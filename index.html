@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STARWRECK 星骸 · dev</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛸</text></svg>"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #05070d;
+        overflow: hidden;
+      }
+      /* 双层结构:canvas 画世界,DOM 画界面(三选一卡片/结算/调参都走 DOM) */
+      #game {
+        position: fixed;
+        inset: 0;
+      }
+      #ui {
+        position: fixed;
+        inset: 0;
+        pointer-events: none; /* 层本身透传,子元素各自接管 */
+      }
+      #ui > * {
+        pointer-events: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="ui"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
