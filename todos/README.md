@@ -14,7 +14,7 @@
 | # | 文件 | 标题 | 优先级 | 依赖 |
 |---|---|---|---|---|
 | 01 | [01-project-scaffold.md](done/01-project-scaffold.md) | 项目脚手架与游戏主循环 | P0 ✅ | — |
-| 02 | [02-ship-movement.md](02-ship-movement.md) | 飞船操控、惯性移动与镜头 | P0 | 01 |
+| 02 | [02-ship-movement.md](done/02-ship-movement.md) | 飞船操控、惯性移动与镜头 | P0 ✅ | 01 |
 | 03 | [03-deck-grid.md](03-deck-grid.md) | 甲板网格与放置规则 | P0 | 01 |
 | 04 | [04-firing-arcs.md](04-firing-arcs.md) | 射界系统与可视化 | P0 | 03 |
 | 05 | [05-weapon-towers.md](05-weapon-towers.md) | 武器塔框架与 6 种 MVP 塔 | P0 | 03, 04 |

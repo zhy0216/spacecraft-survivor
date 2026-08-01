@@ -10,6 +10,7 @@ export interface DebugStats {
   /** 存活敌数 = 池里 items.length,与滑杆设定的目标值区分开 —— fps 读数得配它才有意义 */
   enemies: number;
   bullets: number;
+  speed: number; // 船速 px/s,用来确认巡航参数改动真的生效
   tick: number;
   checksum: string;
   seed: number;
@@ -27,6 +28,8 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   perf.addBinding(stats, 'fps', { readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
   perf.addBinding(stats, 'enemies', { label: '敌(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'bullets', { label: '弹(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  // 拖巡航滑杆时盯这个数:它爬到新的上限,才算"参数改动无需重启即可体感对比"落实了
+  perf.addBinding(stats, 'speed', { label: '船速 px/s', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'tick', { readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'checksum', { readonly: true, interval: 500 });
   perf.addBinding(stats, 'seed', { readonly: true, format: (v: number) => String(v) });
@@ -42,9 +45,15 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
   stress.addBinding(tuning, 'bulletSpeed', { label: '弹速 px/s', min: 60, max: 1200, step: 20 });
 
-  const ship = pane.addFolder({ title: '船体手感(02 号 issue 接线)', expanded: false });
+  // 默认展开:M0 门就是靠这四根滑杆边玩边调出来的,不该让人先点开一层
+  const ship = pane.addFolder({ title: '船体手感', expanded: true });
   ship.addBinding(tuning, 'shipTurnRate', { label: '转向 °/s', min: 20, max: 300, step: 5 });
   ship.addBinding(tuning, 'shipCruiseSpeed', { label: '巡航 px/s', min: 40, max: 400, step: 5 });
   ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
   ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });
+
+  // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效
+  const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });
+  camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.1, max: 0.4, step: 0.01 });
+  camera.addBinding(tuning, 'cameraLookAhead', { label: '前视偏移', min: 0, max: 0.4, step: 0.01 });
 }
