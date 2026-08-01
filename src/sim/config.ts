@@ -15,6 +15,9 @@ export const tuning = {
   stressBullets: 500,
   enemySpeed: 80, // 蜂群蛭 80 px/s(GDD §14)
   enemySeparation: 14, // 邻居分离半径 px(制造空间哈希查询负载)
+  // 最大敌半径:空间哈希 cell = 半径×2(GDD §13)。World 构造时一次性读取,
+  // 故不进调参面板 —— 运行期改会让已分桶的数据与查询半径口径错位。
+  enemyRadiusMax: 14,
   bulletSpeed: 420, // px/s
 };
 

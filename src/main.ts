@@ -14,7 +14,7 @@ async function boot(): Promise<void> {
   const loop = new FixedStepLoop(() => world.step());
   const renderer = await Renderer.create(world);
 
-  const stats: DebugStats = { fps: 0, tick: 0, checksum: '—', seed };
+  const stats: DebugStats = { fps: 0, enemies: 0, bullets: 0, tick: 0, checksum: '—', seed };
   const run: RunState = { paused: false, timeScale: 1 };
   createDebugPanel(stats, run);
 
@@ -27,6 +27,8 @@ async function boot(): Promise<void> {
     renderer.sync(loop.alpha);
 
     stats.fps = Math.round(renderer.app.ticker.FPS);
+    stats.enemies = world.enemies.size;
+    stats.bullets = world.bullets.size;
     stats.tick = loop.tick;
     if (loop.tick - lastChecksumTick >= SIM_HZ) {
       stats.checksum = world.checksum();

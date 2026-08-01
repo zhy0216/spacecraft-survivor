@@ -42,8 +42,8 @@ export class World {
   readonly rng: Rng;
   readonly enemies: Pool<Enemy>;
   readonly bullets: Pool<Bullet>;
-  /** cell = 最大敌半径 ×2(GDD §13;敌半径占位 14px) */
-  readonly grid = new SpatialHash<Enemy>(28);
+  /** cell = 最大敌半径 ×2(GDD §13):查询半径不超过一个 cell 时,3×3 邻域必然覆盖 */
+  readonly grid = new SpatialHash<Enemy>(tuning.enemyRadiusMax * 2);
   tick = 0;
   /** 压测吸引点("假想船"):绕场心画圆,02 号 issue 换成真船 */
   readonly target = { x: 0, y: 0 };

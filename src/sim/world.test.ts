@@ -32,6 +32,10 @@ describe('World 确定性', () => {
     expect(a.checksum()).not.toBe(b.checksum());
   });
 
+  it('空间哈希 cell = 最大敌半径 ×2(GDD §13 不变量)', () => {
+    expect(new World(1).grid.cellSize).toBe(tuning.enemyRadiusMax * 2);
+  });
+
   it('实体数量跟随 tuning 动态调整(面板改数量即时生效)', () => {
     const w = new World(9);
     w.step();

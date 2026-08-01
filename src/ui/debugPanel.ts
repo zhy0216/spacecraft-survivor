@@ -7,6 +7,9 @@ import { tuning } from '../sim/config';
 
 export interface DebugStats {
   fps: number;
+  /** 存活敌数 = 池里 items.length,与滑杆设定的目标值区分开 —— fps 读数得配它才有意义 */
+  enemies: number;
+  bullets: number;
   tick: number;
   checksum: string;
   seed: number;
@@ -22,6 +25,8 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
 
   const perf = pane.addFolder({ title: '性能 / 确定性' });
   perf.addBinding(stats, 'fps', { readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  perf.addBinding(stats, 'enemies', { label: '敌(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  perf.addBinding(stats, 'bullets', { label: '弹(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'tick', { readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'checksum', { readonly: true, interval: 500 });
   perf.addBinding(stats, 'seed', { readonly: true, format: (v: number) => String(v) });
@@ -31,8 +36,8 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   runF.addBinding(run, 'timeScale', { label: '时间倍率', min: 0.1, max: 3, step: 0.1 });
 
   const stress = pane.addFolder({ title: '压测(验收 1000 敌 + 500 弹)' });
-  stress.addBinding(tuning, 'stressEnemies', { label: '敌数量', min: 0, max: 5000, step: 100 });
-  stress.addBinding(tuning, 'stressBullets', { label: '弹数量', min: 0, max: 2000, step: 50 });
+  stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(目标)', min: 0, max: 5000, step: 100 });
+  stress.addBinding(tuning, 'stressBullets', { label: '弹数量(目标)', min: 0, max: 2000, step: 50 });
   stress.addBinding(tuning, 'enemySpeed', { label: '敌速 px/s', min: 20, max: 300, step: 5 });
   stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
   stress.addBinding(tuning, 'bulletSpeed', { label: '弹速 px/s', min: 60, max: 1200, step: 20 });

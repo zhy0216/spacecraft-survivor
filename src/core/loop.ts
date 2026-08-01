@@ -7,7 +7,7 @@ export const SIM_HZ = 60;
 export const SIM_DT = 1 / SIM_HZ;
 
 /** 单帧最多补几步:超出则丢弃剩余时间,防止卡顿后的 spiral of death */
-const MAX_STEPS_PER_FRAME = 5;
+export const MAX_STEPS_PER_FRAME = 5;
 
 export class FixedStepLoop {
   private acc = 0;
