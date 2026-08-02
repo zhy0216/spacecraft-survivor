@@ -1,9 +1,15 @@
 /**
  * Tweakpane 调参面板(DOM 覆盖层)。
  * 服务两件事:01 号 issue 的压测读数,02 号 issue 的手感热调(改了立刻体感对比)。
+ *
+ * 08 号 issue 起还多服务一件:波次脚本的**量化读数**(航段 / 主压方向 / 强度)。
+ * 11 号的威胁罗盘落地之前,画面上只看得出"怪好像多是从那边来的" ——
+ * "主压方向真的在按脚本转"这条验收(08 验收标准第一条)在此之前只能靠这几个数读出来。
  */
 import { Pane } from 'tweakpane';
+import { WAVE_SEGMENTS } from '../data/waves';
 import { tuning } from '../sim/config';
+import { segmentLabel } from './gameOver';
 
 export interface DebugStats {
   fps: number;
@@ -28,6 +34,24 @@ export interface DebugStats {
   tick: number;
   checksum: string;
   seed: number;
+  /**
+   * 当前航段**下标**(world.wave.segment),显示时才 +1 —— 换算与"走完那一刻"的措辞
+   * 共用 ui/gameOver.ts 的 segmentLabel:面板与结算界面报的"航段进度"必须是同一句话,
+   * 各写各的迟早会在越界值(segment == 段数)上分家,印出一个 "5/4" 来。
+   */
+  segment: number;
+  /** 段内已过秒数。它与 segment 合起来才读得出"这一段走到哪儿了" */
+  segTime: number;
+  /**
+   * 主压方向(**度**,世界系绝对角,已折回 [0,360))。sim 里是弧度,换算在 main.ts ——
+   * 面板是给人读的,而数据表(src/data/waves.ts)里写的也是度,两边对得上才好核对脚本。
+   * **绝对角不是相对船头的角**:玩家转舵这个数一动不动,才说明"最优舷"真的会随时间漂移(GDD §6.3)。
+   */
+  threatDeg: number;
+  /** 主压强度(只/秒)= 本段各主压流的当前速率之和;侧压事件是脉冲,不进这个数 */
+  threatRate: number;
+  /** 累计击杀。结算界面报的是同一个数(见 ui/gameOver.ts 的 RunSummary),这里能中途看它爬 */
+  kills: number;
 }
 
 export interface RunState {
@@ -35,7 +59,16 @@ export interface RunState {
   timeScale: number;
 }
 
-export function createDebugPanel(stats: DebugStats, run: RunState): void {
+/**
+ * 面板要触发的流程动作。**面板不认识 World、不动 loop**:重开那一整套
+ * (新 World + 新 loop + renderer.setWorld + placement.setWorld + UI 复位)只在 main.ts 一处,
+ * 这里与结算界面的「再来一局」按钮走的是同一个入口(理由见 ui/gameOver.ts 的 onRestart)。
+ */
+export interface RunHooks {
+  restart(): void;
+}
+
+export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): void {
   const pane = new Pane({ title: 'STARWRECK · 灰盒调参' });
 
   const perf = pane.addFolder({ title: '性能 / 确定性' });
@@ -53,25 +86,59 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   const runF = pane.addFolder({ title: '运行' });
   runF.addBinding(run, 'paused', { label: '暂停' });
   runF.addBinding(run, 'timeScale', { label: '时间倍率', min: 0.1, max: 3, step: 0.1 });
+  // 出怪走哪条路(08 号 issue):关 = 正式的波次脚本(有航段、有主压方向、走完就是胜利),
+  // 开 = 回到 01 号那条"场上恒定 N 只"的压测路 —— 那条路**整段旁路波次运行器**:
+  // 方向不转、脚本不推进、永远走不完,故本局也就不再有胜利条件。
+  // label 得把这两件事都说出来:只写"压测出怪"的话,打开它等一局的人会以为脚本卡住了
+  runF.addBinding(tuning, 'stressSpawn', { label: '压测出怪(旁路波次脚本,本局无胜利)' });
+  // 重开与结算界面的「再来一局」是同一个入口(见 RunHooks):打歪了想重来时,
+  // 不必先把自己撞沉一次。注意它**换种子**(seed + runIndex),所以验不了"同 seed 可复现" ——
+  // 那件事只能带 ?seed= 刷新页面,别指望这个按钮
+  runF.addButton({ title: '重开本局(换种子)' }).on('click', () => hooks.restart());
+
+  // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏
+  //(08 号验收:改数据文件就能调,不改代码)—— 面板不该开第二个入口去改这一局的进度。
+  // 默认展开:这四个数是"主压方向真的在按脚本转"(验收标准第一条)在 11 号罗盘落地之前唯一的读法
+  const wave = pane.addFolder({ title: '波次(08)', expanded: true });
+  // 与结算界面共用 segmentLabel:走完时它报的是 "4/4(全通)" 而不是 "5/4"(segment 是越界值)
+  wave.addBinding(stats, 'segment', {
+    label: '航段',
+    readonly: true,
+    interval: 200,
+    format: (v: number) => segmentLabel(Math.round(v), WAVE_SEGMENTS.length),
+  });
+  wave.addBinding(stats, 'segTime', { label: '段内 s', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
+  // 盯着它一路涨(而不是在某个角度上停住),就是"主压方向持续漂移、玩家不能固定角度挂机"的读数。
+  // 度数与 src/data/waves.ts 里写的起止角同一套(世界系绝对角,0 = +X,顺时针为正)——
+  // 只是这里折回了 [0,360),数据表里写的则是不折回的累积角(如 320→480,折回会让它倒着转)
+  wave.addBinding(stats, 'threatDeg', { label: '主压方向 °', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  wave.addBinding(stats, 'threatRate', { label: '强度 只/s', readonly: true, interval: 200, format: (v: number) => v.toFixed(2) });
+  // 与结算界面报的是同一个数;放这儿是因为"打到第几段"与"打死了多少"合起来才是这一局的进度
+  wave.addBinding(stats, 'kills', { label: '击杀', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
 
   // 压测只剩敌人这一半:子弹那一半(stressBullets / bulletSpeed)在 05 号 issue 整段删除 ——
   // 凭空重生的哑弹与真弹共用一个池,"500 弹不掉帧"测的就是假东西。500 弹现在由塔真的打出来,
   // 想压满就多放几座高射速塔(点防/机炮)再把敌数拖高,盯上面的「弹(存活)」读数即可。
+  //
+  // **整个抽屉只在「运行 · 压测出怪」打开时生效**(敌速倍率与分离半径除外:那两根管的是
+  // 全场敌人的行为,与谁把它们放出来无关)—— 正式出怪器的数量由脚本的速率曲线定,不看这根滑杆。
   const stress = pane.addFolder({ title: '压测(验收 1000 敌)' });
-  stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(目标)', min: 0, max: 5000, step: 100 });
+  stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(仅压测模式)', min: 0, max: 5000, step: 100 });
   // 各型敌人的基础速度在 src/data/enemies.ts,这里只剩全局倍率;拖到 0 = 全场定格,
   // 想看清某一型的走位(尤其冲锋前摇)时比暂停好用 —— 船还能开,敌人不动
   stress.addBinding(tuning, 'enemySpeedScale', { label: '敌速倍率', min: 0, max: 3, step: 0.1 });
   stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
 
   // 敌人(07 号 issue):四条占比是轮盘赌权重,不必凑成 100。
+  // **四条一律仅在「运行 · 压测出怪」打开时生效**:正式出怪器(08 号)的型号由
+  // src/data/waves.ts 的波次脚本逐条流给死,一次随机都不掷 —— 改平衡请去改那张表。
   // 注意:改占比只影响**新生成**的敌人,已在场的不会变型 —— 想只看某一型做肉眼验收,
-  // 把其余三个调 0,再把上面的「敌数量(目标)」拖到 0 再拖回来即可清场重出。
+  // 把其余三个调 0,再把上面的「敌数量(仅压测模式)」拖到 0 再拖回来即可清场重出。
   const enemy = pane.addFolder({ title: '敌人(07)' });
-  enemy.addBinding(tuning, 'enemyMixSwarm', { label: '蜂群蛭 %', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixStrafer', { label: '侧掠者 %', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixTrailer', { label: '尾随蛆 %', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixBeetle', { label: '冲撞甲虫 %', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixSwarm', { label: '蜂群蛭 %(仅压测)', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixStrafer', { label: '侧掠者 %(仅压测)', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixTrailer', { label: '尾随蛆 %(仅压测)', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixBeetle', { label: '冲撞甲虫 %(仅压测)', min: 0, max: 100, step: 5 });
   // 同样只作用于新生成的敌人:HP 在生成那一刻按世界已过时间定死(GDD §14)
   enemy.addBinding(tuning, 'enemyHpScalePerMinute', { label: 'HP/分钟', min: 0, max: 0.5, step: 0.01 });
 

@@ -172,10 +172,21 @@ export interface PlacementUi extends PlacementUiState {
    * 玩家看到的框和点下去落的格不是同一个,而塔一放就不可移动、不可出售(GDD §4.5)。
    */
   syncHover(): void;
+  /**
+   * 换掉整局的 World(08 号 issue T3 的重开流程:一局从开始到胜负/重开全程不刷新页面)。
+   * 重开 = 换一个新 World(池、rng、tick、甲板全是新的,才谈得上"同 seed 可复现"),
+   * 于是这条交互也必须跟着改指向 —— 忘了换,玩家在新船上点下去的每一格都会落进上一局那艘沉船里,
+   * 而画面上什么都不会发生(渲染层读的是新 World 的甲板):那是最难查的一类"点了没反应"。
+   */
+  setWorld(world: World): void;
 }
 
 export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
-  const { world, canvas, screenToWorld } = opts;
+  // world 是**可重赋的局部变量**而不是解构常量:重开一局要换掉整个 World(见 setWorld),
+  // 而闭包里每处(pick / tryPlace)都是现读它 —— 于是换引用这一件事就够了,
+  // window 事件与提示条 DOM 一行都不必重挂(重挂 = 每重开一局多一份监听器、多一条提示条)。
+  let world = opts.world;
+  const { canvas, screenToWorld } = opts;
   const state: PlacementUiState = {
     active: false,
     content: CELL_WEAPON,
@@ -213,6 +224,17 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
       : '放置模式:关';
   }
 
+  /**
+   * 抹掉闪现行并停掉它的计时器。退出放置模式(setActive)与重开一局(setWorld)共用:
+   * 留着的话,那行红字要等超时才消 —— 而它说的是**上一次**(甚至上一局)的事,
+   * 挂在新的语境下就成了一条对不上号的提示。
+   */
+  function clearFlash(): void {
+    if (flashTimer) window.clearTimeout(flashTimer);
+    flashTimer = 0;
+    flashEl.textContent = '';
+  }
+
   /** 闪一句话。连点时重置计时:上一次的超时不该把这一次的提示提前抹掉 */
   function flash(text: string, color: string): void {
     flashEl.textContent = text;
@@ -245,9 +267,7 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
     state.denyIndex = -1;
     state.hoverIndex = on ? pick(lastX, lastY) : -1;
     // 一并抹掉上一条拒绝文案:否则"放置模式:关"底下还挂着一行红字,要等计时器到点才消
-    if (flashTimer) window.clearTimeout(flashTimer);
-    flashTimer = 0;
-    flashEl.textContent = '';
+    clearFlash();
     refresh();
   }
 
@@ -338,6 +358,19 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
   return Object.assign(state, {
     syncHover(): void {
       if (state.active) state.hoverIndex = pick(lastX, lastY);
+    },
+    setWorld(next: World): void {
+      world = next;
+      // 两个下标都是**上一艘船**上的位置,与新甲板毫无关系:不复位的话,重开后的第一帧
+      // 会照着旧下标去描一个高亮框/一格红闪 —— 渲染层那两处判空只挡得住越界,
+      // 挡不住"下标碰巧还落在范围内"。hoverIndex 不必在这里现算:调用方每渲染帧都调 syncHover,
+      // 下一帧它自己就按真实光标位置补上了。
+      state.hoverIndex = -1;
+      state.denyIndex = -1;
+      // 上一局最后那条拒绝文案(连同它的超时)一并抹掉:新船开出去的第一眼不该挂着上一局的红字
+      clearFlash();
+      // **放置模式的开关状态原样保留**:开着还是关着是玩家自己的选择,重开一局不该顺手替他改;
+      // 提示条的文案也只跟这个开关走(见 refresh),故这里没什么可刷的
     },
   });
 }

@@ -2,9 +2,11 @@
  * 世界状态与规则 —— 纯逻辑层。
  * 铁律:本目录永不 import pixi/DOM。这换来:同 seed 确定性、Node 里可单测、渲染可替换。
  *
- * 当前内容 = 玩家船(02)+ 四型敌人(07)+ 武器塔与它们打出来的子弹(05)+ 挨打这一半(09):
+ * 当前内容 = 玩家船(02)+ 四型敌人(07)+ 武器塔与它们打出来的子弹(05)+ 挨打这一半(09)
+ *   + 波次脚本出怪(08):
  *   一艘玩家船(输入只以纯数据 ShipCommand 从外部灌入,sim 永不读键盘),
- *   N 只按 tuning.enemyMix* 混出来的敌人,甲板上的塔真的开火产生的子弹与可视化事件,
+ *   由 sim/waves.ts 的运行器按航段脚本从**船外环**刷出来的敌人,
+ *   甲板上的塔真的开火产生的子弹与可视化事件,
  *   以及贴上来的敌人对船体 HP 的结算与四舷受击惩罚。
  *
  * 01 号 issue 那批"凭空重生的压测哑弹"在 05 号整段删除:哑弹与真弹共用一个池,
@@ -12,15 +14,18 @@
  *
  * 分工:单只敌人的行为(追踪/绕行/冲锋状态机)在 sim/enemy.ts,炮管的追瞄与归位在 sim/turret.ts,
  * 子弹的积分与命中在 sim/bullet.ts,受击判定的全部几何(核心区/甲板轮廓/四舷/射速惩罚)在
- * sim/damage.ts,本文件只做"世界这一层"的接线 —— 出怪、邻居分离、积分位置、接触粗筛、
+ * sim/damage.ts,「脚本 → 出怪事件」的翻译在 sim/waves.ts(它一个字都不认识世界,只说"朝这个方向
+ * 出一只这型的怪"),本文件只做"世界这一层"的接线 —— 出怪落点、邻居分离、积分位置、接触粗筛、
  * 开火的去处(FireSink)、船体受击结算、事件老化、死亡回收。
  * 拆开的理由是它们能脱开世界单测(见 enemy.test.ts / turret.test.ts / bullet.test.ts /
  * damage.test.ts),而这里钉的是顺序与生命周期。
  *
- * 本文件对后续 issue 只留挂钩、不抢活:shipDead / onShipDestroyed 只是状态位与回调,
- * 失败流程(结算界面/重开/暂停)交给 08 —— 世界不认识"游戏流程",它只负责把船沉了这件事说出来;
+ * 局终这件事本文件只做到"判"为止(08 号 T3):帧尾的 settleOutcome 把胜负结论落成 result
+ * 与一次 onGameOver,而**暂停、重开、动 loop、弹结算界面一概不在这里** ——
+ * 世界不认识"游戏流程",那一层在 main.ts。于是有了结论之后 step() 照常可以被调用
+ *(既有那条"船沉后世界照常往下跑"的用例仍然成立),停不停由调用方决定。
  * HP 上限与舷向减伤问 damage.ts 的两个挂钩(06 号装甲舱届时只填函数体);
- * onEnemyDeath 交给 10(残骸掉落),出怪器交给 08(波次脚本)。
+ * onEnemyDeath 交给 10(残骸掉落),onEnemySpawn 是它的对称件(渲染/统计想知道"谁来了")。
  */
 import { SIM_DT } from '../core/loop';
 import { Pool } from '../core/pool';
@@ -35,6 +40,7 @@ import {
   FX_LIFE_LANCE,
   TOWER_AUTOCANNON,
 } from '../data/towers';
+import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
 import { type Bullet, createBullet, resetBullet, stepBullets } from './bullet';
 import { tuning } from './config';
 import {
@@ -72,6 +78,7 @@ import {
 import { createShip, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
 import { syncSupportBuffs } from './support';
 import { stepTurrets } from './turret';
+import { createWaveState, type SpawnSink, stepWaves, type WaveState } from './waves';
 
 /** 渲染层与既有调用方都从 world 取 Enemy 类型,实体定义搬去 enemy.ts 后这条保持它们不破 */
 export type { Enemy } from './enemy';
@@ -81,10 +88,15 @@ export type { Bullet } from './bullet';
 /** 无输入的默认指令:让不接线输入的调用方(单测、无头跑批)照常 world.step() */
 const IDLE: ShipCommand = { desiredHeading: null };
 
-/** 压测场地半径(逻辑坐标,原点为场心) */
+/**
+ * 战场边界半径(逻辑坐标,原点为场心)—— 它是**交战范围,不是地图墙**:
+ * 只夹船,防止玩家一路开出怪潮之外把这一局拖成散步;敌人一概不受它夹取。
+ * 正式出怪环(data/waves.ts 的 SPAWN_RADIUS)以**船**为心,故船贴边时它有一大半落在这个圈之外 ——
+ * 那是对的,不必也不该把敌人拉回来:被拉回来的怪会在边界上排成一道墙,主压方向当场糊掉。
+ */
 export const WORLD_RADIUS = 1200;
 
-/** 出怪环的内半径:别把敌人直接生在船脸上 —— 08 号 issue 的波次脚本接手后这里整段作废 */
+/** 压测出怪环的内半径:别把敌人直接生在船脸上。**只服务于 stressSyncCounts 那条 debug 路径** */
 const SPAWN_MIN_RADIUS = 300;
 
 /**
@@ -118,6 +130,18 @@ function fxLife(kind: number): number {
   }
 }
 
+/**
+ * 局终结果码(08 号 T3),由 World.result 持有、settleOutcome 置位。
+ * 定义在 sim 这一侧而不是 ui:判定发生在世界里,文案才是 ui 的事 ——
+ * 反过来的话 sim 就得 import ui,铁律 1 当场破掉。
+ * 三个值互斥、不是位标志:一局只可能落在其中一个上(先到的那个把这一局定死)。
+ */
+export const RESULT_RUNNING = 0;
+/** 胜利:波次脚本走完(wave.done)—— 这一局活到了最后一段的尽头 */
+export const RESULT_WIN = 1;
+/** 失败:船体 HP 归零(shipDead)。**优先于胜利**,同一帧两样都成立时算失败(见 settleOutcome) */
+export const RESULT_LOSE = 2;
+
 export class World {
   readonly rng: Rng;
   readonly enemies: Pool<Enemy>;
@@ -133,6 +157,17 @@ export class World {
    * 放塔与 12 号扩建都是就地改字段 —— 渲染层持有它的引用,靠 revision 做脏标记。
    */
   readonly deck: Deck = createDeck();
+
+  /**
+   * 本局的波次脚本进度(08 号 issue)。整局同一个对象,由 stepWaves 每帧就地推进。
+   * **不提供 reset()**:重开 = 换整个 World(池 / rng / tick / 甲板全是新的才谈得上"同 seed 可复现"),
+   * 单独把波次拨回去只会造出一个"敌人还在场、脚本却从头开始"的四不像。
+   *
+   * 里头只有 segment / segTime / burstNext / debt 是真状态(进 checksum),
+   * dirRad / intensity / done 是它们与脚本的纯函数(派生量口径见 sim/waves.ts 的字段注释)。
+   * **tuning.stressSpawn = true 时它整段旁路**:冻在初值、方向不转、永不 done。
+   */
+  readonly wave: WaveState = createWaveState();
 
   /**
    * 本帧贴到船身的敌人 —— **粗筛候选**(照 sim/turret.ts 的 candidates 口径),不是"真撞上的人"。
@@ -156,24 +191,56 @@ export class World {
   readonly edgePenalty: number[] = new Array<number>(EDGE_COUNT).fill(0);
 
   /**
-   * 船体 HP 归零。**局终流程本身是 08 号 issue**:结算界面、重开、暂停、动 loop 都不在这里 ——
-   * 世界不认识"游戏流程",它只负责把"船沉了"这件事以一个状态位说出来。
+   * 船体 HP 归零。它只是**这一帧的状态位**,不是这一局的结论:失败结论要等帧尾的 settleOutcome
+   * 落成 result —— 受击结算发生在帧中,胜负两条路只有在帧尾才有同一个判定点。
+   * 结算界面、重开、暂停、动 loop 一概不在这里,那一层在 main.ts。
    * 它是 ship.hp 的派生量(除了归零那一刻没有第二条来路),故**不进 checksum**。
    */
   shipDead = false;
 
   /**
-   * 船沉的**一次性**回调(08 号失败流程挂这里)。只在 hp 第一次归零那一帧响一次:
+   * 船沉的**一次性**回调(09 号受击模型的出口)。只在 hp 第一次归零那一帧响一次:
    * damageShip 的首句就把已 dead 的世界挡在门外,于是尸体上再挨多少下都不会再响,
-   * 08 那边不必自己去重 —— 与 onEnemyDeath"同帧重复致命只算一次"是同一条口径。
+   * 调用方不必自己去重 —— 与 onEnemyDeath"同帧重复致命只算一次"是同一条口径。
+   *
+   * 它与 onGameOver **各管一件事、不合并**:这个说的是"船沉了"(帧中、只有失败这一条路),
+   * onGameOver 说的是"这一局结束了,结果是 X"(帧尾、胜负共用一个出口)。
+   * 想接失败流程请接 onGameOver;想接"沉船那一刻的爆炸表现"才接这个。
    */
   onShipDestroyed: (() => void) | null = null;
+
+  /**
+   * 本局的结果码(RESULT_*),由 step() 帧尾的 settleOutcome 置位,**置位后永不再变**。
+   * 它是 shipDead 与 wave.done 的**派生量**(settleOutcome 只读这两样,没有第三条来路),
+   * 故**不进 checksum** —— 与 maxHp / shipDead / wave 的 dirRad 同一条口径。
+   */
+  result = RESULT_RUNNING;
+
+  /**
+   * 局终的**一次性**回调,胜负共用一个出口(参数 = RESULT_WIN / RESULT_LOSE)。
+   * 只在结论落定那一帧响一次:settleOutcome 的首句就把已有结论的世界挡在门外,
+   * 于是结算界面弹出后世界再被 step 多少帧也不会弹第二次,流程那一侧不必自己去重。
+   *
+   * **回调里该做的事全在 main.ts**:停 loop(run.paused)、弹结算界面、截船形剪影 ——
+   * World 一样都不做,它连"这一局要不要停"都不知道。
+   */
+  onGameOver: ((result: number) => void) | null = null;
 
   /**
    * 死亡挂钩(掉落物本体由 10 号 issue 实现)。回调返回后对象立刻回池,
    * 所以回调里必须当场取走 x/y/kind,不能存引用等下一帧再读。
    */
   onEnemyDeath: ((e: Enemy) => void) | null = null;
+
+  /**
+   * 出怪挂钩,与 onEnemyDeath 对称:每成功出一只怪、initEnemy 填完之后当场响一次。
+   * 同一条口径 —— 回调里当场读 kind/x/y,**别跨帧存引用**(对象在池里,死后会被复用成另一只敌人)。
+   * "同 seed 两局出怪序列一致"(08 验收)只能靠它逐只比对:池里的 items 被 swap-remove 打乱过顺序,
+   * 拿它当序列比的是另一件事。
+   *
+   * **只有正式出怪器走它**:压测那条 debug 路径是凭空补人凑数量,不是"这一局的波次里来了一只怪"。
+   */
+  onEnemySpawn: ((e: Enemy) => void) | null = null;
 
   /** 累计击杀。面板改数量导致的清场不计入 —— 那不是打死的 */
   kills = 0;
@@ -254,6 +321,17 @@ export class World {
     },
   };
 
+  /**
+   * 出怪的去处(sim/waves.ts 的 SpawnSink),与上面那个 sink: FireSink 同一条写法与同一条理由:
+   * 运行器只 `import type` 那份契约、永远不认识 World —— 双向直连(world 调 waves、waves 取 world 的池)
+   * 就是一个运行期循环依赖,在 ESM 里表现为"某一侧拿到 undefined",且只在改了 import 顺序时才炸。
+   * 做成**字段上的对象字面量**:构造时建一次、整局复用(箭头函数捕获 this),
+   * 不在每帧的出怪路径上现造对象(铁律 3)。
+   */
+  private readonly waveSink: SpawnSink = {
+    spawn: (kind, angleRad) => this.spawnFromWave(kind, angleRad),
+  };
+
   constructor(seed: number) {
     this.rng = new Rng(seed);
     this.enemies = new Pool<Enemy>(createEnemy, resetEnemy);
@@ -270,13 +348,32 @@ export class World {
   }
 
   /**
+   * 当前主压方向 —— 世界系**绝对角**(弧度,0 = +X,顺时针为正,与 ship.heading 同一套),
+   * 不是相对船头的角(相对船头的话玩家转舵就没意义了,GDD §6.3「最优舷持续漂移」)。
+   *
+   * 11 号的威胁罗盘直接读这两个 getter:HUD 不必认识 WaveState 的内部字段,
+   * 将来波次状态改结构,要跟着改的也只有这两句。
+   */
+  get threatDirection(): number {
+    return this.wave.dirRad;
+  }
+
+  /**
+   * 当前主压强度(只/秒)= 本段各主压流的当前速率之和。
+   * 侧压事件**不进**这个数:它是脉冲不是速率,混进来会让罗盘每到一次事件就跳一下尖峰。
+   */
+  get threatIntensity(): number {
+    return this.wave.intensity;
+  }
+
+  /**
    * @param cmd 本逻辑帧的输入(纯数据)。只读不缓存引用,调用方可以整局复用同一个对象;
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
    * 顺序定死(单测按此钉):**甲板派生量(邻接 buff + HP 上限)** → 船 → 贴边夹取 → 出怪 →
    * 重建空间哈希 → 清 contacts / 清 broadside / edgePenalty 逐帧减 dt →
    * 敌人(积分 + hitCd 递减 + 粗筛入 contacts)→
-   * 炮管(含节流与开火)→ 子弹 → 船体受击结算 → 可视化事件老化 → 回收死者。
+   * 炮管(含节流与开火)→ 子弹 → 船体受击结算 → 可视化事件老化 → 回收死者 → 局终判定。
    * 甲板派生量排在**最前**(见下面那两句):这一帧的塔按最新的邻接加成开火、这一帧的撞击按最新的
    * 上限结算 —— 12 号拆掉一格甲板(setOccupied 清 supportType)后,加成与上限当帧就回落,
    * 而不是靠下一次放置才想起来重刷(06 号验收第三条"拆除即时移除"的落点就在这两句)。
@@ -288,7 +385,9 @@ export class World {
    * 受击结算排在**子弹之后**,于是"本帧刚被塔打死的敌人"那一句过滤真的有意义(尸体不许再咬一口),
    * 又排在**回收之前**,因为尸体整帧都还在池里 —— contacts 里存的是池中对象,
    * 回收先走的话名单里会留着已经出池、且可能已被复用成另一只敌人的引用;
-   * 回收排在最后,于是"本帧被打死的敌人"在整帧里始终可见(渲染/结算读到的是同一批人)。
+   * 回收排在最后,于是"本帧被打死的敌人"在整帧里始终可见(渲染/结算读到的是同一批人);
+   * 局终判定排在**回收之后**,于是它读到的是这一帧走完的账 —— 最后一发打死的那只算进 kills,
+   * 结算界面上的击杀数才不会比玩家亲眼看到的少一只。
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
@@ -314,8 +413,8 @@ export class World {
     const ship = this.ship;
     stepShip(ship, cmd.desiredHeading, SIM_DT);
 
-    // 压测场地是有边界的(08 号 issue 换成真地图规则):超出就沿径向贴回边上,
-    // 并清掉速度的外向分量 —— 否则贴边时推力仍在往外积速,一转头就会弹射出去
+    // 战场是有边界的,但它**只夹船**(WORLD_RADIUS 是交战范围不是地图墙,理由见常量注释):
+    // 超出就沿径向贴回边上,并清掉速度的外向分量 —— 否则贴边时推力仍在往外积速,一转头就会弹射出去
     const shipDist = Math.hypot(ship.x, ship.y);
     if (shipDist > WORLD_RADIUS) {
       const nx = ship.x / shipDist;
@@ -329,8 +428,17 @@ export class World {
       }
     }
 
-    // 注意:运行中通过面板改实体数量会消耗 rng,之后的 checksum 不再与"从头跑"可比
-    this.syncCounts();
+    // 出怪。正式路径是波次脚本的运行器(sim/waves.ts):它一个字都不认识世界,只说"朝这个方向
+    // 出一只这型的怪",落点由 waveSink → spawnFromWave 补完。
+    // **位置不许挪**:排在贴边夹取**之后**,于是出怪环是以船**本帧**的位置为心的
+    //(晚一帧的话高速航行时整个环会拖在船身后,主压方向当场歪掉);
+    // 又排在建哈希**之前**,于是新生的敌人当帧就参与分离、当帧就动(铁律 2 的 px/py 停在出生点)。
+    //
+    // tuning.stressSpawn = true 时**整段旁路**回到 01 号那条压测路(见 stressSyncCounts):
+    // 波次状态冻在初值(方向不转、永不 done、这一局没有胜利条件),换来"场上恒定 N 只"这种定数。
+    // 注意:压测路上运行中通过面板改数量会消耗 rng,之后的 checksum 不再与"从头跑"可比
+    if (tuning.stressSpawn) this.stressSyncCounts();
+    else stepWaves(this.wave, SIM_DT, this.rng, this.waveSink);
 
     // 重建空间哈希
     const enemies = this.enemies.items;
@@ -442,6 +550,33 @@ export class World {
     }
 
     this.reap();
+
+    // 局终判定收尾:这一帧的三样判据(shipDead 在受击结算里置、wave.done 在帧首的出怪那一步置、
+    // kills 在 reap 里才加完)到这里才全部就位。判完世界也不停 —— 停不停是 main.ts 的事
+    this.settleOutcome();
+  }
+
+  /**
+   * 局终判定(08 号 T3)—— 一局最多落一次结论,**判完就此定死**。
+   * 放在 step() 的最末而不是判据产生的那几处:shipDead 在帧中的受击结算里置位、
+   * wave.done 在帧首的出怪那一步置位,只有帧尾这一个点上两条路都已就位、本帧的击杀也已入账,
+   * 回调里读到的存活时间与击杀数才是完整的一帧(结算界面读的就是这两个数)。
+   *
+   * **失败优先于胜利**:同一帧既沉船又走完脚本算失败 —— 船都没了,最后那一段脚本走没走完不重要,
+   * 反过来会让"终点线前一秒被撞沉"变成一次莫名其妙的胜利。
+   * 两者互斥、且各只触发一次,全靠首句那一个提前返回。
+   *
+   * World **不自己暂停、不重开、不动 loop**:有了结论之后 step() 照常可以继续调用
+   *(既有那条"船沉后世界照常往下跑"的用例仍然成立)—— 世界不认识"游戏流程"。
+   */
+  private settleOutcome(): void {
+    // 已经有结论就再也不改口:这一句同时保证了 onGameOver 只可能响一次
+    //(与 damageShip 那句 shipDead 早返回、applyDamage 的"同帧重复致命只算一次"是同一条口径)
+    if (this.result !== RESULT_RUNNING) return;
+    if (this.shipDead) this.result = RESULT_LOSE;
+    else if (this.wave.done) this.result = RESULT_WIN;
+    else return; // 还在跑:一个字段都不动,更不响回调
+    this.onGameOver?.(this.result);
   }
 
   /**
@@ -472,6 +607,10 @@ export class World {
    *(验收标准第一条"一次接触只结算一次、蜂群贴脸掉血速率可控可调"说的就是这件事)。
    */
   private settleHullDamage(): void {
+    // 船沉了就一切停手。伤害那一半本来就被 damageShip 的首句挡着,漏的是**表现**这一半:
+    // 不挡的话尸体上还会一路冒火花与撞击圆环,而结算界面背后那张静止的战场看着仍在挨打。
+    // 顺带也省了尸体上那一圈没有任何后果的精筛(蜂群贴脸时是几十次矩形判定)
+    if (this.shipDead) return;
     const ship = this.ship;
     const deck = this.deck;
     const scale = tuning.enemyContactDamageScale;
@@ -535,7 +674,9 @@ export class World {
 
     if (this.ship.hp <= 0) {
       this.shipDead = true;
-      // 局终流程本身是 08 号 issue:这里只把消息递出去,不做结算界面、不重开、不暂停、不动 loop
+      // 只把"船沉了"这件事递出去。失败**结论**由帧尾的 settleOutcome 出(result + onGameOver),
+      // 不在这里抢着判:受击结算发生在帧中,那时本帧的死者还没回收进 kills ——
+      // 抢着判的话结算界面上的击杀数会比玩家亲眼看到的少一只
       this.onShipDestroyed?.();
     }
     return true;
@@ -589,22 +730,60 @@ export class World {
   }
 
   /**
+   * 把运行器的一次"朝这个方向出一只这型的怪"落成世界里的一只敌人 —— **正式出怪的唯一落点**。
+   * 脚本那一半(什么时候、朝哪、出几只)全在 sim/waves.ts,这里只补它不该知道的三件事:
+   * 出生点坐标、在场上限、池与 initEnemy。
+   *
+   * 出生点以**船**为心而不是场心:镜头永远跟着船走(GDD §3.3),以场心算的话船开到边上时,
+   * 一侧的怪会当着玩家的面在屏幕里凭空出现,另一侧则要空飞两千像素才进场 ——
+   * 而"屏幕外环形区生成"正是 08 号任务的原话。半径与抖动带见 data/waves.ts(它同时是
+   * sim 与渲染层之间关于"视野有多大"的唯一约定:sim 不知道屏幕多大,铁律 1)。
+   *
+   * 触到在场上限就**丢弃这一发、不留账**:留账的话上限一解除会把攒下的怪一口气吐出来,
+   * 正是"卡了之后更卡"的那条死亡螺旋。丢弃发生在掷半径之前,故触顶帧只消耗掉运行器那一次角度 ——
+   * 上限是保险丝不是旋钮(见 WAVE_MAX_ALIVE),正常脚本下够不到,够到了这一局本就要输。
+   *
+   * rng 消耗顺序**定死为 角(运行器里)→ 半径(这里)→ initEnemy 的 side**,共三次、与型号无关
+   *(型号由脚本给死,不掷随机)—— 于是改一次平衡(改速率、改型号、改展宽)都不会移动整条随机序列,
+   * "同 seed 同波次"这条验收不会因为一次数值调整而全废。
+   */
+  private spawnFromWave(kind: number, angleRad: number): void {
+    if (this.enemies.size >= WAVE_MAX_ALIVE) return;
+    // 半径抖着来:不抖的话一股流出上百只之后会在屏外排成一道正圆弧,还会整排同时抵达 ——
+    // "持续压力"当场被压成一下一下的脉冲(理由全文见 SPAWN_RADIUS_BAND)
+    const r = SPAWN_RADIUS + this.rng.next() * SPAWN_RADIUS_BAND;
+    const x = this.ship.x + Math.cos(angleRad) * r;
+    const y = this.ship.y + Math.sin(angleRad) * r;
+    const e = this.enemies.spawn();
+    // HP 时间缩放只在出生时算一次(GDD §14):在场的敌人不会因为时间流逝而回血变硬
+    initEnemy(e, kind, x, y, this.elapsed, this.rng);
+    // 挂钩排在 initEnemy **之后**:回调读到的必须是填完的敌人(kind/x/y 都已就位),不是个空壳
+    this.onEnemySpawn?.(e);
+  }
+
+  /**
+   * **debug 压测路径,不是正式出怪器** —— 正式的在 step() 里走 stepWaves + spawnFromWave。
+   * 只有 tuning.stressSpawn = true 时才被调用,而 tuning.stressEnemies 与四条 enemyMix*
+   * 也只在这条路上生效:它维持"场上恒定 N 只"这种压测才要的定数(01 号验收:1000 敌同屏 60fps),
+   * 代价是这一局没有波次、没有主压方向、也没有胜利条件。
+   *
    * 让面板改数量即时生效:不足则补,超出则回收(清场不算击杀,故不走 reap 的挂钩)。
    * **只剩敌人这一半**:子弹那一半(维持 tuning.stressBullets 颗哑弹)在 05 号 issue 整段删除 ——
    * 凭空重生的哑弹与真弹共用一个池,"500 弹同屏不掉帧"这条验收测的就是假东西。
    */
-  private syncCounts(): void {
-    while (this.enemies.size < tuning.stressEnemies) this.spawnEnemy();
+  private stressSyncCounts(): void {
+    while (this.enemies.size < tuning.stressEnemies) this.spawnStressEnemy();
     while (this.enemies.size > tuning.stressEnemies) this.enemies.despawnAt(this.enemies.size - 1);
   }
 
   /**
-   * 出一只怪。rng 消耗顺序**定死为 kind → angle → radius → side**,且与 kind 无关:
+   * 压测出一只怪(debug 路径,见 stressSyncCounts):以**场心**为心的整圈上随机撒,与波次一个字都不沾。
+   * rng 消耗顺序**定死为 kind → angle → radius → side**,且与 kind 无关:
    * 改某一型的行为、甚至改出怪占比,都不会移动整条随机序列(位置序列照旧,只是型号变了),
    * 确定性回放才不会因为一次平衡调整而全废。
    */
-  private spawnEnemy(): void {
-    const kind = this.pickKind();
+  private spawnStressEnemy(): void {
+    const kind = this.stressPickKind();
     const a = this.rng.angle();
     const r = SPAWN_MIN_RADIUS + this.rng.next() * (WORLD_RADIUS - SPAWN_MIN_RADIUS);
     const e = this.enemies.spawn();
@@ -613,11 +792,11 @@ export class World {
   }
 
   /**
-   * 按 tuning.enemyMix* 四个权重轮盘赌。08 号 issue 的波次脚本接手前的临时出怪器,
-   * 只影响新生成的敌人 —— 面板拖占比不会让已在场的敌人变型。
+   * 按 tuning.enemyMix* 四个权重轮盘赌(**仅压测路径**:正式出怪器的型号由 data/waves.ts 的
+   * 脚本逐条流给死,一次随机都不掷)。只影响新生成的敌人 —— 面板拖占比不会让已在场的敌人变型。
    * 无论权重如何都**恰好消耗一次 rng**:消耗次数随权重变的话,拖一下面板整条序列就错位了。
    */
-  private pickKind(): number {
+  private stressPickKind(): number {
     // 面板下限是 0,这里再夹一次是防手改配置写出负权重把轮盘转反
     const w0 = Math.max(0, tuning.enemyMixSwarm);
     const w1 = Math.max(0, tuning.enemyMixStrafer);
@@ -653,9 +832,10 @@ export class World {
     // 船体 HP:这一局唯一的失败进度。漏了它,"撞击没结算""无敌帧漏判""擦碰也扣了血"这三类回归
     // 全都会从确定性口径下漏掉。不放大 100 倍 —— HP 是 100 量级的量,acc 内部量化到 1/8 绰绰有余。
     //
-    // **maxHp 与 shipDead 都不进**,它们是派生量:
+    // **maxHp / shipDead / result 都不进**,它们是派生量:
     //   maxHp = damage.hullMaxHp(deck),而甲板本身下面逐格哈过了 —— 哈它就是把同一件事哈两遍;
-    //   shipDead 除了"hp 归零那一刻置位"没有第二条来路,hp 已经进来了,它就没有独立信息。
+    //   shipDead 除了"hp 归零那一刻置位"没有第二条来路,hp 已经进来了,它就没有独立信息;
+    //   result 又是 shipDead 与 wave.done 的纯函数(settleOutcome 只读这两样),同理没有独立信息。
     acc(this.ship.hp);
     // 甲板紧跟着船:build 也是世界状态,少了它,"塔放错格"或"扩建没同步"这类回归会从确定性口径下漏掉。
     // 顺序 = deck.cells 的下标顺序(row-major,见 sim/deck),与渲染遍历同一条,永不改;
@@ -697,6 +877,20 @@ export class World {
     // × 100 的理由与冷却/装填/热量那批秒数字段一字同源:acc 内部量化到 1/8,不放大的话
     // 0.5s 量级的计时器分辨率只有 0.125,差一两帧根本看不出来
     for (let e = 0; e < this.edgePenalty.length; e++) acc(this.edgePenalty[e]! * 100);
+    // 波次进度紧跟着四舷惩罚(08 号):它是这一局的推进进度,逐帧演化(段内计时 → 段推进 → 逐流的出怪账),
+    // 不是任何东西的派生量 —— 漏了它,"某一段早换了一帧""某条流的账差了半只"这类分叉不会当场炸出来,
+    // 只会在几十秒后以"怪莫名其妙多了一只"的形式浮上来,那时早已看不出是哪一帧走岔的。
+    // 顺序 = segment → segTime → burstNext → debt,与 WaveState 的字段顺序一致,永不改。
+    // × 100 的理由与冷却/装填/惩罚那批秒数字段一字同源:acc 内部量化到 1/8,不放大的话段内计时的
+    // 分辨率只有 0.125s(整整七帧半),debt 那种 0..1 量级的账更是直接被抹平。
+    //
+    // **dirRad / intensity / done 一律不进**,与 maxHp / shipDead 同一条派生量口径:
+    // 三者都是 segment + segTime + 脚本的纯函数(sim/waves.ts 里就是这么算出来的),
+    // 而 segment 与 segTime 上面刚哈过 —— 哈它们只是把同一件事哈两遍
+    acc(this.wave.segment);
+    acc(this.wave.segTime * 100);
+    acc(this.wave.burstNext);
+    for (let i = 0; i < this.wave.debt.length; i++) acc(this.wave.debt[i]! * 100);
     for (const e of this.enemies.items) {
       acc(e.x);
       acc(e.y);

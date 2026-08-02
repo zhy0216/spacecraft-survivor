@@ -31,6 +31,13 @@ export const tuning = {
   // —— 压测场景(01 号 issue 验收:1000 敌 + 500 弹 @60fps)——
   // 只剩敌人这一半:子弹的那一半(stressBullets / bulletSpeed)在 05 号 issue 整段删除 ——
   // 凭空重生的哑弹与真弹共用一个池,"500 弹不掉帧"测的就是假东西。500 弹改由塔真的打出来。
+  /**
+   * debug:回到 01 号的 1000 敌压测出怪(旁路波次脚本,本局不再有胜利条件)。
+   * 08 号正式出怪器默认走脚本 —— 打开它,World 就整段绕开 sim/waves.ts 的运行器,
+   * 波次状态冻在初值(方向不转、永不走完),换来的是"场上恒定 N 只"这种压测才要的定数。
+   */
+  stressSpawn: false,
+  /** **仅 stressSpawn = true 时生效**:压测路径维持的在场敌人数 */
   stressEnemies: 1000,
   enemySeparation: 14, // 邻居分离半径 px(制造空间哈希查询负载)
   // 最大敌半径:空间哈希 cell = 半径×2(GDD §13)。从数值表推导,不在这里写死 ——
@@ -42,7 +49,8 @@ export const tuning = {
   // 与 stepShip 同口径:敌人状态机每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
   enemySpeedScale: 1, // 全局敌速倍率:压测想让虫潮慢下来看清行为时拖它,不去动数值表
   enemyHpScalePerMinute: 0.09, // GDD §14:敌方 HP ×(1 + 0.09·t分钟),单地图星区乘数固定 ×1
-  // 出怪占比(轮盘赌权重,不必凑成 100)。08 号 issue 的波次脚本接手前的临时出怪器;
+  // 出怪占比(轮盘赌权重,不必凑成 100)。**仅 stressSpawn = true 时生效** ——
+  // 正式出怪器的型号由 src/data/waves.ts 的波次脚本逐条流给死,不掷随机(08 号 issue)。
   // 只影响新生成的敌人,已在场的不会变型。
   enemyMixSwarm: 70,
   enemyMixStrafer: 15,

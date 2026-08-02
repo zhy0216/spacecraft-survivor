@@ -165,7 +165,7 @@ export function initEnemy(
   e.lockX = 0;
   e.lockY = 0;
   e.side = rng.next() < 0.5 ? -1 : 1;
-  // 起手 0 = 一出生就能咬:出生点在船外几百 px(见 World.spawnEnemy),
+  // 起手 0 = 一出生就能咬:出生点在船外一千多 px 的出怪环上(见 World.spawnFromWave),
   // 给它一个初始冷却只会让"生在船脸上"这类将来的出怪规则悄悄免掉第一口伤害
   e.hitCd = 0;
   e.dead = false;

@@ -23,6 +23,13 @@ import {
   towerMagazine,
   TOWERS,
 } from '../data/towers';
+import {
+  SPAWN_RADIUS,
+  SPAWN_RADIUS_BAND,
+  WAVE_MAX_ALIVE,
+  WAVE_SEGMENTS,
+  type WaveSegment,
+} from '../data/waves';
 import { type Arc, cellArc } from './arc';
 import { tuning } from './config';
 import {
@@ -59,11 +66,17 @@ import {
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
-import { World } from './world';
+import { waveDirAt } from './waves';
+import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN, WORLD_RADIUS, World } from './world';
 
 // 测试用小规模(压测数量是浏览器场景的事,这里只验证逻辑正确性)。
-// 与 ship.test.ts 同口径:有用例会拖数量/占比/分离半径,跑完必须还原,否则污染同文件后续用例
+// 与 ship.test.ts 同口径:有用例会拖数量/占比/分离半径,跑完必须还原,否则污染同文件后续用例。
+//
+// **默认走压测出怪路**(08 号 T2 起 world.step 的正式路径是波次脚本):本文件绝大多数用例钉的是
+// "世界这一层的接线"(受击结算 / 回收 / 炮管顺序 / checksum),它们要的是"场上恒定 N 只"这种定数,
+// 而不是随脚本时刻变化的怪量 —— 那是波次自己的用例该钉的事(见文件末尾那个 describe 与 waves.test.ts)。
 const BASE = {
+  stressSpawn: true,
   stressEnemies: 300,
   enemySeparation: 14,
   enemySpeedScale: 1,
@@ -122,7 +135,7 @@ describe('World 确定性', () => {
     }
     expect(a.enemies.size).toBe(300);
     // 一座塔都没放 → 一颗子弹都没有:01 号那批"凭空重生的压测哑弹"已在 05 号整段删除,
-    // 池里的东西此后只可能是塔真的打出来的(见 world.ts 的 syncCounts)
+    // 池里的东西此后只可能是塔真的打出来的(见 world.ts 的 stressSyncCounts)
     expect(a.bullets.size).toBe(0);
     expect(a.checksum()).toBe(b.checksum());
   });
@@ -751,7 +764,12 @@ describe('开火接线(05 号:塔真的打出东西来)', () => {
   });
 });
 
-describe('出怪混型(08 号波次脚本接手前的临时出怪器)', () => {
+/**
+ * 压测出怪路(tuning.stressSpawn = true)的混型与出生环。08 号 T2 之后它是一条 **debug 路径** ——
+ * 正式出怪器走波次脚本(见文件末尾那个 describe),而 tuning.stressEnemies 与四条 enemyMix*
+ * 也只在这条路上生效。留着它是因为"1000 敌同屏 60fps"那条压测场景要的是恒定数量,脚本给不了。
+ */
+describe('压测出怪混型(debug 路径:仅 stressSpawn = true 时生效)', () => {
   it('按 tuning.enemyMix* 轮盘赌:默认占比下四型都出得来', () => {
     const w = new World(31);
     w.step();
@@ -834,6 +852,511 @@ describe('出怪混型(08 号波次脚本接手前的临时出怪器)', () => {
     const late = w.enemies.items[0]!.hp;
     expect(late).toBeCloseTo(ENEMIES[KIND_SWARM]!.hp * (1 + 0.09 * (w.elapsed / 60)), 9);
     expect(late).toBeGreaterThan(early * 1.08);
+  });
+});
+
+/**
+ * 正式出怪器的接线(08 号 T2)。「什么时候、朝哪、出几只」全在 sim/waves.ts,由 waves.test.ts 钉;
+ * 这里钉的是**世界这一层**替它补上的那几件事:出生落点(以船为心的环)、在场上限、出怪挂钩、
+ * 波次进度进 checksum,以及 tuning.stressSpawn 那条 debug 路的整段旁路。
+ *
+ * 一律用 splice 进来的短脚本(与 waves.test.ts 同口径):真脚本 550s ≈ 33000 逻辑帧,单测里等不起,
+ * 而且它在 M0 还要被反复调平衡 —— 拿它写断言的用例活不过第一次改动。唯一的例外是那条验收用例
+ * (同 seed 两局出怪序列一致):它钉的就是"这一局真正会跑的那份脚本",只是只跑开头几十秒。
+ */
+describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
+  /** 真脚本原样留一份:每个用例都会换成短脚本,跑完必须还原,否则污染同文件后续用例 */
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  });
+
+  /**
+   * 换脚本并回到正式出怪路(本文件的 BASE 默认是压测路)。
+   * 必须在 new World **之前**调用:World 构造时就按第 0 段 t=0 算好了方向与强度。
+   */
+  function useScript(...segs: WaveSegment[]): void {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...segs);
+  }
+
+  function segment(p: Partial<WaveSegment> = {}): WaveSegment {
+    return {
+      name: 'seg',
+      duration: 60,
+      dirStartDeg: 0,
+      dirEndDeg: 0,
+      streams: [],
+      bursts: [],
+      elites: [],
+      ...p,
+    };
+  }
+
+  /** 一只怪的出生记录。记**相对船心**的落点:出怪环以船为心,记绝对坐标的断言换个船位就得重写 */
+  interface Spawn {
+    kind: number;
+    dx: number;
+    dy: number;
+  }
+  /**
+   * 挂上出怪挂钩收流水账。**回调里当场读**(池里的对象死后会被复用成另一只敌人,存引用读到的是别人)——
+   * 08 验收那条"同 seed 出怪序列一致"也只能这么比:池的 items 被 swap-remove 打乱过顺序。
+   */
+  function watchSpawns(w: World): Spawn[] {
+    const out: Spawn[] = [];
+    w.onEnemySpawn = (e) => out.push({ kind: e.kind, dx: e.x - w.ship.x, dy: e.y - w.ship.y });
+    return out;
+  }
+
+  /** 出生点离船心多远 —— 出怪环的唯一口径,断言照抄它 */
+  const ringDist = (s: Spawn): number => Math.hypot(s.dx, s.dy);
+
+  it('默认走脚本:按主压方向在船外环上出怪,型号由脚本给死(压测的 enemyMix* 一个字都不生效)', () => {
+    useScript(
+      segment({
+        dirStartDeg: 90, // +Y(y 轴朝下 = 屏幕正下方)
+        dirEndDeg: 90,
+        streams: [{ kind: KIND_TRAILER, rate0: 305, rate1: 305, spreadDeg: 0 }],
+      }),
+    );
+    // 压测占比全押蜂群蛭:出来的要是尾随蛆,才说明型号真的来自脚本而不是那四条旋钮
+    onlyKind(KIND_SWARM);
+    const w = new World(41);
+    const spawns = watchSpawns(w);
+    w.step();
+
+    expect(spawns.length).toBe(5); // 305 只/秒 ÷ 60Hz = 5.08:首帧出 5 只,余账 0.08 留给下一帧
+    expect(w.enemies.size).toBe(5); // 而不是压测路那 300 只
+    for (const s of spawns) {
+      expect(s.kind).toBe(KIND_TRAILER);
+      expect(ringDist(s)).toBeGreaterThanOrEqual(SPAWN_RADIUS);
+      expect(ringDist(s)).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+      // 展宽 0 → 出生角就是主压方向本身
+      expect(wrapAngle(Math.atan2(s.dy, s.dx) - Math.PI / 2)).toBeCloseTo(0, 12);
+    }
+    // 半径真的抖了(SPAWN_RADIUS_BAND):不抖的话一股流会在屏外排成一道正圆弧、整排同时抵达
+    expect(new Set(spawns.map(ringDist)).size).toBe(5);
+
+    // 出怪排在建哈希之前:新生的敌人当帧就动,px/py 停在出生环上(铁律 2)
+    for (const e of w.enemies.items) {
+      expect(Math.hypot(e.px - w.ship.x, e.py - w.ship.y)).toBeGreaterThanOrEqual(SPAWN_RADIUS);
+      expect(Math.hypot(e.x - e.px, e.y - e.py)).toBeGreaterThan(0);
+    }
+  });
+
+  it('出怪环以**船**为心而不是场心,且允许生在战场边界之外(那道半径只夹船,不是地图墙)', () => {
+    useScript(segment({ streams: [{ kind: KIND_SWARM, rate0: 305, rate1: 305, spreadDeg: 0 }] }));
+    const w = new World(42);
+    // 摆到场边(离场心 806 < WORLD_RADIUS,贴边夹取不会碰它);没有输入 → 它一步也不会挪
+    w.ship.x = 700;
+    w.ship.y = -400;
+    const spawns = watchSpawns(w);
+    w.step();
+    expect(w.ship.x).toBe(700);
+    expect(w.ship.y).toBe(-400);
+
+    expect(spawns.length).toBe(5);
+    for (const s of spawns) {
+      expect(ringDist(s)).toBeGreaterThanOrEqual(SPAWN_RADIUS);
+      expect(ringDist(s)).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+      // 以场心算的话落点会在原点周围的环上:主压方向 0° + 船在 +X 700,离场心远得多
+      const fromCenter = Math.hypot(s.dx + w.ship.x, s.dy + w.ship.y);
+      expect(fromCenter).toBeGreaterThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+      expect(fromCenter).toBeGreaterThan(WORLD_RADIUS);
+    }
+
+    // 再跑一会儿:敌人一直待在圈外也没被拉回来 —— 被拉回来的怪会在边界上排成一道墙,主压方向当场糊掉
+    for (let i = 0; i < 30; i++) w.step();
+    const far = w.enemies.items.filter((e) => Math.hypot(e.x, e.y) > WORLD_RADIUS);
+    expect(far.length).toBeGreaterThan(0);
+  });
+
+  it('onEnemySpawn 与 onEnemyDeath 对称:每成功出一只当场响一次,回调里拿到的是填好的那只', () => {
+    useScript(segment({ streams: [{ kind: KIND_BEETLE, rate0: 65, rate1: 65, spreadDeg: 10 }] }));
+    const w = new World(43);
+    const seen: { kind: number; hp: number; onRing: boolean; stamped: boolean }[] = [];
+    w.onEnemySpawn = (e) =>
+      seen.push({
+        kind: e.kind,
+        hp: e.hp,
+        onRing: Math.hypot(e.x - w.ship.x, e.y - w.ship.y) >= SPAWN_RADIUS,
+        stamped: e.px === e.x && e.py === e.y,
+      });
+    for (let i = 0; i < SIM_HZ; i++) w.step();
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.length).toBe(w.enemies.size); // 一只都没死 → 响过的次数就是场上的人数
+    for (const s of seen) {
+      expect(s.kind).toBe(KIND_BEETLE);
+      expect(s.hp).toBeGreaterThan(0); // 挂钩排在 initEnemy 之后:读到的不是个空壳
+      expect(s.onRing).toBe(true);
+      expect(s.stamped).toBe(true); // px/py 当场就是出生点(铁律 2)
+    }
+  });
+
+  it('压测那条 debug 路一次都不响:凭空补人凑数量不是"这一局的波次里来了一只怪"', () => {
+    tuning.stressSpawn = true;
+    tuning.stressEnemies = 20;
+    const w = new World(44);
+    let n = 0;
+    w.onEnemySpawn = () => n++;
+    for (let i = 0; i < 10; i++) w.step();
+    expect(w.enemies.size).toBe(20);
+    expect(n).toBe(0);
+  });
+
+  it('同 seed 两局出怪序列一字不差(08 验收标准第二条),换 seed 才换序列', () => {
+    // 这条**不换短脚本**:验收要的就是这一局真正会跑的那份 data/waves.ts,只是只跑开头 40 秒
+    tuning.stressSpawn = false;
+    const run = (seed: number): string[] => {
+      const w = new World(seed);
+      const out: string[] = [];
+      // 型号 + 落点逐只记流水:比池里的 items 靠谱(swap-remove 会打乱顺序,那比的是另一件事)
+      w.onEnemySpawn = (e) => out.push(`${e.kind}@${e.x.toFixed(6)},${e.y.toFixed(6)}`);
+      for (let i = 0; i < 40 * SIM_HZ; i++) w.step();
+      return out;
+    };
+    const a = run(2026);
+    expect(a.length).toBeGreaterThan(30); // 不是"两边都没出怪"的空过
+    expect(run(2026)).toEqual(a);
+    expect(run(777)).not.toEqual(a);
+  });
+
+  it('在场上限:触顶后当帧的出怪请求直接丢弃、不留账(上限一解除不会一口气吐出来)', () => {
+    useScript(
+      segment({ streams: [{ kind: KIND_SWARM, rate0: 5000, rate1: 5000, spreadDeg: 90 }] }),
+    );
+    const w = new World(45);
+    const spawns = watchSpawns(w);
+    // 单帧硬上限 64 只(WAVE_MAX_SPAWN_PER_TICK),故填满 1400 只至少要 22 帧
+    for (let i = 0; i < 40; i++) w.step();
+    expect(w.enemies.size).toBe(WAVE_MAX_ALIVE);
+    expect(spawns.length).toBe(WAVE_MAX_ALIVE);
+
+    // 触顶之后:一只都不再落地(留账的话这几帧攒下的怪会在上限解除时一口气涌出来)
+    for (let i = 0; i < 10; i++) w.step();
+    expect(w.enemies.size).toBe(WAVE_MAX_ALIVE);
+    expect(spawns.length).toBe(WAVE_MAX_ALIVE);
+  });
+
+  it('stressSpawn = true:波次整段旁路 —— 冻在初值、方向不转、永不 done(这一局没有胜利条件)', () => {
+    // 半秒的脚本:真跑起来早就走完了,而压测路下它一帧都不该动
+    useScript(
+      segment({
+        duration: 0.5,
+        dirStartDeg: 0,
+        dirEndDeg: 180,
+        streams: [{ kind: KIND_SWARM, rate0: 60, rate1: 60, spreadDeg: 0 }],
+      }),
+    );
+    tuning.stressSpawn = true;
+    tuning.stressEnemies = 12;
+    const w = new World(46);
+    const dir0 = w.threatDirection;
+    const intensity0 = w.threatIntensity;
+    for (let i = 0; i < 120; i++) w.step();
+
+    expect(w.wave.segment).toBe(0);
+    expect(w.wave.segTime).toBe(0);
+    expect(w.wave.burstNext).toBe(0);
+    expect(w.wave.done).toBe(false);
+    expect(w.threatDirection).toBe(dir0);
+    expect(w.threatIntensity).toBe(intensity0);
+    expect(w.enemies.size).toBe(12); // 场上恒定 N 只 —— 压测路要的就是这个定数
+  });
+
+  it('主压方向随脚本插值旋转,threatDirection / threatIntensity 就是 11 号罗盘读的那两个数', () => {
+    const seg = segment({
+      duration: 10,
+      dirStartDeg: 0,
+      dirEndDeg: 180,
+      streams: [{ kind: KIND_SWARM, rate0: 1, rate1: 3, spreadDeg: 0 }],
+    });
+    useScript(seg);
+    const w = new World(47);
+    // getter 就是那两个字段本身:HUD 不必认识 WaveState 的内部结构
+    expect(w.threatDirection).toBe(w.wave.dirRad);
+    expect(w.threatIntensity).toBe(w.wave.intensity);
+    expect(w.threatIntensity).toBeCloseTo(1, 12); // 开局 = 段首速率
+
+    // 每一只的出生角与**当帧**的主压方向:展宽 0 → 罗盘指哪,怪就真的从哪来
+    const born: { bearing: number; dir: number }[] = [];
+    w.onEnemySpawn = (e) =>
+      born.push({
+        bearing: Math.atan2(e.y - w.ship.y, e.x - w.ship.x),
+        dir: w.threatDirection,
+      });
+
+    for (let f = 0; f < 5 * SIM_HZ; f++) {
+      w.step();
+      // 跨 ±π 用 wrapAngle 比差值,别直接比两个角
+      expect(wrapAngle(w.threatDirection - waveDirAt(seg, w.wave.segTime))).toBeCloseTo(0, 12);
+    }
+    // 5 秒 = 半段 → 转过 90°(180° / 10s);强度也走到两端的中点
+    expect(w.threatDirection / DEG2RAD).toBeCloseTo(90, 6);
+    expect(w.threatIntensity).toBeCloseTo(2, 6);
+
+    expect(born.length).toBeGreaterThan(3);
+    for (const b of born) expect(wrapAngle(b.bearing - b.dir)).toBeCloseTo(0, 12);
+    // 玩家被迫持续微调航向的落点:出怪方向自己在漂,不是钉在段首角上(08 验收标准第一条)
+    expect((born[born.length - 1]!.bearing - born[0]!.bearing) / DEG2RAD).toBeGreaterThan(60);
+  });
+
+  it('波次进度进 checksum(段 / 段内计时 / 事件游标 / 逐流的账);方向与强度是派生量,不进', () => {
+    useScript(
+      segment({
+        dirStartDeg: 0,
+        dirEndDeg: 90,
+        streams: [{ kind: KIND_SWARM, rate0: 0.7, rate1: 0.7, spreadDeg: 20 }],
+        bursts: [{ at: 0.2, offsetDeg: 90, spreadDeg: 5, counts: [1, 0, 0, 0] }],
+      }),
+    );
+    const a = new World(48);
+    const b = new World(48);
+    for (let i = 0; i < SIM_HZ; i++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+    expect(a.wave.burstNext).toBe(1); // 事件真的触发过,下面那条游标的断言才不是空过
+
+    // 四项真状态逐个分叉 → 补上同一下又合流:每一项都是**单独**进的哈希,不是靠别的字段捎带
+    const mutations: ((w: World) => void)[] = [
+      (w) => (w.wave.segment += 1),
+      (w) => (w.wave.segTime += 0.5),
+      (w) => (w.wave.burstNext += 1),
+      (w) => (w.wave.debt[0] = w.wave.debt[0]! + 0.5),
+    ];
+    for (const mutate of mutations) {
+      mutate(a);
+      expect(a.checksum()).not.toBe(b.checksum());
+      mutate(b);
+      expect(a.checksum()).toBe(b.checksum());
+    }
+
+    // dirRad / intensity / done 是 segment + segTime + 脚本的纯函数(与 maxHp / shipDead 同口径):
+    // 哈它们只是把同一件事哈两遍,故改了也不该分叉
+    const before = a.checksum();
+    a.wave.dirRad += 1;
+    a.wave.intensity += 1;
+    a.wave.done = true;
+    expect(a.checksum()).toBe(before);
+  });
+});
+
+/**
+ * 局终判定(08 号 T3)。World **只做到"判"为止** —— 结论落成 result 与一次 onGameOver,
+ * 暂停/重开/结算界面全在 main.ts,故这里钉的只有四件事:判得对不对(胜/负/失败优先)、
+ * 响几次(各一次、判完不改口)、判完还能不能接着 step(能,世界不认识"游戏流程")、
+ * 以及船沉之后受击结算是不是真的整段停手(连火花都不再推)。
+ *
+ * 一律用 splice 进来的短脚本(与上一个 describe 同口径):真脚本 550s ≈ 33000 逻辑帧,单测里等不起。
+ */
+describe('局终判定(08 号 T3:胜负结论,World 只判不停)', () => {
+  /** 真脚本原样留一份:每个用例都会换成短脚本,跑完必须还原,否则污染同文件后续用例 */
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  });
+
+  /**
+   * 一段就跑完的脚本,并回到正式出怪路(本文件的 BASE 默认是压测路)。
+   * 必须在 new World **之前**调用:World 构造时就按第 0 段 t=0 算好了方向与强度。
+   * @param rate 主压速率(只/秒),缺省 0 = 一只怪都不出 —— 胜利那几条要的是一局"没人打扰的空跑"
+   */
+  function useShortScript(duration: number, rate = 0): void {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, {
+      name: 'short',
+      duration,
+      dirStartDeg: 0,
+      dirEndDeg: 0,
+      streams: rate > 0 ? [{ kind: KIND_SWARM, rate0: rate, rate1: rate, spreadDeg: 0 }] : [],
+      bursts: [],
+      elites: [],
+    });
+  }
+
+  /**
+   * 段长**刻意不取整帧**:0.5s 恰好是 30 帧,而 segTime 是逐帧累加出来的,
+   * 差一个 ulp 就会在"第 30 帧还是第 31 帧走完"上翻脸。取 0.505 后跨段那一帧无歧义,
+   * 于是下面"走完的**前一帧**还没赢"这类断言才钉得住。
+   */
+  const DUR = 0.505;
+  /** 跨段发生在第几帧(1 起数) */
+  const CROSS = Math.ceil(DUR * SIM_HZ);
+
+  it('开局 result = RESULT_RUNNING,局还在跑就一次都不响', () => {
+    useShortScript(10);
+    const w = new World(60);
+    let n = 0;
+    w.onGameOver = () => n++;
+
+    expect(w.result).toBe(RESULT_RUNNING);
+    for (let i = 0; i < SIM_HZ; i++) w.step();
+    expect(w.result).toBe(RESULT_RUNNING);
+    expect(n).toBe(0);
+  });
+
+  it('脚本走完 = 胜利:走完那一帧才置 RESULT_WIN,onGameOver 恰好响一次', () => {
+    useShortScript(DUR);
+    const w = new World(61);
+    const seen: number[] = [];
+    w.onGameOver = (r) => seen.push(r);
+
+    // 走完的**前一帧**:一切照旧 —— 提前一帧判就等于把最后一段的最后一秒白送了
+    for (let i = 0; i < CROSS - 1; i++) w.step();
+    expect(w.wave.done).toBe(false);
+    expect(w.result).toBe(RESULT_RUNNING);
+    expect(seen).toEqual([]);
+
+    w.step();
+    expect(w.wave.done).toBe(true);
+    expect(w.result).toBe(RESULT_WIN);
+    expect(seen).toEqual([RESULT_WIN]);
+
+    // 结算界面弹出后世界还会被 step 几帧(main.ts 下一渲染帧才暂停)—— 那几帧一次都不许再响
+    for (let i = 0; i < 2 * SIM_HZ; i++) w.step();
+    expect(seen).toEqual([RESULT_WIN]);
+    expect(w.result).toBe(RESULT_WIN);
+  });
+
+  it('HP 归零 = 失败:结论在**帧尾**出,onShipDestroyed 与 onGameOver 各管一件事、各响一次', () => {
+    useShortScript(60); // 长到跑不完:这一条只考失败
+    const w = new World(62);
+    const log: string[] = [];
+    w.onShipDestroyed = () => log.push('dead');
+    w.onGameOver = (r) => log.push(`over:${r}`);
+
+    // 沉船那一刻只有状态位,还没有结论:胜负两条路统一在帧尾判(那时本帧的击杀才入完账)
+    expect(w.damageShip(w.ship.maxHp, 100, 0)).toBe(true);
+    expect(w.shipDead).toBe(true);
+    expect(w.result).toBe(RESULT_RUNNING);
+    expect(log).toEqual(['dead']);
+
+    w.step();
+    expect(w.result).toBe(RESULT_LOSE);
+    expect(log).toEqual(['dead', `over:${RESULT_LOSE}`]);
+
+    for (let i = 0; i < 2 * SIM_HZ; i++) w.step();
+    expect(log).toEqual(['dead', `over:${RESULT_LOSE}`]);
+  });
+
+  it('撞沉的那一帧当帧就判:敌人在帧中把船撞光血,同一次 step 里就落成 RESULT_LOSE', () => {
+    // 走真正的伤害路径(受击结算在帧中)而不是帧外 damageShip:结论要是没排在帧尾,这条就红
+    const w = hullWorld(63);
+    const core = hullCoreHalfExtents(halfOut);
+    const e = w.enemies.items[0]!;
+    park(e, w.ship.x + core.x / 2, w.ship.y);
+    w.ship.hp = 1; // 蜂群蛭一口就够
+    let over = -1;
+    w.onGameOver = (r) => (over = r);
+
+    w.step();
+    expect(w.ship.hp).toBe(0);
+    expect(w.shipDead).toBe(true);
+    expect(w.result).toBe(RESULT_LOSE);
+    expect(over).toBe(RESULT_LOSE);
+  });
+
+  it('失败优先于胜利:同一帧既沉船又走完脚本,算失败', () => {
+    useShortScript(DUR);
+    const w = new World(64);
+    const seen: number[] = [];
+    w.onGameOver = (r) => seen.push(r);
+
+    for (let i = 0; i < CROSS - 1; i++) w.step();
+    expect(w.wave.done).toBe(false);
+    // 终点线前一帧被撞沉:这一帧 shipDead 与 wave.done 同时成立
+    expect(w.damageShip(w.ship.maxHp, 100, 0)).toBe(true);
+    w.step();
+
+    expect(w.wave.done).toBe(true); // 脚本这一帧确实走完了 —— 断言不是空过
+    expect(w.shipDead).toBe(true);
+    expect(w.result).toBe(RESULT_LOSE);
+    expect(seen).toEqual([RESULT_LOSE]);
+  });
+
+  it('判完不改口:赢了之后再把船打沉,result 仍是 RESULT_WIN,回调也不再响', () => {
+    useShortScript(DUR);
+    const w = new World(65);
+    const seen: number[] = [];
+    w.onGameOver = (r) => seen.push(r);
+
+    for (let i = 0; i < CROSS; i++) w.step();
+    expect(w.result).toBe(RESULT_WIN);
+
+    expect(w.damageShip(w.ship.maxHp, 100, 0)).toBe(true);
+    w.step();
+    expect(w.shipDead).toBe(true);
+    expect(w.result).toBe(RESULT_WIN); // 胜负互斥:先到的那个把这一局定死
+    expect(seen).toEqual([RESULT_WIN]);
+  });
+
+  it('World 判完不自己停手:step() 照常推进 tick/elapsed(暂停是 main.ts 的事)', () => {
+    useShortScript(DUR, 60);
+    const w = new World(66);
+    for (let i = 0; i < CROSS; i++) w.step();
+    expect(w.result).toBe(RESULT_WIN);
+    const tick = w.tick;
+    const alive = w.enemies.size;
+    expect(alive).toBeGreaterThan(0); // 场上还有人:下面那条"不再出怪"才有对照
+
+    for (let i = 0; i < 30; i++) w.step();
+    expect(w.tick).toBe(tick + 30);
+    expect(w.elapsed).toBeCloseTo((tick + 30) * SIM_DT, 12);
+    // 胜利之后波次彻底闭嘴(stepWaves 的第一句):结算界面背后不该还在涌怪
+    expect(w.enemies.size).toBeLessThanOrEqual(alive);
+  });
+
+  it('压测路(stressSpawn)没有胜利条件:脚本再短也不会弹结算', () => {
+    useShortScript(0.05); // 短到第一帧就该走完
+    tuning.stressSpawn = true;
+    tuning.stressEnemies = 4;
+    const w = new World(67);
+    let n = 0;
+    w.onGameOver = () => n++;
+
+    for (let i = 0; i < SIM_HZ; i++) w.step();
+    expect(w.wave.done).toBe(false); // 波次整段旁路,冻在初值
+    expect(w.result).toBe(RESULT_RUNNING);
+    expect(n).toBe(0);
+  });
+
+  it('船沉之后受击结算整段停手:连火花与撞击圆环都不再推(伤害那一半本来就被挡着)', () => {
+    const w = hullWorld(68);
+    const core = hullCoreHalfExtents(halfOut);
+    const e = w.enemies.items[0]!;
+    park(e, w.ship.x + core.x / 2, w.ship.y);
+
+    // 先证明这只敌人真的在持续产出撞击事件,否则下面那条断言是空过
+    w.step();
+    expect(w.shipDead).toBe(false);
+    expect(w.fx.size).toBeGreaterThan(0);
+
+    // 帧外扣光:这条考的是"沉了之后还推不推事件",不是"怎么沉的"
+    expect(w.damageShip(w.ship.hp, 100, 0)).toBe(true);
+    expect(w.shipDead).toBe(true);
+    // 跑够 2 秒:沉船前那批事件早已到期(FX_LIFE_* 最长 0.22s),无敌帧也早过了好几轮
+    for (let i = 0; i < frames(2); i++) w.step();
+    expect(w.fx.size).toBe(0);
+
+    // 而它还老老实实压在核心区上 —— 不是因为它走开了才没事件,是结算这一步整段停了
+    expect(classifyHit(w.ship, w.deck, e.x, e.y, ENEMIES[KIND_SWARM]!.radius)).toBe(HIT_CORE);
+    expect(w.contacts).toContain(e); // 粗筛照常登记:停手的只有结算
+  });
+
+  it('result 是派生量,不进 checksum(与 maxHp / shipDead 同口径)', () => {
+    const a = new World(69);
+    const b = new World(69);
+    for (let i = 0; i < 30; i++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+    a.result = RESULT_WIN;
+    expect(a.checksum()).toBe(b.checksum());
   });
 });
 

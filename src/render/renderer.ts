@@ -898,6 +898,78 @@ export class Renderer {
   }
 
   /**
+   * 换掉整个 World(08 号 issue T3 的重开流程 —— 验收标准原文:一局从开始到胜利/失败/重开
+   * **全流程无需刷新页面**)。重开一律是"换一个新 World",而不是给 World 加 reset():
+   * 池、rng、tick、甲板全是新的,才谈得上"同 seed 可复现"(旧世界跑过的随机数一个都不许留)。
+   *
+   * 于是渲染层这边要作废的,只有**跨 World 就会说谎的缓存**这两处:
+   *   deckRevision:新甲板的 revision 从 0 起步,不置 -1 就会与上一局最后那个值撞上 ——
+   *     底板与邻接连线于是停在上一局的样子(空船看上去还带着上一局放的塔),而且再也不会自己好起来:
+   *     脏标记的判据是"变了没有",不是"是不是同一艘船";
+   *   broadside 那一组:去重键 broadsideTick 认的是 world.tick,而新 World 的 tick 同样从 0 起 ——
+   *     留着旧值只会让新局的第 n 帧齐射被误判成"这一帧已经触发过"。顺手把衰减与方向清零、
+   *     把闪光片关掉:那是**上一局最后一次齐射**的镜头顿挫,不该跟着新船开出去
+   *     (flashG 挂在 stage 上、不归任何一层的 clear 管,只能在这儿关)。
+   *
+   * 其余脏标记 hitDrawn / hiliteDrawn / arcDrawn **是自愈的**,这里一个字都不必写:
+   * 三者各自的条件(某舷在挨罚 / 放置模式开着 / 按住 Tab)一旦不成立,对应的 draw* 会 clear 一次
+   * 再落回 false —— 新局第一帧就把上一局的残影抹干净了;条件仍然成立时它们本来就每帧重画。
+   * 粒子也不必动:池里的粒子只增不删,本帧多出来的那些下一次 syncParticles 会被挪去 OFFSCREEN。
+   */
+  setWorld(world: World): void {
+    this.world = world;
+    this.deckRevision = -1;
+    this.broadsideTick = -1;
+    this.broadsideLeft = 0;
+    this.broadsideDirX = 0;
+    this.broadsideDirY = 0;
+    this.flashG.visible = false;
+  }
+
+  /**
+   * 截一张当前船形剪影的 dataURL,抓不到返回 null(08 号 T3 可选项:结算界面的"最终船形",
+   * P3 传播素材的最小雏形)。
+   *
+   * 抓 **deckG** 而不是整块画布:玩家要留下的是"我这一局把船拼成了什么样",
+   * 而画布上那一千只虫子只会把它糊掉。extract 走的是 target 的 **local bounds**,
+   * 于是容器自己的位姿(镜头缩放、船此刻的朝向)一概不进图 —— 出来的永远是船头朝 +X 的正像,
+   * 而不是玩家沉船那一瞬刚好歪着的那个角度。
+   *
+   * 交互层与逐帧读数临时藏起来:放置高亮 / 射界扇形 / 弹夹热量画的都是"此刻的操作状态",
+   * 不是这艘船本身,留在图里就成了一张糊着蓝框的截图。藏与还原走 try/finally ——
+   * extract 抛了(上下文丢失、离屏 canvas 不给 toDataURL)也绝不能把这几层永久关掉,
+   * 那会让重开后的甲板缺三层读数。整体再 try/catch 兜底:剪影是锦上添花,
+   * 抓不到就交 null(ui 侧 RunSummary.silhouette 收的就是 string | null),结算界面照常弹 ——
+   * 一张图绝不许把胜负结算这条主流程带崩。
+   *
+   * 一局只调一次(结算那一下),故这里的临时数组与 2x 分辨率都不必心疼(铁律 3 管的是热路径)。
+   */
+  captureShipSilhouette(): string | null {
+    const hidden = [
+      this.deckArcG,
+      this.deckMuzzleG,
+      this.deckThrottleG,
+      this.deckHiliteG,
+      this.deckHitG,
+    ];
+    try {
+      for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = false;
+      // 2x + 抗锯齿:与敌人/子弹纹理同一条取舍 —— 静态图只生成一次,拿点显存换边缘可读性
+      const canvas = this.app.renderer.extract.canvas({
+        target: this.deckG,
+        resolution: 2,
+        antialias: true,
+      });
+      // toDataURL 在 ICanvas 上是**可选**方法(某些离屏 canvas 实现没有它):没有就当作抓不到
+      return canvas.toDataURL?.('image/png') ?? null;
+    } catch {
+      return null;
+    } finally {
+      for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = true;
+    }
+  }
+
+  /**
    * 接线放置模式。只存引用不拷贝:ui 层每帧就地改字段(hoverIndex/denyIndex),
    * 渲染层下一帧自然读到最新值,两边不必再约定一个"通知"通道。传 null = 摘掉放置层。
    */

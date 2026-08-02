@@ -8,6 +8,9 @@ import { FixedStepLoop, MAX_STEPS_PER_FRAME, SIM_DT } from './loop';
 import { tuning } from '../sim/config';
 import { World } from '../sim/world';
 
+// 走压测出怪路(08 号 T2 起 step 的正式路径是波次脚本):这条用例钉的是"tick 数相同 → 结果相同",
+// 恒定 200 只比随脚本涨落的怪量更容易看出分叉,而波次本身也照样跟着 tick 走(它就在 step 里)
+tuning.stressSpawn = true;
 tuning.stressEnemies = 200;
 
 /** 按固定帧长喂满 frames 帧,返回跑完的世界与循环 */

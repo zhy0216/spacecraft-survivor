@@ -1,5 +1,5 @@
 /**
- * 放置提示文案(03 号 issue T4 + 05 号 issue T5 的塔型/叠级)。只测纯函数那几段 ——
+ * 放置提示文案(03 号 issue T4 + 05 号 issue T5 的塔型/叠级)。主体只测纯函数那几段 ——
  * createPlacementUi 要 DOM 与 canvas,本仓的 vitest 跑在 Node 环境里(不装 jsdom),
  * 交互部分的验收本来也只能靠真人点(见 03 号验收标准),不值得为它拖一个环境进来。
  *
@@ -7,8 +7,16 @@
  * 前提就是拒绝时必须说清为什么):新增理由码却忘了配文案时,它会静默退化成兜底串 ——
  * 本文件就是那道拦网。塔名与键位则钉"提示条只从数值表取名字",不许 ui 里再抄一份。
  * 注意 ui 只 import type 渲染层,所以这里不会把 pixi 拖进 Node。
+ *
+ * **唯一的例外是文件末尾的 setWorld**(08 号 issue T3 的重开流程,验收标准原文:
+ * 一局从开始到胜利/失败/重开全流程无需刷新页面)。它恰恰**不是交互**,而是"换一局"这条流程里
+ * 最容易做漏的一环:换引用 / 不重复注册 window 事件 / 不重复 append DOM,三条各错一次的后果
+ * (点了没反应、监听器每局翻倍、提示条越叠越多)都要等真人重开第二、第三局才看得出来。
+ * 三条全都能在一个几十行的 DOM 桩上数出来,故这里破一次例 —— 桩只提供 createPlacementUi
+ * 真的会碰的那几样(createElement/getElementById/append + window 的三个方法 + canvas 的两个),
+ * 绝不发展成半个 jsdom。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS } from '../data/towers';
 import {
@@ -25,7 +33,16 @@ import {
   PLACE_TAKEN,
   PLACE_UPGRADE,
 } from '../sim/deck';
-import { denyMessage, keyHintText, nextSupportType, placeLabel, placedMessage } from './placement';
+import type { Vec2 } from '../sim/ship';
+import { World } from '../sim/world';
+import {
+  createPlacementUi,
+  denyMessage,
+  keyHintText,
+  nextSupportType,
+  placeLabel,
+  placedMessage,
+} from './placement';
 
 const DENY_CODES = [
   PLACE_NO_CELL,
@@ -143,5 +160,189 @@ describe('keyHintText', () => {
     expect(SUPPORTS.length).toBe(SUPPORT_KIND_COUNT);
     // "按 0 会在四种之间转"必须讲明白:只写"0 支援设施"的话,另外三种没有任何线索
     expect(hint).toContain('轮换');
+  });
+});
+
+// —— 以下只服务 setWorld 那三条(破例的理由见文件头)——
+
+/** 桩元素:createPlacementUi 只碰它的 style.cssText / style.color / textContent / append / appendChild */
+interface StubEl {
+  style: { cssText: string; color: string };
+  textContent: string;
+  children: StubEl[];
+  append(...kids: StubEl[]): void;
+  appendChild(kid: StubEl): StubEl;
+}
+
+function createStubEl(): StubEl {
+  const el: StubEl = {
+    style: { cssText: '', color: '' },
+    textContent: '',
+    children: [],
+    append(...kids: StubEl[]): void {
+      el.children.push(...kids);
+    },
+    appendChild(kid: StubEl): StubEl {
+      el.children.push(kid);
+      return kid;
+    },
+  };
+  return el;
+}
+
+interface StubDom {
+  /** #ui 覆盖层:提示条 append 到这里,"重开一局多长出一条"于是一眼数得出来 */
+  ui: StubEl;
+  /** window.addEventListener 的累计调用次数:重开一局不该让它再涨 */
+  windowListeners: number;
+  /** 还没到点的闪现超时。假计时器(不真排队),故测完不会有回调在后面飞 */
+  timers: Map<number, () => void>;
+  canvas: HTMLCanvasElement;
+  /** 触发画布上的一次左键点击(clientX/Y = 画布像素,见下面 getBoundingClientRect) */
+  click(x: number, y: number): void;
+  restore(): void;
+}
+
+function installDom(): StubDom {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const prevWindow = g.window;
+  const prevDocument = g.document;
+  const clicks: Array<(e: { clientX: number; clientY: number }) => void> = [];
+  let nextTimer = 1;
+
+  const dom: StubDom = {
+    ui: createStubEl(),
+    windowListeners: 0,
+    timers: new Map<number, () => void>(),
+    canvas: {
+      addEventListener(type: string, fn: (e: { clientX: number; clientY: number }) => void): void {
+        if (type === 'click') clicks.push(fn);
+      },
+      // 画布左上角 = 屏幕原点 ⇒ clientX/Y 直接就是画布像素(与真实的 resolution=1 + 满窗画布一致)
+      getBoundingClientRect(): { left: number; top: number } {
+        return { left: 0, top: 0 };
+      },
+    } as unknown as HTMLCanvasElement,
+    click(x: number, y: number): void {
+      for (const fn of clicks) fn({ clientX: x, clientY: y });
+    },
+    restore(): void {
+      g.window = prevWindow;
+      g.document = prevDocument;
+    },
+  };
+
+  g.window = {
+    addEventListener(): void {
+      dom.windowListeners++;
+    },
+    setTimeout(fn: () => void): number {
+      const id = nextTimer++;
+      dom.timers.set(id, fn);
+      return id;
+    },
+    clearTimeout(id: number): void {
+      dom.timers.delete(id);
+    },
+  };
+  g.document = {
+    createElement: (): StubEl => createStubEl(),
+    getElementById: (id: string): StubEl | null => (id === 'ui' ? dom.ui : null),
+  };
+  return dom;
+}
+
+/** 屏幕像素 = 世界坐标:船开局停在世界原点,于是点 (0,0) 就是点在船正中那一格上 */
+function screenIsWorld(sx: number, sy: number, out: Vec2): Vec2 {
+  out.x = sx;
+  out.y = sy;
+  return out;
+}
+
+function countSupports(world: World): number {
+  return world.deck.cells.filter((c) => c.content === CELL_SUPPORT).length;
+}
+
+/** 提示条是 #ui 的唯一子节点,它的第三行是闪现行(见 createPlacementUi 里 box.append 的顺序) */
+function flashText(dom: StubDom): string {
+  return dom.ui.children[0]?.children[2]?.textContent ?? '';
+}
+
+describe('createPlacementUi().setWorld', () => {
+  let dom: StubDom;
+
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => {
+    dom.restore();
+  });
+
+  it('换掉 world 引用:重开后点下去的格落在新船上,旧船一格不动', () => {
+    const first = new World(1);
+    const second = new World(2);
+    const ui = createPlacementUi({
+      world: first,
+      canvas: dom.canvas,
+      screenToWorld: screenIsWorld,
+    });
+    // 直接改状态对象而不是模拟按键:PlacementUi 就是渲染层每帧读的那个 state(见 PlacementUiState),
+    // 这里要测的是 setWorld,不是键位。选支援设施是因为船正中那一格是内部格(武器塔进不去,GDD §4.1)
+    ui.active = true;
+    ui.content = CELL_SUPPORT;
+
+    dom.click(0, 0);
+    expect(countSupports(first)).toBe(1);
+    expect(countSupports(second)).toBe(0);
+
+    ui.setWorld(second);
+    dom.click(0, 0);
+    // 忘了换引用的话,这一下会照旧落进上一局那艘沉船里,而画面上什么都不会发生
+    // (渲染层读的是新 World 的甲板)—— 那正是最难查的一类"点了没反应"
+    expect(countSupports(second)).toBe(1);
+    expect(countSupports(first)).toBe(1);
+  });
+
+  it('不重复注册 window 事件、不重复 append DOM', () => {
+    const ui = createPlacementUi({
+      world: new World(1),
+      canvas: dom.canvas,
+      screenToWorld: screenIsWorld,
+    });
+    const listeners = dom.windowListeners;
+    // 建的时候确实挂了监听器、也确实 append 了提示条 —— 否则下面两条"没变"是废话
+    expect(listeners).toBeGreaterThan(0);
+    expect(dom.ui.children.length).toBe(1);
+
+    ui.setWorld(new World(2));
+    ui.setWorld(new World(3));
+    // 每重开一局多一份监听器 = 一次点击放好几次塔;多一条提示条 = 左下角越堆越高
+    expect(dom.windowListeners).toBe(listeners);
+    expect(dom.ui.children.length).toBe(1);
+  });
+
+  it('复位悬停格/被拒格与闪现计时,但不动放置模式开关', () => {
+    const ui = createPlacementUi({
+      world: new World(1),
+      canvas: dom.canvas,
+      screenToWorld: screenIsWorld,
+    });
+    // 默认 content = CELL_WEAPON,而船正中是内部格 ⇒ 必被拒(PLACE_INTERIOR,GDD §4.1)
+    ui.active = true;
+    dom.click(0, 0);
+    expect(ui.denyIndex).toBeGreaterThanOrEqual(0);
+    expect(flashText(dom)).not.toBe('');
+    expect(dom.timers.size).toBe(1);
+    ui.hoverIndex = ui.denyIndex;
+
+    ui.setWorld(new World(2));
+    // 两个下标都是上一艘船上的位置:留着就会在新局第一帧描出一个与光标无关的框/红闪
+    expect(ui.hoverIndex).toBe(-1);
+    expect(ui.denyIndex).toBe(-1);
+    // 计时器也得停:留着的话它会在新局里回来抹一次 denyIndex —— 抹的是别人的状态
+    expect(dom.timers.size).toBe(0);
+    expect(flashText(dom)).toBe('');
+    // 开关是玩家自己的选择,重开一局不该顺手替他关掉
+    expect(ui.active).toBe(true);
   });
 });

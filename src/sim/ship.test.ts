@@ -24,7 +24,10 @@ Object.assign(tuning, BASE);
 // 有用例会拖参数来验证"每帧现读",跑完必须还原,否则污染同文件后续用例
 afterEach(() => Object.assign(tuning, BASE));
 
-// World 用例只关心船与追船逻辑,压测数量是浏览器场景的事 —— 调小纯粹为了跑得快
+// World 用例只关心船与追船逻辑,压测数量是浏览器场景的事 —— 调小纯粹为了跑得快。
+// 走压测出怪路(08 号 T2 起 step 的正式路径是波次脚本):这里要的是"场上恒定几十只"的定数,
+// 让追船与贴边夹取的断言不受脚本时刻的密度曲线影响(波次自己的用例在 world.test.ts / waves.test.ts)
+tuning.stressSpawn = true;
 tuning.stressEnemies = 50;
 
 // y 轴朝下:-1 是屏幕上方
