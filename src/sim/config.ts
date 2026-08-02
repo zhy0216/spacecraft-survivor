@@ -2,7 +2,12 @@
  * 可热调参数。Tweakpane 直接绑定本对象,改动即时生效。
  * 初值来自 GDD §3.2 / §14(全部占位,M0 调优)。
  * 原则(todos/05):数值只进配置,不写死在逻辑里。
+ *
+ * 分工:一型一个数的(各敌型血量/速度/前摇)进 src/data/enemies.ts;
+ * 全局性的倍率与阈值留在这里 —— 后者才是面板上"拖一下看体感"的旋钮。
  */
+import { ENEMY_RADIUS_MAX } from '../data/enemies';
+
 export const tuning = {
   // —— 船(GDD §3.2)——
   // 以下四项由 sim/ship.ts 的 stepShip 每逻辑帧现读:现读才有"面板拖一下立刻能体感对比",
@@ -23,12 +28,26 @@ export const tuning = {
   // —— 压测场景(01 号 issue 验收:1000 敌 + 500 弹 @60fps)——
   stressEnemies: 1000,
   stressBullets: 500,
-  enemySpeed: 80, // 蜂群蛭 80 px/s(GDD §14)
   enemySeparation: 14, // 邻居分离半径 px(制造空间哈希查询负载)
-  // 最大敌半径:空间哈希 cell = 半径×2(GDD §13)。World 构造时一次性读取,
-  // 故不进调参面板 —— 运行期改会让已分桶的数据与查询半径口径错位。
-  enemyRadiusMax: 14,
+  // 最大敌半径:空间哈希 cell = 半径×2(GDD §13)。从数值表推导,不在这里写死 ——
+  // 加一型敌人只改 src/data/enemies.ts 的 radius,cell 口径自动跟上。
+  // World 构造时一次性读取,故不进调参面板:运行期改会让已分桶的数据与查询半径口径错位。
+  enemyRadiusMax: ENEMY_RADIUS_MAX,
   bulletSpeed: 420, // px/s
+
+  // —— 敌人(GDD §14 / todos/07)——各型基础数值在 src/data/enemies.ts,这里只放全局量。
+  // 与 stepShip 同口径:敌人状态机每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
+  enemySpeedScale: 1, // 全局敌速倍率:压测想让虫潮慢下来看清行为时拖它,不去动数值表
+  enemyHpScalePerMinute: 0.09, // GDD §14:敌方 HP ×(1 + 0.09·t分钟),单地图星区乘数固定 ×1
+  // 占位:船体接触判定圆(= shipWidth/2)。09 号 issue 会换成固定核心区 + 四舷判定,
+  // 现在只用来把"贴到船了"这件事检出来放进 world.contacts,不结算伤害。
+  shipContactRadius: 56,
+  // 出怪占比(轮盘赌权重,不必凑成 100)。08 号 issue 的波次脚本接手前的临时出怪器;
+  // 只影响新生成的敌人,已在场的不会变型。
+  enemyMixSwarm: 70,
+  enemyMixStrafer: 15,
+  enemyMixTrailer: 10,
+  enemyMixBeetle: 5,
 };
 
 export type Tuning = typeof tuning;

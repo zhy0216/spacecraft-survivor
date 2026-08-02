@@ -1,0 +1,276 @@
+/**
+ * 敌人实体与行为状态机(07 号 issue T1/T3)—— 纯逻辑。
+ * 铁律:本目录永不 import pixi/DOM;随机只走调用方递进来的 Rng(sim 内禁 Math.random);
+ * 实体维护 px/py 供渲染层插值(存 px/py 的时机与船同口径,由 World 在推进前做)。
+ *
+ * 分型不用 class 继承 + 虚函数,而是"数字 kind/behavior 字段 + switch 分派":
+ * Enemy 是扁平普通对象,字段在 createEnemy() 里一次性声明齐,运行期绝不新增字段
+ * (新增字段会让 V8 换隐藏类,1000 敌同屏的预算下这笔钱直接写在帧时间上,GDD §13)。
+ * 池的 reset 逐字段重置 —— 漏一个就会把上一条命的状态带给下一只(单测钉了全字段)。
+ *
+ * 本文件只产出"期望速度 + 追随系数",不积分位置、不做邻居分离、不回收尸体:那些是 World 的事。
+ * 换来的是四种敌型的行为能脱开世界单测(喂一只敌人 + 一艘船就能跑完整套冲锋状态机),
+ * 也保证"冲刺中不重新瞄准"这类机制只有一处实现、只需一处钉住。
+ */
+import type { Rng } from '../core/rng';
+import {
+  BH_SEEK_CHARGE,
+  BH_STRAFE,
+  BH_STRAFE_CHARGE,
+  ENEMIES,
+  type EnemyDef,
+  ZONE_HP_MULT,
+} from '../data/enemies';
+import { tuning } from './config';
+import { DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
+import { lockCharge, seek, strafe } from './steering';
+
+/** 接近段:按 behavior 走 seek 或 strafe */
+export const ST_APPROACH = 0;
+/** 前摇:刹住不动,方向已锁死,渲染层据此画预警(07 验收:前摇可读) */
+export const ST_WINDUP = 1;
+/** 冲刺:沿锁定方向直线全速,期间绝不重新瞄准 */
+export const ST_DASH = 2;
+/** 硬直:不出力,靠惯性滑出去 = 侧掠者的"啃咬后脱离" */
+export const ST_RECOVER = 3;
+
+/**
+ * 侧掠者起手的方位容差:绕到离目标方位(舷侧)30° 以内才允许进前摇。
+ * 这条是"侧掠者确实从舷侧发起攻击、而不是退化成追尾"的机制根源(07 验收标准第一条)——
+ * 去掉它 BH_STRAFE_CHARGE 就等于 BH_SEEK_CHARGE,这一型的方向压力也就没了。
+ * 与 steering.ts 的 STRAFE_*_GAIN 同理:它是判据的形状而非平衡旋钮
+ * (平衡旋钮是数值表里的 chargeRange / strafeOffsetDeg),故留在模块里,不进数值表。
+ */
+const WINDUP_BEARING_TOL = 30 * DEG2RAD;
+
+/**
+ * 计时到期的判据容差(秒)。timer 是逐帧减 dt 的浮点累减:0.2s 这种 dt 整数倍的时长
+ * 减完会落在 ±1e-17 上,不兜住就会随机多出一帧。1e-9 远小于一帧(1/60 s),
+ * 只吃得掉浮点残差、吃不掉真帧 —— 于是"某状态恰好持续 timer/dt 帧"严格成立,
+ * 前摇时长这个最敏感的旋钮才是真可配的(单测按帧数钉)。
+ */
+const TIMER_EPS = 1e-9;
+
+/** px/py = 上一逻辑帧位置(铁律 2);字段一次性声明齐,运行期不新增 */
+export interface Enemy {
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+  vx: number;
+  vy: number;
+  /** EnemyKind,switch 分派用;同时是 ENEMIES 的下标与渲染层的分桶键 */
+  kind: number;
+  hp: number;
+  maxHp: number;
+  /** ST_* */
+  state: number;
+  /** 当前状态剩余秒(ST_APPROACH 下恒为 0:接近段没有时限) */
+  timer: number;
+  /** 冲锋锁定方向(单位向量),进 WINDUP 那一刻写死,到 DASH 结束都不再动 */
+  lockX: number;
+  lockY: number;
+  /** +1/-1:绕行型从左舷还是右舷切入。生成时定死 —— 每帧现选会让它在船头前来回抖 */
+  side: number;
+  /** 本帧被打死,step 末尾统一回收(遍历中就地删会踩 swap-remove 的下标坑) */
+  dead: boolean;
+}
+
+/** 池 factory:字段在这里一次性声明齐,之后只被赋值、绝不新增 */
+export function createEnemy(): Enemy {
+  return {
+    x: 0,
+    y: 0,
+    px: 0,
+    py: 0,
+    vx: 0,
+    vy: 0,
+    kind: 0,
+    hp: 0,
+    maxHp: 0,
+    state: ST_APPROACH,
+    timer: 0,
+    lockX: 0,
+    lockY: 0,
+    side: 1,
+    dead: false,
+  };
+}
+
+/**
+ * 池 reset:每个字段都要写一遍。
+ * 池里的对象是复用的,漏掉一个字段 = 新出生的敌人继承上一条命的状态
+ * (最典型的是 dead 没清 → 一出生就被当尸体回收,或者 state 停在 DASH → 一出生就在冲刺)。
+ * 单测按 Object.keys 逐字段比对,将来加字段忘了这里会被当场抓住。
+ */
+export function resetEnemy(e: Enemy): void {
+  e.x = 0;
+  e.y = 0;
+  e.px = 0;
+  e.py = 0;
+  e.vx = 0;
+  e.vy = 0;
+  e.kind = 0;
+  e.hp = 0;
+  e.maxHp = 0;
+  e.state = ST_APPROACH;
+  e.timer = 0;
+  e.lockX = 0;
+  e.lockY = 0;
+  e.side = 1;
+  e.dead = false;
+}
+
+/**
+ * 敌方 HP 的时间缩放(GDD §14):×(1 + 0.09·t分钟),再乘星区乘数(单地图 MVP 固定 ×1)。
+ * 每分钟的斜率现读 tuning —— 面板拖一下就能看清"撑到第 10 分钟该有多硬"。
+ * 只在出生时调用一次并把结果写进 hp/maxHp:在场的敌人不会因为时间流逝而回血变硬。
+ */
+export function hpScaleAt(seconds: number): number {
+  return (1 + tuning.enemyHpScalePerMinute * (seconds / 60)) * ZONE_HP_MULT;
+}
+
+/**
+ * 出生:池 spawn 之后由 World 调用,把一只空壳变成某型敌人。
+ * @param elapsedSec 开局至今的秒数(World.elapsed),HP 时间缩放的唯一时间源
+ * @param rng 世界的随机源;本函数固定消耗 1 次(side),改这里的消耗次数会移动整条随机序列
+ */
+export function initEnemy(
+  e: Enemy,
+  kind: number,
+  x: number,
+  y: number,
+  elapsedSec: number,
+  rng: Rng,
+): void {
+  const def = ENEMIES[kind]!;
+  e.x = e.px = x;
+  e.y = e.py = y;
+  e.vx = 0;
+  e.vy = 0;
+  e.kind = kind;
+  e.hp = e.maxHp = def.hp * hpScaleAt(elapsedSec);
+  e.state = ST_APPROACH;
+  e.timer = 0;
+  e.lockX = 0;
+  e.lockY = 0;
+  e.side = rng.next() < 0.5 ? -1 : 1;
+  e.dead = false;
+}
+
+/**
+ * 够不够格起手前摇。不冲锋的型永远 false —— 它们的冲锋参数全是 0,
+ * 放进来就会以"射程 0"起手,渲染层的前摇指示也会对着永不冲锋的敌人闪。
+ */
+function shouldWindup(e: Enemy, def: EnemyDef, ship: Ship): boolean {
+  const charges = def.behavior === BH_SEEK_CHARGE || def.behavior === BH_STRAFE_CHARGE;
+  if (!charges) return false;
+
+  const dx = e.x - ship.x;
+  const dy = e.y - ship.y;
+  if (dx * dx + dy * dy > def.chargeRange * def.chargeRange) return false;
+  if (def.behavior === BH_SEEK_CHARGE) return true;
+
+  // 绕行型还得先真绕到位:方位没对就只是"路过射程",这一票否决才让它从舷侧起手
+  const targetBearing = ship.heading + def.strafeOffsetDeg * DEG2RAD * e.side;
+  const angErr = wrapAngle(targetBearing - Math.atan2(dy, dx));
+  return Math.abs(angErr) < WINDUP_BEARING_TOL;
+}
+
+/**
+ * 推进一只敌人的行为一帧:把期望速度写进 out,返回追随系数 follow ∈ (0, 1]。
+ * 调用方(World)负责 `v += (desired - v) * follow` 与积分位置 —— 本函数不碰位置。
+ *
+ * 顺序:先推进计时器并处理到期转移,再按(可能刚更新的)状态出速度。
+ * 到期那一帧当场按新状态出力,不空转一帧;而刚进入某状态的那一帧不扣计时
+ * (进入时才刚设上 timer),于是"某状态恰好持续 timer/dt 帧"严格成立。
+ *
+ * 速度一律现乘 tuning.enemySpeedScale、每帧现读(与 stepShip 同口径):
+ * 缓存进局部常量就得重启才生效,面板拖动看虫潮快慢的用法会失效。
+ */
+export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): number {
+  const def = ENEMIES[e.kind]!;
+
+  switch (e.state) {
+    case ST_WINDUP:
+      e.timer -= dt;
+      if (e.timer <= TIMER_EPS) {
+        e.state = ST_DASH;
+        e.timer = def.chargeDuration;
+      }
+      break;
+    case ST_DASH:
+      e.timer -= dt;
+      if (e.timer <= TIMER_EPS) {
+        e.state = ST_RECOVER;
+        e.timer = def.chargeRecover;
+      }
+      break;
+    case ST_RECOVER:
+      e.timer -= dt;
+      if (e.timer <= TIMER_EPS) {
+        e.state = ST_APPROACH;
+        e.timer = 0;
+      }
+      break;
+    default:
+      // 接近段没有时限,只看条件够不够起手。方向在这一刻一次性锁死:
+      // 之后无论船怎么跑,冲刺都只沿这条线走 —— 这是玩家躲得掉的唯一依据。
+      // 借 out 当暂存:下面 WINDUP 分支会把它覆盖成零向量,不多占一个模块级 Vec2。
+      if (shouldWindup(e, def, ship)) {
+        lockCharge(e.x, e.y, ship.x, ship.y, out);
+        e.lockX = out.x;
+        e.lockY = out.y;
+        e.state = ST_WINDUP;
+        e.timer = def.chargeWindup;
+      }
+      break;
+  }
+
+  switch (e.state) {
+    case ST_WINDUP:
+      // 刹住:期望速度归零 + 双倍追随系数,肉眼看得出"停下来蓄力"这个停顿
+      out.x = 0;
+      out.y = 0;
+      return Math.min(1, def.accel * dt * 2);
+    case ST_DASH: {
+      // 沿锁定方向直线全速。这里绝不重新读 ship 的位置 ——
+      // 任何"冲刺中微调"都会让前摇预警变成谎言,07 验收标准第二条当场作废。
+      const sp = def.chargeSpeed * tuning.enemySpeedScale;
+      out.x = e.lockX * sp;
+      out.y = e.lockY * sp;
+      return 1; // 瞬时到速:冲刺要"弹出去",而不是慢慢加速
+    }
+    case ST_RECOVER:
+      // 不出力,靠惯性滑出去(半速追随 = 减速比前摇慢一倍),这就是"啃咬后脱离"
+      out.x = 0;
+      out.y = 0;
+      return Math.min(1, def.accel * dt * 0.5);
+    default: {
+      const speed = def.speed * tuning.enemySpeedScale;
+      if (def.behavior === BH_STRAFE || def.behavior === BH_STRAFE_CHARGE) {
+        // offsetRad 带上 e.side:同一型的两半分别从左右舷压过来,不会挤成一条线
+        const offsetRad = def.strafeOffsetDeg * DEG2RAD * e.side;
+        strafe(e.x, e.y, ship.x, ship.y, ship.heading, offsetRad, def.strafeRadius, speed, out);
+      } else {
+        seek(e.x, e.y, ship.x, ship.y, speed, out);
+      }
+      return Math.min(1, def.accel * dt);
+    }
+  }
+}
+
+/**
+ * 扣血。05 号 issue 的塔经 World.damageEnemy 调进来,是全仓唯一的伤害入口。
+ * @returns 本次是否致死。已经 dead 直接 false —— 同一帧多颗子弹同时命中只算一次死亡,
+ *   否则 10 号 issue 的掉落挂钩会按命中数重复给残骸、kills 也会虚高。
+ *   真正的回收与掉落在 step 末尾统一做,调用方不需要知道下标。
+ */
+export function applyDamage(e: Enemy, amount: number): boolean {
+  if (e.dead) return false;
+  e.hp -= amount;
+  if (e.hp > 0) return false;
+  e.hp = 0; // 夹到 0:血条/HUD 不必各自再兜一次负数
+  e.dead = true;
+  return true;
+}

@@ -19,7 +19,7 @@
 | 04 | [04-firing-arcs.md](04-firing-arcs.md) | 射界系统与可视化 | P0 | 03 |
 | 05 | [05-weapon-towers.md](05-weapon-towers.md) | 武器塔框架与 6 种 MVP 塔 | P0 | 03, 04 |
 | 06 | [06-support-facilities.md](06-support-facilities.md) | 支援设施与邻接协同 | P1 | 03, 05 |
-| 07 | [07-enemies.md](07-enemies.md) | 敌人系统与 4 种 MVP 敌人 | P0 | 01, 02 |
+| 07 | [07-enemies.md](done/07-enemies.md) | 敌人系统与 4 种 MVP 敌人 | P0 ✅ | 01, 02 |
 | 08 | [08-waves-map.md](08-waves-map.md) | 波次脚本与单局地图 | P1 | 02, 07 |
 | 09 | [09-damage-model.md](09-damage-model.md) | 受击模型与船体 HP | P0 | 02, 07 |
 | 10 | [10-economy-upgrade.md](10-economy-upgrade.md) | 残骸经济与三选一升级 | P1 | 03, 05, 06 |

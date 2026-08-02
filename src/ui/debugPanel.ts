@@ -41,9 +41,22 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   const stress = pane.addFolder({ title: '压测(验收 1000 敌 + 500 弹)' });
   stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(目标)', min: 0, max: 5000, step: 100 });
   stress.addBinding(tuning, 'stressBullets', { label: '弹数量(目标)', min: 0, max: 2000, step: 50 });
-  stress.addBinding(tuning, 'enemySpeed', { label: '敌速 px/s', min: 20, max: 300, step: 5 });
+  // 各型敌人的基础速度在 src/data/enemies.ts,这里只剩全局倍率;拖到 0 = 全场定格,
+  // 想看清某一型的走位(尤其冲锋前摇)时比暂停好用 —— 船还能开,敌人不动
+  stress.addBinding(tuning, 'enemySpeedScale', { label: '敌速倍率', min: 0, max: 3, step: 0.1 });
   stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
   stress.addBinding(tuning, 'bulletSpeed', { label: '弹速 px/s', min: 60, max: 1200, step: 20 });
+
+  // 敌人(07 号 issue):四条占比是轮盘赌权重,不必凑成 100。
+  // 注意:改占比只影响**新生成**的敌人,已在场的不会变型 —— 想只看某一型做肉眼验收,
+  // 把其余三个调 0,再把上面的「敌数量(目标)」拖到 0 再拖回来即可清场重出。
+  const enemy = pane.addFolder({ title: '敌人(07)' });
+  enemy.addBinding(tuning, 'enemyMixSwarm', { label: '蜂群蛭 %', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixStrafer', { label: '侧掠者 %', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixTrailer', { label: '尾随蛆 %', min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixBeetle', { label: '冲撞甲虫 %', min: 0, max: 100, step: 5 });
+  // 同样只作用于新生成的敌人:HP 在生成那一刻按世界已过时间定死(GDD §14)
+  enemy.addBinding(tuning, 'enemyHpScalePerMinute', { label: 'HP/分钟', min: 0, max: 0.5, step: 0.01 });
 
   // 默认展开:M0 门就是靠这四根滑杆边玩边调出来的,不该让人先点开一层
   const ship = pane.addFolder({ title: '船体手感', expanded: true });
