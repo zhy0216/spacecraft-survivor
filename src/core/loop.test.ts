@@ -9,7 +9,6 @@ import { tuning } from '../sim/config';
 import { World } from '../sim/world';
 
 tuning.stressEnemies = 200;
-tuning.stressBullets = 80;
 
 /** 按固定帧长喂满 frames 帧,返回跑完的世界与循环 */
 function run(dtMs: number, frames: number, seed = 777) {

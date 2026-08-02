@@ -12,6 +12,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import {
+  FX_LIFE_BEAM,
+  TOWER_ARC,
+  TOWER_AUTOCANNON,
+  TOWER_LASER,
+  TOWER_MAX_LEVEL,
+  towerArcDeg,
+  towerMagazine,
+  TOWERS,
+} from '../data/towers';
 import { type Arc, cellArc } from './arc';
 import { tuning } from './config';
 import {
@@ -21,11 +31,17 @@ import {
   cellWorldPos,
   DECK_COLS,
   DECK_ROWS,
+  EDGE_BOW,
+  isPlaceSuccess,
+  PLACE_BAD_TOWER,
   PLACE_INTERIOR,
+  PLACE_MAX_LEVEL,
   PLACE_OK,
   PLACE_TAKEN,
+  PLACE_UPGRADE,
 } from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
+import { FXV_BEAM } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { World } from './world';
 
@@ -33,7 +49,6 @@ import { World } from './world';
 // 与 ship.test.ts 同口径:有用例会拖数量/占比/分离半径,跑完必须还原,否则污染同文件后续用例
 const BASE = {
   stressEnemies: 300,
-  stressBullets: 100,
   enemySeparation: 14,
   enemySpeedScale: 1,
   enemyHpScalePerMinute: 0.09,
@@ -42,17 +57,26 @@ const BASE = {
   enemyMixStrafer: 15,
   enemyMixTrailer: 10,
   enemyMixBeetle: 5,
-  // 04 号 issue 的三项占位(05 号的塔数值表接手后作废):显式写死在这里而不是读 config 的初值,
-  // 否则 05 一调平衡,下面那些"转到 25° 就停"的断言会跟着莫名其妙地红
-  turretArcDeg: 100,
-  turretRange: 380,
-  turretTurnRate: 360,
+  // 塔的全局倍率:有用例要临时把伤害归零(见 turretWorld),跑完必须还原
+  towerDamageScale: 1,
+  towerFireRateScale: 1,
 };
 Object.assign(tuning, BASE);
+
+/**
+ * 炮管/开火用例读的那一行数值表 —— w.place 的缺省塔型就是自动机炮(GDD §5.2 的万金油)。
+ * 04 号那三项全塔共用的 tuning 占位(turretArcDeg/turretRange/turretTurnRate)在 05 号被
+ * 一塔一档的数值表取代,故这里显式写死表里的字段并 afterEach 还原:05 一调平衡,
+ * 下面那些"转到 25° 就停"的断言不该跟着莫名其妙地红。
+ */
+const GUN = TOWERS[TOWER_AUTOCANNON]!;
+const GUN_BASE = { arcDeg: 100, range: 380, turnRate: 360, aimTolDeg: 6 };
+Object.assign(GUN, GUN_BASE);
 /** 有用例要临时改甲虫前摇(证明"时长可配"),与 enemy.test.ts 同口径:跑完必须还原 */
 const BASE_BEETLE_WINDUP = ENEMIES[KIND_BEETLE]!.chargeWindup;
 afterEach(() => {
   Object.assign(tuning, BASE);
+  Object.assign(GUN, GUN_BASE);
   ENEMIES[KIND_BEETLE]!.chargeWindup = BASE_BEETLE_WINDUP;
 });
 
@@ -73,7 +97,9 @@ describe('World 确定性', () => {
       b.step();
     }
     expect(a.enemies.size).toBe(300);
-    expect(a.bullets.size).toBe(100);
+    // 一座塔都没放 → 一颗子弹都没有:01 号那批"凭空重生的压测哑弹"已在 05 号整段删除,
+    // 池里的东西此后只可能是塔真的打出来的(见 world.ts 的 syncCounts)
+    expect(a.bullets.size).toBe(0);
     expect(a.checksum()).toBe(b.checksum());
   });
 
@@ -120,7 +146,6 @@ describe('World 确定性', () => {
 
   it('两个同 seed 世界并排跑:只给其中一边扣一滴血就分叉,补上同一下又合流', () => {
     tuning.stressEnemies = 40;
-    tuning.stressBullets = 20;
     const a = new World(88);
     const b = new World(88);
     for (let i = 0; i < 90; i++) {
@@ -169,11 +194,30 @@ describe('甲板接线(world.place 是唯一放置入口)', () => {
     // 上面几条全用对称坐标,单靠它们抓不住转发时把两个参数写反
     expect(w.place(0, 3, CELL_WEAPON)).toBe(PLACE_OK);
     expect(cellAt(w.deck, 0, 3)!.content).toBe(CELL_WEAPON);
+    // 塔型缺省 = 自动机炮(GDD §5.2 的万金油):三参调用方语义原样成立
+    expect(cellAt(w.deck, 0, 3)!.towerType).toBe(TOWER_AUTOCANNON);
+    expect(cellAt(w.deck, 0, 3)!.level).toBe(1);
+  });
+
+  it('塔型与叠级原样转发:同格同种塔 = 升级,换塔型仍是 TAKEN(规则在 sim/deck,这里只验接线)', () => {
+    const w = new World(5);
+    expect(w.place(1, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    const cell = cellAt(w.deck, 1, 0)!;
+    expect(cell.towerType).toBe(TOWER_LASER); // 第四个参数真的送到了 deck,而不是被吞掉走了默认值
+    expect(cell.level).toBe(1);
+
+    expect(w.place(1, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_UPGRADE);
+    expect(cell.level).toBe(2);
+    expect(isPlaceSuccess(PLACE_UPGRADE)).toBe(true); // ui 的成功分支认的就是这个函数
+    // 换塔型 = 出售 + 重放(GDD §4.5),不许;塔型非法则连格都不必问
+    expect(w.place(1, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_TAKEN);
+    expect(w.place(2, 0, CELL_WEAPON, 99)).toBe(PLACE_BAD_TOWER);
+    expect(cell.level).toBe(2);
+    expect(w.deck.cells.filter((c) => c.content === CELL_WEAPON).length).toBe(1); // 升级不占新格
   });
 
   it('甲板内容进 checksum:并排两个同 seed 世界,只给一边放一座塔就分叉,补上同一座又合流', () => {
     tuning.stressEnemies = 10;
-    tuning.stressBullets = 0;
     const a = new World(77);
     const b = new World(77);
     for (let i = 0; i < 30; i++) {
@@ -192,6 +236,36 @@ describe('甲板接线(world.place 是唯一放置入口)', () => {
     const before = a.checksum();
     expect(a.place(0, 0, CELL_SUPPORT)).toBe(PLACE_TAKEN);
     expect(a.checksum()).toBe(before);
+  });
+
+  it('塔型与等级进 checksum:只给一边升一级就分叉,另一边补上同一级又合流', () => {
+    tuning.stressEnemies = 10;
+    const a = new World(78);
+    const b = new World(78);
+    for (const w of [a, b]) expect(w.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 升级只改 level 一个字段(格没换、内容没换):分叉 = 等级确实进了哈希,
+    // 否则"叠级没生效"或"升到了别的格上"这类回归会从确定性口径下漏掉
+    expect(a.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_UPGRADE);
+    expect(a.checksum()).not.toBe(b.checksum());
+    expect(b.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_UPGRADE);
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 塔型同理:同一格、同样是 Lv1 的塔,换个型号就该是另一个世界
+    const c = new World(78);
+    expect(c.place(0, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_OK);
+    const d = new World(78);
+    expect(d.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    expect(c.checksum()).not.toBe(d.checksum());
+
+    // 满级后的拒绝一个字段都没动,哈希自然也不许变
+    for (let lv = cellAt(a.deck, 0, 0)!.level; lv < TOWER_MAX_LEVEL; lv++) {
+      expect(a.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_UPGRADE);
+    }
+    const capped = a.checksum();
+    expect(a.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_MAX_LEVEL);
+    expect(a.checksum()).toBe(capped);
   });
 });
 
@@ -249,13 +323,13 @@ describe('炮管接线(04 号:塔只打射界内的目标,没得打就归位)', 
     const w = turretWorld(63, 1);
     const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
     const e = w.enemies.items[0]!;
-    const half = tuning.turretArcDeg / 2; // 船头正中格只有 BOW 一条暴露边,不加宽
+    const half = GUN.arcDeg / 2; // 船头正中格只有 BOW 一条暴露边,不加宽
 
-    parkAt(w, e, 25, tuning.turretRange + 5); // 方位在射界正中,但差五步进不了射程
+    parkAt(w, e, 25, GUN.range + 5); // 方位在射界正中,但差五步进不了射程
     for (let f = 0; f < 20; f++) w.step();
     expect(cell.turretOffset).toBe(0); // 逐位为 0:压根没被推过,而不是"转出去又转回来"
 
-    parkAt(w, e, 25, tuning.turretRange - 5); // 同一个方位,踏进射程圆
+    parkAt(w, e, 25, GUN.range - 5); // 同一个方位,踏进射程圆
     for (let f = 0; f < 20; f++) w.step();
     expect(aimDeg(w)).toBeCloseTo(25, 6);
 
@@ -275,27 +349,26 @@ describe('炮管接线(04 号:塔只打射界内的目标,没得打就归位)', 
     const bearing = 25;
 
     // 对照组:同样停在射程外 4px,不给速度就永远进不来 —— 下面那一帧的位移才是唯一的分水岭
-    parkAt(w, e, bearing, tuning.turretRange + 4);
+    parkAt(w, e, bearing, GUN.range + 4);
     w.step();
     expect(cell.turretOffset).toBe(0);
 
     // 给它一发朝炮口的径向速度:本帧位移 9px(> 4)且方位角一点不变(径向 = 只缩距离)。
     // 帧首在圈外、帧尾在圈内 —— 若 stepTurrets 排在敌人循环之前,它读到的还是帧首那个
     // "射程外"的位置,炮管会纹丝不动
-    parkAt(w, e, bearing, tuning.turretRange + 4);
+    parkAt(w, e, bearing, GUN.range + 4);
     const a = bearing * DEG2RAD;
     e.vx = -Math.cos(a) * 600;
     e.vy = -Math.sin(a) * 600;
     w.step();
 
-    expect(distToGun(w, e.px, e.py)).toBeGreaterThan(tuning.turretRange); // 帧首:还在圈外
-    expect(distToGun(w, e.x, e.y)).toBeLessThan(tuning.turretRange); // 帧尾:已经进圈
+    expect(distToGun(w, e.px, e.py)).toBeGreaterThan(GUN.range); // 帧首:还在圈外
+    expect(distToGun(w, e.x, e.y)).toBeLessThan(GUN.range); // 帧尾:已经进圈
     expect(cell.turretOffset / DEG2RAD).toBeCloseTo(MAX_TURN_DEG, 9); // 当帧就转满了一格上限
   });
 
   it('放塔后同 seed 两个世界仍逐位一致,且与未放塔的世界不同', () => {
     tuning.stressEnemies = 100;
-    tuning.stressBullets = 0;
     const a = armedWorld(88);
     const b = armedWorld(88);
     const c = new World(88); // 对照:同 seed,但一座塔都不放
@@ -315,7 +388,6 @@ describe('炮管接线(04 号:塔只打射界内的目标,没得打就归位)', 
 
   it('turretOffset 单独进 checksum:把转过的偏角抹平就分叉,照另一边补回来又合流', () => {
     tuning.stressEnemies = 100;
-    tuning.stressBullets = 0;
     const a = armedWorld(89);
     const b = armedWorld(89);
     for (let f = 0; f < 90; f++) {
@@ -335,6 +407,159 @@ describe('炮管接线(04 号:塔只打射界内的目标,没得打就归位)', 
     a.deck.cells.forEach((cell, i) => {
       cell.turretOffset = saved[i]!;
     });
+    expect(a.checksum()).toBe(b.checksum());
+  });
+});
+
+/**
+ * 开火接线(05 号 issue T3)。五种开火表现的判定规则在 turret.test.ts 钉、子弹的积分与命中在
+ * bullet.test.ts 钉、三套节流在 tower.test.ts 钉,这里只钉**世界这一层**的四件事:
+ *   step() 里塔真的开火了(FireSink 接通:子弹进池、伤害进 damageEnemy、死亡照旧走 reap);
+ *   可视化事件每帧老化、走完回池,且**纯表现不进 checksum**;
+ *   broadside 读数逐帧重建(渲染层的镜头顿挫认它);
+ *   塔的运行期节流状态与子弹位置进 checksum —— 它们是逐帧演化的状态,不是派生量。
+ */
+describe('开火接线(05 号:塔真的打出东西来)', () => {
+  it('step() 里塔真的开火:子弹当帧进池、飞到靶子身上扣血、打死了照旧算 kills', () => {
+    const w = firingWorld(71, 1);
+    const e = w.enemies.items[0]!;
+    parkAt(w, e, 0, 150); // 射界正中、射程内:炮口起手就对着它,当帧即可开火
+    const hp = e.hp;
+
+    w.step();
+    expect(w.bullets.size).toBe(1);
+    const b = w.bullets.items[0]!;
+    expect(b.towerType).toBe(TOWER_AUTOCANNON);
+    expect(b.damage).toBe(GUN.damage); // 倍率 1 时就是 GDD §14 锚点的 6 伤
+    // 子弹排在炮管之后:本帧新出膛的弹当帧就走一步,px/py 停在炮口(铁律 2 的插值两端)
+    expect(Math.hypot(b.x - b.px, b.y - b.py)).toBeGreaterThan(0);
+    expect(distToGun(w, b.px, b.py)).toBeCloseTo(0, 9);
+
+    // 150px / 420px每秒 ≈ 22 帧后命中(靶子钉着不动)—— 只要在飞就一定会撞上
+    for (let f = 0; f < 30 && e.hp === hp; f++) w.step();
+    expect(e.hp).toBeLessThan(hp);
+    expect(e.hp).toBe(hp - GUN.damage); // 伤害经的是 World.damageEnemy 这唯一入口
+
+    // 一路打死:死亡回收与掉落挂钩走的还是既有那条路径(05 没有另开一条)
+    let dropped = 0;
+    w.onEnemyDeath = () => dropped++;
+    for (let f = 0; f < 600 && w.kills === 0; f++) w.step();
+    expect(w.kills).toBe(1);
+    expect(dropped).toBe(1);
+  });
+
+  it('开火的可视化事件:当帧入池、逐帧老化、存续走完回池;纯表现,不进 checksum', () => {
+    // 激光是瞬时判定塔:它的表现全靠 FxEvent(直射弹的表现由子弹自己交代,不推事件)
+    const w = firingWorld(72, 1, TOWER_LASER);
+    const e = w.enemies.items[0]!;
+    parkAt(w, e, 0, 150);
+
+    w.step();
+    expect(w.fx.size).toBe(1);
+    const beam = w.fx.items[0]!;
+    expect(beam.kind).toBe(FXV_BEAM);
+    expect(beam.towerType).toBe(TOWER_LASER);
+    expect(beam.x0).toBeCloseTo(gunPos(w).x, 9); // 起点 = 炮位(世界坐标,不是甲板局部坐标)
+    expect(beam.x1).toBeCloseTo(e.x, 9); // 终点 = 命中点
+    // 老化排在开火之后:出膛那一帧就扣掉一个 dt,life 从数值表的 FX_LIFE_BEAM 起算
+    expect(beam.life).toBeCloseTo(FX_LIFE_BEAM - SIM_DT, 12);
+
+    // 纯表现:凭空多一个事件,checksum 一位都不许动 ——
+    // 否则"渲染改一下淡出时长"看起来就像一次确定性回归
+    const before = w.checksum();
+    w.fx.spawn();
+    expect(w.checksum()).toBe(before);
+
+    // 靶子退到射程外 → 不再有新事件,池必须自己空掉(不老化的话屏幕上会积一层永不消失的光)
+    parkAt(w, e, 0, 2000);
+    let frames = 0;
+    while (w.fx.size > 0 && frames < 60) {
+      w.step();
+      frames++;
+    }
+    expect(w.fx.size).toBe(0);
+    expect(frames).toBeLessThanOrEqual(Math.ceil(FX_LIFE_BEAM / SIM_DT) + 1);
+  });
+
+  it('broadside:同舷三座塔同帧开火 → 记下那一舷与塔数;没人开火的帧读回 -1/0', () => {
+    // 容差临时放到 90°:三座塔的射界中心差着 45°,不放宽就得等各自转到位,凑不出"同帧"。
+    // 容差本身的行为在 turret.test.ts 钉,这里要的是"同一帧里有三座塔开了火"
+    GUN.aimTolDeg = 90;
+    const w = firingWorld(73, 1);
+    // 船头一整行三格:(0,0) 与 (2,0) 是角落格,但三格暴露边的**最低位**都是 BOW ——
+    // "算哪一舷"的口径就是这一条(与 sim/arc.ts 的退化分支同源)
+    expect(w.place(0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(w.place(2, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    parkAt(w, w.enemies.items[0]!, 0, 150);
+
+    expect(w.broadsideEdge).toBe(-1); // 一帧都没跑过:读数是"本帧没人开火"
+    expect(w.broadsideCount).toBe(0);
+
+    w.step();
+    expect(w.bullets.size).toBe(3);
+    expect(w.broadsideCount).toBe(3); // ≥3 = 单舷齐射,渲染层据此给一次镜头顿挫
+    expect(w.broadsideEdge).toBe(EDGE_BOW);
+
+    // 逐帧重建:下一帧三座塔都在冷却里,读数当场回到 -1/0 ——
+    // 不清的话镜头会被上一帧的齐射一直顶着
+    w.step();
+    expect(w.bullets.size).toBe(3); // 没有新弹出膛(0.4s 的射击间隔还没走完)
+    expect(w.broadsideEdge).toBe(-1);
+    expect(w.broadsideCount).toBe(0);
+  });
+
+  it('塔的节流状态与子弹位置进 checksum:抹掉就分叉,补回来又合流', () => {
+    /** 同一个靶场跑两份:同 seed + 同放置 ⇒ 两边必须逐位一致 */
+    const armed = (seed: number): World => {
+      const w = firingWorld(seed, 1);
+      parkAt(w, w.enemies.items[0]!, 0, 150);
+      return w;
+    };
+    const a = armed(91);
+    const b = armed(91);
+    // 90 帧里这座塔打了好几发、靶子被打死又补出新的:开火整条路径(节流→弹道→伤害→回收)
+    // 全程都在 checksum 的覆盖下
+    for (let f = 0; f < 90; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+    expect(a.kills).toBeGreaterThan(0); // 非空过:这 90 帧里真的打死过人
+
+    // 再给两边摆一次同样的靶(不消耗 rng,序列一步都不会错开),让池里确实有一颗**在飞**的弹:
+    // 300 远 → 43 帧才飞到,下面这 40 帧里它一定还在半路上
+    for (const w of [a, b]) parkAt(w, w.enemies.items[0]!, 0, 300);
+    for (let f = 0; f < 40; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+    expect(a.bullets.size).toBeGreaterThan(0);
+
+    const cell = cellAt(a.deck, BOW_COL, BOW_ROW)!;
+    expect(cell.ammo).toBeLessThan(towerMagazine(GUN, 1)); // 非空过:这 90 帧真打出去了几发
+
+    // 弹夹:节流状态是逐帧演化出来的状态,不是派生量 —— 漏了它,"某座塔的装填提前了一帧"
+    // 这类分叉就从确定性口径下漏掉了,而节流恰恰决定了下一帧谁开火
+    const ammo = cell.ammo;
+    cell.ammo = ammo + 1;
+    expect(a.checksum()).not.toBe(b.checksum());
+    cell.ammo = ammo;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 冷却:× 100 之后才抓得住一两帧的差别(Math.round(v*8) 对 0..1 的秒数太粗)
+    const cooldown = cell.cooldown;
+    cell.cooldown = cooldown + 0.05;
+    expect(a.checksum()).not.toBe(b.checksum());
+    cell.cooldown = cooldown;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 子弹只哈位置(伤害/存活是发射那一刻定死的常量),而位置已经能抓住任何弹道分叉
+    const bullet = a.bullets.items[0]!;
+    const bx = bullet.x;
+    bullet.x = bx + 1;
+    expect(a.checksum()).not.toBe(b.checksum());
+    bullet.x = bx;
     expect(a.checksum()).toBe(b.checksum());
   });
 });
@@ -435,7 +660,6 @@ describe('07 验收标准(可自动化的部分)', () => {
   it('侧掠者从当前船侧发起:起手瞬间的方位在舷侧 45°~135°,而不是聚在船尾 180°(追尾)', () => {
     onlyKind(KIND_STRAFER);
     tuning.stressEnemies = 24;
-    tuning.stressBullets = 0; // 子弹与本条无关,省掉它让这条跑得快些
     const w = new World(101);
 
     const bearings: number[] = [];
@@ -467,7 +691,6 @@ describe('07 验收标准(可自动化的部分)', () => {
   it('尾随蛆持续占据船尾象限:硬转 90° 甩开后绕回**新的**船尾,松手停船也咬在驻留半径上', () => {
     onlyKind(KIND_TRAILER);
     tuning.stressEnemies = 20;
-    tuning.stressBullets = 0;
     const w = new World(202);
 
     /** 落在船尾 ±45° 象限内的比例 */
@@ -515,7 +738,6 @@ describe('07 验收标准(可自动化的部分)', () => {
       ENEMIES[KIND_BEETLE]!.chargeWindup = windup;
       onlyKind(KIND_BEETLE);
       tuning.stressEnemies = 12;
-      tuning.stressBullets = 0;
       const w = new World(303);
 
       const windupFrames = new Map<Enemy, number>();
@@ -540,7 +762,6 @@ describe('07 验收标准(可自动化的部分)', () => {
   it('HP 时间缩放跑满 5 分钟:此刻重生的敌人 = 基础血 ×1.45(GDD §14)', () => {
     onlyKind(KIND_SWARM);
     tuning.stressEnemies = 1; // 就一只:要真跑满 18000 帧,场上人越少跑得越快
-    tuning.stressBullets = 0;
     const w = new World(77);
 
     // 回收在帧尾、出怪在帧首 → 打死之后要隔两帧才补出新的一只。
@@ -848,8 +1069,8 @@ function watchStates(
  */
 const BOW_COL = 1;
 const BOW_ROW = 0;
-/** 每帧转速上限(度)。拿 BASE 算而不是写死 6,改了参数也不会悄悄失配 */
-const MAX_TURN_DEG = BASE.turretTurnRate * SIM_DT;
+/** 每帧转速上限(度)。拿数值表算而不是写死 6,改了参数也不会悄悄失配 */
+const MAX_TURN_DEG = GUN_BASE.turnRate * SIM_DT;
 /** 炮位与射界的暂存:与被测代码同口径,复用一份,不在断言里现造对象 */
 const gun: Vec2 = { x: 0, y: 0 };
 const gunArc: Arc = { center: 0, half: 0 };
@@ -860,19 +1081,30 @@ const gunArc: Arc = { center: 0, half: 0 };
  * 敌速倍率归零 = 把敌人钉死在摆好的位置(期望速度整体 ×0,park 之后 v 恒为 0),
  * 于是射界/射程的边界断言算的是什么就是什么,不会被每帧一两 px 的漂移搅掉 ——
  * 本组用例考的是"塔朝哪",不是"敌人往哪走"。
+ *
+ * **伤害倍率一并归零**(05 号开火落地后的必要一手):塔现在真的会开火,靶子挨两发就没了,
+ * 而"转到 25° 就停"这类断言要的是一个一直站在那儿的靶子。零伤害是个可逆、可理解的调试态
+ * (口径见 sim/tower.ts 的 effectiveDamage),开火那一组自己把它调回来(见 firingWorld)。
  */
-function turretWorld(seed: number, count: number): World {
+function turretWorld(seed: number, count: number, type: number = TOWER_AUTOCANNON): World {
   onlyKind(KIND_SWARM);
   tuning.stressEnemies = count;
-  tuning.stressBullets = 0;
   tuning.enemySpeedScale = 0;
+  tuning.towerDamageScale = 0;
   const w = new World(seed);
   w.step(); // 帧首出怪:此后场上恰好 count 只
   expect(w.enemies.size).toBe(count);
   expect(w.ship.x).toBe(0); // 没有输入 → 船一步没挪,炮位算得清
   expect(w.ship.y).toBe(0);
   w.ship.heading = w.ship.pheading = 0;
-  expect(w.place(BOW_COL, BOW_ROW, CELL_WEAPON)).toBe(PLACE_OK);
+  expect(w.place(BOW_COL, BOW_ROW, CELL_WEAPON, type)).toBe(PLACE_OK);
+  return w;
+}
+
+/** 同一个靶场,但伤害照常结算 —— 开火那一组正要看谁掉了血 */
+function firingWorld(seed: number, count: number, type: number = TOWER_AUTOCANNON): World {
+  const w = turretWorld(seed, count, type);
+  tuning.towerDamageScale = 1;
   return w;
 }
 
@@ -908,7 +1140,7 @@ function parkAt(w: World, e: Enemy, bearingDeg: number, dist: number): void {
  */
 function aimDeg(w: World): number {
   const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
-  expect(cellArc(cell, w.ship.heading, tuning.turretArcDeg, gunArc)).toBe(true);
+  expect(cellArc(cell, w.ship.heading, GUN.arcDeg, gunArc)).toBe(true);
   return wrapAngle(gunArc.center + cell.turretOffset) / DEG2RAD;
 }
 

@@ -26,7 +26,6 @@ afterEach(() => Object.assign(tuning, BASE));
 
 // World 用例只关心船与追船逻辑,压测数量是浏览器场景的事 —— 调小纯粹为了跑得快
 tuning.stressEnemies = 50;
-tuning.stressBullets = 20;
 
 // y 轴朝下:-1 是屏幕上方
 const UP: Vec2 = { x: 0, y: -1 };

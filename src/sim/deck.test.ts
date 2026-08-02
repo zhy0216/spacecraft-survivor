@@ -14,6 +14,16 @@
  * M0 会反复调 tuning,几何断言不该被平衡调整带崩。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  TOWER_ARC,
+  TOWER_AUTOCANNON,
+  TOWER_KIND_COUNT,
+  TOWER_LASER,
+  TOWER_MAX_LEVEL,
+  TOWER_PD,
+  towerMagazine,
+  TOWERS,
+} from '../data/towers';
 import { tuning } from './config';
 import * as deckApi from './deck';
 import {
@@ -43,11 +53,15 @@ import {
   isEdgeCell,
   isEdgeExposed,
   isInteriorCell,
+  isPlaceSuccess,
   PLACE_BAD_CONTENT,
+  PLACE_BAD_TOWER,
   PLACE_INTERIOR,
+  PLACE_MAX_LEVEL,
   PLACE_NO_CELL,
   PLACE_OK,
   PLACE_TAKEN,
+  PLACE_UPGRADE,
   placeAt,
   recomputeDeck,
   setOccupied,
@@ -56,8 +70,13 @@ import { createShip, type Vec2, wrapAngle } from './ship';
 
 const BASE = { shipLength: 150, shipWidth: 112 };
 Object.assign(tuning, BASE);
+/** 叠级那一组有一条要临时改机炮弹夹(证明弹夹上限确实来自数值表),与 towers.test.ts 同口径:跑完还原 */
+const BASE_MAGAZINE = TOWERS[TOWER_AUTOCANNON]!.magazine;
 // 有用例会改船体尺寸来验证"格边长由 tuning 推导",跑完必须还原,否则污染同文件后续用例
-afterEach(() => Object.assign(tuning, BASE));
+afterEach(() => {
+  Object.assign(tuning, BASE);
+  TOWERS[TOWER_AUTOCANNON]!.magazine = BASE_MAGAZINE;
+});
 
 const v = (): Vec2 => ({ x: 0, y: 0 });
 
@@ -375,21 +394,27 @@ describe('放置合法性与战斗规则(GDD §4.1 / §4.5)', () => {
     expect(deck.revision).toBe(1);
   });
 
-  it('已放置的不可覆盖:占用格一律 PLACE_TAKEN,连"换个内容盖上去"也不行', () => {
+  it('已放置的不可覆盖:换塔型 / 换内容一律 PLACE_TAKEN(同种塔叠级是另一回事,见下一组)', () => {
     const deck = createDeck();
-    expect(placeAt(deck, 0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
     const rev = deck.revision;
 
-    expect(canPlace(deck, 0, 0, CELL_WEAPON)).toBe(PLACE_TAKEN); // 同一种内容也不行
-    expect(placeAt(deck, 0, 0, CELL_SUPPORT)).toBe(PLACE_TAKEN); // 换一种更不行
+    // 05 号 T4 起,"同一种内容"要连塔型也同才算叠级:换一种塔 = 出售 + 重放,GDD §4.5 明令不许
+    expect(canPlace(deck, 0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_TAKEN);
+    expect(placeAt(deck, 0, 0, CELL_SUPPORT)).toBe(PLACE_TAKEN); // 换内容更不行
     // 想借"放个空格"把它清掉:CELL_EMPTY 连合法内容都不是,判定顺序上先被 BAD_CONTENT 挡掉
     expect(placeAt(deck, 0, 0, CELL_EMPTY)).toBe(PLACE_BAD_CONTENT);
     expect(cellAt(deck, 0, 0)!.content).toBe(CELL_WEAPON);
+    expect(cellAt(deck, 0, 0)!.towerType).toBe(TOWER_AUTOCANNON); // 被拒的那几下一个字段都没写进去
+    expect(cellAt(deck, 0, 0)!.level).toBe(1);
     expect(deck.revision).toBe(rev);
 
-    // 支援设施同样锁死:MVP 里"占用"就是终局,重排要等船坞节点(GDD §4.5)
+    // 支援设施同样锁死:MVP 里"占用"就是终局,重排要等船坞节点(GDD §4.5);
+    // 它也没有"同名叠级"这回事(06 号的设施是另一套),同内容再放一次照旧是 TAKEN
     expect(placeAt(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_OK);
     expect(canPlace(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_TAKEN);
+    // 内部格的支援上盖武器塔:占用那一步排在 INTERIOR 之前,故报 TAKEN 而不是 INTERIOR
+    expect(canPlace(deck, 1, 1, CELL_WEAPON)).toBe(PLACE_TAKEN);
   });
 
   it('模块里根本没有拆除/出售/移动的入口 —— 这就是"不可移动、不可出售"的全部实现', () => {
@@ -433,7 +458,10 @@ describe('放置合法性与战斗规则(GDD §4.1 / §4.5)', () => {
 
     for (const c of deck.cells) {
       for (const content of [CELL_EMPTY, CELL_WEAPON, CELL_SUPPORT, 77]) {
-        canPlace(deck, c.col, c.row, content);
+        // 塔型也轮一遍:含 (0,0) 上那座机炮的**同型**问法,于是连"升一级"那条分支也压在只读口径下
+        for (const t of [TOWER_AUTOCANNON, TOWER_LASER, 99]) {
+          canPlace(deck, c.col, c.row, content, t);
+        }
       }
     }
     const outside: [number, number][] = [
@@ -466,6 +494,208 @@ describe('放置合法性与战斗规则(GDD §4.1 / §4.5)', () => {
     expect(canPlace(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_TAKEN);
     // 而边缘判定确实是现算的:这一格此刻已经不再收新的武器塔,船头那格却还收
     expect(canPlace(deck, 1, 0, CELL_WEAPON)).toBe(PLACE_OK);
+  });
+});
+
+/**
+ * 同名叠级(05 号 issue T4,GDD §5.4:Lv1→Lv5,数值成长,原格生效不占新格)。
+ * 它刻意走 placeAt 这**同一个入口**:叠级不是移动、不是重放,故与 §4.5"不可移动、不可出售"共存;
+ * 单开一个 upgrade API 的话,那个 API 迟早会被当成"先拆再放"用。
+ * 这一组钉的是它与既有放置规则的接缝:成功码从此有两个、只有同型才叠、满级要说满级、
+ * 升级绝不重置运行期节流状态(否则成长就变成"掐着弹夹见底去升级"的操作技巧)。
+ */
+describe('同名叠级 Lv1→Lv5(GDD §5.4)', () => {
+  /** 场上的武器格数:"不占新格"就是这个数从头到尾不变 */
+  const weaponCells = (deck: Deck): number =>
+    deck.cells.filter((c) => c.content === CELL_WEAPON).length;
+
+  it('新放塔:塔型/等级/满弹一次写齐,其余节流状态全零', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+
+    const cell = cellAt(deck, 0, 0)!;
+    expect(cell.content).toBe(CELL_WEAPON);
+    expect(cell.towerType).toBe(TOWER_LASER);
+    expect(cell.level).toBe(1);
+    // 上限现问数值表:激光是过热系,magazine 为 0 → 这里也该是 0,不该凭空冒出一夹子弹
+    expect(cell.ammo).toBe(towerMagazine(TOWERS[TOWER_LASER]!, 1));
+    for (const v of [cell.cooldown, cell.reloadLeft, cell.heat, cell.coolLock, cell.charge]) {
+      expect(v).toBe(0); // 起手一律干净:节流状态的推进是 sim/tower.ts 的活,放置只负责生它
+    }
+  });
+
+  it('弹药系新塔满弹进场,弹夹上限来自数值表(改表即改平衡,不改一行代码)', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(cellAt(deck, 0, 0)!.ammo).toBe(towerMagazine(TOWERS[TOWER_AUTOCANNON]!, 1));
+    expect(cellAt(deck, 0, 0)!.ammo).toBeGreaterThan(0); // 上一条不是"0 等于 0"的空过
+
+    TOWERS[TOWER_AUTOCANNON]!.magazine = 7; // 只改数据表(afterEach 还原),deck.ts 一个字不动
+    const tuned = createDeck();
+    expect(placeAt(tuned, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(cellAt(tuned, 0, 0)!.ammo).toBe(7);
+  });
+
+  it('非武器格永远没有塔字段:支援设施与空格恒 towerType -1 / level 0', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_OK);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_OK);
+    for (const c of deck.cells) {
+      if (c.content === CELL_WEAPON) continue;
+      expect(c.towerType).toBe(-1); // 0 是自动机炮:拿它当"没有塔"会让满甲板空格都自称机炮
+      expect(c.level).toBe(0);
+    }
+  });
+
+  it('同格同种塔 = 升一级:Lv1→Lv5 每级 bump revision,且始终不占新格', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_OK);
+    const cell = cellAt(deck, 0, 0)!;
+    expect(cell.level).toBe(1);
+    expect(weaponCells(deck)).toBe(1);
+
+    for (let want = 2; want <= TOWER_MAX_LEVEL; want++) {
+      const rev = deck.revision;
+      expect(canPlace(deck, 0, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_UPGRADE); // 问和放同码
+      expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_UPGRADE);
+      expect(cell.level).toBe(want);
+      // 升级也是甲板变化:渲染层靠 revision 才知道该重画等级点与射界半径
+      expect(deck.revision).toBe(rev + 1);
+      // "原格生效不占新格":整块甲板始终只有这一个武器格,别处一个字段都没被写
+      expect(weaponCells(deck)).toBe(1);
+      expect(cell.towerType).toBe(TOWER_ARC);
+      expect(cell.content).toBe(CELL_WEAPON);
+    }
+  });
+
+  it('满 Lv5 → PLACE_MAX_LEVEL:等级停住、revision 不动、一个字段都没写', () => {
+    const deck = createDeck();
+    placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    for (let i = 1; i < TOWER_MAX_LEVEL; i++) placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    const cell = cellAt(deck, 0, 0)!;
+    expect(cell.level).toBe(TOWER_MAX_LEVEL);
+
+    const rev = deck.revision;
+    const snapshot = JSON.stringify(deck);
+    // 与 TAKEN 分开的理由:玩家该被告知"满级了",而不是"这格有东西"—— 两句话指向的规则不是一条
+    expect(canPlace(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_MAX_LEVEL);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_MAX_LEVEL);
+    expect(cell.level).toBe(TOWER_MAX_LEVEL);
+    expect(deck.revision).toBe(rev);
+    expect(JSON.stringify(deck)).toBe(snapshot);
+  });
+
+  it('升级不重置运行期状态:弹夹/热量/充能/冷却/装填/过热锁/炮管一概不动', () => {
+    const deck = createDeck();
+    placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    const cell = cellAt(deck, 0, 0)!;
+    // 手写一组"打了大半个弹夹、正装填、还热着、蓄了一半、炮管偏着"的中间态:升级不该把它抹平
+    cell.ammo = 3;
+    cell.cooldown = 0.17;
+    cell.reloadLeft = 0.42;
+    cell.heat = 9;
+    cell.coolLock = 1.1;
+    cell.charge = 0.6;
+    cell.turretOffset = 0.3;
+
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_UPGRADE);
+    expect(cell.level).toBe(2);
+    // 不白送一个满弹夹:否则玩家会掐着弹夹见底那一刻去升级,把成长变成操作技巧
+    expect(cell.ammo).toBe(3);
+    expect(cell.cooldown).toBe(0.17);
+    expect(cell.reloadLeft).toBe(0.42);
+    expect(cell.heat).toBe(9);
+    expect(cell.coolLock).toBe(1.1);
+    expect(cell.charge).toBe(0.6);
+    // 升级不是"重放一座塔":炮管还指着原处,不会当帧啪地归位
+    expect(cell.turretOffset).toBe(0.3);
+
+    // 派生上限当帧起按新等级算,旧余量天然合法(ammo ≤ 旧上限 ≤ 新上限),故不必补一次夹取
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    expect(towerMagazine(def, 2)).toBeGreaterThan(towerMagazine(def, 1));
+    expect(cell.ammo).toBeLessThanOrEqual(towerMagazine(def, 2));
+  });
+
+  it('换塔型仍是 PLACE_TAKEN:另外五型挨个试一遍,等级与塔型一动不动', () => {
+    const deck = createDeck();
+    placeAt(deck, 0, 0, CELL_WEAPON, TOWER_LASER);
+    placeAt(deck, 0, 0, CELL_WEAPON, TOWER_LASER); // 先升到 Lv2,"被拒时等级不动"才有话可说
+    const cell = cellAt(deck, 0, 0)!;
+    const rev = deck.revision;
+
+    for (let t = 0; t < TOWER_KIND_COUNT; t++) {
+      if (t === TOWER_LASER) continue;
+      // 换塔型 = 出售 + 重放,GDD §4.5 明令不许;它也不是"叠级失败",故不是 MAX_LEVEL
+      expect(canPlace(deck, 0, 0, CELL_WEAPON, t)).toBe(PLACE_TAKEN);
+      expect(placeAt(deck, 0, 0, CELL_WEAPON, t)).toBe(PLACE_TAKEN);
+    }
+    expect(cell.towerType).toBe(TOWER_LASER);
+    expect(cell.level).toBe(2);
+    expect(deck.revision).toBe(rev);
+  });
+
+  it('离线塔也能升:焊成内脏位之后照样叠得动(它只是不开火,不是不存在)', () => {
+    const deck = deckFrom(['.#.', '.#.', '.#.']);
+    expect(placeAt(deck, 1, 1, CELL_WEAPON, TOWER_PD)).toBe(PLACE_OK);
+    const mid = cellAt(deck, 1, 1)!;
+
+    setOccupied(deck, 0, 1, true); // 两舷各焊一块:炮位变内脏位
+    setOccupied(deck, 2, 1, true);
+    expect(isInteriorCell(mid)).toBe(true);
+    expect(mid.online).toBe(false);
+
+    // 判定顺序上"格已占"排在 INTERIOR 之前,所以离线塔仍然叠得动
+    expect(canPlace(deck, 1, 1, CELL_WEAPON, TOWER_PD)).toBe(PLACE_UPGRADE);
+    expect(placeAt(deck, 1, 1, CELL_WEAPON, TOWER_PD)).toBe(PLACE_UPGRADE);
+    expect(mid.level).toBe(2);
+    expect(mid.online).toBe(false); // 升级不改在线状态:它还是那个四面被围的内脏位
+    // 而这一格早已不收**新**塔:换个塔型照旧 TAKEN,空的内部格照旧 INTERIOR
+    expect(canPlace(deck, 1, 1, CELL_WEAPON, TOWER_ARC)).toBe(PLACE_TAKEN);
+    expect(canPlace(createDeck(), 1, 1, CELL_WEAPON, TOWER_PD)).toBe(PLACE_INTERIOR);
+  });
+
+  it('塔型非法 → PLACE_BAD_TOWER,且判在"问格"之前;支援设施不看塔型', () => {
+    const deck = createDeck();
+    for (const bad of [-1, TOWER_KIND_COUNT, 99, 1.5, NaN]) {
+      expect(canPlace(deck, 0, 0, CELL_WEAPON, bad)).toBe(PLACE_BAD_TOWER);
+      // 塔型错了就是塔型错了:顺手点到界外也不改口报 NO_CELL(理由码的语义靠判定顺序才唯一)
+      expect(canPlace(deck, 99, 99, CELL_WEAPON, bad)).toBe(PLACE_BAD_TOWER);
+      expect(placeAt(deck, 0, 0, CELL_WEAPON, bad)).toBe(PLACE_BAD_TOWER);
+    }
+    // 内容不合法时仍先报内容:BAD_CONTENT 还是最外面那一道
+    expect(canPlace(deck, 0, 0, CELL_EMPTY, 99)).toBe(PLACE_BAD_CONTENT);
+    // 支援设施压根没有塔型这回事,传什么都不该拦(06 号的设施型号是另一套字段)
+    expect(canPlace(deck, 1, 1, CELL_SUPPORT, 99)).toBe(PLACE_OK);
+
+    expect(deck.revision).toBe(0); // 上面全是拒绝:一格都没落子
+    expect(deck.cells.every((c) => c.content === CELL_EMPTY)).toBe(true);
+  });
+
+  it('塔型缺省 = 自动机炮:三参调用方语义原样成立,再放一次就是升级', () => {
+    const deck = createDeck();
+    // 04 号那批只关心几何的用例全是三参调用,默认成万金油(GDD §5.2)它们才不用逐处补参数
+    expect(placeAt(deck, 0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(cellAt(deck, 0, 0)!.towerType).toBe(TOWER_AUTOCANNON);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON)).toBe(PLACE_UPGRADE);
+    expect(cellAt(deck, 0, 0)!.level).toBe(2);
+  });
+
+  it('isPlaceSuccess:只有 PLACE_OK 与 PLACE_UPGRADE 算成功,八个理由码互不撞号', () => {
+    expect(isPlaceSuccess(PLACE_OK)).toBe(true);
+    expect(isPlaceSuccess(PLACE_UPGRADE)).toBe(true); // 漏了这一个,升级就会被 ui 当成拒绝弹红字
+    const rejects = [
+      PLACE_NO_CELL,
+      PLACE_TAKEN,
+      PLACE_INTERIOR,
+      PLACE_BAD_CONTENT,
+      PLACE_MAX_LEVEL,
+      PLACE_BAD_TOWER,
+    ];
+    for (const code of rejects) expect(isPlaceSuccess(code)).toBe(false);
+
+    // ui 靠码分支说人话,撞号就会指错规则(玩家看到的解释与真正被拦的原因对不上)
+    const codes = [PLACE_OK, PLACE_UPGRADE, ...rejects];
+    expect(new Set(codes).size).toBe(codes.length);
   });
 });
 

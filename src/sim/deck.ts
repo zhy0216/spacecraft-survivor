@@ -21,8 +21,18 @@
  * 本模块**只提供放置,不提供拆除/移动/出售** —— "已放置的塔不可移动、不可出售"这条规则的实现
  * 就是"没有那个 API",而不是某处的一个 if:MVP 没有船坞节点,战斗中的全部规则就只有"往空格里插"。
  * (setOccupied 清内容是 12 号焊/拆**甲板**的副作用,不是卖塔的后门。)
+ * 同名叠级(GDD §5.4:Lv1→Lv5)也走 placeAt 这**同一个入口** —— 往已有同种塔的格上再放一座同种塔
+ * 就是升级:原格生效、不占新格、不移动任何东西,故与"不可移动、不可出售"共存,
+ * 而不是在放置之外另开一个 upgrade API(那个 API 迟早会被当成"先拆再放"用)。
  * canPlace 只读、placeAt 才写:渲染层每帧拿 canPlace 算合法格高亮,不必担心把世界改脏。
  */
+import {
+  TOWER_AUTOCANNON,
+  TOWER_KIND_COUNT,
+  TOWER_MAX_LEVEL,
+  towerMagazine,
+  TOWERS,
+} from '../data/towers';
 import { tuning } from './config';
 import { type Ship, type Vec2, wrapAngle } from './ship';
 
@@ -49,6 +59,24 @@ export const PLACE_TAKEN = 2;
 export const PLACE_INTERIOR = 3;
 /** content 不是 CELL_WEAPON / CELL_SUPPORT。含 CELL_EMPTY:MVP 没有"放个空格"式的拆除 */
 export const PLACE_BAD_CONTENT = 4;
+/**
+ * 同格同种塔 = 升一级(GDD §5.4:Lv1→Lv5,数值成长,原格生效不占新格)。**这是成功码**。
+ * 单开一个码而不是复用 PLACE_OK:ui 要说"升到 Lv3"而不是"已放置",渲染层也得知道该不该重画等级点。
+ */
+export const PLACE_UPGRADE = 5;
+/** 已经 Lv5,叠不动了(GDD §5.4 的上限)。与 TAKEN 分开:玩家该被告知"满级了",而不是"这格有东西" */
+export const PLACE_MAX_LEVEL = 6;
+/** content = CELL_WEAPON 但 towerType 不是合法塔型(TOWERS 的下标)。多半是 ui 的键位表漏了一档 */
+export const PLACE_BAD_TOWER = 7;
+
+/**
+ * 放置成功的唯一判据。成功从此有**两种**(新塔 PLACE_OK / 升级 PLACE_UPGRADE),
+ * 再让每个调用方各写一遍 `code === PLACE_OK` 就会分裂成两份规则 —— 而其中一份必然漏掉升级,
+ * 表现是"塔明明升上去了,ui 却弹了一行红字"。
+ */
+export function isPlaceSuccess(code: number): boolean {
+  return code === PLACE_OK || code === PLACE_UPGRADE;
+}
 
 /** 四条边的方向下标。掩码位 = 1 << edge */
 export const EDGE_BOW = 0;
@@ -72,7 +100,7 @@ export interface DeckCell {
   row: number;
   /** 是否属于船体;12 号焊接拼块 = 把更多格置 true */
   occupied: boolean;
-  /** CELL_*;05/06 会在本对象上再加 tower 引用字段 */
+  /** CELL_*;塔的型号/等级/节流状态一并扁平挂在本对象上,见下方 towerType 起的一段 */
   content: number;
   /** 暴露边位掩码,由 occupied 集合推导,永远不手写 */
   exposed: number;
@@ -91,6 +119,34 @@ export interface DeckCell {
    * 甲板不认识"敌人"这个概念,它只是那块状态的房东。
    */
   turretOffset: number;
+
+  /*
+   * —— 塔的运行期状态(05 号 issue)——
+   * 与 turretOffset 同口径:**扁平挂在格上,一次性声明齐,运行期绝不新增字段**。
+   * 不另开一个 Tower 对象挂引用,理由有三:
+   *   一、格与塔一一对应,单开对象就多出一个要与格同步生灭的容器,12 号拆改甲板时必然漏一处;
+   *   二、满甲板十几座塔逐帧读写这些数,扁平对象让 V8 保持单一隐藏类,不必多一层指针跳;
+   *   三、清理只有一处 —— recomputeDeck 的非占用分支,漏清一个字段就是"拆了再焊,新塔继承旧热量"。
+   * 甲板仍然只当**房东**:这些字段的推进(装填/降温/蓄力/开火)全在 sim/tower.ts,
+   * 本文件不 import 它,也不认识"节流机制"这个概念。
+   */
+
+  /** TOWER_*(见 data/towers)。**非武器格恒 -1** —— 0 是自动机炮,拿它当"没有塔"会全盘串味 */
+  towerType: number;
+  /** 1..TOWER_MAX_LEVEL;非武器格恒 0。同名叠级(GDD §5.4)就是把它 +1,不占新格 */
+  level: number;
+  /** 距下次可开火的剩余秒(充能系恒 0:那类塔的节奏全由 charge 给) */
+  cooldown: number;
+  /** 弹夹余量(发)—— UI 直接显示这个整数;上限是 towerMagazine(def, level) 的派生量 */
+  ammo: number;
+  /** 装填剩余秒;>0 = 装填中,期间一律不许开火 */
+  reloadLeft: number;
+  /** 当前热量 —— UI 的热量条 = heat / towerHeatMax(def, level) */
+  heat: number;
+  /** 过热强制冷却的剩余秒;>0 = 锁死不许开火(UI 闪红) */
+  coolLock: number;
+  /** 充能进度 0..1 —— UI 的充能环;满 1.0 就停在那里等目标 */
+  charge: number;
 }
 
 export interface Deck {
@@ -130,6 +186,16 @@ export function createDeck(cols: number = DECK_COLS, rows: number = DECK_ROWS): 
         exposedCount: 0,
         online: true,
         turretOffset: 0,
+        // 塔的运行期状态:建格时一次性给齐(哪怕这格永远不放塔),此后只改值不加字段。
+        // towerType 用 -1 而不是 0 —— 0 是自动机炮,拿它当"没有塔"会让满甲板空格都自称机炮
+        towerType: -1,
+        level: 0,
+        cooldown: 0,
+        ammo: 0,
+        reloadLeft: 0,
+        heat: 0,
+        coolLock: 0,
+        charge: 0,
       });
     }
   }
@@ -178,6 +244,16 @@ export function recomputeDeck(deck: Deck): void {
       cell.content = CELL_EMPTY;
       cell.online = true;
       cell.turretOffset = 0;
+      // 塔的运行期状态与炮管偏角同理,**八个字段一个不落**:漏清哪一个,
+      // 拆了再焊出来的新塔就会继承上一座塔的弹夹/热量/充能,而这类脏值只在 12 号扩建之后才现形
+      cell.towerType = -1;
+      cell.level = 0;
+      cell.cooldown = 0;
+      cell.ammo = 0;
+      cell.reloadLeft = 0;
+      cell.heat = 0;
+      cell.coolLock = 0;
+      cell.charge = 0;
       continue;
     }
     let mask = 0;
@@ -228,23 +304,52 @@ export function isCornerCell(cell: DeckCell): boolean {
 }
 
 /**
+ * 合法塔型 = TOWERS 的下标。用 Number.isInteger 而不是只比两头大小:NaN 与 1.5 同样不是下标,
+ * 放进去只会让 TOWERS[towerType] 取到 undefined —— 那时炸的是 sim/tower.ts,离现场十万八千里。
+ */
+function isTowerType(towerType: number): boolean {
+  return Number.isInteger(towerType) && towerType >= 0 && towerType < TOWER_KIND_COUNT;
+}
+
+/**
  * 能不能往这一格放东西,返回 PLACE_*。**只读不写**:渲染层每帧对全甲板问一遍来算高亮,
  * ui 层每次点击前也问一遍,任何一次询问都不许改动世界。
+ * @param towerType content = CELL_WEAPON 时的塔型(TOWERS 下标),其余内容忽略它。
+ *   缺省 = 自动机炮 —— 它是 GDD §5.2 的"基础输出,万金油",默认它让既有的三参调用方
+ *   (04 号那批只关心几何的用例、渲染层的合法格高亮)语义原样成立,不必逐处补一个参数。
  *
  * 判定顺序固定(理由码的语义靠它才唯一):
  *   1. content 不是武器塔/支援设施 → BAD_CONTENT。放在最前是因为它压根不是一次"放置请求",
  *      连问哪一格都无意义;顺带把"placeAt(格, CELL_EMPTY) 当拆除用"这条路堵在最外层;
- *   2. 格不存在或不属于船体 → NO_CELL;
- *   3. 已有塔/设施 → TAKEN。战斗中不可移动、不可出售(GDD §4.5)= 占用格永远拒绝,
- *      连"换一种内容盖上去"也不行;
- *   4. 武器塔落在内部格 → INTERIOR(GDD §4.1:边缘格开火、内部格供能);
+ *   2. 武器塔但塔型非法 → BAD_TOWER。塔型对不对与哪一格无关,故也判在"问格"之前:
+ *      同一个"塔型填错了"不能因为顺手点到界外就改口报 NO_CELL;
+ *   3. 格不存在或不属于船体 → NO_CELL;
+ *   4. 格已占:同种塔叠级(GDD §5.4)是**唯一**能落在占用格上的放置 —— 同 content、同 towerType
+ *      → 未满 Lv5 给 UPGRADE、满级给 MAX_LEVEL;**其余一律 TAKEN**(换塔型、换内容都等于
+ *      "出售 + 重放",GDD §4.5 明令战斗中不可移动、不可出售);
+ *   5. 武器塔落在内部格 → INTERIOR(GDD §4.1:边缘格开火、内部格供能);
  *      支援设施则任意空占用格都行,内部格正是它的主场。
+ *
+ * 第 4 步排在 INTERIOR 之前是有意的:被 12 号焊成内脏位的**离线塔照样能升级** ——
+ * 它只是不开火,不是不存在;而那一格早已不收新塔(空的内部格仍然一律 INTERIOR)。
  */
-export function canPlace(deck: Deck, col: number, row: number, content: number): number {
+export function canPlace(
+  deck: Deck,
+  col: number,
+  row: number,
+  content: number,
+  towerType: number = TOWER_AUTOCANNON,
+): number {
   if (content !== CELL_WEAPON && content !== CELL_SUPPORT) return PLACE_BAD_CONTENT;
+  if (content === CELL_WEAPON && !isTowerType(towerType)) return PLACE_BAD_TOWER;
   const cell = cellAt(deck, col, row);
   if (!cell || !cell.occupied) return PLACE_NO_CELL;
-  if (cell.content !== CELL_EMPTY) return PLACE_TAKEN;
+  if (cell.content !== CELL_EMPTY) {
+    if (content === CELL_WEAPON && cell.content === CELL_WEAPON && cell.towerType === towerType) {
+      return cell.level >= TOWER_MAX_LEVEL ? PLACE_MAX_LEVEL : PLACE_UPGRADE;
+    }
+    return PLACE_TAKEN;
+  }
   // 边缘/内部一律现问暴露边(而不是查一张"哪些格是边缘"的表):12 号扩建把边缘焊成内部之后,
   // 那一格立刻就不再收武器塔,不必在扩建那边记得来同步任何东西
   if (content === CELL_WEAPON && !isEdgeCell(cell)) return PLACE_INTERIOR;
@@ -252,16 +357,49 @@ export function canPlace(deck: Deck, col: number, row: number, content: number):
 }
 
 /**
- * 真正落子:合法则写 content,返回与 canPlace 同一个码。非法则一个字段都不动 ——
- * 失败不 bump revision,渲染层不会为一次拒绝白重建一遍几何(拒绝的表现是高亮层的一下闪色)。
- * 05/06 号 issue 的塔实体会在这里往格上再挂一个引用,规则判定仍然只此一处。
+ * 真正落子:合法则写 content(或给同种塔升一级),返回与 canPlace 同一个码。
+ * 非法则一个字段都不动 —— 失败不 bump revision,渲染层不会为一次拒绝白重建一遍几何
+ * (拒绝的表现是高亮层的一下闪色)。成功码有两个,故这里问 isPlaceSuccess 而不是比 PLACE_OK。
  */
-export function placeAt(deck: Deck, col: number, row: number, content: number): number {
-  const code = canPlace(deck, col, row, content);
-  if (code !== PLACE_OK) return code;
+export function placeAt(
+  deck: Deck,
+  col: number,
+  row: number,
+  content: number,
+  towerType: number = TOWER_AUTOCANNON,
+): number {
+  const code = canPlace(deck, col, row, content, towerType);
+  if (!isPlaceSuccess(code)) return code;
   // canPlace 已经判过这一格存在且属于船体,故这里的 ! 是安全的(noUncheckedIndexedAccess)
   const cell = cellAt(deck, col, row)!;
+
+  if (code === PLACE_UPGRADE) {
+    // 叠级**只动等级**,运行期节流状态一概不碰:弹夹不白送满、热量不清、充能不清、炮管不归位。
+    // 一来"升级 = 免费装填 + 免费散热"会让玩家掐着弹夹见底的那一刻去升级,把成长变成操作技巧;
+    // 二来派生上限当帧起自动按新等级算,而 ammo ≤ 旧上限 ≤ 新上限 天然合法,不必补一次夹取。
+    // 也不碰 content/online:升级不是"重放一座塔",格还是那一格,不占新格(GDD §5.4)
+    cell.level++;
+    deck.revision++;
+    return code;
+  }
+
   cell.content = content;
+  if (content === CELL_WEAPON) {
+    // 新塔的起手状态只在这一处写,且**八个字段一次性写齐**(而不是"反正建格时是 0 就不管"):
+    // 这一格可能被 12 号拆了再焊、也可能被将来的规则改动放过一遭,起手状态不该指望别处的清理。
+    // towerType 已过 isTowerType,故 TOWERS[towerType] 的 ! 是安全的
+    cell.towerType = towerType;
+    cell.level = 1;
+    cell.cooldown = 0;
+    cell.ammo = towerMagazine(TOWERS[towerType]!, 1); // 满弹进场;非弹药系的塔这里恒 0
+    cell.reloadLeft = 0;
+    cell.heat = 0;
+    cell.coolLock = 0;
+    cell.charge = 0;
+  }
+  // 支援设施不写上面那一段:它没有塔型也没有节流机制,towerType/level 恒 -1/0
+  // (由 createDeck 的初值与 recomputeDeck 的清理保证),塔的字段永远只属于武器格。
+
   // 暴露边没变(occupied 没动),只有这一格的 online 要跟着新内容走 —— 犯不着全量 recompute。
   // 有上面那条"武器塔只上边缘格"在,这一句今天算出来恒为 true;仍然照算,是为了让 online
   // 永远只由 updateOnline 这一个算式产出:哪天规则放宽(或 12 号先扩建后放塔),这里不会成为漏网

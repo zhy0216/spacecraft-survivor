@@ -17,7 +17,7 @@
 | 02 | [02-ship-movement.md](done/02-ship-movement.md) | 飞船操控、惯性移动与镜头 | P0 ✅ | 01 |
 | 03 | [03-deck-grid.md](done/03-deck-grid.md) | 甲板网格与放置规则 | P0 ✅ | 01 |
 | 04 | [04-firing-arcs.md](done/04-firing-arcs.md) | 射界系统与可视化 | P0 ✅ | 03 |
-| 05 | [05-weapon-towers.md](05-weapon-towers.md) | 武器塔框架与 6 种 MVP 塔 | P0 | 03, 04 |
+| 05 | [05-weapon-towers.md](done/05-weapon-towers.md) | 武器塔框架与 6 种 MVP 塔 | P0 ✅ | 03, 04 |
 | 06 | [06-support-facilities.md](06-support-facilities.md) | 支援设施与邻接协同 | P1 | 03, 05 |
 | 07 | [07-enemies.md](done/07-enemies.md) | 敌人系统与 4 种 MVP 敌人 | P0 ✅ | 01, 02 |
 | 08 | [08-waves-map.md](08-waves-map.md) | 波次脚本与单局地图 | P1 | 02, 07 |

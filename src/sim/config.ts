@@ -6,7 +6,6 @@
  * 分工:一型一个数的(各敌型血量/速度/前摇)进 src/data/enemies.ts;
  * 全局性的倍率与阈值留在这里 —— 后者才是面板上"拖一下看体感"的旋钮。
  */
-import { ARC_MEDIUM_DEG } from '../data/arcs';
 import { ENEMY_RADIUS_MAX } from '../data/enemies';
 
 export const tuning = {
@@ -30,14 +29,14 @@ export const tuning = {
   cameraLookAhead: 0.15, // 镜头向航向前方偏移的屏高比例(GDD §3.3)
 
   // —— 压测场景(01 号 issue 验收:1000 敌 + 500 弹 @60fps)——
+  // 只剩敌人这一半:子弹的那一半(stressBullets / bulletSpeed)在 05 号 issue 整段删除 ——
+  // 凭空重生的哑弹与真弹共用一个池,"500 弹不掉帧"测的就是假东西。500 弹改由塔真的打出来。
   stressEnemies: 1000,
-  stressBullets: 500,
   enemySeparation: 14, // 邻居分离半径 px(制造空间哈希查询负载)
   // 最大敌半径:空间哈希 cell = 半径×2(GDD §13)。从数值表推导,不在这里写死 ——
   // 加一型敌人只改 src/data/enemies.ts 的 radius,cell 口径自动跟上。
   // World 构造时一次性读取,故不进调参面板:运行期改会让已分桶的数据与查询半径口径错位。
   enemyRadiusMax: ENEMY_RADIUS_MAX,
-  bulletSpeed: 420, // px/s
 
   // —— 敌人(GDD §14 / todos/07)——各型基础数值在 src/data/enemies.ts,这里只放全局量。
   // 与 stepShip 同口径:敌人状态机每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
@@ -53,11 +52,13 @@ export const tuning = {
   enemyMixTrailer: 10,
   enemyMixBeetle: 5,
 
-  // —— 射界与炮管(04 号 issue)——三项全是占位:05 号的塔数值表接手后一塔一档,这里整段作废。
-  // 与 stepShip 同口径:sim 每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
-  turretArcDeg: ARC_MEDIUM_DEG, // 中 100°(GDD §4.2);本轮所有武器格统一用这一档
-  turretRange: 380, // 自动机炮射程(GDD §14);本轮所有武器格统一用它
-  turretTurnRate: 360, // 炮管转速上限 °/s(与 shipTurnRate 同单位口径),追瞄与归位共用
+  // —— 武器塔(05 号 issue)——一塔一个数的(伤害/射程/弧度/转速/节流)全在 src/data/towers.ts,
+  // 这里只留**全局倍率**:与 enemySpeedScale 同口径,是面板上"整体拖一下看体感"的那种旋钮。
+  // 04 号的 turretArcDeg / turretRange / turretTurnRate 三项全塔共用的占位由数值表一塔一档取代,已删。
+  // sim/tower.ts 的 effectiveDamage / effectiveFireInterval 每逻辑帧现读它们(数值表永不 import 本文件,
+  // 那是上下游关系,引回去就成环),故面板拖动即时生效。
+  towerDamageScale: 1,
+  towerFireRateScale: 1, // >1 = 全塔射得更快(除以它得到实际 fireInterval)
 };
 
 export type Tuning = typeof tuning;

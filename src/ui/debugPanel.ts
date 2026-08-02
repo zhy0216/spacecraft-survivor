@@ -27,6 +27,8 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   const perf = pane.addFolder({ title: '性能 / 确定性' });
   perf.addBinding(stats, 'fps', { readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
   perf.addBinding(stats, 'enemies', { label: '敌(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  // 05 号起这是**塔真的打出来的弹**(不再有凭空重生的压测哑弹),故它同时是"500 弹不掉帧"
+  // 那条验收的读数:它爬到 500 上下时 fps 还稳,才算数
   perf.addBinding(stats, 'bullets', { label: '弹(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 拖巡航滑杆时盯这个数:它爬到新的上限,才算"参数改动无需重启即可体感对比"落实了
   perf.addBinding(stats, 'speed', { label: '船速 px/s', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
@@ -38,14 +40,15 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   runF.addBinding(run, 'paused', { label: '暂停' });
   runF.addBinding(run, 'timeScale', { label: '时间倍率', min: 0.1, max: 3, step: 0.1 });
 
-  const stress = pane.addFolder({ title: '压测(验收 1000 敌 + 500 弹)' });
+  // 压测只剩敌人这一半:子弹那一半(stressBullets / bulletSpeed)在 05 号 issue 整段删除 ——
+  // 凭空重生的哑弹与真弹共用一个池,"500 弹不掉帧"测的就是假东西。500 弹现在由塔真的打出来,
+  // 想压满就多放几座高射速塔(点防/机炮)再把敌数拖高,盯上面的「弹(存活)」读数即可。
+  const stress = pane.addFolder({ title: '压测(验收 1000 敌)' });
   stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(目标)', min: 0, max: 5000, step: 100 });
-  stress.addBinding(tuning, 'stressBullets', { label: '弹数量(目标)', min: 0, max: 2000, step: 50 });
   // 各型敌人的基础速度在 src/data/enemies.ts,这里只剩全局倍率;拖到 0 = 全场定格,
   // 想看清某一型的走位(尤其冲锋前摇)时比暂停好用 —— 船还能开,敌人不动
   stress.addBinding(tuning, 'enemySpeedScale', { label: '敌速倍率', min: 0, max: 3, step: 0.1 });
   stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
-  stress.addBinding(tuning, 'bulletSpeed', { label: '弹速 px/s', min: 60, max: 1200, step: 20 });
 
   // 敌人(07 号 issue):四条占比是轮盘赌权重,不必凑成 100。
   // 注意:改占比只影响**新生成**的敌人,已在场的不会变型 —— 想只看某一型做肉眼验收,
@@ -65,15 +68,16 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
   ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });
 
-  // 射界(04 号 issue):三项全是**占位** —— 05 号的塔数值表接手后一塔一档(弧度/射程/转速
-  // 都进那张表),这个 folder 连同 tuning 里对应的三项一起作废,别在它上面接更多东西。
-  // 用法:按住 Tab 亮出扇形,一边拖一边看 —— 这是本轮唯一能肉眼校准"扇形 = 可命中区域"的手段
-  // (扇形半径直接取 turretRange、几何取自 sim 的射界函数,所以拖动时两者不可能对不上)。
-  const arc = pane.addFolder({ title: '射界(04)' });
-  arc.addBinding(tuning, 'turretArcDeg', { label: '射界 °', min: 30, max: 360, step: 10 });
-  arc.addBinding(tuning, 'turretRange', { label: '射程 px', min: 100, max: 900, step: 20 });
-  // 拖到最低能看清"塔转不过来就打不到":归位与追瞄共用这一根上限
-  arc.addBinding(tuning, 'turretTurnRate', { label: '炮管转速 °/s', min: 30, max: 1080, step: 30 });
+  // 塔(05 号 issue):这里**只剩两根全局倍率**。04 号那三项全塔共用的占位
+  // (turretArcDeg / turretRange / turretTurnRate)已被数值表一塔一档取代 —— 弧度、射程、转速、
+  // 节流参数全在 src/data/towers.ts,改那张表即可调平衡(05 号验收标准),面板不该再开第二个入口:
+  // 面板能改的数与数值表里的数一旦分家,调出来的手感就落不回文件里。
+  // 两根倍率由 sim/tower.ts 每逻辑帧现读(与 enemySpeedScale 同口径),故拖动即时生效;
+  // 用法是"整体拖一下看体感":想知道六塔的相对强弱够不够开,把伤害倍率拖一半再打一波最快。
+  const tower = pane.addFolder({ title: '塔(05)' });
+  tower.addBinding(tuning, 'towerDamageScale', { label: '伤害倍率', min: 0, max: 5, step: 0.1 });
+  // >1 = 全塔射得更快(实际 fireInterval = 表里的值 ÷ 它);充能系不受它影响(那类塔的节奏在 chargeTime)
+  tower.addBinding(tuning, 'towerFireRateScale', { label: '射速倍率', min: 0.1, max: 5, step: 0.1 });
 
   // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效
   const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });

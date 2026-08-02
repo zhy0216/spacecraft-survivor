@@ -32,7 +32,8 @@ async function boot(): Promise<void> {
   const run: RunState = { paused: false, timeScale: 1 };
   createDebugPanel(stats, run);
 
-  // 放置交互(03 号 issue 的灰盒入口:B 开关 / 1、2 选类型 / Esc 退出 / 左键放置)。
+  // 放置交互(03 号 issue 的灰盒入口:B 开关 / **1..6 选六种武器塔** / 0 选支援设施 /
+  // Esc 退出 / 左键放置 —— 05 号起数字键直选塔型,键位表由 ui 侧从数值表现生成,这里不复述)。
   // 屏幕像素换世界坐标只走渲染层这一份镜头公式 —— ui 层不复制第二份,也就不 import pixi(铁律 1)。
   // 状态对象交给渲染层画高亮;两边共享同一个对象,ui 就地改字段,渲染层下一帧自然读到。
   // 注意:10 号 issue 的"三选一 → 时停 → 甲板放大 → 拖放"会把这三行连同 ui/placement.ts 一起换掉。
