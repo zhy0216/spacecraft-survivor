@@ -54,7 +54,7 @@ import {
   setOccupied,
 } from './deck';
 import { applyDamage, createEnemy, type Enemy } from './enemy';
-import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE } from './fx';
+import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE, FXV_MUZZLE } from './fx';
 import { createShip, DEG2RAD, type Ship } from './ship';
 import { effectiveAoeDamage, effectiveDamage } from './tower';
 import { stepTurrets } from './turret';
@@ -616,7 +616,17 @@ describe('stepTurrets:五种开火表现', () => {
     expect(b.aoeDamage).toBe(0);
 
     expect(log.damages.length).toBe(0); // 真子弹:伤害在飞行途中由 sim/bullet.ts 结算,不当场扣
-    expect(log.fxs.length).toBe(0); // 出膛由子弹自己交代,本轮 sim 不产 FXV_MUZZLE
+    expect(log.fxs).toEqual([
+      {
+        kind: FXV_MUZZLE,
+        x0: BOW_MUZZLE_X,
+        y0: BOW_MUZZLE_Y,
+        x1: BOW_MUZZLE_X,
+        y1: BOW_MUZZLE_Y,
+        radius: 0,
+        towerType: TOWER_AUTOCANNON,
+      },
+    ]); // 真正开火才推一次短促炮口闪；多发 burst 仍是一座塔的一次 trigger
     expect(cell.ammo).toBe(towerMagazine(def, 1) - 1); // 代价记在自己那套机制上
     expect(log.fired).toEqual([cell]); // broadside 统计:一次开火恰好记一次
   });
@@ -680,6 +690,7 @@ describe('stepTurrets:五种开火表现', () => {
     expect(b.y + b.vy * b.life).toBeCloseTo(target.y, 6);
 
     expect(log.damages.length).toBe(0); // 开火这一刻一滴血都不掉,全在落点(sim/bullet.ts)
+    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_MUZZLE]);
     expect(cell.charge).toBe(0); // 充能系一次放空
     expect(log.fired).toEqual([cell]);
   });
@@ -697,8 +708,8 @@ describe('stepTurrets:五种开火表现', () => {
     expect(log.damages[0]!.e).toBe(target);
     expect(log.damages[0]!.amount).toBe(effectiveDamage(def, 1));
 
-    expect(log.fxs.length).toBe(1);
-    const fx = log.fxs[0]!;
+    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_BEAM, FXV_MUZZLE]);
+    const fx = log.fxs.find((f) => f.kind === FXV_BEAM)!;
     expect(fx.kind).toBe(FXV_BEAM);
     expect(fx.x0).toBe(BOW_MUZZLE_X); // 起点 = 炮口
     expect(fx.y0).toBe(BOW_MUZZLE_Y);
@@ -730,8 +741,13 @@ describe('stepTurrets:五种开火表现', () => {
     expect(lonely.hp).toBe(lonely.maxHp); // 一滴血都没掉:chainRange 真的在拦人
 
     // 每跳一条折线,首尾相接 —— 渲染层照这几条画出整条链(炮口 → 甲 → 乙 → 丙)
-    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_CHAIN, FXV_CHAIN, FXV_CHAIN]);
-    expect(log.fxs.map((f) => [f.x0, f.x1])).toEqual([
+    expect(log.fxs.map((f) => f.kind)).toEqual([
+      FXV_CHAIN,
+      FXV_CHAIN,
+      FXV_CHAIN,
+      FXV_MUZZLE,
+    ]);
+    expect(log.fxs.filter((f) => f.kind === FXV_CHAIN).map((f) => [f.x0, f.x1])).toEqual([
       [BOW_MUZZLE_X, first.x],
       [first.x, second.x],
       [second.x, third.x],
@@ -814,8 +830,8 @@ describe('stepTurrets:五种开火表现', () => {
     expect(log.bullets.size).toBe(0); // 60Hz 下一帧走两千 px 的弹丸必然隧穿,故不走子弹池
     expect(log.queries).toBe(0); // 与链跳同口径:复用已经查好的候选
 
-    expect(log.fxs.length).toBe(1);
-    const fx = log.fxs[0]!;
+    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_LANCE, FXV_MUZZLE]);
+    const fx = log.fxs.find((f) => f.kind === FXV_LANCE)!;
     expect(fx.kind).toBe(FXV_LANCE);
     expect(fx.x0).toBe(BOW_MUZZLE_X);
     expect(fx.y0).toBe(BOW_MUZZLE_Y);

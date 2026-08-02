@@ -57,9 +57,9 @@ export interface WaveState {
    * 0.7 只/秒这种小数速率全靠它攒:每帧四舍五入的话,速率低于 60 只/秒的流会被抹成 0 或炸成满帧。
    */
   debt: number[];
-  /** 当前主压方向(弧度,折回 (-π, π]);11 号的威胁罗盘读它。**派生量** */
+  /** 脚本计划的主压方向(弧度,折回 (-π, π]);实际统计无样本时供 World 罗盘兜底。**派生量** */
   dirRad: number;
-  /** 当前主压强度 = 本段各 stream 当前速率之和(只/秒);HUD 用来显示"压力有多大"。**派生量** */
+  /** 脚本计划强度 = 本段各 stream 当前速率之和(只/秒);供调试与脚本测试，不冒充实际生成。**派生量** */
   intensity: number;
   /** segment >= WAVE_SEGMENTS.length 的**派生量**;World 据此判胜利 */
   done: boolean;
@@ -67,7 +67,7 @@ export interface WaveState {
 
 /**
  * 段内进度 [0, 1]。要夹一次是因为 waveDirAt / waveIntensityAt 是**公开**函数
- * (HUD 与单测会拿任意 segTime 问它们),而"segTime < duration"只在 runner 内部成立。
+ * (调试与单测会拿任意 segTime 问它们),而"segTime < duration"只在 runner 内部成立。
  * duration <= 0 的坏数据回落成 0:与其吐 Infinity/NaN 让罗盘乱转,不如钉在段首角上。
  */
 function segProgress(seg: WaveSegment, segTime: number): number {
@@ -91,7 +91,7 @@ export function waveDirAt(seg: WaveSegment, segTime: number): number {
   return wrapAngle(deg * DEG2RAD);
 }
 
-/** 主压强度(只/秒)= 本段各流当前速率之和。侧压事件不进来:它是脉冲,不是速率 */
+/** 脚本计划强度(只/秒)= 本段各流当前速率之和；侧压 burst 是离散事件，不属于这条计划曲线。 */
 export function waveIntensityAt(seg: WaveSegment, segTime: number): number {
   const prog = segProgress(seg, segTime);
   let sum = 0;
@@ -190,8 +190,7 @@ export function stepWaves(s: WaveState, dt: number, rng: Rng, sink: SpawnSink): 
   }
   const seg = WAVE_SEGMENTS[s.segment]!;
 
-  // 4. 主压方向与强度:11 号的威胁罗盘每帧读它们(经 World 的两个 getter),
-  //    本帧的出怪也全部以这个 dirRad 为基准 —— 罗盘指哪,怪就真的从哪来
+  // 4. 脚本计划方向与强度。本帧主流出怪以 dirRad 为基准；World 另按真正成功的事件统计 HUD 实况。
   s.dirRad = waveDirAt(seg, s.segTime);
   s.intensity = waveIntensityAt(seg, s.segTime);
 

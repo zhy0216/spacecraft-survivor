@@ -1,0 +1,264 @@
+/**
+ * 战斗 HUD(11 号 issue H1/H2)—— 固定在屏幕空间的 DOM 覆盖层,永不 import pixi。
+ * 世界里同时有多少敌人都不会改变这里的节点数:整页只创建一次,每帧只改已有节点的
+ * textContent / style。重开也只走 setWorld 换引用,不重复 append DOM 或注册监听器。
+ *
+ * 布局只占屏幕上沿与威胁所在的边缘,中央战场完全留空。升级时停与结算期间由 setPaused
+ * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
+ */
+import { WAVE_SEGMENTS } from '../data/waves';
+import type { World } from '../sim/world';
+import { formatDuration } from './gameOver';
+
+const OK_COLOR = '#9adcff';
+const VALUE_COLOR = '#c8dcf0';
+const IDLE_COLOR = '#5f7a99';
+const LINE_COLOR = '#2b4a6e';
+const HP_COLOR = '#73d9e8';
+const SCRAP_COLOR = '#e6c878';
+const THREAT_COLOR = '#ff5f77';
+
+const ROOT_CSS =
+  'position:fixed;inset:0;pointer-events:none!important;user-select:none;opacity:1;' +
+  'transition:opacity 140ms ease;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;';
+
+/** 三块读数贴上沿排开;中间只有一枚窄计时器,不会盖住中央交战区 */
+const TOP_CSS =
+  // 四周先留一条 48px 的罗盘通道:箭头贴边走,不会压在 HP/计时/航段文字上
+  // 右侧额外给开发期常驻的 Tweakpane 留位;正式 HUD 不应被调参工具盖住。
+  'position:absolute;left:48px;right:300px;top:48px;display:grid;' +
+  'grid-template-columns:minmax(150px,300px) 1fr minmax(150px,300px);gap:18px;align-items:start;';
+
+const PANEL_CSS =
+  `padding:8px 10px;border:1px solid ${LINE_COLOR};border-radius:7px;` +
+  'background:rgba(5,7,13,.68);box-shadow:0 2px 12px rgba(0,0,0,.28);';
+const LABEL_ROW_CSS = 'display:flex;align-items:baseline;justify-content:space-between;gap:12px;';
+const LABEL_CSS = `color:${IDLE_COLOR};letter-spacing:.08em;white-space:nowrap;`;
+const VALUE_CSS = `color:${VALUE_COLOR};white-space:nowrap;`;
+const TRACK_CSS =
+  `height:5px;margin-top:5px;overflow:hidden;border-radius:999px;background:rgba(43,74,110,.35);` +
+  `box-shadow:inset 0 0 0 1px ${LINE_COLOR};`;
+const FILL_CSS = 'height:100%;width:0;border-radius:inherit;transition:width 80ms linear;';
+
+const TIMER_CSS =
+  `${PANEL_CSS}justify-self:center;min-width:86px;text-align:center;color:${OK_COLOR};` +
+  'font-size:17px;letter-spacing:.12em;';
+const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
+
+/** 罗盘根是一支向 +X 的 CSS 箭头;sync 时只改位置、旋转、尺寸与透明度 */
+const THREAT_CSS =
+  'position:absolute;width:24px;height:24px;transform-origin:50% 50%;will-change:left,top,transform;' +
+  'pointer-events:none;';
+const THREAT_SHAFT_CSS =
+  `position:absolute;left:0;top:50%;width:68%;height:2px;border-radius:999px;background:${THREAT_COLOR};` +
+  'transform:translateY(-50%);';
+const THREAT_TIP_CSS =
+  'position:absolute;right:0;top:50%;width:0;height:0;transform:translateY(-50%);' +
+  `border-top:6px solid transparent;border-bottom:6px solid transparent;border-left:10px solid ${THREAT_COLOR};`;
+
+/** 从脚本推导罗盘的满强度:改波次速率,视觉刻度自动跟着走,不另养一枚魔法数 */
+export const THREAT_INTENSITY_MAX = Math.max(
+  1,
+  ...WAVE_SEGMENTS.map((seg) => {
+    let start = 0;
+    let end = 0;
+    for (const stream of seg.streams) {
+      start += stream.rate0 > 0 && Number.isFinite(stream.rate0) ? stream.rate0 : 0;
+      end += stream.rate1 > 0 && Number.isFinite(stream.rate1) ? stream.rate1 : 0;
+    }
+    return Math.max(start, end);
+  }),
+);
+
+/** 开发期 Tweakpane 固定在右侧约 256px;罗盘把这条不可用区域从战场边缘扣掉。 */
+const HUD_RIGHT_GUTTER = 288;
+
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** 任意进度夹到 [0,1];max <= 0 / NaN 时回落 0,不把 NaN 写进 CSS */
+export function hudRatio(value: number, max: number): number {
+  if (!(max > 0) || !Number.isFinite(max)) return 0;
+  const ratio = finiteOrZero(value) / max;
+  return ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
+}
+
+export interface SegmentReadout {
+  label: string;
+  ratio: number;
+}
+
+/** 当前航段的名字、n/N 与段内进度;脚本走完钉在满格,不显示 5/4 */
+export function segmentReadout(segment: number, segTime: number): SegmentReadout {
+  const count = WAVE_SEGMENTS.length;
+  if (count === 0) return { label: '—', ratio: 0 };
+  if (Number.isFinite(segment) && segment >= count) return { label: `${count}/${count} 全通`, ratio: 1 };
+  const index = Number.isFinite(segment) && segment >= 0 ? Math.floor(segment) : 0;
+  const seg = WAVE_SEGMENTS[index] ?? WAVE_SEGMENTS[0]!;
+  return {
+    label: `${index + 1}/${count} ${seg.name}`,
+    ratio: hudRatio(segTime, seg.duration),
+  };
+}
+
+export interface ThreatVisual {
+  x: number;
+  y: number;
+  rotationDeg: number;
+  strength: number;
+  sizePx: number;
+  linePx: number;
+  opacity: number;
+  brightness: number;
+}
+
+/**
+ * 世界绝对角 → 屏幕边缘交点。0 = 右、π/2 = 下,与 World/画布的 y 向下一致。
+ * 强度同时驱动箭头尺寸/线宽与透明度/亮度,低压仍保留常驻轮廓。
+ */
+export function threatVisual(direction: number, intensity: number, width: number, height: number): ThreatVisual {
+  const angle = Number.isFinite(direction) ? direction : 0;
+  const viewportW = Number.isFinite(width) && width > 0 ? width : 1;
+  const viewportH = Number.isFinite(height) && height > 0 ? height : 1;
+  const cx = viewportW * 0.5;
+  const cy = viewportH * 0.5;
+  const margin = Math.min(22, Math.max(16, Math.min(viewportW, viewportH) * 0.025));
+  const rightEdge = Math.max(cx, viewportW - HUD_RIGHT_GUTTER);
+  const halfWRight = Math.max(0, rightEdge - cx);
+  const halfWLeft = Math.max(0, cx - margin);
+  const halfH = Math.max(0, cy - margin);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const halfW = dx >= 0 ? halfWRight : halfWLeft;
+  const tx = Math.abs(dx) > 1e-9 ? halfW / Math.abs(dx) : Number.POSITIVE_INFINITY;
+  const ty = Math.abs(dy) > 1e-9 ? halfH / Math.abs(dy) : Number.POSITIVE_INFINITY;
+  const distance = Math.min(tx, ty);
+  const strength = hudRatio(intensity, THREAT_INTENSITY_MAX);
+  return {
+    x: cx + dx * (Number.isFinite(distance) ? distance : 0),
+    y: cy + dy * (Number.isFinite(distance) ? distance : 0),
+    // 箭头放在来敌侧边缘,但头部朝向屏幕内/船心,读起来是“怪流从这里压进来”。
+    rotationDeg: (angle * 180) / Math.PI + 180,
+    strength,
+    sizePx: 22 + strength * 16,
+    linePx: 2 + strength * 4,
+    opacity: 0.38 + strength * 0.58,
+    brightness: 0.78 + strength * 0.72,
+  };
+}
+
+export interface HudUi {
+  /** 重开只换引用;DOM 与任何监听器都不重建 */
+  setWorld(world: World): void;
+  /** 升级时停 / 结算时淡出,不与卡片或放大甲板抢焦点 */
+  setPaused(paused: boolean): void;
+  /** 每渲染帧同步现有节点 */
+  sync(): void;
+}
+
+interface BarEls {
+  value: HTMLSpanElement;
+  fill: HTMLDivElement;
+}
+
+function createBar(parent: HTMLElement, labelText: string, color: string): BarEls {
+  const row = document.createElement('div');
+  row.style.cssText = LABEL_ROW_CSS;
+  const label = document.createElement('span');
+  label.style.cssText = LABEL_CSS;
+  label.textContent = labelText;
+  const value = document.createElement('span');
+  value.style.cssText = VALUE_CSS;
+  row.append(label, value);
+  const track = document.createElement('div');
+  track.style.cssText = TRACK_CSS;
+  const fill = document.createElement('div');
+  fill.style.cssText = `${FILL_CSS}background:${color};`;
+  track.appendChild(fill);
+  parent.append(row, track);
+  return { value, fill };
+}
+
+export function createHud(opts: { world: World }): HudUi {
+  let world = opts.world;
+  let paused = false;
+
+  const root = document.createElement('div');
+  root.style.cssText = ROOT_CSS;
+  const top = document.createElement('div');
+  top.style.cssText = TOP_CSS;
+
+  const vitals = document.createElement('div');
+  vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
+  const hp = createBar(vitals, '船体 HP', HP_COLOR);
+  const scrap = createBar(vitals, '升级残骸', SCRAP_COLOR);
+
+  const timer = document.createElement('div');
+  timer.style.cssText = TIMER_CSS;
+
+  const segment = document.createElement('div');
+  segment.style.cssText = SEGMENT_CSS;
+  const segmentBar = createBar(segment, '航段进度', OK_COLOR);
+
+  top.append(vitals, timer, segment);
+
+  const threat = document.createElement('div');
+  threat.style.cssText = THREAT_CSS;
+  threat.title = '主压方向';
+  const shaft = document.createElement('div');
+  shaft.style.cssText = THREAT_SHAFT_CSS;
+  const tip = document.createElement('div');
+  tip.style.cssText = THREAT_TIP_CSS;
+  threat.append(shaft, tip);
+
+  root.append(top, threat);
+  document.getElementById('ui')!.appendChild(root);
+
+  function sync(): void {
+    const hpMax = finiteOrZero(world.ship.maxHp);
+    const hpNow = finiteOrZero(world.ship.hp);
+    hp.value.textContent = `${Math.max(0, Math.round(hpNow))} / ${Math.max(0, Math.round(hpMax))}`;
+    hp.fill.style.width = `${hudRatio(hpNow, hpMax) * 100}%`;
+
+    const cost = finiteOrZero(world.upgradeCost);
+    const scrapNow = finiteOrZero(world.scrap);
+    scrap.value.textContent = `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}`;
+    scrap.fill.style.width = `${hudRatio(scrapNow, cost) * 100}%`;
+
+    timer.textContent = formatDuration(world.elapsed);
+
+    const seg = segmentReadout(world.wave.segment, world.wave.segTime);
+    segmentBar.value.textContent = seg.label;
+    segmentBar.fill.style.width = `${seg.ratio * 100}%`;
+
+    const visual = threatVisual(world.threatDirection, world.threatIntensity, window.innerWidth, window.innerHeight);
+    threat.style.left = `${visual.x}px`;
+    threat.style.top = `${visual.y}px`;
+    threat.style.width = `${visual.sizePx}px`;
+    threat.style.height = `${visual.sizePx}px`;
+    threat.style.opacity = String(visual.opacity);
+    threat.style.filter =
+      `brightness(${visual.brightness}) drop-shadow(0 0 ${2 + visual.strength * 8}px rgba(255,95,119,.9))`;
+    threat.style.transform = `translate(-50%,-50%) rotate(${visual.rotationDeg}deg)`;
+    shaft.style.height = `${visual.linePx}px`;
+    tip.style.borderTopWidth = `${visual.sizePx * 0.25}px`;
+    tip.style.borderBottomWidth = `${visual.sizePx * 0.25}px`;
+    tip.style.borderLeftWidth = `${visual.sizePx * 0.42}px`;
+  }
+
+  sync();
+
+  return {
+    setWorld(next: World): void {
+      world = next;
+      sync();
+    },
+    setPaused(next: boolean): void {
+      if (paused === next) return;
+      paused = next;
+      root.style.opacity = paused ? '0.06' : '1';
+    },
+    sync,
+  };
+}

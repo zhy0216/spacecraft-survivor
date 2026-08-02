@@ -44,7 +44,7 @@ import { BK_DIRECT, BK_MORTAR } from './bullet';
 import { cellFireRateMul } from './damage';
 import { cellWorldPos, type Deck, type DeckCell, deckCellSize } from './deck';
 import type { Enemy } from './enemy';
-import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE } from './fx';
+import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
 import {
   canFire,
@@ -197,6 +197,9 @@ export function stepTurrets(
     // shots = 0 只可能是数值表被改坏(弹速非正、fx 越界):那种塔当场哑火,
     // 而**不记代价** —— 记了就会白扣一发弹药/一份热量,现场看上去像"塔在打但没伤害"
     if (shots <= 0) continue;
+    // 所有塔型共用的一次短促炮口闪：只在真正打出至少一发/一次结算后推事件，哑火不闪。
+    // 一次 trigger 只推一条（双管仍是一座塔开了一次火），渲染层按 towerType 取同源冷色。
+    sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
     // 与 stepThrottle 传同一个 fireMul:写进 cooldown 的那个间隔和逐帧夹取它的那个上限
     // 必须同源,否则惩罚期内写进去的长冷却会被下一帧按基准间隔夹回去,惩罚静默失效
     onFired(cell, def, shots, fireMul);

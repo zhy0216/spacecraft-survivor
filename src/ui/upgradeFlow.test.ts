@@ -48,6 +48,7 @@ import { OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type Upgrade
 import type { World } from '../sim/world';
 import {
   cardDesc,
+  cardIcon,
   cardLevelText,
   cardTitle,
   createUpgradeFlow,
@@ -173,6 +174,28 @@ describe('cardTitle', () => {
   });
 });
 
+describe('cardIcon', () => {
+  it('六塔四设施都有明确且互不串台的内建图标', () => {
+    const towerIcons = TOWERS.map((def) => cardIcon(towerOpt(def.type)));
+    const supportIcons = SUPPORTS.map((def) => cardIcon(supportOpt(def.type)));
+    const icons = [...towerIcons, ...supportIcons];
+    expect(icons.length).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT);
+    for (const icon of icons) {
+      expect(icon.length).toBeGreaterThan(0);
+      expect(icon).not.toBe('?');
+      // 图标是随代码交付的字符,不依赖图片 URL / 外部资产能否加载
+      expect(icon).not.toContain('http');
+      expect(icon).not.toContain('<');
+    }
+    expect(new Set(icons).size).toBe(icons.length);
+  });
+
+  it('未知型号显式报 ?,不冒充数值表第 0 型', () => {
+    expect(cardIcon(towerOpt(99))).toBe('?');
+    expect(cardIcon(supportOpt(99))).toBe('?');
+  });
+});
+
 describe('cardDesc', () => {
   it('塔卡报射界 / 射程 / 节流系三样,六座各不相同', () => {
     const descs = TOWERS.map((def) => cardDesc(towerOpt(def.type)));
@@ -252,8 +275,13 @@ describe('cardLevelText', () => {
     expect(top).toContain('新建');
   });
 
-  it('支援候选恒 0 级 → 未装备(设施不叠级,每次都是新建一格)', () => {
-    for (const def of SUPPORTS) expect(cardLevelText(supportOpt(def.type))).toBe('未装备');
+  it('支援设施不拿恒 0 的 level 冒充“未装备”,明确说明每次都是新建', () => {
+    for (const def of SUPPORTS) {
+      const text = cardLevelText(supportOpt(def.type));
+      expect(text).toContain('不叠级');
+      expect(text).toContain('新建');
+      expect(text).not.toContain('未装备');
+    }
   });
 
   it('越界与 NaN 不产出 LvNaN 这种字', () => {
@@ -500,6 +528,16 @@ describe('createUpgradeFlow 两阶段状态机', () => {
     // 一次误点变成一座放错格的塔,而塔放下去不可移动、不可出售(GDD §4.5)
     expect(world.takeCalls.length).toBe(0);
     expect(resolved).toBe(0);
+  });
+
+  it('卡片 DOM 同时显示图标 / 名称 / 描述 / 当前等级', () => {
+    setup();
+    const card = cardsOf(dom).children[0]!;
+    expect(card.children.length).toBe(4);
+    expect(card.children[0]!.textContent).toBe(cardIcon(world.offer[0]!));
+    expect(card.children[1]!.textContent).toBe(cardTitle(world.offer[0]!));
+    expect(card.children[2]!.textContent).toBe(cardDesc(world.offer[0]!));
+    expect(card.children[3]!.textContent).toBe(cardLevelText(world.offer[0]!));
   });
 
   it('点一张卡 → 放置阶段:候选原样填进 PlacementUiState', () => {

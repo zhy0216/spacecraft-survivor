@@ -11,7 +11,7 @@
  * 容器每帧只吃插值后的 position/rotation —— 于是"甲板与船体一同旋转"是结构上必然成立的,
  * 而不是靠两处变换算得一样。逐格用 cellWorldPos 摆 12 个 Graphics 也能画出同一幅画面,
  * 但那等于每帧重做一遍船体变换,格与格之间还会各自吃到浮点误差而抖动。
- * 注意:11 号 issue 会要求战斗中甲板走简化渲染(远景只留轮廓),本轮**不做两套**,先把一套画对。
+ * 11 号起甲板分两档:战斗远景只留按型色块、朝向与开火闪光；Tab / 时停放大再补射界、连线与节流细节。
  *
  * 射界叠加层(04 号 issue,按住 Tab):同样挂在 deckG 里、同样只画局部几何,
  * 于是"扇形随船实时旋转"与"甲板随船旋转"是同一件事,不可能差一帧。
@@ -95,7 +95,7 @@ import {
 } from '../data/towers';
 import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
-import { deckOuterRadius, hullCoreHalfExtents } from '../sim/damage';
+import { hullCoreHalfExtents } from '../sim/damage';
 import {
   canPlace,
   CELL_SUPPORT,
@@ -131,20 +131,16 @@ import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
 import type { Bullet, Enemy, World } from '../sim/world';
 import { WORLD_RADIUS } from '../sim/world';
+import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
 
 /** 未使用粒子的"停车位":粒子只增不删,多余的挪出视野(避免运行期增删 GPU 缓冲) */
 const OFFSCREEN = 1e6;
 
-// 敌人纹理一律画成灰阶(暗面 + 亮边),真正的颜色靠粒子 tint 相乘出来:
+// 敌人纹理一律画成浅灰阶(明面 + 亮边),真正的颜色靠粒子 tint 相乘出来:
 // tint 是逐粒子的静态属性,建粒子时上传一次就不再动,于是"按型上色"零每帧开销。
 // 剪影结构与船体同一套语汇(暗底亮边),唯独色域相反 —— 敌取 src/data/enemies.ts 的红紫暖色,
 // 我方取下面的冷色,千敌同屏时靠色域而不是靠描边把自己认出来(GDD §12)。
-const ENEMY_FILL = 0x9a9a9a;
 const ENEMY_EDGE = 0xffffff;
-// 船体走冷色废铁(GDD §12)
-const SHIP_FILL = 0x2b4a6e;
-const SHIP_EDGE = 0x7fc4ff;
-
 // —— 残骸掉落物(10 号 issue T4)——GDD §12 的"拾荒焊接美学:船是冷色废铁拼焊的" ——
 // 残骸就是那批废铁本身(GDD 开篇:残骸 = XP,星之残骸 = 你的船),故取**低饱和钢白**:
 // 与六塔那批高饱和冷色(弹与光效)差的是饱和度、与敌人的红紫暖色差的是整个色域 ——
@@ -202,7 +198,7 @@ const DECK_DENY_FILL_ALPHA = 0.22;
 /**
  * 放大档位:1.3 = GDD §11 明写的"甲板放大 30%"。只作用在 deckG 上(见 setDeckZoom):
  * 格子、合法格高亮、射界扇形、节流读数全挂在它下面,一并放大 —— 而虫潮、场地边界圈、
- * HP 条一个都不跟着变,于是"世界停住了、镜头没动,只有我这块甲板凑到眼前来"这句话
+ * DOM HUD 一个都不跟着变,于是"世界停住了、镜头没动,只有我这块甲板凑到眼前来"这句话
  * 在画面上是自明的。
  */
 const DECK_ZOOM = 1.3;
@@ -356,9 +352,12 @@ const FX_BLAST_RING_WIDTH = 2.5;
 const FX_BLAST_START = 0.35;
 /** 覆盖面的实心盘:极淡的一层,负责"炸到多大一片"的面积读数,扩张环负责"炸了" */
 const FX_BLAST_FILL_ALPHA = 0.16;
-/** 炮口火光的半径与不透明度(见 drawFx 里 FXV_MUZZLE 那一支:sim 本轮不产出它) */
-const FX_MUZZLE_RADIUS = 4;
+/** 炮口火光的半径与不透明度：略大于节流点，保证战斗态缩放下仍能越过塔色块被看见。 */
+const FX_MUZZLE_RADIUS = 7;
 const FX_MUZZLE_ALPHA = 0.8;
+/** 同色光晕落在同色塔块上仍会隐形；冷白描边与芯点提供不依赖塔色的第二条亮度通道。 */
+const FX_MUZZLE_RING_WIDTH = 2.5;
+const FX_MUZZLE_CORE_RADIUS = 2.3;
 
 // —— 受击表现(09 号 issue T4)——被撞舷闪红 / 船体真伤害 / 判定体轮廓共用的暖红 ——
 /**
@@ -376,23 +375,6 @@ const HULL_HIT_ALPHA = 0.85;
 /** 判定体轮廓(按住 Tab):细线 + 半透明 —— 它是叠在甲板上的调试读数,不许压过格子本身的状态色 */
 const HULL_CORE_WIDTH = 2;
 const HULL_CORE_ALPHA = 0.7;
-
-// —— 船体 HP 条(09 号 issue T4 的**灰盒**读数)——整条会被 11 号 issue 的战斗 HUD 换掉,见 drawShipHp。
-// 故这批常量刻意只有"槽 + 填充 + 一记受击回执"这几个,不做数字、分段、渐变、低血警告:
-// 本轮要的只是"被撞了、掉了多少"在画面上存在,好看是 11 号的事。
-/** 条长 = 船宽 × 它。与船同宽,于是"这条是这艘船的血"不用任何图例就读得出来 */
-const HP_BAR_WIDTH_MUL = 1;
-const HP_BAR_HEIGHT = 7;
-/** 条与船体外接圆之间的留白(世界 px):贴着画会在急转弯时被甲板的角蹭到 */
-const HP_BAR_GAP = 12;
-/** 槽底沿用节流读数那一档暗色(THR_TRACK_COLOR),alpha 再高一点:HP 见底时槽必须还在(理由同 THR_TRACK_*) */
-const HP_TRACK_ALPHA = 0.75;
-/** 填充取船体轮廓那支冷蓝(GDD §12 我方冷色域):血条是船的一部分,不该另起一个色 */
-const HP_FILL_COLOR = SHIP_EDGE;
-/** 受击回执:暖红描边的线宽 + 横向抖动的幅度(世界 px)与衰减期内走完的振荡周期数(相位写法见 stepBroadside) */
-const HP_HIT_WIDTH = 2;
-const HP_HIT_SHAKE = 4;
-const HP_HIT_CYCLES = 2.5;
 
 /**
  * 火花 FXV_SPARK = "蹭到甲板了、但没进核心区,一分血都没掉"。冷白(与我方光效同一支芯色)、
@@ -532,7 +514,9 @@ function buildEnemyShape(def: EnemyDef): Graphics {
     }
   }
   // 描边宽度随体型缩放:固定宽度会把 r=7 的蜂群蛭糊成一个亮点,形状通道就废了
-  return g.fill(ENEMY_FILL).stroke({ width: Math.max(1.5, r * 0.25), color: ENEMY_EDGE });
+  return g
+    .fill(ENEMY_BODY_FILL)
+    .stroke({ width: Math.max(1.5, r * 0.25), color: ENEMY_EDGE });
 }
 
 /**
@@ -600,16 +584,15 @@ function clamp01(t: number): number {
  * 格填充色。离线格一律去色(灰),不按内容上色 —— "这格是塔还是支援"在它不工作时不重要,
  * "它不工作"才重要;把两条信息叠在同一个色块上,玩家一眼只会读到更抢眼的那条。
  *
- * 支援格(06 号)**按型上色**,色相取数值表的 SUPPORTS[supportType].tint:四种设施一眼分得开,
- * 而连线取的是同一个 tint —— 于是"这条线从哪一格来"不必顺着线去找源头,看颜色就知道。
- * 查不到(supportType 越界,或数值表被改坏)回落既有的 DECK_SUPPORT_FILL:
- * 那一格仍然是一块冷青,只是不再说明自己是哪一型 —— 绝不让画面上冒出 undefined 色(GDD §12)。
+ * 武器与支援都**按型上色**,色相分别取 TOWERS[towerType].tint / SUPPORTS[supportType].tint:
+ * 战斗远景不画文字也能认塔；支援连线又复用同一个 tint,顺着颜色就能找到来源。
+ * 查不到类型(越界或数值表被改坏)分别回落既有的冷蓝/冷青,绝不冒出 undefined 色(GDD §12)。
  * 收整个 cell 而不是两个散字段:支援格要多读一个 supportType,再往参数表里加一个 number
  * 就成了三个位置相邻的同类型参数,调用点传错顺序编译器一声不吭。
  */
 function deckCellFill(cell: DeckCell): number {
   if (!cell.online) return DECK_OFFLINE_FILL;
-  if (cell.content === CELL_WEAPON) return DECK_WEAPON_FILL;
+  if (cell.content === CELL_WEAPON) return TOWERS[cell.towerType]?.tint ?? DECK_WEAPON_FILL;
   if (cell.content === CELL_SUPPORT) return SUPPORTS[cell.supportType]?.tint ?? DECK_SUPPORT_FILL;
   return DECK_EMPTY_FILL;
 }
@@ -652,6 +635,8 @@ export class Renderer {
    * 上一帧打出去的光束就会甩到别处去。
    */
   private fxG = new Graphics();
+  /** 炮口闪专层：压在甲板之上；其余命中/弹道 FX 仍在甲板之下，不能反过来糊住自己的船。 */
+  private muzzleFxG = new Graphics();
   private telegraphG: Graphics;
   /** 甲板容器:子层几何全在船体局部空间,它自己每帧只吃插值位姿(见文件头) */
   private deckG = new Container();
@@ -687,13 +672,6 @@ export class Renderer {
    */
   private deckThrottleG = new Graphics();
   /**
-   * 船体 HP 条(09 号 T4 的灰盒读数,11 号 issue 会整条换掉 —— 见 drawShipHp)。
-   * 挂在 **worldLayer 的最上层**、**不进 deckG**:进了甲板容器就会跟着船一起转,
-   * 船头朝下时玩家得倒着读自己的血量;排在最上层则是因为它是"这一局还剩多少余地"这一个数,
-   * 千敌贴脸时正是最该看见它的时刻,不许被任何东西盖住。
-   */
-  private shipHpG = new Graphics();
-  /**
    * 底板几何的脏标记。占用/内容一局里只变几次(放塔、12 号焊接拼块),
    * 却要每帧出现在画面上 —— 故按 deck.revision 重建,而不是每帧 clear 重画。
    * 初值 -1 保证首帧必建一次(revision 从 0 起)。
@@ -718,10 +696,12 @@ export class Renderer {
    */
   private deckZoom = 1;
   private deckZoomTarget = 1;
-  /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab'),渲染层只存 bool、不持有输入 */
+  /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab'),放置态会在 sync 内并入同一 detailed 状态 */
   private arcOverlay = false;
-  /** 叠加层上一帧是否画过:松开 Tab 时 clear 一次即可(照 hiliteDrawn 的写法) */
+  /** 详细射界上一帧是否画过:退出 Tab/放置时 clear 一次即可(照 hiliteDrawn 的写法) */
   private arcDrawn = false;
+  /** 详细节流读数上一帧是否画过：回到战斗态时只 clear 一次，不让隐藏层每帧空转。 */
+  private throttleDrawn = false;
   /**
    * 闪红层上一帧是否画过。整局绝大多数帧四舷惩罚都是 0(受击才有,每次只有半秒),
    * 照 hiliteDrawn / arcDrawn 那条口径:惩罚归零后 clear 一次就够,不必每帧空转一个 Graphics。
@@ -860,14 +840,15 @@ export class Renderer {
       this.deckThrottleG,
       this.deckHiliteG,
     );
+    this.deckLinkG.visible = false;
 
     // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
-    // 不会被蜂群蛭糊掉)→ 残骸 → 弹 → 开火光效 → 甲板 → HP 条。
+    // 不会被蜂群蛭糊掉)→ 残骸 → 弹 → 开火光效 → 甲板 → 炮口闪。
     // 指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
     // 光效排在弹之后、甲板之前:它是"这一发打出去了"的读数,压住敌人才看得见命中在谁身上,
     // 但绝不许盖住甲板自己的格子(放塔与节流读数在那上面)。
     // 甲板压在敌与弹之上,千敌贴脸时自己的格子不会被糊掉 —— 放塔时更是必须看得见;
-    // HP 条再压在甲板之上收尾:蜂群把船埋了的那一刻,正是"还剩多少血"最不能被盖住的时候。
+    // 11 号起 HP 已搬到固定屏幕空间的 DOM HUD,这里不再保留不受时停淡出控制的灰盒重复读数。
     // 残骸(10 号 T4)排在**敌之上、弹之下**:压在敌之下的话,残骸一掉出来就被它自己那堆虫子埋了,
     // 而"残骸正往船上飞"是这一局经济在转的唯一读数;压在弹与光效之上又会让自己的火力
     // 被一串小菱形点花 —— 它终究只是地上的材料,抢不过"我打中了谁"。
@@ -876,7 +857,7 @@ export class Renderer {
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
     this.worldLayer.addChild(this.dropPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
-    this.worldLayer.addChild(this.fxG, this.deckG, this.shipHpG);
+    this.worldLayer.addChild(this.fxG, this.deckG, this.muzzleFxG);
     // 闪光片挂在 stage 最上层(屏幕空间),不进 worldLayer —— 理由见 flashG 的字段注释
     this.flashG.visible = false;
     app.stage.addChild(this.worldLayer, this.flashG);
@@ -934,7 +915,7 @@ export class Renderer {
       const bucket = buckets[k]!;
       this.syncParticles(this.enemyParticles[k]!, this.enemyPcs[k]!, bucket, {
         texture: this.enemyTextures[k]!,
-        tint: def.tint,
+        tint: enemyTint(def.kind),
         alpha,
       });
       this.drawTelegraph(bucket, def, alpha, TELEGRAPH_MAX_PER_KIND);
@@ -987,22 +968,22 @@ export class Renderer {
     // 甲板交互必须卡在**变换已落地、高亮还没画**的这一点重算:放在 main 的 sync 之前会读上一帧变换,
     // 放在 sync 之后又会让这一帧的框晚一帧。回调由 main 灌入,render 不反向 import ui。
     beforeDeckDraw?.();
+    // 战斗态只保留色块、炮口朝向与开火闪光；Tab 或放置态才恢复邻接、装甲、节流与射界。
+    // 所有详细子层读同一个布尔值，避免出现“松了 Tab 但装甲图标还挂着”的半套状态。
+    const deckDetailed = this.arcOverlay || this.deckZoomTarget > 1;
+    this.deckLinkG.visible = deckDetailed;
     this.drawDeckHit(deck);
     this.drawDeckHilite(deck);
-    this.drawDeckThrottle(deck);
-    this.drawDeckArcs(deck);
+    this.drawDeckThrottle(deck, deckDetailed);
+    this.drawDeckArcs(deck, deckDetailed);
 
-    // HP 条吃的是同一个插值船位、却**只吃位置不吃朝向**(见 shipHpG 字段注释),故不能塞进上面那两行
-    this.drawShipHp(sx, sy);
   }
 
   /**
    * 四舷里剩余最久的那一档惩罚秒数;0 = 本帧没有任何一舷在挨罚。
    *
-   * 被撞舷闪红与 HP 条的受击回执共用它 —— 两处读的都是 **sim 的那一个计时器**
-   * (world.edgePenalty,与该舷塔的射速惩罚同源),于是"闪红 / 血条抖一下 / 塔变慢"
-   * 三件事天然同起同落,想差一帧都做不到;渲染层要是为血条另起一个衰减计时器,
-   * 玩家看到的三条反馈就会各走各的,而它们本该是同一次挨打。
+   * 被撞舷闪红读的是 **sim 的那一个计时器**(world.edgePenalty,与该舷塔的射速惩罚同源),
+   * 于是"闪红 / 塔变慢"天然同起同落,想差一帧都做不到。
    * 取最大值而不是"有没有":两舷同时挨打时,回执理应按**还没走完的那一档**继续给。
    */
   private hitPenaltyLeft(): number {
@@ -1055,6 +1036,9 @@ export class Renderer {
    */
   setDeckZoom(on: boolean): void {
     this.deckZoomTarget = on ? DECK_ZOOM : 1;
+    // 开火事件的坐标属于开火那一刻的世界空间；时停后它的 life 不再衰减，而甲板还会继续放大。
+    // 进入放置详细态就立即清掉这层，避免一枚冻结闪光脱离塔身、永久压在选格界面上。
+    if (on) this.muzzleFxG.clear();
   }
 
   /**
@@ -1336,7 +1320,7 @@ export class Renderer {
 
       // 二、盾形图标:肩在船头侧、尖朝船尾(= 常见的下垂盾,船头朝上时读起来最顺手)。
       // 它只回答"这一格在给船体加 HP",不表示方向 —— 真正的方向读数是上面那几条舷线。
-      // 加成的**具体点数**由调参面板的"HP 上限"只读项 + 既有 HP 条给:
+      // 加成的**具体点数**由调参面板的"HP 上限"只读项 + 11 号 DOM HUD 给:
       // 一格三十几 px 塞不下一个认得出的数字(与等级点不用数字同一条理由)
       if (def.hullHp > 0) {
         g.poly([
@@ -1374,7 +1358,7 @@ export class Renderer {
     const g = this.deckHitG;
     const penalty = this.world.edgePenalty;
     // 先看四舷有没有事:整局绝大多数帧全是 0(见 hitDrawn 字段注释),归零后 clear 一次就够。
-    // 判据问 hitPenaltyLeft —— HP 条的受击回执读的是同一个数,"有没有一舷在挨罚"不该有第二份写法
+    // 判据问 hitPenaltyLeft —— "有没有一舷在挨罚"不该有第二份写法
     if (this.hitPenaltyLeft() <= 0) {
       if (this.hitDrawn) {
         g.clear();
@@ -1509,19 +1493,19 @@ export class Renderer {
    * 缓存键要跟上就得把 12 座塔的 (towerType, level) 全编进去,那已经比重画本身贵了;
    * 而重画的代价只是 12 个扇形,与每帧现算的放置高亮层同量级(它一直就是这么干的)。
    */
-  private drawDeckArcs(deck: Deck): void {
-    if (!this.arcOverlay) {
-      // 松开 Tab 时清一次就够(照 drawDeckHilite):每帧 clear 两个空 Graphics 不贵,但也没必要
+  private drawDeckArcs(deck: Deck, detailed: boolean): void {
+    // 炮口朝向是战斗态唯一常驻的塔细节：每帧都要跟 sim 的 turretOffset 同步。
+    this.drawArcMuzzles(deck);
+    if (!detailed) {
+      // 退出 Tab/放置时只清详细底衬；炮口层刚在上面重画，不能一起清掉。
       if (this.arcDrawn) {
         this.deckArcG.clear();
-        this.deckMuzzleG.clear();
         this.arcDrawn = false;
       }
       return;
     }
     this.arcDrawn = true;
     this.drawArcFans(deck);
-    this.drawArcMuzzles(deck);
     // 判定体轮廓与射界扇形同开同关(09 号 T4 验收点名):它必须排在 drawArcMuzzles 之后,
     // 因为两者共用 deckMuzzleG,而那个方法开头就 clear 一次(见下面 drawHullCore 的说明)
     this.drawHullCore();
@@ -1608,7 +1592,7 @@ export class Renderer {
    *
    * 画进 deckMuzzleG 而不是 deckArcG:后者是压在底板**之下**的底衬(见构造函数的层序),
    * 核心区整个落在甲板范围内,画在那儿会被格子填充一块不剩地盖掉。
-   * 与炮口线共用一层还顺带保证了"同开同关"—— 松开 Tab 时 drawDeckArcs 那一次 clear 把两者一起收走。
+   * 与炮口线共用一层；战斗态炮口线仍常驻，只有这条核心轮廓随 detailed 开关增删。
    */
   private drawHullCore(): void {
     const h = hullCoreHalfExtents(coreTmp);
@@ -1619,63 +1603,6 @@ export class Renderer {
       color: HULL_HIT_COLOR,
       alpha: HULL_CORE_ALPHA,
     });
-  }
-
-  /**
-   * 船体 HP 条(09 号 issue T4)——"被撞了、掉了多少"在画面上的落点。
-   * 没有它,09 号整条链路(判定体 → 结算 → 惩罚)在屏幕上就只剩几个火花,肉眼验收无从谈起。
-   *
-   * **这是可以整条删掉的灰盒版**:11 号 issue 的战斗 HUD 会把血量搬进屏幕空间,届时本方法、
-   * shipHpG 字段与那批 HP_* 常量一起删除,sim 侧一个字都不用改 —— 它读的只有
-   * world.ship.hp / maxHp 两个公开字段,除此之外不持有任何状态。所以这里刻意不做
-   * 数字、分段、渐变、低血量警告:那些是 11 号要连着整套 HUD 一起定的事,
-   * 现在做了,11 号只会得到一份必须先拆掉的旧设计。
-   *
-   * 挂在 worldLayer(见 shipHpG 字段注释)⇒ 它吃的是镜头的缩放,单位是**世界 px**:
-   * 船在画面里多大,血条就多长。11 号会反过来把它做成屏幕空间的固定尺寸,不再随镜头变。
-   * 竖直偏移问 sim 的 deckOuterRadius(与 World 粗筛同一个数,渲染层不自己推第二份):
-   * 那是船体在**任何朝向**下的最大外延,于是"血条不压在船身上"与船头指哪儿无关,
-   * 12 号把甲板焊大之后它也自动让开。
-   *
-   * 每帧 clear 重画,不做脏标记:船一直在动,条的位置每帧都变(与 drawDeckThrottle 同一条取舍)。
-   */
-  private drawShipHp(sx: number, sy: number): void {
-    const g = this.shipHpG;
-    g.clear();
-    const ship = this.world.ship;
-    const w = tuning.shipWidth * HP_BAR_WIDTH_MUL;
-
-    // 受击回执的强度取 sim 的惩罚计时器(见 hitPenaltyLeft):于是"血条抖一下"与"那一舷闪红"
-    // 是同一段时间窗 —— 玩家把两件事连起来看,正是这条反馈存在的目的。
-    // clamp01 兜住 hitPenaltyTime 被面板拖到 0 的情形(除出来的 Infinity/NaN 会画出 NaN 几何)
-    const k = clamp01(this.hitPenaltyLeft() / tuning.hitPenaltyTime);
-    // 相位照 stepBroadside 那一顿的写法:cos 起手 = 1,受击那一帧立刻给出最大位移
-    // (先 sin 的话第一帧纹丝不动,"抖了一下"就没了);幅度再乘 k,于是自己衰减回原位。
-    // 按**已走过的比例**推进而不是按秒:惩罚时长被拖长拖短,这一抖都刚好走完 HP_HIT_CYCLES 个来回
-    const kick = k > 0 ? Math.cos((1 - k) * HP_HIT_CYCLES * Math.PI * 2) * k * HP_HIT_SHAKE : 0;
-    const x0 = sx - w / 2 + kick;
-    // 与船体外接圆的留白**按当前甲板缩放推出去**(10 号 T4 的时停放大):这条条是照甲板的外接圆
-    // 摆位的,而时停那几秒甲板会长到 1.3 倍 —— 不乘这一档,放大的甲板角就会顶到血条底下
-    // (它画在甲板之上,盖不掉,但那一刻两样东西糊在一起谁都读不清)。
-    // 只推距离、不缩条本身:"与船同宽"是它不用图例就读得出是谁的血的全部理由,缩放了就不再同宽
-    const y0 = sy + deckOuterRadius(this.world.deck) * this.deckZoom + HP_BAR_GAP;
-
-    // 槽底:空槽也要看得出"这里有一条血条",否则 HP 见底 = 读数整条消失(与 THR_TRACK_* 同一条取舍)
-    g.rect(x0, y0, w, HP_BAR_HEIGHT).fill({ color: THR_TRACK_COLOR, alpha: HP_TRACK_ALPHA });
-    // 比例每帧现算、不缓存:maxHp 是甲板的派生量(06 号的装甲舱会让它变,见 damage.hullMaxHp),
-    // 缓存住就会与真实上限走散。maxHp ≤ 0 时直接当空槽,不让除法把 NaN 宽度喂进 Graphics
-    const t = ship.maxHp > 0 ? clamp01(ship.hp / ship.maxHp) : 0;
-    if (t > 0) g.rect(x0, y0, w * t, HP_BAR_HEIGHT).fill(HP_FILL_COLOR);
-    // 挨打的回执:整条描一圈暖红(甲板上的暖色是 GDD §4.6 明令的例外,见 HULL_HIT_COLOR)+ 横向抖动。
-    // 色相与位移两条通道一起上,是因为一次撞击掉的血可能只有几个点 ——
-    // 光靠填充长度那一丁点变化,肉眼根本抓不住"刚刚挨了一下",而那正是本条要交代的事
-    if (k > 0) {
-      g.rect(x0, y0, w, HP_BAR_HEIGHT).stroke({
-        width: HP_HIT_WIDTH,
-        color: HULL_HIT_COLOR,
-        alpha: HULL_HIT_ALPHA * k,
-      });
-    }
   }
 
   /**
@@ -1693,9 +1620,17 @@ export class Renderer {
    * 三种机制各自的形状与位置见文件上方 THR_* 那段;等级点三种塔共用同一处(船头侧格边),
    * 于是"这塔几级"永远在同一个地方读,不必先认出它挂的是哪一套节流。
    */
-  private drawDeckThrottle(deck: Deck): void {
+  private drawDeckThrottle(deck: Deck, detailed: boolean): void {
     const g = this.deckThrottleG;
+    if (!detailed) {
+      if (this.throttleDrawn) {
+        g.clear();
+        this.throttleDrawn = false;
+      }
+      return;
+    }
     g.clear();
+    this.throttleDrawn = true;
     const size = deckCellSize();
     const half = size / 2;
     const len = size - THR_PAD * 2; // 条长 / 等级点可用的净宽
@@ -1816,6 +1751,11 @@ export class Renderer {
   private drawFx(): void {
     const g = this.fxG;
     g.clear();
+    const muzzleG = this.muzzleFxG;
+    muzzleG.clear();
+    // 放置时停会冻结 FxEvent 寿命，同时让甲板独自放大；恢复时 target 会先回 1、实际缩放还在缓动。
+    // 因此必须等实际甲板也回到战斗档才重新显示，不能让暂停前的旧闪光在缩小途中短暂复活错位。
+    const showMuzzle = this.deckZoomTarget <= 1 && this.deckZoom <= 1.001;
     const items = this.world.fx.items;
     for (let i = 0; i < items.length; i++) {
       const e = items[i]!;
@@ -1910,10 +1850,17 @@ export class Renderer {
           break;
         }
         case FXV_MUZZLE: {
-          // 炮口火光。本轮 sim 侧**不产出**它(FX_BULLET 的出膛位置由子弹自己交代),
-          // 但事件类型已经在 sim/fx.ts 里定义好,这里照画一支:将来 sim 补发时不会被悄悄吞掉。
-          // 数值表没给它对应的 FX_LIFE_*,故不淡出 —— 它本就只活一两帧,也不该在这里自造一个常量。
-          g.circle(e.x0, e.y0, FX_MUZZLE_RADIUS).fill({ color, alpha: FX_MUZZLE_ALPHA });
+          if (!showMuzzle) break;
+          // 炮口火光画进甲板上方的专层；同源塔色只做外圈，冷白描边 + 芯点提供独立亮度通道，
+          // 否则同色实心圆落在同色塔块上仍等于没画。life 复用最短的 FX_LIFE_BEAM。
+          const t = fxFade(e.life, FX_LIFE_BEAM);
+          const radius = FX_MUZZLE_RADIUS * (0.65 + 0.35 * t);
+          muzzleG
+            .circle(e.x0, e.y0, radius)
+            .fill({ color, alpha: FX_MUZZLE_ALPHA * t })
+            .stroke({ width: FX_MUZZLE_RING_WIDTH, color: FX_CORE_COLOR, alpha: t })
+            .circle(e.x0, e.y0, FX_MUZZLE_CORE_RADIUS)
+            .fill({ color: FX_CORE_COLOR, alpha: t });
           break;
         }
         default:
@@ -2056,7 +2003,9 @@ export class Renderer {
       const t = Math.max(0, Math.min(1, e.timer / def.chargeWindup)); // 1 → 0
       g.circle(x, y, def.radius * (1 + TELEGRAPH_RING_GROWTH * t));
     }
-    if (drawn > 0) g.stroke({ width: TELEGRAPH_WIDTH, color: def.tint, alpha: TELEGRAPH_ALPHA });
+    if (drawn > 0) {
+      g.stroke({ width: TELEGRAPH_WIDTH, color: enemyTint(def.kind), alpha: TELEGRAPH_ALPHA });
+    }
   }
 
   private syncParticles(

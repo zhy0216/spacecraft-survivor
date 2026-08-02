@@ -133,7 +133,8 @@ export const ENEMIES: EnemyDef[] = [
     chargeSpeed: 0,
     chargeDuration: 0,
     chargeRecover: 0, // 不冲锋,冲锋段全 0
-    tint: 0xb14dff, // 占位待调
+    // 暖绯红而不是高蓝紫：敌纹理还会乘灰底；原紫色在绿色盲模拟下会与我方靛蓝塔合流。
+    tint: 0xd42844, // 占位待调；色盲合成审计见 render/palette.test.ts
     shape: 'capsule',
   },
   {

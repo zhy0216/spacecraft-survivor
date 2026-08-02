@@ -3,8 +3,7 @@
  * 服务两件事:01 号 issue 的压测读数,02 号 issue 的手感热调(改了立刻体感对比)。
  *
  * 08 号 issue 起还多服务一件:波次脚本的**量化读数**(航段 / 主压方向 / 强度)。
- * 11 号的威胁罗盘落地之前,画面上只看得出"怪好像多是从那边来的" ——
- * "主压方向真的在按脚本转"这条验收(08 验收标准第一条)在此之前只能靠这几个数读出来。
+ * 11 号已有常驻 HUD 与威胁罗盘；这里仍保留精确数值，供调参与核对实际出怪统计。
  */
 import { Pane } from 'tweakpane';
 import { WAVE_SEGMENTS } from '../data/waves';
@@ -18,9 +17,8 @@ export interface DebugStats {
   bullets: number;
   speed: number; // 船速 px/s,用来确认巡航参数改动真的生效
   /**
-   * 船体 HP(09 号 issue)。11 号 issue 的战斗 HUD 会给它一条正式血条,在那之前,
-   * 这个只读数是"蜂群贴脸掉血速率可控可调"(09 号验收标准)唯一的**量化**读数 ——
-   * 画面上那条灰盒血条只回答"在掉",拖倍率对比掉得多快得看数。
+   * 船体 HP(09 号 issue)。正式 HUD 给状态读数；这个只读数保留更多精度，
+   * 用来量化对比撞击伤害倍率 / 无敌帧等调参效果。
    */
   hp: number;
   /**
@@ -48,7 +46,7 @@ export interface DebugStats {
    * **绝对角不是相对船头的角**:玩家转舵这个数一动不动,才说明"最优舷"真的会随时间漂移(GDD §6.3)。
    */
   threatDeg: number;
-  /** 主压强度(只/秒)= 本段各主压流的当前速率之和;侧压事件是脉冲,不进这个数 */
+  /** 实际主压强度(只/秒)= 成功生成事件的平滑速率；burst 计入，被在场上限丢弃的请求不计 */
   threatRate: number;
   /** 累计击杀。结算界面报的是同一个数(见 ui/gameOver.ts 的 RunSummary),这里能中途看它爬 */
   kills: number;
@@ -104,7 +102,7 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏
   //(08 号验收:改数据文件就能调,不改代码)—— 面板不该开第二个入口去改这一局的进度。
-  // 默认展开:这四个数是"主压方向真的在按脚本转"(验收标准第一条)在 11 号罗盘落地之前唯一的读法
+  // 默认展开:与常驻 HUD 同源，但保留小数精度，便于核对脚本与实际生成是否一致。
   const wave = pane.addFolder({ title: '波次(08)', expanded: true });
   // 与结算界面共用 segmentLabel:走完时它报的是 "4/4(全通)" 而不是 "5/4"(segment 是越界值)
   wave.addBinding(stats, 'segment', {

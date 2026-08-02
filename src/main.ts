@@ -25,6 +25,7 @@ import type { ShipCommand } from './sim/ship';
 import { World } from './sim/world';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
+import { createHud } from './ui/hud';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
@@ -45,6 +46,11 @@ async function boot(): Promise<void> {
   let world = new World(seed);
   let loop: FixedStepLoop;
   const renderer = await Renderer.create(world);
+
+  // 战斗 HUD 同样整页只建一次:固定屏幕空间的血条/残骸/计时/航段与威胁箭头都只改已有 DOM。
+  // 重开走 setWorld,升级时停与结算的淡出则每渲染帧照 run.paused 同步,不另挂事件监听器。
+  // 放在升级/结算面板之前创建,后两者弹出时自然盖在它上面;HUD 本身 pointer-events:none。
+  const hud = createHud({ world });
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -105,8 +111,8 @@ async function boot(): Promise<void> {
 
   /**
    * 装配一局。首局与重开走的是同一条路,顺序有讲究:
-   * 先换 world/loop 与挂钩(它们是这一局的本体),再把三个吃 World 引用的地方指过去
-   * (渲染层的脏标记缓存 / 升级流程认的甲板 / 结算界面收起来),最后复位 UI 读数。
+   * 先换 world/loop 与挂钩(它们是这一局的本体),再把吃 World 引用的地方指过去
+   * (渲染层的脏标记缓存 / 升级流程认的甲板 / HUD 读数 / 结算界面收起来),最后复位调试读数。
    * 漏一样的后果各不相同、但都要等真人重开第二局才看得见:
    * 渲染层留着上一局的 deckRevision → 新船上还画着上一局的塔;
    * 升级流程留着旧 world → 点下去落进上一局那艘沉船,画面上什么都不发生;
@@ -161,11 +167,12 @@ async function boot(): Promise<void> {
       upgradeFlow.show();
     };
 
-    // 三处吃 World 引用的地方(渲染层的脏标记缓存 / 升级流程 / 结算界面),各自的理由见它们自己那边。
+    // 吃 World 引用的地方(渲染层的脏标记缓存 / 升级流程 / HUD),各自的理由见它们自己那边。
     // setWorld 会把上一局那张还开着的卡片一并收掉,但**不恢复战斗** —— 那一步在下面的 run.paused;
     // 甲板缩放同理由渲染层的 setWorld 当场吸附回 1(时停中点重开按钮时,不复位就会带着放大开出去)
     renderer.setWorld(world);
     upgradeFlow.setWorld(world);
+    hud.setWorld(world);
     gameOver.hide();
 
     // UI 读数复位。**不动 tuning、不动 run.timeScale、不动放置模式的开关**:
@@ -185,6 +192,8 @@ async function boot(): Promise<void> {
     // 不推的话,重开后的头一秒面板上挂的还是上一局最后那个哈希,而那正是最容易看错的一个数
     lastChecksumTick = -SIM_HZ;
     run.paused = false;
+    // 上一局若停在升级/结算态,HUD 此刻仍是淡出的;新局装配完成就当场恢复,不等首个 ticker。
+    hud.setPaused(false);
     runIndex++;
 
     // 开发用全局句柄:浏览器控制台里可直接 __game.run.paused = true / __game.world.checksum()
@@ -197,6 +206,7 @@ async function boot(): Promise<void> {
       stats,
       input,
       upgradeFlow,
+      hud,
       gameOver,
       restart,
     };
@@ -228,21 +238,23 @@ async function boot(): Promise<void> {
     // 同步点由 renderer 卡在「本帧 deckG 变换已更新、高亮尚未绘制」的位置调用,
     // 于是看到的框、screenToDeckLocal 与点击确认一帧都不会走散。直接传稳定方法引用,不按帧造闭包。
     renderer.sync(loop.alpha, upgradeFlow.syncHover);
+    // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
+    // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。
+    hud.setPaused(run.paused);
+    hud.sync();
 
     stats.fps = Math.round(renderer.app.ticker.FPS);
     stats.enemies = world.enemies.size;
     stats.bullets = world.bullets.size;
     // 拖巡航滑杆时盯这个数爬到新上限,才算证实了"改参数无需重启"(02 号 issue 验收标准)
     stats.speed = Math.hypot(world.ship.vx, world.ship.vy);
-    // 船体 HP(09 号 issue):画面上那条灰盒血条只回答"在掉",拖撞击伤害倍率 / 无敌帧对比
-    // "掉得多快"要看这个数(09 号验收标准的"可控可调")。11 号 issue 的 HUD 会接手这条读数
+    // 船体 HP 同时进正式 HUD 与调参面板；面板保留数值精度，便于对比撞击伤害倍率 / 无敌帧。
     stats.hp = world.ship.hp;
     // 上限每帧现读(06 号 issue):它是甲板的派生量,放一块装甲舱当帧 +15、12 号拆掉当帧回落 ——
     // 装甲舱是四种设施里唯一不画邻接连线的那种,这个数跳一下就是它生效的肉眼落点
     stats.maxHp = world.ship.maxHp;
     stats.tick = loop.tick;
-    // 波次读数(08 号 issue):在 11 号的威胁罗盘落地之前,这四个数是"主压方向真的在转"
-    // 这条验收唯一的量化读数 —— 画面上只看得出"怪好像多是从那边来的"
+    // 波次读数与常驻 HUD / 威胁罗盘同源；调参面板额外保留精确值供脚本核对。
     stats.segment = world.wave.segment;
     stats.segTime = world.wave.segTime;
     // 罗盘读的是弧度(world.threatDirection),面板换算成度并折回 [0,360):

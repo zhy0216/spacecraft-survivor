@@ -66,7 +66,7 @@ import {
   setOccupied,
 } from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
-import { FXV_BEAM, FXV_HULL_HIT, FXV_SPARK } from './fx';
+import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { waveDirAt } from './waves';
 import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN, WORLD_RADIUS, World } from './world';
@@ -620,8 +620,9 @@ describe('开火接线(05 号:塔真的打出东西来)', () => {
     parkAt(w, e, 0, 150);
 
     w.step();
-    expect(w.fx.size).toBe(1);
-    const beam = w.fx.items[0]!;
+    expect(w.fx.size).toBe(2);
+    expect(w.fx.items.map((e) => e.kind)).toEqual([FXV_BEAM, FXV_MUZZLE]);
+    const beam = w.fx.items.find((e) => e.kind === FXV_BEAM)!;
     expect(beam.kind).toBe(FXV_BEAM);
     expect(beam.towerType).toBe(TOWER_LASER);
     expect(beam.x0).toBeCloseTo(gunPos(w).x, 9); // 起点 = 炮位(世界坐标,不是甲板局部坐标)
@@ -1045,7 +1046,11 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
     expect(spawns.length).toBe(WAVE_MAX_ALIVE);
 
     // 触顶之后:一只都不再落地(留账的话这几帧攒下的怪会在上限解除时一口气涌出来)
-    for (let i = 0; i < 10; i++) w.step();
+    const intensity = w.threatIntensity;
+    w.step();
+    // 请求仍在持续，但没有一只真正进池：罗盘强度只能按平滑系数衰减，不能被丢弃请求续上。
+    expect(w.threatIntensity).toBeCloseTo(intensity * Math.exp(-SIM_DT / 1.25), 10);
+    for (let i = 1; i < 10; i++) w.step();
     expect(w.enemies.size).toBe(WAVE_MAX_ALIVE);
     expect(spawns.length).toBe(WAVE_MAX_ALIVE);
   });
@@ -1076,41 +1081,51 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
     expect(w.enemies.size).toBe(12); // 场上恒定 N 只 —— 压测路要的就是这个定数
   });
 
-  it('主压方向随脚本插值旋转,threatDirection / threatIntensity 就是 11 号罗盘读的那两个数', () => {
-    const seg = segment({
-      duration: 10,
-      dirStartDeg: 0,
-      dirEndDeg: 180,
-      streams: [{ kind: KIND_SWARM, rate0: 1, rate1: 3, spreadDeg: 0 }],
-    });
+  it('无成功样本时方向回退波次派生值、强度为 0', () => {
+    const seg = segment({ duration: 10, dirStartDeg: 20, dirEndDeg: 140 });
     useScript(seg);
     const w = new World(47);
-    // getter 就是那两个字段本身:HUD 不必认识 WaveState 的内部结构
+
     expect(w.threatDirection).toBe(w.wave.dirRad);
-    expect(w.threatIntensity).toBe(w.wave.intensity);
-    expect(w.threatIntensity).toBeCloseTo(1, 12); // 开局 = 段首速率
+    expect(w.threatIntensity).toBe(0);
+    for (let f = 0; f < 4 * SIM_HZ; f++) w.step();
 
-    // 每一只的出生角与**当帧**的主压方向:展宽 0 → 罗盘指哪,怪就真的从哪来
-    const born: { bearing: number; dir: number }[] = [];
-    w.onEnemySpawn = (e) =>
-      born.push({
-        bearing: Math.atan2(e.y - w.ship.y, e.x - w.ship.x),
-        dir: w.threatDirection,
-      });
+    expect(w.enemies.size).toBe(0);
+    expect(w.threatIntensity).toBe(0);
+    expect(wrapAngle(w.threatDirection - waveDirAt(seg, w.wave.segTime))).toBeCloseTo(0, 12);
+  });
 
-    for (let f = 0; f < 5 * SIM_HZ; f++) {
-      w.step();
-      // 跨 ±π 用 wrapAngle 比差值,别直接比两个角
-      expect(wrapAngle(w.threatDirection - waveDirAt(seg, w.wave.segTime))).toBeCloseTo(0, 12);
-    }
-    // 5 秒 = 半段 → 转过 90°(180° / 10s);强度也走到两端的中点
-    expect(w.threatDirection / DEG2RAD).toBeCloseTo(90, 6);
-    expect(w.threatIntensity).toBeCloseTo(2, 6);
+  it('罗盘统计实际成功事件：burst 计入强度与方向，并按固定步平滑衰减且同 seed 确定', () => {
+    useScript(
+      segment({
+        dirStartDeg: 10,
+        dirEndDeg: 10,
+        bursts: [{ at: 0, offsetDeg: 90, spreadDeg: 0, counts: [8, 0, 0, 0] }],
+      }),
+    );
+    const a = new World(48);
+    const b = new World(48);
 
-    expect(born.length).toBeGreaterThan(3);
-    for (const b of born) expect(wrapAngle(b.bearing - b.dir)).toBeCloseTo(0, 12);
-    // 玩家被迫持续微调航向的落点:出怪方向自己在漂,不是钉在段首角上(08 验收标准第一条)
-    expect((born[born.length - 1]!.bearing - born[0]!.bearing) / DEG2RAD).toBeGreaterThan(60);
+    // 一只都没真正落地前只回退脚本方向，不拿“计划速率”冒充实时强度。
+    expect(a.threatDirection / DEG2RAD).toBeCloseTo(10, 12);
+    expect(a.threatIntensity).toBe(0);
+
+    a.step();
+    b.step();
+    expect(a.enemies.size).toBe(8);
+    // burst 的实际出生角 = 主压 10° + 偏移 90°，不能仍指着 wave.dirRad。
+    expect(wrapAngle(a.threatDirection - 100 * DEG2RAD)).toBeCloseTo(0, 12);
+    expect(a.threatIntensity).toBeGreaterThan(0);
+    expect(a.threatDirection).toBe(b.threatDirection);
+    expect(a.threatIntensity).toBe(b.threatIntensity);
+
+    const peak = a.threatIntensity;
+    a.step();
+    b.step();
+    expect(a.threatIntensity).toBeGreaterThan(0);
+    expect(a.threatIntensity).toBeLessThan(peak);
+    expect(a.threatIntensity).toBe(b.threatIntensity);
+    expect(a.threatDirection).toBe(b.threatDirection);
   });
 
   it('波次进度进 checksum(段 / 段内计时 / 事件游标 / 逐流的账);方向与强度是派生量,不进', () => {

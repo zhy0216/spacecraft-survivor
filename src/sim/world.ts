@@ -126,6 +126,22 @@ const SPAWN_MIN_RADIUS = 300;
 const desired: Vec2 = { x: 0, y: 0 };
 
 /**
+ * 威胁罗盘的实际出怪统计采用一阶指数平滑。1.25s 足够把低速怪流的逐只脉冲抹平，
+ * 又不会让侧压 burst 过了几秒还把箭头拽在旧方向。衰减与单次成功出怪的脉冲增益都按
+ * 固定 SIM_DT 预先算好：热路径只做乘加，不现算 exp、也不分配样本对象。
+ *
+ * 单次事件加 (1-decay)/dt，意味着稳定的 N 只/秒输入最终收敛到 N；burst 则按实际成功
+ * 落地的只数当场抬高强度。World 的在场上限在记录样本之前挡掉请求，故触顶丢弃天然一票不投。
+ */
+const THREAT_SMOOTH_TAU = 1.25;
+const THREAT_SMOOTH_DECAY = Math.exp(-SIM_DT / THREAT_SMOOTH_TAU);
+const THREAT_SPAWN_IMPULSE = (1 - THREAT_SMOOTH_DECAY) / SIM_DT;
+/** 最近实际生成速率低于这一档时，旧样本已经没有指向意义，回退波次脚本的派生方向。 */
+const THREAT_DIRECTION_MIN_RATE = 0.05;
+/** 两股相反压力把方向向量抵消时同样回退，避免 atan2(≈0,≈0) 给出随机抖动。 */
+const THREAT_DIRECTION_EPSILON = 1e-6;
+
+/**
  * 可视化事件的存续秒数:开火那几种一律取 data/towers 的 FX_LIFE_*,挨打这两种取 sim/fx.ts 的
  * FX_LIFE_SPARK / FX_LIFE_HULL_HIT(渲染层读的是同一批常量,两边才不会各算各的淡出时长)。
  * 挨打那两个刻意不进数值表:那张表是"某座塔开火的表现有多长",而船上一座塔都没有照样会被撞 ——
@@ -323,6 +339,15 @@ export class World {
   broadsideEdge = -1;
   broadsideCount = 0;
 
+  /**
+   * 正式出怪器实际成功落地事件的一阶平滑统计。三个数整局就地演化、不存逐事件历史：
+   * rate 是平滑后的只/秒；dirX/dirY 是同一批事件按出生角累积的加权方向向量。
+   * 纯 HUD 读数，不参与任何判定，也不进 checksum（与 broadside/FxEvent 同口径）。
+   */
+  private threatRate = 0;
+  private threatDirX = 0;
+  private threatDirY = 0;
+
   private scratch: Enemy[] = [];
 
   /** 本帧各舷的开火塔数,下标 = EDGE_*。整局复用同一个致密四元组(铁律 3:运行期零新增分配) */
@@ -422,15 +447,20 @@ export class World {
    * 将来波次状态改结构,要跟着改的也只有这两句。
    */
   get threatDirection(): number {
-    return this.wave.dirRad;
+    const x = this.threatDirX;
+    const y = this.threatDirY;
+    return this.threatRate > THREAT_DIRECTION_MIN_RATE &&
+      x * x + y * y > THREAT_DIRECTION_EPSILON * THREAT_DIRECTION_EPSILON
+      ? Math.atan2(y, x)
+      : this.wave.dirRad;
   }
 
   /**
-   * 当前主压强度(只/秒)= 本段各主压流的当前速率之和。
-   * 侧压事件**不进**这个数:它是脉冲不是速率,混进来会让罗盘每到一次事件就跳一下尖峰。
+   * 当前主压强度(只/秒)= 正式出怪器实际成功落地事件的一阶平滑速率。
+   * 普通流与 burst 都进；在场上限丢弃的请求不进。没有成功样本时从 0 起步，不拿脚本计划速率冒充实况。
    */
   get threatIntensity(): number {
-    return this.wave.intensity;
+    return this.threatRate;
   }
 
   /**
@@ -464,6 +494,12 @@ export class World {
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
+
+    // 威胁统计先衰减、再接本帧成功出怪的脉冲。顺序定死后，同一帧的 burst 会以完整强度出现，
+    // 而不是刚落地就先被扣掉一帧；没有新样本时三项只做乘法，平滑地退回 0。
+    this.threatRate *= THREAT_SMOOTH_DECAY;
+    this.threatDirX *= THREAT_SMOOTH_DECAY;
+    this.threatDirY *= THREAT_SMOOTH_DECAY;
 
     // 甲板的两样派生量在帧首统一刷,于是"这一帧"的塔与"这一帧"的撞击读到的都是最新的甲板。
     //
@@ -925,6 +961,11 @@ export class World {
     const e = this.enemies.spawn();
     // HP 时间缩放只在出生时算一次(GDD §14):在场的敌人不会因为时间流逝而回血变硬
     initEnemy(e, kind, x, y, this.elapsed, this.rng);
+    // 只在敌人真正进池并完成初始化后记样本：burst 与普通流共用这一条入口；触顶丢弃在上面
+    // 已经 return，故不会把“请求过但没生成”的怪算进罗盘强度。只记角度与一次固定脉冲，零分配。
+    this.threatRate += THREAT_SPAWN_IMPULSE;
+    this.threatDirX += Math.cos(angleRad) * THREAT_SPAWN_IMPULSE;
+    this.threatDirY += Math.sin(angleRad) * THREAT_SPAWN_IMPULSE;
     // 挂钩排在 initEnemy **之后**:回调读到的必须是填完的敌人(kind/x/y 都已就位),不是个空壳
     this.onEnemySpawn?.(e);
   }

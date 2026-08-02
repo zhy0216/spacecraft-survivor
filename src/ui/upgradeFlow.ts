@@ -34,13 +34,25 @@
  * 不改代码);而多一个手写的描述字段,就是多一处迟早与数值走散的真相。
  */
 import { UPGRADE_SKIP_REFUND } from '../data/economy';
-import { SUP_AMMO_BAY, type SupportDef, SUPPORTS } from '../data/supports';
+import {
+  SUP_AMMO_BAY,
+  SUP_ARMOR_BAY,
+  SUP_CAPACITOR,
+  SUP_RADIATOR,
+  type SupportDef,
+  SUPPORTS,
+} from '../data/supports';
 import {
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
+  TOWER_ARC,
   TOWER_AUTOCANNON,
+  TOWER_LASER,
   TOWER_MAX_LEVEL,
+  TOWER_MORTAR,
+  TOWER_PD,
+  TOWER_RAILGUN,
   TOWERS,
   towerArcDeg,
   towerRange,
@@ -60,6 +72,7 @@ import {
 } from '../sim/deck';
 import type { Vec2 } from '../sim/ship';
 import {
+  OFFER_SUPPORT,
   OFFER_TOWER,
   optionContent,
   optionLabel,
@@ -104,6 +117,9 @@ const CARDS_CSS = 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap;'
 const CARD_CSS =
   'width:196px;padding:12px 14px;border-radius:8px;cursor:pointer;text-align:left;font:inherit;' +
   `background:rgba(10,16,26,.94);border:1px solid ${LINE_COLOR};color:${VALUE_COLOR};`;
+const CARD_ICON_CSS =
+  `color:${OK_COLOR};font-size:24px;line-height:1;text-align:center;margin-bottom:8px;` +
+  'text-shadow:0 0 10px rgba(154,220,255,.42);';
 const CARD_TITLE_CSS = `color:${OK_COLOR};font-size:15px;letter-spacing:.06em;margin-bottom:6px;`;
 /** 描述行留常驻高度:三张卡的描述长短不一,不撑住的话等级行会参差成三个高度 */
 const CARD_DESC_CSS = 'min-height:3.2em;';
@@ -209,6 +225,44 @@ export function cardTitle(opt: UpgradeOption): string {
 }
 
 /**
+ * 无外部资产的卡片图标。型号仍然取 UpgradeOption.type(也就是数值表下标),不按卡名做字符串猜测:
+ * 改名不会让图标走丢,塔/设施两套同编号也不会串台。每种内容各用一个简明的几何符号,
+ * 即使系统没有彩色 emoji 字体也能稳定显示;未知型号显式报 ?,不静默冒充第 0 型。
+ */
+export function cardIcon(opt: UpgradeOption): string {
+  if (opt.kind === OFFER_TOWER) {
+    switch (optionTowerType(opt)) {
+      case TOWER_AUTOCANNON:
+        return '▰';
+      case TOWER_LASER:
+        return '◇';
+      case TOWER_ARC:
+        return 'ϟ';
+      case TOWER_RAILGUN:
+        return '➠';
+      case TOWER_PD:
+        return '✣';
+      case TOWER_MORTAR:
+        return '◉';
+      default:
+        return '?';
+    }
+  }
+  switch (optionSupportType(opt)) {
+    case SUP_AMMO_BAY:
+      return '▦';
+    case SUP_RADIATOR:
+      return '≋';
+    case SUP_CAPACITOR:
+      return '⚡';
+    case SUP_ARMOR_BAY:
+      return '⬢';
+    default:
+      return '?';
+  }
+}
+
+/**
  * 这一次拿到手会是几级(塔)。0(尚未拥有)与已满级(只能新建)都是**一座新的 Lv1 塔**,
  * 1..4 则是叠到下一级。卡片上的射程/射界照这个等级报 —— 报当前等级就是在描述玩家已有的东西,
  * 而这张卡承诺的是"点下去之后"。
@@ -306,8 +360,8 @@ export function cardDesc(opt: UpgradeOption): string {
 }
 
 /**
- * 卡片上的等级行。三档各有各的话要说:
- *   0 = 甲板上还没有这一型(支援设施恒 0 —— 设施不叠级,每次都是新建一格);
+ * 卡片上的等级行。支援设施没有等级,明确说“不叠级/本次新建”;塔则三档各有各的话要说:
+ *   0 = 甲板上还没有这一型;
  *   1..4 = 已有,点下去就是同名叠级(GDD §5.4,不占新格);
  *   满级 = 叠不动了,这张卡只能在别的格上**新建**一座 —— 不写清楚的话,
  *     玩家会照着"再点一次那座塔"的直觉去点,然后吃一记 PLACE_MAX_LEVEL。
@@ -315,6 +369,7 @@ export function cardDesc(opt: UpgradeOption): string {
  * (与渲染层的 clamp01 同一条写法)。
  */
 export function cardLevelText(opt: UpgradeOption): string {
+  if (opt.kind === OFFER_SUPPORT) return '设施不叠级 · 本次新建';
   const lv = opt.level;
   if (!(lv >= 1)) return '未装备';
   if (lv >= TOWER_MAX_LEVEL) return `Lv${TOWER_MAX_LEVEL}(满级,只能新建)`;
@@ -375,9 +430,10 @@ export interface UpgradeFlowOpts {
   onResolved(): void;
 }
 
-/** 一张卡的三块文本节点。整局复用同一批元素,弹一次卡只改 textContent(铁律 3 的 DOM 版) */
+/** 一张卡的图标 + 三块文本节点。整局复用同一批元素,弹一次卡只改 textContent */
 interface CardEls {
   root: HTMLButtonElement;
+  icon: HTMLDivElement;
   title: HTMLDivElement;
   desc: HTMLDivElement;
   level: HTMLDivElement;
@@ -440,16 +496,18 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   function createCard(index: number): CardEls {
     const root = document.createElement('button');
     root.style.cssText = CARD_CSS;
+    const icon = document.createElement('div');
+    icon.style.cssText = CARD_ICON_CSS;
     const title = document.createElement('div');
     title.style.cssText = CARD_TITLE_CSS;
     const desc = document.createElement('div');
     desc.style.cssText = CARD_DESC_CSS;
     const level = document.createElement('div');
     level.style.cssText = CARD_LEVEL_CSS;
-    root.append(title, desc, level);
+    root.append(icon, title, desc, level);
     root.addEventListener('click', () => choose(index));
     cardsEl.appendChild(root);
-    return { root, title, desc, level };
+    return { root, icon, title, desc, level };
   }
 
   /**
@@ -524,6 +582,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
         continue;
       }
       card.root.style.display = 'block';
+      card.icon.textContent = cardIcon(opt);
       card.title.textContent = cardTitle(opt);
       card.desc.textContent = cardDesc(opt);
       card.level.textContent = cardLevelText(opt);
