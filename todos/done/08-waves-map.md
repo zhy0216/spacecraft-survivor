@@ -25,7 +25,7 @@ MVP 的"一张地图"= 一个开阔太空战场 + 一串首尾相接的航段脚
       「玩家被迫持续微调航向」**待真人试玩**
 - [x] 同 seed 两局出怪序列一致 —— 跑真脚本 40s 逐只对比种类与出生位置
 - [x] 一局从开始到胜利/失败/重开全流程无需刷新页面 —— `startRun(newWorld)` 换 World +
-      `renderer.setWorld` + `placement.setWorld`;**真机重开第二局仍待人工过一遍**
+      `renderer.setWorld` + `upgradeFlow.setWorld`;**真机重开第二局仍待人工过一遍**
 
 ## 口径说明与交接
 

@@ -565,9 +565,25 @@ export function cellWorldPosAt(
 }
 
 /**
- * 世界坐标反查格下标(放置交互的拾取用),不在甲板上返回 -1。
- * 与 cellWorldPos 严格互逆:先把世界点转回船体局部系(旋转的逆 = 转置),再按格边长取整。
+ * 船体局部坐标反查格下标,不在甲板上返回 -1。
+ * 与 cellLocalPos 严格互逆,也是所有拾取路径最终共用的**唯一**「局部坐标 → 格」算式:
+ * 老的世界坐标入口先把点逆旋转到局部系再走这里;10 号时停放大则由渲染层的 deckG.toLocal
+ * 直接给出局部坐标再走这里。于是甲板缩放/缓动不会逼 ui 复制第二份格子公式。
  * 非占用格一律 -1 —— 洞与船体外的空白对拾取是一回事。
+ */
+export function cellIndexAtLocal(deck: Deck, lx: number, ly: number): number {
+  const size = deckCellSize();
+  const col = Math.floor(ly / size + deck.cols / 2);
+  const row = Math.floor(deck.rows / 2 - lx / size);
+  const i = cellIndex(deck, col, row);
+  if (i < 0) return -1;
+  return deck.cells[i]!.occupied ? i : -1;
+}
+
+/**
+ * 世界坐标反查格下标(放置交互的拾取用),不在甲板上返回 -1。
+ * 与 cellWorldPos 严格互逆:只负责把世界点转回船体局部系(旋转的逆 = 转置),
+ * 真正的格子反查统一交给 cellIndexAtLocal —— 两条拾取入口绝不各养一份取整公式。
  */
 export function cellIndexAtWorld(
   deck: Deck,
@@ -583,12 +599,7 @@ export function cellIndexAtWorld(
   const sin = Math.sin(heading);
   const lx = dx * cos + dy * sin;
   const ly = -dx * sin + dy * cos;
-  const size = deckCellSize();
-  const col = Math.floor(ly / size + deck.cols / 2);
-  const row = Math.floor(deck.rows / 2 - lx / size);
-  const i = cellIndex(deck, col, row);
-  if (i < 0) return -1;
-  return deck.cells[i]!.occupied ? i : -1;
+  return cellIndexAtLocal(deck, lx, ly);
 }
 
 /**

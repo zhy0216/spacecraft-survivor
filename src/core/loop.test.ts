@@ -65,3 +65,92 @@ describe('FixedStepLoop', () => {
     }
   });
 });
+
+/**
+ * 时停的停法(10 号 issue T3)。08 号踩过的坑:弹结算/弹卡片是在 step 回调里说出来的,
+ * 那一刻循环还站在 while 里 —— 只立外层的 run.paused 挡的是**下一次** advance,
+ * 本次 advance 还会把剩余固定步补完。下面两条分别钉"当场停手"与"不补跑"。
+ * 喂 64ms:够补 3 步(64 / 16.67 = 3.84),第 1 步就停手的话另外两步必须不发生。
+ */
+describe('FixedStepLoop.halt()', () => {
+  it('回调里 halt 后,本次 advance 不再多跑一步', () => {
+    let steps = 0;
+    const loop: FixedStepLoop = new FixedStepLoop(() => {
+      steps++;
+      loop.halt();
+    });
+
+    loop.advance(64);
+
+    // 当前这一步跑完才停(它正是"弹卡片的那一帧"),但不许再补第 2、3 步
+    expect(steps).toBe(1);
+    expect(loop.tick).toBe(1);
+    // 剩余时间作废,于是也没有"下一步的进度"可言
+    expect(loop.alpha).toBe(0);
+  });
+
+  it('被丢弃的时间不会在下一次 advance 补跑回来', () => {
+    let halting = true;
+    const loop: FixedStepLoop = new FixedStepLoop(() => {
+      if (halting) loop.halt();
+    });
+
+    loop.advance(64); // 3.84 步的量,跑 1 步就停手,余下的 47.3ms 该作废
+    expect(loop.tick).toBe(1);
+
+    // 时停结束。16ms < 16.67ms:acc 真被清零了才一步都跑不出来
+    // (不清的话余量 47.3 + 16 = 63.3ms 会当场补 3 步 —— 时停期间的世界就"漏"跑了)
+    halting = false;
+    loop.advance(16);
+    expect(loop.tick).toBe(1);
+
+    // 但也不是"从此不跑了":旗每次 advance 进门就清,再喂一帧凑够一步照常推进
+    loop.advance(16);
+    expect(loop.tick).toBe(2);
+  });
+
+  it('升级回调里 halt + 外层 paused 后,敌人/子弹/掉落/计时器在任意渲染帧数内完全冻结', () => {
+    const world = new World(20260802);
+    const bullet = world.bullets.spawn();
+    bullet.x = bullet.px = 0;
+    bullet.y = bullet.py = 0;
+    bullet.vx = 120;
+    bullet.life = 10;
+    const drop = world.drops.spawn();
+    drop.x = drop.px = 100;
+    drop.y = drop.py = 0;
+    drop.value = 1;
+    world.scrap = world.upgradeCost;
+
+    let paused = false;
+    const loop: FixedStepLoop = new FixedStepLoop(() => world.step());
+    world.onUpgradeOffer = () => {
+      paused = true; // main.ts:挡住下一次 advance
+      loop.halt(); // main.ts:本次 advance 当场停手
+    };
+
+    loop.advance(64); // 原本够补 3 步,弹卡那一步后必须立刻停
+    expect(loop.tick).toBe(1);
+    expect(world.offer.length).toBeGreaterThan(0);
+    const enemy = world.enemies.items[0]!;
+    const snapshot = {
+      tick: world.tick,
+      checksum: world.checksum(),
+      enemyX: enemy.x,
+      enemyY: enemy.y,
+      bulletX: bullet.x,
+      bulletLife: bullet.life,
+      dropX: drop.x,
+      dropMagnet: drop.magnet,
+    };
+
+    // ticker / 渲染照常跑两秒,但 main 的 paused 守卫不再把任何墙钟时间灌进 sim。
+    for (let frame = 0; frame < 120; frame++) if (!paused) loop.advance(1000 / 60);
+
+    expect(world.tick).toBe(snapshot.tick);
+    expect(world.checksum()).toBe(snapshot.checksum);
+    expect([enemy.x, enemy.y]).toEqual([snapshot.enemyX, snapshot.enemyY]);
+    expect([bullet.x, bullet.life]).toEqual([snapshot.bulletX, snapshot.bulletLife]);
+    expect([drop.x, drop.magnet]).toEqual([snapshot.dropX, snapshot.dropMagnet]);
+  });
+});

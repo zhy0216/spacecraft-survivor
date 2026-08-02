@@ -2,7 +2,7 @@
  * 输入层里唯一值得单测的一段:哪些键要吞掉浏览器默认行为(04 号 T3-b 的 Tab)。
  * 本仓的 vitest 跑在 Node 环境(不装 jsdom),但 Input 的事件源是构造参数注入的 ——
  * 塞一个只记 handler 的假 window,就能在 Node 里把 keydown/keyup 全流程跑完,
- * 不必为这几行把一个 DOM 环境拖进来(照 ui/placement.test.ts 的同一条取舍)。
+ * 不必为这几行把一个 DOM 环境拖进来(照 ui/upgradeFlow.test.ts 的同一条取舍)。
  *
  * 钉的是两件事,漏哪一件"按住 Tab 显示射界"都会坏,而且都是肉眼很难当场归因的坏法:
  * 1. Tab 必须 preventDefault —— 否则浏览器拿它切焦点,焦点跑进调参面板的输入框,

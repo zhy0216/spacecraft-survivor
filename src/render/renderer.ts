@@ -50,6 +50,20 @@
  * (沿 Y 的条 / 沿 X 的条 / 一个圆),而不是三条一样的条换个颜色:颜色这条通道已经被"哪座塔"
  * 占满了(读数一律取 def.tint,与该塔的弹和光效同色),再拿它区分机制就是把两条信息压进一个通道。
  * 这三样正是 06 号支援设施的三个作用锚点,画面上分不出三件事,06 号就没法让玩家看出加成落在哪。
+ *
+ * 残骸掉落(10 号 issue T4):掉落物照敌/弹那一套走 ParticleContainer —— 一容器一纹理、
+ * dynamicProperties 只有 position、位置吃 alpha 插值。它们同屏能有上千颗(sim 那边的
+ * DROP_MAX_ALIVE 保险丝)且每一颗每帧都在动,画成 Graphics 就是每帧上千条几何指令;
+ * 而被吸住的残骸每秒跑 300px(比船的巡航还快一倍),不插值在 144Hz 屏上就是一串跳点,
+ * 偏偏"残骸飞进船里"是玩家每隔几秒就要看一次的正反馈(铁律 2)。
+ *
+ * 时停放大(GDD §11 / 10 号 issue T4:三选一 → 时停 → 甲板放大 30% + 合法格高亮):
+ * setDeckZoom **只动 deckG.scale,绝不动镜头** —— 镜头一缩放,虫潮与场地边界圈会跟着变大,
+ * 玩家会以为世界也变了;而放大 deckG,挂在它下面的合法格高亮与射界扇形天然一起放大,
+ * 那正是这一刻唯一要看清的东西。于是拾格子也必须改走 screenToDeckLocal(deckG.toLocal):
+ * 老的 screenToWorld + cellIndexAtWorld 那条路的公式里没有这一档缩放,ui 层想自己补上
+ * 就等于又抄一份镜头/缩放公式 —— 两处必然走散,而走散的样子恰恰是"看到的高亮框与
+ * 点下去的格差一截":玩家只会觉得这游戏点不准,而不会觉得是缩放算错了。
  */
 import {
   Application,
@@ -99,6 +113,7 @@ import {
   isEdgeExposed,
   isPlaceSuccess,
 } from '../sim/deck';
+import type { Drop } from '../sim/drop';
 import { ST_WINDUP } from '../sim/enemy';
 import {
   FX_LIFE_HULL_HIT,
@@ -129,6 +144,24 @@ const ENEMY_EDGE = 0xffffff;
 // 船体走冷色废铁(GDD §12)
 const SHIP_FILL = 0x2b4a6e;
 const SHIP_EDGE = 0x7fc4ff;
+
+// —— 残骸掉落物(10 号 issue T4)——GDD §12 的"拾荒焊接美学:船是冷色废铁拼焊的" ——
+// 残骸就是那批废铁本身(GDD 开篇:残骸 = XP,星之残骸 = 你的船),故取**低饱和钢白**:
+// 与六塔那批高饱和冷色(弹与光效)差的是饱和度、与敌人的红紫暖色差的是整个色域 ——
+// 它既不是威胁也不是自己的火力,是地上等着捡的材料,不该抢任何一方的读数。
+const DROP_TINT = 0xb9cfe0;
+/** 纹理一律灰阶(暗面 + 亮边),真正的颜色靠粒子 tint 相乘 —— 与敌人/子弹纹理同一套做法 */
+const DROP_FILL = 0x8f959c;
+const DROP_EDGE = 0xffffff;
+const DROP_EDGE_WIDTH = 1.2;
+/**
+ * 菱形的外接半径(世界 px)。**刻意不取拾取半径**:拾取判定是围着**船心**量的
+ * (sim/drop 的 dropCollectRadius),不是围着这一颗残骸 —— 照那个数画出去,
+ * 满屏就是一片糊住虫潮的光斑,而它承诺的距离感还是错的(与"灰盒阶段视觉 = 判定"
+ * 那条口径不冲突:这里根本没有以残骸为圆心的判定可对齐)。
+ * 比最大的子弹再大一点点:一颗残骸值几分钱不重要,"地上还有没有没捡的"必须一眼看得见。
+ */
+const DROP_RADIUS = 5;
 
 // —— 甲板配色:我方一律冷色域(GDD §12),三种格状态靠明度 + 蓝↔青的色相分开 ——
 // 空格沿用船体本色:空格就是"还没装东西的船体",不该比装了东西的格更抢眼。
@@ -164,6 +197,27 @@ const DECK_HILITE_FILL_ALPHA = 0.16; // 薄薄一层:合法格要看得出"能�
 const DECK_HILITE_WIDTH = 2;
 const DECK_HOVER_WIDTH = 3; // 悬停格比其它合法格粗一档:光标在哪一格必须无歧义
 const DECK_DENY_FILL_ALPHA = 0.22;
+
+// —— 时停放大(GDD §11 / 10 号 issue T4)——三选一弹卡的那几秒里,甲板是玩家唯一要看的东西 ——
+/**
+ * 放大档位:1.3 = GDD §11 明写的"甲板放大 30%"。只作用在 deckG 上(见 setDeckZoom):
+ * 格子、合法格高亮、射界扇形、节流读数全挂在它下面,一并放大 —— 而虫潮、场地边界圈、
+ * HP 条一个都不跟着变,于是"世界停住了、镜头没动,只有我这块甲板凑到眼前来"这句话
+ * 在画面上是自明的。
+ */
+const DECK_ZOOM = 1.3;
+/**
+ * 缩放的指数缓动时间常数(秒)。**短促**是要点:它是"世界停了,轮到你摆甲板"的一记转场,
+ * 不是一段动画 —— 拖长了玩家每次升级都得先干等它放完(一局要等十几次)。
+ * 缓动只改 deckG.scale;拾格子一律走 deckG.toLocal(见 screenToDeckLocal),
+ * 于是缓动走到一半点下去,"看到的高亮框"与"点中的格"仍然是同一格:两者读的是同一个变换本身。
+ */
+const DECK_ZOOM_TAU = 0.06;
+/**
+ * 与目标差到这一档以内就直接吸附。指数缓动永远只是逼近,不吸附就等于往后每一帧都在
+ * 给 scale 写一个肉眼看不出差别的新值(而 deckG 的变换一改,它下面七层子层的世界变换全要重算)。
+ */
+const DECK_ZOOM_EPS = 0.002;
 
 // —— 射界叠加层(04 号 issue,按住 Tab):我方冷色域(GDD §12),与弹道/合法格同一支蓝 ——
 // 扇形是"这一片我打得到"的读数而不是实体,故填充压到极淡的一层、边界靠描边交代:
@@ -505,6 +559,24 @@ function buildBulletShape(def: TowerDef): Graphics {
 }
 
 /**
+ * 残骸掉落物的剪影(10 号 issue T4)。一律**菱形**,且全场只有这一种形状 ——
+ * 圆 / 飞镖 / 胶囊 / 六边被四型敌人占满,实心点与空心环被两类子弹占满,菱形是唯一还空着的一档:
+ * 于是"地上那颗是残骸"不必靠颜色也认得出(色盲安全,与敌人分型同一条口径)。
+ * 价值差(1/2/2/4,见 data/enemies 的 scrap)**不进画面**:一容器一纹理是这套粒子的前提
+ * (取舍见构造函数那段),按价值分容器就得为一个"捡到就没了"的差别多挂三层;
+ * 玩家真正要读的是"我攒了多少"(面板读数 / 11 号的 HUD 残骸条),不是"这一颗值几分"。
+ * 几何画成灰阶(暗面 + 亮边),颜色由粒子 tint 相乘得到,与敌人/子弹纹理同一套做法。
+ * 形状对原点对称(粒子锚点固定 0.5,纹理按包围盒裁):不对称就等于把剪影整体偏出实体真实位置。
+ */
+function buildDropShape(): Graphics {
+  const r = DROP_RADIUS;
+  return new Graphics()
+    .poly([r, 0, 0, r, -r, 0, 0, -r])
+    .fill(DROP_FILL)
+    .stroke({ width: DROP_EDGE_WIDTH, color: DROP_EDGE });
+}
+
+/**
  * FxEvent 的存续比例:1 = 刚发生,0 = 这一帧就要被 World 回收。
  * full ≤ 0 时退化成 1 —— 数值表被改坏(FX_LIFE_* 填了 0)也不该让画面上出现 NaN 几何。
  */
@@ -564,6 +636,16 @@ export class Renderer {
   /** 下标 = slot,取 tint 用(冷色域,GDD §12);同时把"这个 slot 是哪座塔"写在明面上 */
   private bulletDefs: TowerDef[] = [];
   private bulletBuckets: Bullet[][] = [];
+  /**
+   * 残骸掉落物(10 号 issue T4)。与敌/弹相反,这里**只有一个容器、不分型**:
+   * 分容器分的是纹理与 tint(见构造函数那段取舍),而掉落物两样都只有一份
+   * (形状恒为菱形、颜色恒为 DROP_TINT,价值差不进画面 —— 见 buildDropShape),
+   * 分了只是多挂几个永远为空却每帧被遍历的对象。也不必分桶:池里的 items 本就是致密数组,
+   * 整池直接喂给 syncParticles 就行,连那一趟按型分桶的遍历都省了。
+   */
+  private dropPc: ParticleContainer;
+  private dropParticles: Particle[] = [];
+  private dropTexture: Texture;
   /**
    * 开火光效层(05 号 T5)。挂在 **worldLayer** 而不是 deckG:FxEvent 的坐标是**世界坐标**
    * (命中点在敌人身上,不在船上),挂进甲板局部空间会让整条光束跟着船转 —— 船一转,
@@ -627,6 +709,15 @@ export class Renderer {
   private placement: PlacementUiState | null = null;
   /** 高亮层上一帧是否画过东西:退出放置模式时只需 clear 一次,而不是每帧空转 */
   private hiliteDrawn = false;
+  /**
+   * 甲板缩放的**当前值**与**目标档位**(10 号 issue T4 的时停放大)。分成两个数是为了缓动:
+   * setDeckZoom 只立目标(它是流程事件,一次性),sync 每渲染帧把当前值朝目标推一段(见 stepDeckZoom)。
+   * 两个都从 1 起步 —— 战斗中甲板就是原尺寸,放大只在弹卡的那几秒里存在。
+   * 计时/相位全在渲染层自持,与 broadside 那一组同一条理由:它纯是表现,
+   * 进了 sim 就等于让确定性回放为一次镜头动画负责(铁律 1 的边界画在这儿)。
+   */
+  private deckZoom = 1;
+  private deckZoomTarget = 1;
   /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab'),渲染层只存 bool、不持有输入 */
   private arcOverlay = false;
   /** 叠加层上一帧是否画过:松开 Tab 时 clear 一次即可(照 hiliteDrawn 的写法) */
@@ -732,6 +823,19 @@ export class Renderer {
       this.bulletBuckets.push([]);
     }
 
+    // 残骸掉落物:同一套粒子做法,只是**一个容器就够**(理由见 dropPc 的字段注释)。
+    // 2x 分辨率 + 抗锯齿:菱形只有 5px 出头,1x 画布上不这么烤就糊成一个亮点,形状通道当场作废
+    this.dropTexture = app.renderer.generateTexture({
+      target: buildDropShape(),
+      resolution: 2,
+      antialias: true,
+    });
+    this.dropPc = new ParticleContainer({
+      dynamicProperties: dyn,
+      boundsArea: bounds,
+      texture: this.dropTexture,
+    });
+
     // 方位参照:镜头跟船后画面里没有不动的东西,靠场地边界圈才知道自己漂到哪了
     const ring = new Graphics().circle(0, 0, WORLD_RADIUS).stroke({ width: 3, color: 0x1c2740 });
 
@@ -758,13 +862,19 @@ export class Renderer {
     );
 
     // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
-    // 不会被蜂群蛭糊掉)→ 弹 → 开火光效 → 甲板 → HP 条。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
+    // 不会被蜂群蛭糊掉)→ 残骸 → 弹 → 开火光效 → 甲板 → HP 条。
+    // 指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
     // 光效排在弹之后、甲板之前:它是"这一发打出去了"的读数,压住敌人才看得见命中在谁身上,
     // 但绝不许盖住甲板自己的格子(放塔与节流读数在那上面)。
     // 甲板压在敌与弹之上,千敌贴脸时自己的格子不会被糊掉 —— 放塔时更是必须看得见;
     // HP 条再压在甲板之上收尾:蜂群把船埋了的那一刻,正是"还剩多少血"最不能被盖住的时候。
+    // 残骸(10 号 T4)排在**敌之上、弹之下**:压在敌之下的话,残骸一掉出来就被它自己那堆虫子埋了,
+    // 而"残骸正往船上飞"是这一局经济在转的唯一读数;压在弹与光效之上又会让自己的火力
+    // 被一串小菱形点花 —— 它终究只是地上的材料,抢不过"我打中了谁"。
+    // 一颗才 5px,盖在敌人剪影上也不至于让威胁读数打折。
     this.worldLayer.addChild(ring, this.telegraphG);
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
+    this.worldLayer.addChild(this.dropPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     this.worldLayer.addChild(this.fxG, this.deckG, this.shipHpG);
     // 闪光片挂在 stage 最上层(屏幕空间),不进 worldLayer —— 理由见 flashG 的字段注释
@@ -772,8 +882,13 @@ export class Renderer {
     app.stage.addChild(this.worldLayer, this.flashG);
   }
 
-  /** 每渲染帧调用。alpha ∈ [0,1):在上一逻辑帧与当前逻辑帧之间插值 */
-  sync(alpha: number): void {
+  /**
+   * 每渲染帧调用。alpha ∈ [0,1):在上一逻辑帧与当前逻辑帧之间插值。
+   * @param beforeDeckDraw 可选的甲板交互同步点:镜头、甲板位姿与缩放都已经更新,
+   *   合法格高亮还没画。main 在这里重算悬停格,于是放大缓动/转船的**当前帧**里
+   *   screenToDeckLocal 与马上要画出来的 deckG 读的是同一个变换,不留一帧错格。
+   */
+  sync(alpha: number, beforeDeckDraw?: () => void): void {
     const screen = this.app.screen;
 
     // 船的插值位姿:镜头与船体都取样它。直接用 ship.x/heading 会让整个画面按 60Hz 台阶抖(铁律 2)
@@ -843,6 +958,14 @@ export class Renderer {
       });
     }
 
+    // 残骸掉落物:整池直接喂进去(池的 items 本就是致密数组,不必像敌/弹那样先分桶),
+    // 与它们同一套 syncParticles ⇒ 一并吃 alpha 插值:磁吸段每秒 300px,不插值就是一串跳点
+    this.syncParticles(this.dropParticles, this.dropPc, this.world.drops.items, {
+      texture: this.dropTexture,
+      tint: DROP_TINT,
+      alpha,
+    });
+
     // 开火光效:瞬时判定的四类全在这一层。**不插值**(见 drawFx)
     this.drawFx();
 
@@ -855,12 +978,19 @@ export class Renderer {
       // 邻接连线与底板同一个脏标记:两者都只在放置那一下变(见 deckLinkG 的字段注释)
       this.drawDeckLinks(deck);
     }
+    this.deckG.position.set(sx, sy);
+    this.deckG.rotation = sh;
+    // 时停放大(10 号 T4):缩放与位姿一起落到同一个容器上。dt 取的是上面那个渲染帧间隔 ——
+    // 时停期间 loop 不再推进(alpha 恒 0、世界一动不动),但 ticker 与 sync 照跑,
+    // 于是这段缓动仍然动得起来;它本就该是纯表现,与 sim 的时间无关
+    this.stepDeckZoom(dt);
+    // 甲板交互必须卡在**变换已落地、高亮还没画**的这一点重算:放在 main 的 sync 之前会读上一帧变换,
+    // 放在 sync 之后又会让这一帧的框晚一帧。回调由 main 灌入,render 不反向 import ui。
+    beforeDeckDraw?.();
     this.drawDeckHit(deck);
     this.drawDeckHilite(deck);
     this.drawDeckThrottle(deck);
     this.drawDeckArcs(deck);
-    this.deckG.position.set(sx, sy);
-    this.deckG.rotation = sh;
 
     // HP 条吃的是同一个插值船位、却**只吃位置不吃朝向**(见 shipHpG 字段注释),故不能塞进上面那两行
     this.drawShipHp(sx, sy);
@@ -886,7 +1016,7 @@ export class Renderer {
   }
 
   /**
-   * 画布像素 → 世界坐标。放置交互(ui/placement.ts)拾格子的第一步:
+   * 画布像素 → 世界坐标。普通世界交互的统一入口;10 号的放大甲板拾取改走 screenToDeckLocal:
    * 镜头的缩放/pivot 都在渲染层,ui 层不该再复制一份镜头公式 —— 那是两处必然会走散的真相。
    * 走 worldLayer.toLocal:镜头怎么变(将来加震屏、变焦)这里都不用改。
    * out 由调用方给,零分配(铁律 3)。
@@ -895,6 +1025,36 @@ export class Renderer {
     screenPos.x = sx;
     screenPos.y = sy;
     return this.worldLayer.toLocal(screenPos, undefined, out);
+  }
+
+  /**
+   * 画布像素 → **甲板局部坐标**(局部 +X = 船头、+Y = 右舷,与 cellLocalPos / cellIndexAtLocal
+   * 是同一套坐标)。10 号 issue 的放置流一律走这一条拾格子。
+   *
+   * 为什么不接着用 screenToWorld + cellIndexAtWorld:那条路要在 ui 侧把"镜头缩放 → 船位姿"
+   * 这串变换重走一遍,而时停放大之后中间还多了一档 deckG.scale —— ui 层补上它就等于
+   * 又抄了一份镜头/缩放公式,两处迟早走散,而走散的样子恰好是**看到的高亮框与点中的格差一截**
+   * (那还是玩家花了残骸、正要把塔放下去的那一刻)。
+   * 这里走 deckG.toLocal:镜头怎么变(缩放、broadside 震屏)、甲板放没放大、放大缓动走到哪一帧、
+   * 船此刻转到什么角度 —— 全部由容器**当前的**世界变换自己交代,本方法与调用方一个字都不用改。
+   * 于是"缓动中途点下去也不会错格"是结构上成立的:高亮画在这个变换下,拾取也问这个变换。
+   * out 由调用方给,零分配(铁律 3)。
+   */
+  screenToDeckLocal(sx: number, sy: number, out: Vec2): Vec2 {
+    screenPos.x = sx;
+    screenPos.y = sy;
+    return this.deckG.toLocal(screenPos, undefined, out);
+  }
+
+  /**
+   * 时停放大开关(GDD §11 / 10 号 issue T4:三选一 → **时停** → 甲板放大 30% + 合法格高亮)。
+   * 只立一个目标档位,真正的缩放由 sync 每渲染帧缓动过去(见 stepDeckZoom)——
+   * 于是调用方(main.ts 的弹卡/结算那两句)不必关心动画,也绝不会在 UI 事件里直接写 scale。
+   * 与 setPlacement / setArcOverlay 同一条依赖方向:流程状态由 main/ui 灌进来,
+   * 渲染层不认识"时停"这件事,也不去碰 loop —— 冻结世界是 main + loop.halt 的活。
+   */
+  setDeckZoom(on: boolean): void {
+    this.deckZoomTarget = on ? DECK_ZOOM : 1;
   }
 
   /**
@@ -924,6 +1084,13 @@ export class Renderer {
     this.broadsideDirX = 0;
     this.broadsideDirY = 0;
     this.flashG.visible = false;
+    // 时停放大是**上一局那张卡片**留下的表现状态,新局一律从战斗态起步:
+    // 调参面板的重开按钮在时停期间照样点得动(它不认识"正在弹卡"),不复位的话新船会带着
+    // 上一局的 1.3 倍甲板开出去,而那一局再也没有一次 setDeckZoom(false) 来关它。
+    // **当场吸附、不缓动**:重开是"换一艘船",不是一次转场 —— 缩回去的那段动画属于上一局
+    this.deckZoom = 1;
+    this.deckZoomTarget = 1;
+    this.deckG.scale.set(1);
   }
 
   /**
@@ -1487,7 +1654,11 @@ export class Renderer {
     // 按**已走过的比例**推进而不是按秒:惩罚时长被拖长拖短,这一抖都刚好走完 HP_HIT_CYCLES 个来回
     const kick = k > 0 ? Math.cos((1 - k) * HP_HIT_CYCLES * Math.PI * 2) * k * HP_HIT_SHAKE : 0;
     const x0 = sx - w / 2 + kick;
-    const y0 = sy + deckOuterRadius(this.world.deck) + HP_BAR_GAP;
+    // 与船体外接圆的留白**按当前甲板缩放推出去**(10 号 T4 的时停放大):这条条是照甲板的外接圆
+    // 摆位的,而时停那几秒甲板会长到 1.3 倍 —— 不乘这一档,放大的甲板角就会顶到血条底下
+    // (它画在甲板之上,盖不掉,但那一刻两样东西糊在一起谁都读不清)。
+    // 只推距离、不缩条本身:"与船同宽"是它不用图例就读得出是谁的血的全部理由,缩放了就不再同宽
+    const y0 = sy + deckOuterRadius(this.world.deck) * this.deckZoom + HP_BAR_GAP;
 
     // 槽底:空槽也要看得出"这里有一条血条",否则 HP 见底 = 读数整条消失(与 THR_TRACK_* 同一条取舍)
     g.rect(x0, y0, w, HP_BAR_HEIGHT).fill({ color: THR_TRACK_COLOR, alpha: HP_TRACK_ALPHA });
@@ -1830,6 +2001,27 @@ export class Renderer {
   }
 
   /**
+   * 甲板缩放的缓动(10 号 issue T4 的时停放大)。目标由 setDeckZoom 立,这里每渲染帧推一段。
+   *
+   * 指数逼近而不是"每帧加固定一档":后者的时长会随帧率漂移(144Hz 屏上放完只要 30Hz 屏的
+   * 五分之一时间),而 1 - e^(-dt/τ) 这一式对任意 dt 都给出同一条时间曲线 ——
+   * 掉帧那一帧 dt 大,它就一次多走一段,总时长不变(与 stepBroadside "按已走过的比例推进相位"
+   * 是同一条口径:观感不随帧率漂移)。
+   * 到位后**吸附并停手**:差值小于 DECK_ZOOM_EPS 就写死目标值,此后每帧只比一个数就返回 ——
+   * 缩放一变,deckG 下面七层子层的世界变换全要重算,而战斗中的每一帧目标都恒等于 1。
+   */
+  private stepDeckZoom(dt: number): void {
+    const target = this.deckZoomTarget;
+    if (this.deckZoom === target) return;
+    // dt ≤ 0(首帧 deltaMS 为 0)时 k = 0:这一帧不动,下一帧照常 —— 绝不除以 0、也绝不外插
+    const k = 1 - Math.exp(-Math.max(0, dt) / DECK_ZOOM_TAU);
+    let z = this.deckZoom + (target - this.deckZoom) * k;
+    if (Math.abs(target - z) <= DECK_ZOOM_EPS) z = target;
+    this.deckZoom = z;
+    this.deckG.scale.set(z);
+  }
+
+  /**
    * 冲锋前摇的可读性指示(07 号验收标准:前摇可读、玩家来得及转向躲避)。画两样:
    * 锁定线 = 锁定方向 × 冲刺全程距离。方向在进 WINDUP 时就写死、冲刺中不再瞄准(见 sim/enemy),
    *   所以这条线是一句"待会儿只会撞这条线上"的承诺 —— 玩家照它横向挪开即可,这是躲避的唯一依据;
@@ -1870,7 +2062,7 @@ export class Renderer {
   private syncParticles(
     particles: Particle[],
     pc: ParticleContainer,
-    entities: readonly (Enemy | Bullet)[],
+    entities: readonly (Enemy | Bullet | Drop)[],
     opts: { texture: Texture; tint: number; alpha: number },
   ): void {
     // 扩容:tint/texture 是静态属性,增粒子后需 pc.update() 重传。

@@ -3,7 +3,8 @@
  *
  * 单只敌人的行为(状态机/前摇/冲刺锁定)在 enemy.test.ts 钉、炮管的追瞄与归位在 turret.test.ts 钉;
  * 这里钉的是**世界这一层的接线**:step 的顺序(含炮管排在敌人循环之后)、出怪混型的随机序列、
- * 接触检测只检测不结算、死亡回收的下标坑与掉落挂钩,以及哪些状态进 checksum。
+ * 接触检测只检测不结算、死亡回收的下标坑与它带出来的残骸掉落(磁吸规则本身在 drop.test.ts 钉),
+ * 以及哪些状态进 checksum。
  *
  * 07 验收标准里可自动化的那几条也钉在这里(T5):它们的口径都是"一整个世界连着跑若干秒",
  * 单只敌人的用例复现不出来 —— 方向压力得有一艘真在机动的船,HP 时间缩放得真跑到第 5 分钟。
@@ -11,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
+import { DROP_MAX_ALIVE } from '../data/economy';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
@@ -97,6 +99,11 @@ const BASE = {
   enemyContactDamageScale: 1,
   hitFireRateMul: 0.75,
   hitPenaltyTime: 0.5,
+  // 磁吸那三根(10 号 T1):掉落那一组用例会把起吸半径拖大拖小(验收标准第四条就是这么验的),
+  // 跑完必须还原。三条规则本身在 drop.test.ts 钉,这里只关心"世界把它接对了没有"
+  dropMagnetRadius: 170,
+  dropMagnetSpeed: 300,
+  dropCollectRadius: 22,
 };
 Object.assign(tuning, BASE);
 
@@ -111,10 +118,13 @@ const GUN_BASE = { arcDeg: 100, range: 380, turnRate: 360, aimTolDeg: 6 };
 Object.assign(GUN, GUN_BASE);
 /** 有用例要临时改甲虫前摇(证明"时长可配"),与 enemy.test.ts 同口径:跑完必须还原 */
 const BASE_BEETLE_WINDUP = ENEMIES[KIND_BEETLE]!.chargeWindup;
+/** 有用例要把某一型的掉落面额临时改成 0(证明"给不了东西的残骸不掉"),同口径:跑完必须还原 */
+const BASE_SCRAP = ENEMIES.map((d) => d.scrap);
 afterEach(() => {
   Object.assign(tuning, BASE);
   Object.assign(GUN, GUN_BASE);
   ENEMIES[KIND_BEETLE]!.chargeWindup = BASE_BEETLE_WINDUP;
+  for (let i = 0; i < ENEMIES.length; i++) ENEMIES[i]!.scrap = BASE_SCRAP[i]!;
 });
 
 /** 只出某一型:验收混型逻辑时才好把断言写死(其余三型权重归零 = 面板上"只看一型"的用法) */
@@ -2176,6 +2186,236 @@ describe('死亡回收与掉落挂钩(07 号 T3)', () => {
     expect(w.enemies.size).toBe(2);
     expect(w.kills).toBe(0);
     expect(hits).toBe(0);
+    expect(w.drops.size).toBe(0); // 清场走的是池的 despawnAt,压根不经过 reap,自然也不掉残骸
+  });
+});
+
+/**
+ * 残骸掉落与磁吸拾取的**世界接线**(10 号 T1)。
+ * 磁吸本身的每一条规则(起吸含边界 / 锁定了就不放手 / 匀速直追船心 / 收取判在本帧新位置)
+ * 在 drop.test.ts 钉 —— 那边连 World 都不造,喂一个池 + 一块甲板 + 一对船心坐标就够。
+ * 这里只钉世界才知道的那几件事:谁掉的、掉在哪、掉多少、掉落与公开挂钩谁先谁后、
+ * 收到的那笔账进了谁的兜,以及这一整套有没有把确定性(尤其是出怪的随机序列)搅坏。
+ */
+describe('残骸掉落接线(10 号 T1:死了掉残骸,磁吸收进 scrap)', () => {
+  it('死者当场掉一颗:就掉在它倒下的地方,面额 = 数值表里那一型的 scrap', () => {
+    onlyKind(KIND_BEETLE);
+    tuning.stressEnemies = 3;
+    const w = new World(31);
+    w.step();
+    expect(w.drops.size).toBe(0); // 还没死过人:一颗残骸都不该凭空出现
+
+    const victim = w.enemies.items[0]!;
+    w.damageEnemy(victim, 9999);
+    w.step(); // 掉落发生在帧尾的 reap(尸体本帧仍被推进,故坐标对着回收那一刻取)
+
+    expect(w.drops.size).toBe(1);
+    const d = w.drops.items[0]!;
+    // 出池不清字段(pool 的 reset 在 spawn 时才走),故 victim 身上留着的正是它倒下的坐标
+    expect(d.x).toBe(victim.x);
+    expect(d.y).toBe(victim.y);
+    expect(d.px).toBe(d.x); // px/py 起手 = 当前位置:它还没动过(铁律 2 的两端)
+    expect(d.py).toBe(d.y);
+    expect(d.value).toBe(ENEMIES[KIND_BEETLE]!.scrap);
+    // 出生环在几百 px 外:不该一出生就被吸住,速度也该是 0(停在尸体上等人来捡)
+    expect(d.magnet).toBe(false);
+    expect(d.vx).toBe(0);
+    expect(d.vy).toBe(0);
+  });
+
+  it('掉落排在公开挂钩**之前**,而挂钩接不接都不影响掉落', () => {
+    onlyKind(KIND_SWARM);
+    tuning.stressEnemies = 2;
+    const w = new World(32);
+    w.step();
+    const seen: number[] = [];
+    w.onEnemyDeath = () => seen.push(w.drops.size);
+
+    w.damageEnemy(w.enemies.items[0]!, 9999);
+    w.step();
+    // 回调进门时残骸已经在池里;挂钩自己的语义一个字没变(回池前、每只恰好响一次)
+    expect(seen).toEqual([1]);
+
+    // 摘掉挂钩照样掉:残骸是世界自己的账,不是挂钩的副产品
+    w.onEnemyDeath = null;
+    w.damageEnemy(w.enemies.items[0]!, 9999);
+    w.step();
+    expect(w.drops.size).toBe(2);
+  });
+
+  it('一片死者一个不漏地各掉一颗,面额各按各的型(混型的一局里残骸不是一口价)', () => {
+    tuning.stressEnemies = 40; // 默认混型:四型都出得来(下面那条 Set 断言保证这不是空过)
+    const w = new World(33);
+    w.step();
+    const doomed = [...w.enemies.items];
+    const kinds = doomed.map((e) => e.kind);
+    const want = kinds.reduce((s, k) => s + ENEMIES[k]!.scrap, 0);
+    for (const e of doomed) w.damageEnemy(e, 9999);
+
+    w.step();
+    expect(new Set(kinds).size).toBeGreaterThan(1);
+    expect(w.drops.size).toBe(doomed.length);
+    expect(w.drops.items.reduce((s, d) => s + d.value, 0)).toBe(want);
+  });
+
+  it('面额 0 的型不掉:一颗给不了任何东西的残骸只会骗玩家专程绕一趟', () => {
+    onlyKind(KIND_SWARM);
+    tuning.stressEnemies = 4;
+    ENEMIES[KIND_SWARM]!.scrap = 0; // 数值表允许 0(表级不变量只要求非负整数);afterEach 还原
+    const w = new World(34);
+    w.step();
+    let hits = 0;
+    w.onEnemyDeath = () => hits++;
+    for (const e of [...w.enemies.items]) w.damageEnemy(e, 9999);
+
+    w.step();
+    expect(w.drops.size).toBe(0);
+    expect(w.scrap).toBe(0);
+    expect(hits).toBe(4); // 死照样算死:面额只掐掉残骸,回收与挂钩一概不受影响
+    expect(w.kills).toBe(4);
+  });
+
+  it('磁吸接线:下一帧才起吸 → 飞过来 → 进 scrap → 颗粒回池被下一颗复用', () => {
+    onlyKind(KIND_SWARM);
+    tuning.stressEnemies = 1;
+    tuning.enemySpeedScale = 0;
+    const w = new World(35);
+    w.step();
+    // 起吸半径(170)之内、收取半径(22)之外:接线对了它就该自己飞完这 78px
+    park(w.enemies.items[0]!, w.ship.x + 100, w.ship.y);
+    w.damageEnemy(w.enemies.items[0]!, 9999);
+
+    w.step();
+    const d = w.drops.items[0]!;
+    // 本帧的 stepDrops 排在回收之前 ⇒ 这颗新掉的当帧一步不动(先看见它掉在尸体上,再看见它飞过来)
+    expect(d.magnet).toBe(false);
+    expect(d.x).toBe(w.ship.x + 100);
+    expect(w.scrap).toBe(0);
+
+    w.step();
+    expect(d.magnet).toBe(true); // 下一帧才起吸
+
+    for (let f = 0; f < frames(0.5); f++) w.step(); // (100-22)/5px ≈ 16 帧,半秒绰绰有余
+    expect(w.drops.size).toBe(0);
+    expect(w.scrap).toBe(ENEMIES[KIND_SWARM]!.scrap);
+    expect(Number.isInteger(w.scrap)).toBe(true); // 面额是整数,收下时整颗进账,不乘任何系数
+    expect(w.drops.spawn()).toBe(d); // 同一个对象:收下的当场回池,没有 new 出新的
+  });
+
+  it('在场上限是保险丝:触顶后当帧掉的那一颗直接丢弃、**不留账**(与出怪上限同口径)', () => {
+    onlyKind(KIND_SWARM);
+    tuning.stressEnemies = 2;
+    const w = new World(36);
+    w.step();
+    // 手工把池灌满(靠真打死 1200 只怪去凑是几万帧的事);摆在起吸半径之外,免得被顺手收走
+    for (let i = 0; i < DROP_MAX_ALIVE; i++) {
+      const d = w.drops.spawn();
+      d.x = d.px = 5000 + i;
+      d.y = d.py = 5000;
+      d.value = 1;
+    }
+
+    let hits = 0;
+    w.onEnemyDeath = () => hits++;
+    w.damageEnemy(w.enemies.items[0]!, 9999);
+    w.step();
+    expect(w.drops.size).toBe(DROP_MAX_ALIVE); // 这一颗被丢掉了
+    expect(hits).toBe(1); // 死照样算死:上限只掐掉残骸,不改回收与挂钩
+    expect(w.kills).toBe(1);
+
+    // 腾出三个名额再死一只:它只掉自己那一颗(1197 → 1198),而不是补发刚才欠下的那一颗 ——
+    // 留账的话上限一松就会一口气吐出来,正是"卡了之后更卡"的那条死亡螺旋
+    for (let i = 0; i < 3; i++) w.drops.despawnAt(0);
+    expect(w.drops.size).toBe(DROP_MAX_ALIVE - 3);
+    w.damageEnemy(w.enemies.items[0]!, 9999);
+    w.step();
+    expect(w.drops.size).toBe(DROP_MAX_ALIVE - 2);
+  });
+
+  it('拾取半径改大 → 同一局收到的残骸变多(验收标准第四条的量化版)', () => {
+    // 真人拖面板看手感那一半 Node 里量不出来,不在这里假装验过;能量化的是这条因果:
+    // 同一个 seed、同一批死者、同一片摊在原地的残骸,只把那根旋钮拖大,收回来的就该更多
+    const near = harvest(400);
+    const far = harvest(900);
+
+    expect(near.total).toBe(far.total); // 同一局:掉出来的残骸逐颗同位,差别只有那一根旋钮
+    // 两头都不是"零"和"全部",否则这条就退化成常识
+    expect(near.reach).toBeGreaterThan(0);
+    expect(far.reach).toBeLessThan(far.total);
+    expect(far.got).toBeGreaterThan(near.got * 2);
+
+    // 闭式:船一步没挪、圈外的残骸一步不动 ⇒ 收到的**恰好**是起吸圈里的那些,
+    // 而不是"大概更多一点" —— 这条一旦只剩不等号,磁吸悄悄漏收半圈也照样绿
+    expect(near.got).toBe(near.reach);
+    expect(far.got).toBe(far.reach);
+  });
+
+  it('同 seed 两局:掉落、收取与 scrap 逐位一致(掉落没把确定性搅坏)', () => {
+    tuning.dropMagnetRadius = 900; // 拖大到"这一片残骸大半都收得回来",让收取也进这条比对
+    const a = scrapField(37, 20);
+    const b = scrapField(37, 20);
+    for (let f = 0; f < frames(5); f++) {
+      a.step();
+      b.step();
+    }
+
+    expect(a.scrap).toBeGreaterThan(0);
+    expect(a.drops.size).toBeGreaterThan(0); // 收干净的话下面这条 checksum 就白比了
+    expect(a.scrap).toBe(b.scrap);
+    expect(a.drops.size).toBe(b.drops.size);
+    expect(a.checksum()).toBe(b.checksum());
+  });
+
+  it('残骸位置与 scrap 进 checksum;面额是掉落那一刻定死的常量,不进', () => {
+    const a = scrapField(38, 6);
+    const b = scrapField(38, 6);
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 位置:漏了它,"磁吸把残骸吸歪了""该收的没收走"这类回归会从确定性口径下漏掉
+    const d = a.drops.items[0]!;
+    const x = d.x;
+    d.x += 3;
+    expect(a.checksum()).not.toBe(b.checksum());
+    d.x = x;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 收到的那笔账单独进哈希:收下的残骸当场出池,不哈它,池空之后就再也看不见多收/漏收
+    a.scrap += 1;
+    expect(a.checksum()).not.toBe(b.checksum());
+    b.scrap += 1;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 面额不进(与子弹的 damage 同口径):掉落那一刻按敌型定死,飞行途中不会变
+    const before = a.checksum();
+    d.value += 5;
+    expect(a.checksum()).toBe(before);
+  });
+
+  it('掉落一次 rng 都不掷:一边把怪全打死、一边一只不打,出怪序列与随机流仍逐位一致', () => {
+    // 于是"这一局打得好不好"反过来扰动不到出怪(08 验收标准第二条:同 seed 同出怪序列)。
+    // 必须走**正式出怪器**:压测那条路死一只补一只,而补人自己就要掷随机,这件事在那里测不出来
+    tuning.stressSpawn = false;
+    const bornA: number[] = [];
+    const bornB: number[] = [];
+    const a = new World(39);
+    const b = new World(39);
+    a.onEnemySpawn = (e) => bornA.push(e.kind, e.x, e.y);
+    b.onEnemySpawn = (e) => bornB.push(e.kind, e.x, e.y);
+
+    for (let f = 0; f < frames(10); f++) {
+      a.step();
+      b.step();
+      for (const e of a.enemies.items) a.damageEnemy(e, 9999); // a 这一局每帧清场 = 每帧都在掉残骸
+    }
+
+    expect(a.kills).toBeGreaterThan(0);
+    expect(b.kills).toBe(0);
+    // 每只必掉一颗,而且一颗都没被收走(出怪环在船外 1150px,起吸半径够不着)
+    expect(a.drops.size).toBe(a.kills);
+    expect(a.scrap).toBe(0);
+    expect(bornA.length).toBeGreaterThan(0);
+    expect(bornA).toEqual(bornB); // 出怪序列一字不差
+    expect(a.rng.next()).toBe(b.rng.next()); // 两条随机流仍站在同一格上
   });
 });
 
@@ -2399,6 +2639,48 @@ function hullWorld(seed: number): World {
   expect(w.enemies.size).toBe(1);
   w.ship.heading = w.ship.pheading = 0;
   return w;
+}
+
+/**
+ * 一片摊在船周围的残骸:场上 count 只蜂群蛭当场全打死,残骸就掉在它们各自倒下的地方。
+ * 敌速倍率归零把它们钉在出生环上(半径 300..1200,由 seed 定死),于是同一个 seed 的两局
+ * 掉出来的残骸逐颗同位 —— 拾取半径的对比才是"同一局只改一根旋钮",而不是两局不同的运气。
+ * 打完把在场数拖到 0:这几条用例考的是"这一片残骸能收回来多少",不是"又来了多少怪"。
+ */
+function scrapField(seed: number, count: number): World {
+  onlyKind(KIND_SWARM);
+  tuning.stressEnemies = count;
+  tuning.enemySpeedScale = 0;
+  const w = new World(seed);
+  w.step(); // 帧首出怪:此后场上恰好 count 只
+  expect(w.enemies.size).toBe(count);
+  for (const e of w.enemies.items) w.damageEnemy(e, 9999);
+  w.step(); // 帧尾回收 = 掉落(本帧的 stepDrops 排在回收之前,故它们当帧还没动过)
+  expect(w.drops.size).toBe(count);
+  tuning.stressEnemies = 0; // 这一局不再补人
+  return w;
+}
+
+/**
+ * 把上面那片残骸按给定起吸半径收一轮(5 秒 = 300 帧,够最远那颗 900px 的以 300px/s 飞完)。
+ * @returns got = 实际收到的总量;reach = 起吸圈里本来就有多少;total = 这一片一共有多少
+ */
+function harvest(radius: number): { got: number; reach: number; total: number } {
+  const w = scrapField(31, 40);
+  tuning.dropMagnetRadius = radius;
+
+  let reach = 0;
+  let total = 0;
+  for (const d of w.drops.items) {
+    total += d.value;
+    if (Math.hypot(d.x - w.ship.x, d.y - w.ship.y) <= radius) reach += d.value;
+  }
+
+  for (let f = 0; f < frames(5); f++) w.step();
+  // 船一步没挪(整局没有输入),这正是上面那个闭式的前提:圈外的残骸永远够不着
+  expect(w.ship.x).toBe(0);
+  expect(w.ship.y).toBe(0);
+  return { got: w.scrap, reach, total };
 }
 
 /** 把敌人钉在某处并清速度:构造判定用的确定构型,免得被上一帧的惯性带走 */

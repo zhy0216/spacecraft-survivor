@@ -36,6 +36,16 @@ export interface EnemyDef {
   name: string;
   hp: number;
   contactDamage: number;
+  /**
+   * 死了掉多少残骸(10 号 issue),**必须是 ≥ 0 的整数**:残骸是全程唯一成长资源(GDD §7),
+   * 而升级曲线按整点记账 —— 掉半颗残骸会让"离下一次升级还差几只怪"这条读数变成一句没法验的近似
+   * (表级不变量见 enemies.test.ts)。
+   * 每只**必掉、价值按型定死**:不掷随机、不按伤害归因,于是战斗打得好不好反过来扰动不到
+   * 出怪的随机序列(08 号"同 seed 同出怪序列"因此照旧成立)。
+   * 四型的数只是**占位待调**,平衡口径见 src/data/economy.ts —— 一局升几次由"总掉落量 × 升级曲线"
+   * 一起决定,单看这里任何一个数都没有意义。
+   */
+  scrap: number;
   /** 接近段基础速度 px/s;实际速度还要乘 tuning.enemySpeedScale */
   speed: number;
   /** 期望速度的追随系数 1/s(转向力寻路,GDD §13 无 A*);越大越"贴脸咬得死" */
@@ -67,6 +77,9 @@ export const ENEMIES: EnemyDef[] = [
     name: '蜂群蛭',
     hp: 8, // GDD §14 锁定
     contactDamage: 5, // GDD §14 锁定
+    // 占位待调,平衡口径见 data/economy.ts。1 = 最小面额:它是场上最多、最好打的口粮型,
+    // 一局的残骸大头本来就该由"打了很多只"而不是"每只值很多"堆出来
+    scrap: 1,
     speed: 80, // GDD §14 锁定
     accel: 6, // 占位待调(= 01 号压测里 SEEK_ACCEL 的推广,四型的基准手感)
     radius: 7, // 占位待调
@@ -86,6 +99,7 @@ export const ENEMIES: EnemyDef[] = [
     name: '侧掠者',
     hp: 20, // GDD §14 锁定
     contactDamage: 10, // GDD §14 锁定
+    scrap: 2, // 占位待调,平衡口径见 data/economy.ts(血厚一倍多、还要抓它切进来的那一下,给两颗)
     speed: 150, // 占位待调(接近段速度;GDD §14 锁的 220 是下面的冲刺速)
     accel: 8, // 占位待调
     radius: 9, // 占位待调
@@ -105,6 +119,9 @@ export const ENEMIES: EnemyDef[] = [
     name: '尾随蛆',
     hp: 14, // 占位待调
     contactDamage: 6, // 占位待调
+    // 占位待调,平衡口径见 data/economy.ts。与侧掠者同档:它血没那么厚,但赖在船尾死角上,
+    // 玩家得转舵把火力送过去才拿得到 —— 那份操作成本也该算进价钱里
+    scrap: 2,
     speed: 125, // 占位待调(必须快过船的巡航 130 的大半,否则永远绕不到尾)
     accel: 7, // 占位待调
     radius: 8, // 占位待调
@@ -124,6 +141,7 @@ export const ENEMIES: EnemyDef[] = [
     name: '冲撞甲虫',
     hp: 40, // 占位待调
     contactDamage: 18, // 占位待调
+    scrap: 4, // 占位待调,平衡口径见 data/economy.ts(全场最硬、最疼的一型,打掉它该有一次看得见的进账)
     speed: 70, // 占位待调(接近段慢,压力全在冲锋那一下)
     accel: 4, // 占位待调(转向迟钝,绕开它是有解的)
     radius: 14, // 占位待调,但它同时钉着 ENEMY_RADIUS_MAX = 14 → 空间哈希 cell 与今天一致

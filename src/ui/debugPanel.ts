@@ -52,6 +52,12 @@ export interface DebugStats {
   threatRate: number;
   /** 累计击杀。结算界面报的是同一个数(见 ui/gameOver.ts 的 RunSummary),这里能中途看它爬 */
   kills: number;
+  /** 已收集、未花掉的残骸(10 号 issue)。三选一卡片与这里读的是同一笔 World.scrap */
+  scrap: number;
+  /** 已结算升级次数(放置成功或跳过都算一次),也是下一次费用曲线的级数 */
+  upgrades: number;
+  /** 下一次升级所需残骸 = data/economy.upgradeCost(upgrades),World 的派生读数 */
+  upgradeCost: number;
 }
 
 export interface RunState {
@@ -61,7 +67,7 @@ export interface RunState {
 
 /**
  * 面板要触发的流程动作。**面板不认识 World、不动 loop**:重开那一整套
- * (新 World + 新 loop + renderer.setWorld + placement.setWorld + UI 复位)只在 main.ts 一处,
+ * (新 World + 新 loop + renderer.setWorld + upgradeFlow.setWorld + UI 复位)只在 main.ts 一处,
  * 这里与结算界面的「再来一局」按钮走的是同一个入口(理由见 ui/gameOver.ts 的 onRestart)。
  */
 export interface RunHooks {
@@ -181,6 +187,47 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
     min: 20,
     max: 500,
     step: 10,
+  });
+
+  // 残骸经济(10 号):三根**手感旋钮**与三条只读账摆在同一个抽屉里。
+  // 面额归 data/enemies、曲线/权重/返还归 data/economy,它们不是运行中随手拖的东西;
+  // 这里只放 sim/drop 每帧现读的三根,于是拖一下立刻就能看「残骸开始飞 / 追不追得上 / 何时到账」。
+  const economy = pane.addFolder({ title: '残骸经济(10)', expanded: true });
+  economy.addBinding(stats, 'scrap', {
+    label: '残骸',
+    readonly: true,
+    interval: 100,
+    format: (v: number) => String(Math.round(v)),
+  });
+  economy.addBinding(stats, 'upgrades', {
+    label: '升级次数',
+    readonly: true,
+    interval: 100,
+    format: (v: number) => String(Math.round(v)),
+  });
+  economy.addBinding(stats, 'upgradeCost', {
+    label: '下次所需',
+    readonly: true,
+    interval: 100,
+    format: (v: number) => String(Math.round(v)),
+  });
+  economy.addBinding(tuning, 'dropMagnetRadius', {
+    label: '起吸半径 px',
+    min: 20,
+    max: 600,
+    step: 5,
+  });
+  economy.addBinding(tuning, 'dropMagnetSpeed', {
+    label: '磁吸速度 px/s',
+    min: 20,
+    max: 800,
+    step: 10,
+  });
+  economy.addBinding(tuning, 'dropCollectRadius', {
+    label: '收取半径 px',
+    min: 0,
+    max: 100,
+    step: 1,
   });
 
   // 塔(05 号 issue):这里**只剩两根全局倍率**。04 号那三项全塔共用的占位

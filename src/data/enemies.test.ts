@@ -108,6 +108,19 @@ describe('敌人数值表', () => {
     }
   });
 
+  it('残骸掉落值是 ≥0 的整数,且不是全 0(10 号经济的记账前提)', () => {
+    // 整数:残骸是全程唯一成长资源,升级曲线按整点记账 —— 一旦掉出 0.5 颗,
+    // "离下一次升级还差几只怪"这条读数就变成没法验的近似,scrap 也不再恒是整数。
+    // 这条只钉口径不钉具体数值:四个数是占位,调平衡时随便改是被鼓励的(todos/05 的验收口径)
+    for (const def of ENEMIES) {
+      expect(Number.isInteger(def.scrap)).toBe(true);
+      expect(def.scrap).toBeGreaterThanOrEqual(0);
+    }
+    // 全 0 的表能通过上面每一条,却让整局一颗残骸都攒不出来 —— 升级流程从此永远不触发,
+    // 而症状是"玩了十分钟没弹过卡",不会有任何一处报错
+    expect(ENEMIES.some((def) => def.scrap > 0)).toBe(true);
+  });
+
   it('HP 时间缩放口径来自 GDD §14,单地图星区乘数固定 ×1', () => {
     expect(tuning.enemyHpScalePerMinute).toBe(0.09);
     expect(ZONE_HP_MULT).toBe(1);

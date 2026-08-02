@@ -34,6 +34,7 @@ import {
   CELL_WEAPON,
   cellAt,
   cellIndex,
+  cellIndexAtLocal,
   cellIndexAtWorld,
   cellLocalPos,
   cellWorldPos,
@@ -1020,7 +1021,29 @@ describe('格坐标:局部系与世界系', () => {
     }
   });
 
-  it('cellWorldPos 与 cellIndexAtWorld:12 格往返一致(拾取靠这条互逆)', () => {
+  it('cellLocalPos 与 cellIndexAtLocal:12 格往返一致,边界与洞都按同一套拾取口径', () => {
+    const deck = createDeck();
+    const p = v();
+    for (const c of deck.cells) {
+      cellLocalPos(deck, c.col, c.row, p);
+      expect(cellIndexAtLocal(deck, p.x, p.y)).toBe(cellIndex(deck, c.col, c.row));
+    }
+
+    const size = deckCellSize();
+    expect(cellIndexAtLocal(deck, 500, 0)).toBe(-1);
+    expect(cellIndexAtLocal(deck, 2 * size - 0.01, 0)).toBe(cellIndex(deck, 1, 0));
+    expect(cellIndexAtLocal(deck, 2 * size + 0.01, 0)).toBe(-1);
+    expect(cellIndexAtLocal(deck, 0, 1.5 * size + 0.01)).toBe(-1);
+
+    const donut = deckFrom([
+      '###',
+      '#.#',
+      '###',
+    ]);
+    expect(cellIndexAtLocal(donut, 0, 0)).toBe(-1);
+  });
+
+  it('cellWorldPos 与 cellIndexAtWorld:12 格往返一致(世界入口复用局部拾取)', () => {
     const deck = createDeck();
     const p = v();
     const poses: [number, number, number][] = [

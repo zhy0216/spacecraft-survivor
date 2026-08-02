@@ -3,13 +3,13 @@
  * 把 8:59.9 报成 9:00、胜利时航段印成 "5/4"、某个结果码漏配文案却静默显示成"航段全通",
  * 三种错都只是一行字符串拼接,却要等真人打完一整局(8–10 分钟)撞上那一刻才看得见。
  *
- * 文件末尾**破一次例**去测 createGameOverUi 本身(理由与 ui/placement.test.ts 的 setWorld 一致):
+ * 文件末尾**破一次例**去测 createGameOverUi 本身(理由与 ui/upgradeFlow.test.ts 的 setWorld 一致):
  * 它不是"交互",而是"一局从开始到胜利/失败/重开全流程无需刷新页面"(08 验收标准)里
  * 最容易做漏的一环 —— 只建一次 / 收着时 Enter 不认 / 点了就该消失,三条各错一次的后果
  * (一次回车重开好几局、战斗中误按回车把正打着的一局重开掉、点完按钮面板还挂在新局上)
  * 都要等真人重开第二局才看得出来。桩只提供 createGameOverUi 真的会碰的那几样
  * (createElement/getElementById/append + window.addEventListener + activeElement),
- * 绝不发展成半个 jsdom:本仓的 vitest 跑在 Node 环境里,不装 jsdom(见 ui/placement.test.ts)。
+ * 绝不发展成半个 jsdom:本仓的 vitest 跑在 Node 环境里,不装 jsdom(见 ui/upgradeFlow.test.ts)。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WAVE_SEGMENTS } from '../data/waves';

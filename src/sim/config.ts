@@ -78,6 +78,19 @@ export const tuning = {
   // 那是上下游关系,引回去就成环),故面板拖动即时生效。
   towerDamageScale: 1,
   towerFireRateScale: 1, // >1 = 全塔射得更快(除以它得到实际 fireInterval)
+
+  // —— 残骸经济(10 号 issue)——只有磁吸这三根旋钮在这里,理由是分工那一段:
+  // 掉落**价值**是一型一个数(敌人死了掉几颗),归 src/data/enemies.ts 的 scrap;
+  // 升级曲线 / 三选一权重 / 跳过返还是"这一局的经济口径",归 src/data/economy.ts。
+  // 留在这里的三项恰恰是面板上"拖一下就看得出体感"的那种全局量(与 shipTurnRate 同一类),
+  // 由 sim/drop.ts 的 stepDrops 每逻辑帧现读:改了当帧生效,不必重开一局。
+  dropMagnetRadius: 170, // 磁吸起吸半径 px;本轮唯一要能"拖一下看体感"的旋钮(验收标准第四条)
+  // 磁吸速度 px/s。**必须显著大于 shipCruiseSpeed(130)**:残骸锁定后匀速直追船心,
+  // 净逼近速度 = 本值 - 船速,拖到船速以下的话被吸住的残骸就永远吊在船屁股后面追不上
+  dropMagnetSpeed: 300,
+  // 收取半径 px;**必须远大于一帧位移**(300/60 = 5px),否则残骸会一帧跨过收取圈。
+  // (sim/drop.ts 另有一手"够得着船心就落在船心、不冲过头"兜底,但那是保险,不是让这个数可以乱填)
+  dropCollectRadius: 22,
 };
 
 export type Tuning = typeof tuning;

@@ -25,12 +25,23 @@
  * 世界不认识"游戏流程",那一层在 main.ts。于是有了结论之后 step() 照常可以被调用
  *(既有那条"船沉后世界照常往下跑"的用例仍然成立),停不停由调用方决定。
  * HP 上限与舷向减伤问 damage.ts 的两个挂钩(06 号装甲舱届时只填函数体);
- * onEnemyDeath 交给 10(残骸掉落),onEnemySpawn 是它的对称件(渲染/统计想知道"谁来了")。
+ * onEnemySpawn / onEnemyDeath 是一对对称的挂钩(渲染/统计想知道"谁来了、谁没了")。
+ *
+ * 残骸掉落(10 号 T1)落在帧尾的 reap 里:每只死者当场掉一颗,面额按型取自数值表。
+ * 磁吸与收取的**全部规则**在 sim/drop.ts(它连世界都不认识,喂一个池 + 一块甲板 + 船心坐标就能单测),
+ * 本文件照旧只做接线 —— 敌人死了往池里放一颗(spawnDrop)、把 stepDrops 结算出来的那笔账记进 scrap。
+ * 三选一经济(T2)同样只在这里接线:sim/upgrade.ts 负责生成合法候选,本文件负责扣残骸、记升级次数、
+ * 帧尾在够钱时弹出一次 offer。暂停/卡片/放大甲板仍一概不在 World,那层在 main.ts。
  */
 import { SIM_DT } from '../core/loop';
 import { Pool } from '../core/pool';
 import { Rng } from '../core/rng';
 import { SpatialHash } from '../core/spatialHash';
+import {
+  DROP_MAX_ALIVE,
+  upgradeCost as economyUpgradeCost,
+  UPGRADE_SKIP_REFUND,
+} from '../data/economy';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY } from '../data/supports';
 import {
@@ -53,6 +64,7 @@ import {
   hullMaxHp,
 } from './damage';
 import { createDeck, type Deck, EDGE_COUNT, isEdgeExposed, isPlaceSuccess, placeAt } from './deck';
+import { createDrop, type Drop, resetDrop, stepDrops } from './drop';
 import {
   applyDamage,
   createEnemy,
@@ -78,6 +90,14 @@ import {
 import { createShip, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
 import { syncSupportBuffs } from './support';
 import { stepTurrets } from './turret';
+import {
+  optionContent,
+  optionSupportType,
+  optionTowerType,
+  rollUpgradeOffer,
+  type UpgradeOption,
+  UPGRADE_NO_OFFER,
+} from './upgrade';
 import { createWaveState, type SpawnSink, stepWaves, type WaveState } from './waves';
 
 /** 渲染层与既有调用方都从 world 取 Enemy 类型,实体定义搬去 enemy.ts 后这条保持它们不破 */
@@ -146,6 +166,14 @@ export class World {
   readonly rng: Rng;
   readonly enemies: Pool<Enemy>;
   readonly bullets: Pool<Bullet>;
+
+  /**
+   * 场上的残骸掉落物(10 号 issue T1)。敌人死在哪就掉在哪(reap 里的 spawnDrop),
+   * 此后由 sim/drop.ts 的 stepDrops 每帧推进磁吸与收取 —— 起吸/锁定/收取的规则一个字都不在本文件,
+   * 世界这一层只知道"谁死了、船在哪"(与子弹的 stepBullets、敌人的 stepEnemyBehavior 同一条分工)。
+   * 生命周期也与那两样同款:池里的普通对象、维护 px/py 供渲染插值、收下的当场倒序 swap-remove 回收。
+   */
+  readonly drops: Pool<Drop>;
   /** cell = 最大敌半径 ×2(GDD §13):查询半径不超过一个 cell 时,3×3 邻域必然覆盖 */
   readonly grid = new SpatialHash<Enemy>(tuning.enemyRadiusMax * 2);
   tick = 0;
@@ -227,8 +255,11 @@ export class World {
   onGameOver: ((result: number) => void) | null = null;
 
   /**
-   * 死亡挂钩(掉落物本体由 10 号 issue 实现)。回调返回后对象立刻回池,
+   * 死亡挂钩(表现与统计的出口)。回调返回后对象立刻回池,
    * 所以回调里必须当场取走 x/y/kind,不能存引用等下一帧再读。
+   *
+   * **残骸掉落不走它**:那是世界自己的账,已经在 reap 里由 spawnDrop 当场落地(排在本回调之前) ——
+   * 挂钩接不接、接的人做了什么,都不该决定这一局能不能捡到残骸。
    */
   onEnemyDeath: ((e: Enemy) => void) | null = null;
 
@@ -244,6 +275,36 @@ export class World {
 
   /** 累计击杀。面板改数量导致的清场不计入 —— 那不是打死的 */
   kills = 0;
+
+  /**
+   * 已收集、未花掉的残骸(GDD §7:全程唯一成长资源),**恒整数** ——
+   * 面额是数值表里的整数 scrap,收下时整颗进账,全程没有任何地方给它乘系数或按比例结算。
+   * 收取在 T1 接线,花费/跳过返还由本轮 T2 的 completeUpgrade 统一结算。
+   *
+   * 它是逐帧演化出来的状态、**不是派生量**:收下的那颗当场出池,池里再也找不到它 ——
+   * 于是漏了它,"磁吸多收/漏收了一颗"这类回归在池空之后就彻底看不见了,故进 checksum。
+   */
+  scrap = 0;
+
+  /**
+   * 已经**结算完**的升级次数,同时也是下一次费用曲线的级数。
+   * 它不是甲板等级之和:跳过照样算结算一次、同一张卡也可能新建 Lv1 或叠到 Lv4;
+   * 经济曲线只关心这局已经消费过几次机会。逐帧演化、进 checksum。
+   */
+  upgrades = 0;
+
+  /**
+   * 当前待选的候选卡。长度 0 = 没有待选;>0 = World 等玩家结算,自己绝不暂停。
+   * 数组整局复用,rollUpgradeOffer 就地改三个对象;候选消耗了 rng 且决定玩家能放什么,
+   * 不是甲板的派生量,故逐项进 checksum。
+   */
+  readonly offer: UpgradeOption[] = [];
+
+  /**
+   * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
+   * 回调也不会重复响。停 loop / 放大 / 弹卡全在 main.ts,World 不认识流程层。
+   */
+  onUpgradeOffer: (() => void) | null = null;
 
   /**
    * 开火/命中的可视化事件(05 号 issue):渲染层遍历 world.fx.items 逐个画,按 life 淡出。
@@ -336,6 +397,7 @@ export class World {
     this.rng = new Rng(seed);
     this.enemies = new Pool<Enemy>(createEnemy, resetEnemy);
     this.bullets = new Pool<Bullet>(createBullet, resetBullet);
+    this.drops = new Pool<Drop>(createDrop, resetDrop);
     // HP 上限问 damage.hullMaxHp 而不是直接读 tuning:06 号的装甲舱("船体 HP +15")会把它变成
     // **甲板的派生量**,调用点今天就接好,届时 06 只需要把那个函数体填掉,World 一个字不用动。
     // 满血进场(hp = maxHp):createShip 里那份初值只是"船不进池"的兜底,真相以这一句为准
@@ -345,6 +407,11 @@ export class World {
   /** 开局至今的秒数。HP 时间缩放(GDD §14)的唯一时间源:挂在 tick 上才与 checksum 同口径 */
   get elapsed(): number {
     return this.tick * SIM_DT;
+  }
+
+  /** 下一次升级所需残骸。只从 upgrades 派生,不单独进 checksum。 */
+  get upgradeCost(): number {
+    return economyUpgradeCost(this.upgrades);
   }
 
   /**
@@ -373,7 +440,8 @@ export class World {
    * 顺序定死(单测按此钉):**甲板派生量(邻接 buff + HP 上限)** → 船 → 贴边夹取 → 出怪 →
    * 重建空间哈希 → 清 contacts / 清 broadside / edgePenalty 逐帧减 dt →
    * 敌人(积分 + hitCd 递减 + 粗筛入 contacts)→
-   * 炮管(含节流与开火)→ 子弹 → 船体受击结算 → 可视化事件老化 → 回收死者 → 局终判定。
+   * 炮管(含节流与开火)→ 子弹 → 残骸(磁吸与收取)→ 船体受击结算 →
+   * 可视化事件老化 → 回收死者(含掉落)→ 局终判定 → 升级候选结算。
    * 甲板派生量排在**最前**(见下面那两句):这一帧的塔按最新的邻接加成开火、这一帧的撞击按最新的
    * 上限结算 —— 12 号拆掉一格甲板(setOccupied 清 supportType)后,加成与上限当帧就回落,
    * 而不是靠下一次放置才想起来重刷(06 号验收第三条"拆除即时移除"的落点就在这两句)。
@@ -382,12 +450,17 @@ export class World {
    * 反过来的话每座塔都恒定落后一帧,贴脸高速目标会永远被瞄在身后(04 号 issue);
    * 子弹排在炮管之后,于是本帧新出膛的弹当帧就走一步、px/py 停在炮口
    *(与"出怪排在建哈希之前、新生敌人当帧就动"同一条口径);
+   * 残骸排在子弹之后、受击结算之前 —— 它是世界里会动的东西,该在这一帧的伤害账结清之前把自己走完;
+   * 而它与子弹刻意**不**同口径:本帧新掉的那颗还没进池(掉落发生在帧尾的 reap),
+   * 于是它当帧一步不动、px/py 停在敌人倒下的地方,下一帧才起吸 ——
+   * 那正是玩家该读到的因果:先看见残骸掉在尸体上,再看见它飞过来;
    * 受击结算排在**子弹之后**,于是"本帧刚被塔打死的敌人"那一句过滤真的有意义(尸体不许再咬一口),
    * 又排在**回收之前**,因为尸体整帧都还在池里 —— contacts 里存的是池中对象,
    * 回收先走的话名单里会留着已经出池、且可能已被复用成另一只敌人的引用;
    * 回收排在最后,于是"本帧被打死的敌人"在整帧里始终可见(渲染/结算读到的是同一批人);
    * 局终判定排在**回收之后**,于是它读到的是这一帧走完的账 —— 最后一发打死的那只算进 kills,
-   * 结算界面上的击杀数才不会比玩家亲眼看到的少一只。
+   * 结算界面上的击杀数才不会比玩家亲眼看到的少一只;
+   * 升级候选排在局终之后且只在 RESULT_RUNNING 时生成:同一帧若已经胜负落定,绝不再在结算界面下面弹卡。
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
@@ -537,6 +610,13 @@ export class World {
     // 子弹:积分 → 命中 → 迫击炮到期在落点炸 AoE(规则全在 sim/bullet.ts,本文件只给它一个 sink)
     stepBullets(this.bullets, SIM_DT, this.sink);
 
+    // 残骸:起吸 → 匀速直追 → 收取,收到多少当帧进账(规则全在 sim/drop.ts,这里只给它池、甲板与船心)。
+    // 船心传的是本帧**积分之后**的位置:残骸追的是船现在在哪 ——
+    // 晚一帧的话,高速航行时整串残骸会恒定拖在船身后(与出怪环以船本帧位置为心同一条理由)。
+    // 甲板也传进去:起吸半径是**甲板的派生量**(drop.magnetRadius),
+    // GDD §5.3 的磁力收集器届时只填那个函数体,本行一个字都不用改
+    this.scrap += stepDrops(this.drops, this.deck, ship.x, ship.y, SIM_DT);
+
     // 船体受击结算:粗筛名单 → 三层判定 → 扣血/出火花(顺序理由见块注释与 settleHullDamage)
     this.settleHullDamage();
 
@@ -554,6 +634,10 @@ export class World {
     // 局终判定收尾:这一帧的三样判据(shipDead 在受击结算里置、wave.done 在帧首的出怪那一步置、
     // kills 在 reap 里才加完)到这里才全部就位。判完世界也不停 —— 停不停是 main.ts 的事
     this.settleOutcome();
+
+    // 经济是帧尾最后一步:本帧刚收到的残骸已经进账、胜负也已经定完。
+    // 只有仍在跑的局才会生成候选;World 只响回调,暂停与弹卡归 main.ts。
+    this.settleUpgrade();
   }
 
   /**
@@ -580,19 +664,75 @@ export class World {
   }
 
   /**
+   * 帧尾检查是否该生成一次三选一。候选存在时一律不重掷:玩家停在卡片前多久都看到同一组三张,
+   * rng 也不会因为 UI 停留时间不同而继续往前走。
+   *
+   * 甲板彻底没得放时 rollUpgradeOffer 返回 0:当场按「跳过」结算并且**不响回调** ——
+   * 弹一张空面板会把玩家永久卡在时停里;什么都不做则下一帧又满足够钱条件,形成每帧重掷死循环。
+   */
+  private settleUpgrade(): void {
+    if (this.result !== RESULT_RUNNING || this.offer.length > 0 || this.scrap < this.upgradeCost) return;
+    if (rollUpgradeOffer(this.deck, this.rng, this.offer) === 0) {
+      this.completeUpgrade(UPGRADE_SKIP_REFUND);
+      return;
+    }
+    this.onUpgradeOffer?.();
+  }
+
+  /**
+   * 结算一轮经济账。refund 是返还额的上限,实际到账夹在本轮 cost 内:
+   * 第 0 级费用若低于返还额,跳过最多只是免单,绝不能净赚残骸并立刻再弹一张。
+   */
+  private completeUpgrade(refund: number): void {
+    const cost = this.upgradeCost;
+    this.scrap -= cost;
+    this.scrap += Math.min(Math.max(0, refund), cost);
+    this.upgrades++;
+    this.offer.length = 0;
+  }
+
+  /**
    * 统一回收本帧的死者。**必须倒序**:pool 的 despawnAt 是 swap-remove,
    * 正序遍历时被顶上来的那只会跳过当前下标而漏检(pool.ts 注释已给口径);
    * 倒序则被顶上来的对象一定落在已经走过的区间,不会漏也不会重。
-   * 掉落交给挂钩:回调返回后对象立刻回池,10 号 issue 必须在回调里当场取走坐标。
+   * 残骸与挂钩都在**对象回池之前**当场读完 x/y/kind:回池后同一个对象会被复用成另一只敌人。
    */
   private reap(): void {
     for (let i = this.enemies.size - 1; i >= 0; i--) {
       const e = this.enemies.items[i]!;
       if (!e.dead) continue;
       this.kills++;
+      // 掉落排在公开挂钩**之前**:先把世界自己的账落地(残骸是这一局的成长资源,不是一段表现),
+      // 再把这具尸体递给外面 —— 于是挂钩接不接、接的人在回调里做了什么,都影响不到掉落。
+      // onEnemyDeath 的既有语义一个字没变:仍是回池前、每只恰好一次(见它的字段注释)
+      this.spawnDrop(e);
       this.onEnemyDeath?.(e);
       this.enemies.despawnAt(i);
     }
+  }
+
+  /**
+   * 一只死者掉一颗残骸 —— **掉落的唯一落点**(与 spawnFromWave 同一条分工:
+   * 规则在别处,这里只补世界这一层才知道的三件事:掉在哪、值多少、在场上限)。
+   * 只在 reap 里、对象回池之前调用:坐标必须当场读走。
+   *
+   * **一次 rng 都不掷**:每只必掉、面额按型定死(data/enemies 的整数 scrap)——
+   * 于是战斗打得好不好(死了几只、什么时候死)反过来扰动不到出怪的随机序列,
+   * 08 号那条"同 seed 同出怪序列"照旧成立。
+   * 速度不填:池里取出来的那颗刚走过 resetDrop,vx/vy = 0 就是"停在尸体上等人来捡"。
+   *
+   * 面额 ≤ 0 的型**不掉**(数值表允许 0,见 enemies.test.ts 的表级不变量):
+   * 一颗看得见却给不了任何东西的残骸只会骗玩家专程绕一趟,还白占着下面那道保险丝的名额。
+   * 触到在场上限就**丢弃这一颗、不留账**(与 spawnFromWave 那句一字同源):
+   * DROP_MAX_ALIVE 是保险丝不是旋钮,理由全文见 data/economy.ts。
+   */
+  private spawnDrop(e: Enemy): void {
+    const value = ENEMIES[e.kind]!.scrap;
+    if (value <= 0 || this.drops.size >= DROP_MAX_ALIVE) return;
+    const d = this.drops.spawn();
+    d.x = d.px = e.x;
+    d.y = d.py = e.y;
+    d.value = value;
   }
 
   /**
@@ -693,6 +833,35 @@ export class World {
   }
 
   /**
+   * 结算一张候选到指定格。候选 → 内容码/型号的翻译只走 sim/upgrade 那三个函数,
+   * 真正放置仍走 this.place 这唯一入口;只有 PLACE_OK / PLACE_UPGRADE 才扣费并清空候选。
+   * 被拒时残骸、升级次数与 offer 一个字段都不动,玩家可以换格或退回重选。
+   */
+  takeUpgrade(choice: number, col: number, row: number): number {
+    const opt = this.offer[choice];
+    if (!opt) return UPGRADE_NO_OFFER;
+    const code = this.place(
+      col,
+      row,
+      optionContent(opt),
+      optionTowerType(opt),
+      optionSupportType(opt),
+    );
+    if (isPlaceSuccess(code)) this.completeUpgrade(0);
+    return code;
+  }
+
+  /**
+   * 跳过当前候选。照样消费这一次升级并 upgrades++,只返还 data/economy 的占位额;
+   * 没有待选时返回 false 且不动账,避免 UI 的过期按钮凭空消费一次曲线。
+   */
+  skipUpgrade(): boolean {
+    if (this.offer.length === 0) return false;
+    this.completeUpgrade(UPGRADE_SKIP_REFUND);
+    return true;
+  }
+
+  /**
    * 全仓唯一的放置入口(与 damageEnemy 同口径:规则在 sim/deck,World 只转发)。
    * @param towerType content = CELL_WEAPON 时的塔型;缺省 = 自动机炮(GDD §5.2 的万金油),
    *   于是既有的三参调用方语义原样成立。往已有**同种**塔的格上再放一座 = 同名叠级
@@ -702,9 +871,8 @@ export class World {
    *   0 在两边分别是自动机炮与弹药库,理由全文见 sim/deck 的 canPlace。
    * @returns PLACE_* 理由码;被拒时世界一个字段都没动,ui 层照码说人话(成功判定用 isPlaceSuccess)
    *
-   * 它在 step() 之外改世界状态,与"面板改实体数量"同一个口径:一旦调用,
-   * 之后的 checksum 不再与"同 seed 从头跑"可比(放置本身是确定性的,但它不在输入序列里)。
-   * 10 号 issue 的"三选一 → 时停 → 放置"会把它收进正式流程,届时放置事件进输入序列,这条限制自动消失。
+   * 灰盒/测试直接调用它仍属于 step() 之外的外部修改,之后的 checksum 不再与"同 seed 从头跑"可比;
+   * 正式流程只从 takeUpgrade 进来,选择与格子就是那一帧的玩家输入,可被回放层记录。
    */
   place(
     col: number,
@@ -906,6 +1074,27 @@ export class World {
     for (const b of this.bullets.items) {
       acc(b.x);
       acc(b.y);
+    }
+    // 残骸紧跟着子弹,而且同样**只哈位置**,理由也是同一条:value 是掉落那一刻按敌型定死的常量
+    //(与子弹的 damage 一样,飞行途中绝不会变);magnet 是只从 false 变 true 的单向锁,
+    // 它一旦不同,下一帧的位置立刻就分开了(锁住的每帧朝船走一步,没锁的停在原地)——
+    // 位置这一项已经抓得住,多哈几个不会变的数只是把同一件事哈好几遍。
+    for (const d of this.drops.items) {
+      acc(d.x);
+      acc(d.y);
+    }
+    // 收下的残骸当场出池,故池里再也找不到它 —— 这一笔账必须单独进哈希,
+    // 否则"磁吸多收了一颗/漏收了一颗"这类回归在场上残骸清空之后就彻底看不见了。
+    // 整数,**不放大**:acc 内部量化到 1/8,整数原样进去分毫不差(与坐标那批放大是两回事)
+    acc(this.scrap);
+    // 升级次数与候选紧跟残骸经济账。upgradeCost 不进:它是 upgrades 的纯函数(data/economy.upgradeCost)。
+    // offer 则必须进:它消耗了 rng、决定玩家能放什么,不是甲板或残骸的派生量;
+    // 漏了它,"同 seed 弹出不同三张卡"要等玩家选完、甲板分叉后才看得见。
+    acc(this.upgrades);
+    for (const opt of this.offer) {
+      acc(opt.kind);
+      acc(opt.type);
+      acc(opt.level);
     }
     // FxEvent 一律**不进** checksum:它纯是表现(少画一条闪电不改变世界的下一帧),
     // 混进来只会让"渲染改一下淡出时长"看起来像一次确定性回归。broadside 同理是本帧的表现读数。

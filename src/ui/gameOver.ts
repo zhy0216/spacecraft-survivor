@@ -17,7 +17,7 @@
  */
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
 
-/** 冷色域:我方废铁本色,与 ui/placement.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
+/** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
 const OK_COLOR = '#9adcff';
 /** 暖红只用于失败标题这几个字(GDD §12:敌方色域不铺成面) */
 const LOSE_COLOR = '#ff7a6b';
@@ -52,7 +52,7 @@ const SHOT_CSS = 'display:none;max-width:60%;height:auto;margin:0 auto 14px;';
 
 /**
  * 读数区。white-space:pre + 等宽字体 + 左对齐(卡片本身居中):三行的标签都是 4 个汉字,
- * 于是数值天然对成一列,不必为三行读数摆一套 grid。写法与 ui/placement.ts 的提示条同源。
+ * 于是数值天然对成一列,不必为三行读数摆一套 grid。写法与 ui/upgradeFlow.ts 的提示条同源。
  */
 const STATS_CSS = `white-space:pre;text-align:left;display:inline-block;color:${VALUE_COLOR};margin-bottom:16px;`;
 
@@ -108,7 +108,7 @@ export function segmentLabel(segment: number, count: number): string {
 }
 
 /**
- * 结果标题。**未知码不许静默兜底成胜利**(与 ui/placement.ts 的 denyMessage 同一条口径):
+ * 结果标题。**未知码不许静默兜底成胜利**(与 ui/upgradeFlow.ts 的 denyMessage 同一条口径):
  * RESULT_RUNNING 或将来新加的结果码漏配文案时,得当场把码印出来 ——
  * 悄悄显示"航段全通"的话,一条判定写反了都没人看得见。
  */
@@ -151,7 +151,7 @@ export function summaryText(s: RunSummary): string {
 
 /**
  * 焦点在调参面板的输入框里:此时 Enter 是在提交一个数值,不该被当成"再来一局"抢走。
- * 判据与 ui/placement.ts 里那份一字不差 —— tweakpane 挂在 body 上、位置比 #ui 还靠后,
+ * 判据与 ui/upgradeFlow.ts 里那份一字不差 —— tweakpane 挂在 body 上、位置比 #ui 还靠后,
  * 结算弹出时它照样点得到,所以这道拦网这里也得有(为两行 DOM 判断单开一个共享模块不值得,
  * 但两处必须同口径:哪天放置那边改了判据,这里也得跟)。
  */
@@ -164,10 +164,10 @@ function isTyping(): boolean {
 /**
  * 接线结算界面。整局(乃至整个页面生命周期)**只建一次**:DOM 与 window 监听器都在这里挂,
  * 重开走的是 show/hide,而不是重建一份 —— 每重开一局多一份监听器 = 一次 Enter 重开好几局,
- * 多一块遮罩 = 战斗中屏幕上永远糊着一层看不见的点击拦截层(与 ui/placement.ts 的 setWorld 同一条教训)。
+ * 多一块遮罩 = 战斗中屏幕上永远糊着一层看不见的点击拦截层(与 ui/upgradeFlow.ts 的 setWorld 同一条教训)。
  *
  * @param opts.onRestart 「再来一局」的去处。**结算界面不认识 World、不动 loop、不复位任何状态**:
- *   那一整套(新 World + 新 loop + renderer.setWorld + placement.setWorld + UI 复位)在 main.ts 一处,
+ *   那一整套(新 World + 新 loop + renderer.setWorld + upgradeFlow.setWorld + UI 复位)在 main.ts 一处,
  *   这里只负责把"玩家想再来一局"这件事说出来。
  */
 export function createGameOverUi(opts: { onRestart: () => void }): GameOverUi {
