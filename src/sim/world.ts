@@ -19,6 +19,7 @@ import { Rng } from '../core/rng';
 import { SpatialHash } from '../core/spatialHash';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { tuning } from './config';
+import { createDeck, type Deck, placeAt } from './deck';
 import {
   applyDamage,
   createEnemy,
@@ -66,6 +67,12 @@ export class World {
   tick = 0;
   /** 全局只有一艘船,故不进对象池;它同样维护 px/py 与 pheading 供渲染插值(铁律 2) */
   readonly ship: Ship = createShip();
+
+  /**
+   * 甲板(03 号 issue):起始 = T0 拾荒艇的 3×4 全空格。整局同一个对象,
+   * 放塔与 12 号扩建都是就地改字段 —— 渲染层持有它的引用,靠 revision 做脏标记。
+   */
+  readonly deck: Deck = createDeck();
 
   /**
    * 本帧贴到船身的敌人。**只检测不结算**:伤害/无敌帧/四舷判定是 09 号 issue 的活,
@@ -235,6 +242,18 @@ export class World {
     return applyDamage(e, amount);
   }
 
+  /**
+   * 全仓唯一的放置入口(与 damageEnemy 同口径:规则在 sim/deck,World 只转发)。
+   * @returns PLACE_* 理由码;被拒时世界一个字段都没动,ui 层照码说人话
+   *
+   * 它在 step() 之外改世界状态,与"面板改实体数量"同一个口径:一旦调用,
+   * 之后的 checksum 不再与"同 seed 从头跑"可比(放置本身是确定性的,但它不在输入序列里)。
+   * 10 号 issue 的"三选一 → 时停 → 放置"会把它收进正式流程,届时放置事件进输入序列,这条限制自动消失。
+   */
+  place(col: number, row: number, content: number): number {
+    return placeAt(this.deck, col, row, content);
+  }
+
   /** 让面板改数量即时生效:不足则补,超出则回收(清场不算击杀,故不走 reap 的挂钩) */
   private syncCounts(): void {
     while (this.enemies.size < tuning.stressEnemies) this.spawnEnemy();
@@ -305,6 +324,13 @@ export class World {
     acc(this.ship.x);
     acc(this.ship.y);
     acc((this.ship.heading * 180) / Math.PI);
+    // 甲板紧跟着船:build 也是世界状态,少了它,"塔放错格"或"扩建没同步"这类回归会从确定性口径下漏掉。
+    // 顺序 = deck.cells 的下标顺序(row-major,见 sim/deck),与渲染遍历同一条,永不改;
+    // exposed/online 是 occupied 的派生量,进哈希只是把同一件事哈两遍,故只累加 occupied 与 content
+    for (const c of this.deck.cells) {
+      acc(c.occupied ? 1 : 0);
+      acc(c.content);
+    }
     for (const e of this.enemies.items) {
       acc(e.x);
       acc(e.y);

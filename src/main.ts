@@ -10,6 +10,7 @@ import { Renderer } from './render/renderer';
 import type { ShipCommand } from './sim/ship';
 import { World } from './sim/world';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
+import { createPlacementUi } from './ui/placement';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
 
@@ -31,13 +32,26 @@ async function boot(): Promise<void> {
   const run: RunState = { paused: false, timeScale: 1 };
   createDebugPanel(stats, run);
 
+  // 放置交互(03 号 issue 的灰盒入口:B 开关 / 1、2 选类型 / Esc 退出 / 左键放置)。
+  // 屏幕像素换世界坐标只走渲染层这一份镜头公式 —— ui 层不复制第二份,也就不 import pixi(铁律 1)。
+  // 状态对象交给渲染层画高亮;两边共享同一个对象,ui 就地改字段,渲染层下一帧自然读到。
+  // 注意:10 号 issue 的"三选一 → 时停 → 甲板放大 → 拖放"会把这三行连同 ui/placement.ts 一起换掉。
+  const placement = createPlacementUi({
+    world,
+    canvas: renderer.app.canvas,
+    screenToWorld: (sx, sy, out) => renderer.screenToWorld(sx, sy, out),
+  });
+  renderer.setPlacement(placement);
+
   // 开发用全局句柄:浏览器控制台里可直接 __game.run.paused = true / __game.world.checksum()
   // / __game.input.desiredHeading() 确认键位真的被读到
-  (window as unknown as { __game?: object }).__game = { world, loop, run, stats, input };
+  (window as unknown as { __game?: object }).__game = { world, loop, run, stats, input, placement };
 
   let lastChecksumTick = -SIM_HZ;
   renderer.app.ticker.add((ticker) => {
     if (!run.paused) loop.advance(ticker.elapsedMS * run.timeScale);
+    // 船动了、光标没动,悬停格也得跟着重算 —— 否则高亮框会跟着甲板飘走(见 placement.syncHover)
+    placement.syncHover();
     renderer.sync(loop.alpha);
 
     stats.fps = Math.round(renderer.app.ticker.FPS);

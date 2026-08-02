@@ -5,6 +5,13 @@
  * 镜头跟船(GDD §3.3):固定缩放 + 航向前方 look-ahead,取样一律用插值后的位姿。
  * 敌我色域分离(GDD §12 / 07 号 issue):敌人一律红紫暖色剪影、我方船与弹一律冷色,
  * 四型之间再靠形状 + 体型区分 —— 色相与轮廓两条通道各自独立,色盲玩家丢了色相仍认得出型。
+ *
+ * 甲板(03 号 issue):船体不再是一个箭头,而是 deckG 容器里的一张格子网。
+ * 几何**全部画在船体局部空间**(格心一律问 sim 的 cellLocalPos,渲染层绝不自己再算一遍),
+ * 容器每帧只吃插值后的 position/rotation —— 于是"甲板与船体一同旋转"是结构上必然成立的,
+ * 而不是靠两处变换算得一样。逐格用 cellWorldPos 摆 12 个 Graphics 也能画出同一幅画面,
+ * 但那等于每帧重做一遍船体变换,格与格之间还会各自吃到浮点误差而抖动。
+ * 注意:11 号 issue 会要求战斗中甲板走简化渲染(远景只留轮廓),本轮**不做两套**,先把一套画对。
  */
 import {
   Application,
@@ -17,8 +24,22 @@ import {
 } from 'pixi.js';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
 import { tuning } from '../sim/config';
+import {
+  canPlace,
+  CELL_SUPPORT,
+  CELL_WEAPON,
+  cellLocalPos,
+  type Deck,
+  deckCellSize,
+  EDGE_BOW,
+  EDGE_PORT,
+  EDGE_STARBOARD,
+  EDGE_STERN,
+  isEdgeExposed,
+  PLACE_OK,
+} from '../sim/deck';
 import { ST_WINDUP } from '../sim/enemy';
-import { lerpAngle } from '../sim/ship';
+import { lerpAngle, type Vec2 } from '../sim/ship';
 import type { Bullet, Enemy, World } from '../sim/world';
 import { WORLD_RADIUS } from '../sim/world';
 
@@ -35,6 +56,41 @@ const BULLET_TINT = 0x9adcff;
 // 船体走冷色废铁(GDD §12)
 const SHIP_FILL = 0x2b4a6e;
 const SHIP_EDGE = 0x7fc4ff;
+
+// —— 甲板配色:我方一律冷色域(GDD §12),三种格状态靠明度 + 蓝↔青的色相分开 ——
+// 空格沿用船体本色:空格就是"还没装东西的船体",不该比装了东西的格更抢眼。
+const DECK_EMPTY_FILL = SHIP_FILL;
+const DECK_WEAPON_FILL = 0x3d78b8; // 武器塔:更亮的冷蓝
+const DECK_SUPPORT_FILL = 0x2c7f76; // 支援设施:冷青,与武器塔同为冷色但色相分得开
+const DECK_GRID_COLOR = 0x4d7ea8; // 格线:压在填充与轮廓之间的中间调,只交代"这里是分格的"
+const DECK_GRID_WIDTH = 1.5;
+/** 离线格(见 sim/deck 的 online 口径:武器塔失去全部暴露边)一律去色 + 压暗,一眼看出它是死的 */
+const DECK_OFFLINE_FILL = 0x3a4048;
+const DECK_OFFLINE_ALPHA = 0.35;
+/** 格与格之间留缝:不留缝时相邻格的描边会叠成一条粗线,3×4 看上去就成了一整块 */
+const DECK_CELL_GAP = 2;
+const DECK_HULL_WIDTH = 2.5;
+/** 船头亮边 + 艏尖:快速转向时头尾必须一眼分得清(T3 验收口径),故给最亮的一档冷白 */
+const DECK_BOW_COLOR = 0xdff2ff;
+const DECK_BOW_WIDTH = 4;
+/**
+ * 艏尖三角的长与半宽(× 格边长)。它是**纯装饰**,故意伸出甲板前沿一点点 ——
+ * 甲板本身已经占满 tuning 声明的包围盒(deckCellSize 取两轴较小值),想让尖头露在外面只能超出去。
+ * 超出的是观感不是口径:镜头缩放仍以 tuning.shipLength 为准,判定更是一格也不多(碰撞在 sim)。
+ */
+const DECK_PROW_LEN = 0.5;
+const DECK_PROW_HALF_W = 0.42;
+// 放置高亮:合法格用弹道同色的冷青蓝,与船体自身的蓝拉开一档明度。
+// 拒绝色是暖色,故**只许小面积短促闪一下**(细描边 + 低 alpha):大面积暖色块会污染
+// "暖色 = 敌人"这条全局约定(GDD §12),真正的拒绝理由由 DOM 文案给。
+const DECK_HILITE_OK = 0x9adcff;
+const DECK_HILITE_DENY = 0xff7a6b;
+/** 高亮矩形相对格边的内缩:留出底板格线,免得高亮把格子边界糊掉 */
+const DECK_HILITE_PAD = 4;
+const DECK_HILITE_FILL_ALPHA = 0.16; // 薄薄一层:合法格要看得出"能放",但不能盖掉格子本身的状态色
+const DECK_HILITE_WIDTH = 2;
+const DECK_HOVER_WIDTH = 3; // 悬停格比其它合法格粗一档:光标在哪一格必须无歧义
+const DECK_DENY_FILL_ALPHA = 0.22;
 
 /**
  * 前摇指示器每帧重建几何(Graphics 不像粒子那样能只改位置),故设硬上限:超配额的本帧不画。
@@ -53,6 +109,29 @@ interface Interpolatable {
   y: number;
   px: number;
   py: number;
+}
+
+/**
+ * 取格心 / 屏幕点的暂存。模块级复用而不是每次现造(照 sim/world.ts 的 desired 写法):
+ * 甲板高亮每帧要问十几次格心,现造就是每秒上千次分配(铁律 3)。用完即弃,绝不跨函数存活。
+ */
+const localPos: Vec2 = { x: 0, y: 0 };
+const screenPos: Vec2 = { x: 0, y: 0 };
+
+/**
+ * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
+ * ui 层持有这个对象、每帧就地改字段,渲染层只存引用、只读不写(零分配),render 不 import ui。
+ * 10 号 issue 的"三选一 → 时停 → 甲板放大 → 拖放"会整套换掉 ui 那一侧,本接口是它们之间唯一的缝。
+ */
+export interface PlacementUiState {
+  /** 放置模式开关:关着时高亮层一片空白 */
+  active: boolean;
+  /** CELL_WEAPON | CELL_SUPPORT —— 决定哪些格算合法(武器塔仅限边缘格,GDD §4.1) */
+  content: number;
+  /** 悬停格在 deck.cells 里的下标,-1 = 不在甲板上 */
+  hoverIndex: number;
+  /** 刚被拒绝的格,-1 = 无;由 ui 层超时清零(渲染层不持有计时器) */
+  denyIndex: number;
 }
 
 /**
@@ -95,6 +174,17 @@ function buildEnemyShape(def: EnemyDef): Graphics {
   return g.fill(ENEMY_FILL).stroke({ width: Math.max(1.5, r * 0.25), color: ENEMY_EDGE });
 }
 
+/**
+ * 格填充色。离线格一律去色(灰),不按内容上色 —— "这格是塔还是支援"在它不工作时不重要,
+ * "它不工作"才重要;把两条信息叠在同一个色块上,玩家一眼只会读到更抢眼的那条。
+ */
+function deckCellFill(content: number, online: boolean): number {
+  if (!online) return DECK_OFFLINE_FILL;
+  if (content === CELL_WEAPON) return DECK_WEAPON_FILL;
+  if (content === CELL_SUPPORT) return DECK_SUPPORT_FILL;
+  return DECK_EMPTY_FILL;
+}
+
 export class Renderer {
   readonly app: Application;
   private world: World;
@@ -109,7 +199,21 @@ export class Renderer {
   private bulletParticles: Particle[] = [];
   private bulletTex: Texture;
   private telegraphG: Graphics;
-  private shipG: Graphics;
+  /** 甲板容器:子层几何全在船体局部空间,它自己每帧只吃插值位姿(见文件头) */
+  private deckG = new Container();
+  private deckBaseG = new Graphics();
+  /** 放置高亮:压在底板之上,否则合法格的半透明色块会被格子填充盖掉 */
+  private deckHiliteG = new Graphics();
+  /**
+   * 底板几何的脏标记。占用/内容一局里只变几次(放塔、12 号焊接拼块),
+   * 却要每帧出现在画面上 —— 故按 deck.revision 重建,而不是每帧 clear 重画。
+   * 初值 -1 保证首帧必建一次(revision 从 0 起)。
+   */
+  private deckRevision = -1;
+  /** 放置模式状态:由 ui 层塞进来,渲染层只读(见 PlacementUiState) */
+  private placement: PlacementUiState | null = null;
+  /** 高亮层上一帧是否画过东西:退出放置模式时只需 clear 一次,而不是每帧空转 */
+  private hiliteDrawn = false;
 
   static async create(world: World): Promise<Renderer> {
     const app = new Application();
@@ -173,22 +277,16 @@ export class Renderer {
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变),故与静态的边界圈分开
     this.telegraphG = new Graphics();
 
-    // 灰盒船体:几何朝 +X(与 heading = 0 同向),每帧只改 position/rotation,不重建几何。
-    // 船长宽在此一次性读取、不进调参面板 —— 改了甲板格子也得跟着重算(03 号 issue)。
-    // 尾部凹口是唯一的朝向线索:纯三角形在快速转向时分不清头尾。
-    const len = tuning.shipLength;
-    const wid = tuning.shipWidth;
-    this.shipG = new Graphics()
-      .poly([len / 2, 0, -len / 2, wid / 2, -len * 0.3, 0, -len / 2, -wid / 2])
-      .fill(SHIP_FILL)
-      .stroke({ width: 3, color: SHIP_EDGE });
+    // 灰盒船体 = 甲板本身:底板 + 高亮装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 这里不建几何 —— 格子内容要等 sync() 的脏标记在首帧补上(deckRevision = -1)。
+    this.deckG.addChild(this.deckBaseG, this.deckHiliteG);
 
     // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
-    // 不会被蜂群蛭糊掉)→ 弹 → 船。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
-    // 船最后加:压在敌与弹之上,千敌贴脸时自己不会被糊掉
+    // 不会被蜂群蛭糊掉)→ 弹 → 甲板。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
+    // 甲板最后加:压在敌与弹之上,千敌贴脸时自己的格子不会被糊掉 —— 放塔时更是必须看得见
     this.worldLayer.addChild(ring, this.telegraphG);
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
-    this.worldLayer.addChild(this.bulletPc, this.shipG);
+    this.worldLayer.addChild(this.bulletPc, this.deckG);
     app.stage.addChild(this.worldLayer);
   }
 
@@ -241,8 +339,171 @@ export class Renderer {
       alpha,
     });
 
-    this.shipG.position.set(sx, sy);
-    this.shipG.rotation = sh;
+    // 甲板:底板只在 deck.revision 变了才重建,高亮层每帧现算(它跟着鼠标走)。
+    // 容器只吃插值位姿,格子几何一律是局部坐标 —— 甲板与船体一同旋转由此成立(见文件头)
+    const deck = this.world.deck;
+    if (deck.revision !== this.deckRevision) {
+      this.deckRevision = deck.revision;
+      this.drawDeckBase(deck);
+    }
+    this.drawDeckHilite(deck);
+    this.deckG.position.set(sx, sy);
+    this.deckG.rotation = sh;
+  }
+
+  /**
+   * 画布像素 → 世界坐标。放置交互(ui/placement.ts)拾格子的第一步:
+   * 镜头的缩放/pivot 都在渲染层,ui 层不该再复制一份镜头公式 —— 那是两处必然会走散的真相。
+   * 走 worldLayer.toLocal:镜头怎么变(将来加震屏、变焦)这里都不用改。
+   * out 由调用方给,零分配(铁律 3)。
+   */
+  screenToWorld(sx: number, sy: number, out: Vec2): Vec2 {
+    screenPos.x = sx;
+    screenPos.y = sy;
+    return this.worldLayer.toLocal(screenPos, undefined, out);
+  }
+
+  /**
+   * 接线放置模式。只存引用不拷贝:ui 层每帧就地改字段(hoverIndex/denyIndex),
+   * 渲染层下一帧自然读到最新值,两边不必再约定一个"通知"通道。传 null = 摘掉放置层。
+   */
+  setPlacement(state: PlacementUiState | null): void {
+    this.placement = state;
+    // 摘掉时不留残影:下一次 drawDeckHilite 会看 hiliteDrawn 补一次 clear
+  }
+
+  /**
+   * 甲板底板:格子填充 + 格线 + 船体轮廓 + 船头标识,全部画在船体局部空间(局部 +X = 船头)。
+   * 轮廓照 sim 推导出的 exposed 位掩码逐边画,而不是照 3×4 的矩形写死 ——
+   * 12 号扩建出非矩形甲板时,这段一个字都不用改(也顺手把"哪几条边算暴露"画给玩家看,
+   * 而暴露边正是 04 号射界与"武器塔只能上边缘格"的依据)。
+   * 只在 deck.revision 变化时调用,故这里可以放心多跑几趟循环。
+   */
+  private drawDeckBase(deck: Deck): void {
+    const g = this.deckBaseG;
+    g.clear();
+    const size = deckCellSize();
+    const half = size / 2;
+    const inset = DECK_CELL_GAP / 2;
+    const cells = deck.cells;
+
+    // 一、格子本体:按 content 上色,离线格灰显
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!c.occupied) continue; // 不属于船体的格不画:12 号扩建前恒为 true
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      const fill = deckCellFill(c.content, c.online);
+      const a = c.online ? 1 : DECK_OFFLINE_ALPHA;
+      g.rect(p.x - half + inset, p.y - half + inset, size - DECK_CELL_GAP, size - DECK_CELL_GAP)
+        .fill({ color: fill, alpha: a })
+        .stroke({ width: DECK_GRID_WIDTH, color: DECK_GRID_COLOR, alpha: a });
+    }
+
+    // 二、船体轮廓 = 所有暴露边(船头那条除外,它归下面单独描)。攒成一条 path 只 stroke 一次
+    let hull = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!c.occupied) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      // 局部 +X = 船头、+Y = 右舷(全仓唯一口径,与 sim/deck 的边下标一致)
+      if (isEdgeExposed(c, EDGE_STARBOARD)) {
+        g.moveTo(p.x - half, p.y + half).lineTo(p.x + half, p.y + half);
+        hull++;
+      }
+      if (isEdgeExposed(c, EDGE_PORT)) {
+        g.moveTo(p.x - half, p.y - half).lineTo(p.x + half, p.y - half);
+        hull++;
+      }
+      if (isEdgeExposed(c, EDGE_STERN)) {
+        g.moveTo(p.x - half, p.y - half).lineTo(p.x - half, p.y + half);
+        hull++;
+      }
+    }
+    if (hull > 0) g.stroke({ width: DECK_HULL_WIDTH, color: SHIP_EDGE });
+
+    // 三、船头标识:朝向必须一眼可辨(纯矩形网格在快速转向时分不清头尾)。两重保险 ——
+    // 全部朝船头的暴露边加亮描边(高速转向时看的是这条最亮的边),外加一个艏尖三角(静止时看形状)
+    let bow = 0;
+    let bowX = -Infinity;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!c.occupied || !isEdgeExposed(c, EDGE_BOW)) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      g.moveTo(p.x + half, p.y - half).lineTo(p.x + half, p.y + half);
+      if (p.x + half > bowX) bowX = p.x + half; // 艏尖挂在最靠前的那条暴露边上
+      bow++;
+    }
+    if (bow > 0) {
+      g.stroke({ width: DECK_BOW_WIDTH, color: DECK_BOW_COLOR });
+      // 艏尖挂在最靠前的那条暴露边上、顶在中线(局部 y = 0):
+      // 12 号把甲板焊歪之后它依然在船体正前方,这段不必跟着改
+      const w = size * DECK_PROW_HALF_W;
+      g.poly([bowX, -w, bowX + size * DECK_PROW_LEN, 0, bowX, w]).fill(DECK_BOW_COLOR);
+    }
+  }
+
+  /**
+   * 放置高亮:合法格铺一层薄色 + 悬停格加粗描边 + 被拒格短促闪一下。
+   * 合法性每帧现问 canPlace(只读不写),于是 ui 层不必缓存一份"哪些格能放"——
+   * 一局里甲板会变(放塔、12 号扩建),缓存就是又一个会走散的真相。
+   * 每帧重画 12 个矩形的代价可忽略(相比之下底板走脏标记,是因为它一直在画面上却极少变)。
+   */
+  private drawDeckHilite(deck: Deck): void {
+    const g = this.deckHiliteG;
+    const st = this.placement;
+    if (!st || !st.active) {
+      // 关掉时清一次就够:每帧 clear 一个空 Graphics 不贵,但也没必要
+      if (this.hiliteDrawn) {
+        g.clear();
+        this.hiliteDrawn = false;
+      }
+      return;
+    }
+    g.clear();
+    this.hiliteDrawn = true;
+
+    const size = deckCellSize();
+    const half = size / 2;
+    const box = size - DECK_HILITE_PAD * 2;
+    const cells = deck.cells;
+
+    let ok = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (canPlace(deck, c.col, c.row, st.content) !== PLACE_OK) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box);
+      ok++;
+    }
+    // 全部合法格攒成一条 path 一次填充:高亮是"哪里能放"的整体读数,不需要逐格不同的表现
+    if (ok > 0) {
+      g.fill({ color: DECK_HILITE_OK, alpha: DECK_HILITE_FILL_ALPHA }).stroke({
+        width: DECK_HILITE_WIDTH,
+        color: DECK_HILITE_OK,
+      });
+    }
+
+    // 悬停格:加粗描边。非法时用拒绝色描边(而不是铺色块)—— 暖色只许出现在这一圈线上。
+    // 下标来自 ui 层,可能因甲板换了(12 号)而过期,故必须判空(noUncheckedIndexedAccess 也逼着判)
+    const hover = st.hoverIndex >= 0 ? cells[st.hoverIndex] : undefined;
+    if (hover) {
+      const legal = canPlace(deck, hover.col, hover.row, st.content) === PLACE_OK;
+      const p = cellLocalPos(deck, hover.col, hover.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box).stroke({
+        width: DECK_HOVER_WIDTH,
+        color: legal ? DECK_HILITE_OK : DECK_HILITE_DENY,
+      });
+    }
+
+    // 被拒格:短促闪一下(闪多久由 ui 层的超时清零决定,渲染层不持有计时器)。
+    // 真正说明理由的是 DOM 文案,这里只负责把玩家的视线钉回"是这一格不行"
+    const deny = st.denyIndex >= 0 ? cells[st.denyIndex] : undefined;
+    if (deny) {
+      const p = cellLocalPos(deck, deny.col, deny.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box)
+        .fill({ color: DECK_HILITE_DENY, alpha: DECK_DENY_FILL_ALPHA })
+        .stroke({ width: DECK_HILITE_WIDTH, color: DECK_HILITE_DENY });
+    }
   }
 
   /**

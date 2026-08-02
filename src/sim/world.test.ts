@@ -12,6 +12,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { tuning } from './config';
+import {
+  CELL_SUPPORT,
+  CELL_WEAPON,
+  cellAt,
+  DECK_COLS,
+  DECK_ROWS,
+  PLACE_INTERIOR,
+  PLACE_OK,
+  PLACE_TAKEN,
+} from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { World } from './world';
@@ -127,6 +137,53 @@ describe('World 确定性', () => {
     expect(w.elapsed).toBe(0);
     for (let i = 0; i < 90; i++) w.step();
     expect(w.elapsed).toBeCloseTo(1.5, 12);
+  });
+});
+
+/**
+ * 甲板接线(03 号 issue)。规则本身在 deck.test.ts 钉,这里只钉**世界这一层**的两件事:
+ * world.place 是全仓唯一的放置入口(与 damageEnemy 同口径:ui/渲染都不许直接改 deck),
+ * 以及甲板内容进 checksum —— build 也是世界状态,少了它,"塔放错格"会从确定性口径下漏掉。
+ */
+describe('甲板接线(world.place 是唯一放置入口)', () => {
+  it('新世界自带一块 T0 的 3×4 空甲板,place 原样转发理由码', () => {
+    const w = new World(5);
+    expect(w.deck.cells.length).toBe(DECK_COLS * DECK_ROWS);
+    expect(w.deck.cells.every((c) => c.occupied)).toBe(true);
+
+    expect(w.place(1, 1, CELL_WEAPON)).toBe(PLACE_INTERIOR); // 内部格放武器塔:拒绝
+    expect(cellAt(w.deck, 1, 1)!.content).toBe(0);
+    expect(w.place(1, 1, CELL_SUPPORT)).toBe(PLACE_OK); // 同一格放支援设施:允许
+    expect(w.place(1, 1, CELL_SUPPORT)).toBe(PLACE_TAKEN); // 已占:战斗中不可移动、不可出售
+    expect(cellAt(w.deck, 1, 1)!.content).toBe(CELL_SUPPORT);
+
+    // 非对称格:col 与 row 传反的话 (0,3) 会变成 (3,0),col=3 越界 → PLACE_NO_CELL。
+    // 上面几条全用对称坐标,单靠它们抓不住转发时把两个参数写反
+    expect(w.place(0, 3, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(cellAt(w.deck, 0, 3)!.content).toBe(CELL_WEAPON);
+  });
+
+  it('甲板内容进 checksum:并排两个同 seed 世界,只给一边放一座塔就分叉,补上同一座又合流', () => {
+    tuning.stressEnemies = 10;
+    tuning.stressBullets = 0;
+    const a = new World(77);
+    const b = new World(77);
+    for (let i = 0; i < 30; i++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+
+    // place 不消耗 rng(它不在输入序列里),所以两边的敌人序列一步没错开:分叉只可能来自甲板
+    expect(a.place(0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(a.checksum()).not.toBe(b.checksum());
+    expect(b.place(0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 被拒的放置一个字段都没动,自然也不该改变哈希
+    const before = a.checksum();
+    expect(a.place(0, 0, CELL_SUPPORT)).toBe(PLACE_TAKEN);
+    expect(a.checksum()).toBe(before);
   });
 });
 
