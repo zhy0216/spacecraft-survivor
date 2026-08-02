@@ -28,13 +28,24 @@ async function boot(): Promise<void> {
   });
   const renderer = await Renderer.create(world);
 
-  // hp 初值直接取船的当前血:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0
-  const stats: DebugStats = { fps: 0, enemies: 0, bullets: 0, speed: 0, hp: world.ship.hp, tick: 0, checksum: '—', seed };
+  // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0
+  const stats: DebugStats = {
+    fps: 0,
+    enemies: 0,
+    bullets: 0,
+    speed: 0,
+    hp: world.ship.hp,
+    maxHp: world.ship.maxHp,
+    tick: 0,
+    checksum: '—',
+    seed,
+  };
   const run: RunState = { paused: false, timeScale: 1 };
   createDebugPanel(stats, run);
 
-  // 放置交互(03 号 issue 的灰盒入口:B 开关 / **1..6 选六种武器塔** / 0 选支援设施 /
-  // Esc 退出 / 左键放置 —— 05 号起数字键直选塔型,键位表由 ui 侧从数值表现生成,这里不复述)。
+  // 放置交互(03 号 issue 的灰盒入口:B 开关 / **1..6 选六种武器塔** /
+  // **0 进支援模式,再按 0 在四种支援设施间轮换** / Esc 退出 / 左键放置 ——
+  // 05 号起数字键直选塔型、06 号起 0 键轮换设施型,键位表由 ui 侧从数值表现生成,这里不复述)。
   // 屏幕像素换世界坐标只走渲染层这一份镜头公式 —— ui 层不复制第二份,也就不 import pixi(铁律 1)。
   // 状态对象交给渲染层画高亮;两边共享同一个对象,ui 就地改字段,渲染层下一帧自然读到。
   // 注意:10 号 issue 的"三选一 → 时停 → 甲板放大 → 拖放"会把这三行连同 ui/placement.ts 一起换掉。
@@ -68,6 +79,9 @@ async function boot(): Promise<void> {
     // 船体 HP(09 号 issue):画面上那条灰盒血条只回答"在掉",拖撞击伤害倍率 / 无敌帧对比
     // "掉得多快"要看这个数(09 号验收标准的"可控可调")。11 号 issue 的 HUD 会接手这条读数
     stats.hp = world.ship.hp;
+    // 上限每帧现读(06 号 issue):它是甲板的派生量,放一块装甲舱当帧 +15、12 号拆掉当帧回落 ——
+    // 装甲舱是四种设施里唯一不画邻接连线的那种,这个数跳一下就是它生效的肉眼落点
+    stats.maxHp = world.ship.maxHp;
     stats.tick = loop.tick;
     if (loop.tick - lastChecksumTick >= SIM_HZ) {
       stats.checksum = world.checksum();

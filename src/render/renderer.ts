@@ -35,6 +35,16 @@
  * 故 FXV_SPARK = 冷白星芒随 life 收缩、FXV_HULL_HIT = 暖红圆环随 life 扩散 ——
  * 色域与形变两条通道各自独立,色盲玩家丢了色相仍分得出"擦了一下"和"掉血了"。
  *
+ * 邻接连线(06 号 issue T3):deckLinkG 把"生效中的支援加成"画成支援格心 → 受益塔格心的一条线。
+ * 配对表**一律问 sim 的 supportLinks**,渲染层一行类型匹配规则都不许自己写 —— 与射界叠加层只调
+ * cellArc 是同一条口径:两处各判一次,迟早会画出一条"看得见却没生效"的线,而那比不画更糟
+ * (06 号验收标准原文:节流类型不匹配时 UI 不画连线,避免误导)。逐对 stroke,于是多来源的加成
+ * 在画面上自然叠出更亮的一段 —— "buff 可叠加"这条读数不必再另找地方交代。
+ * 装甲舱是唯一的例外:它压根不作用于相邻塔(对任何塔都不匹配 ⇒ supportLinks 永远不给它配对),
+ * 故改画两条自己的读数 —— 格内一个盾(它在加船体 HP)+ 沿它自己每一条暴露边内壁一道冷色粗带
+ * (它护的舷)。舷线与下面那条被撞舷闪红长在**同一批边**上,靠色域(冷 vs 暖红)与线宽分开;
+ * 内部格的装甲舱没有暴露边 ⇒ 只有盾、没有舷线,"只加 HP、不护舷"于是画的就是它本来的样子。
+ *
  * 节流读数(05 号 issue T5):deckThrottleG 逐帧把每座在线塔的节流状态画在它自己那一格上 ——
  * 弹夹条 + 装填进度 / 热量条 + 过热闪红 / 充能环,外加一排等级点。三套机制**各绑一种几何形状**
  * (沿 Y 的条 / 沿 X 的条 / 一个圆),而不是三条一样的条换个颜色:颜色这条通道已经被"哪座塔"
@@ -51,6 +61,7 @@ import {
   type Texture,
 } from 'pixi.js';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
+import { SUPPORTS } from '../data/supports';
 import {
   FX_BULLET,
   FX_LIFE_BEAM,
@@ -65,7 +76,6 @@ import {
   TOWERS,
   towerArcDeg,
   type TowerDef,
-  towerHeatMax,
   towerMagazine,
   towerRange,
 } from '../data/towers';
@@ -78,6 +88,7 @@ import {
   CELL_WEAPON,
   cellLocalPos,
   type Deck,
+  type DeckCell,
   deckCellSize,
   EDGE_BOW,
   EDGE_COUNT,
@@ -101,6 +112,8 @@ import {
   FXV_SPARK,
 } from '../sim/fx';
 import { lerpAngle, type Vec2 } from '../sim/ship';
+import { supportLinks } from '../sim/support';
+import { cellHeatMax, cellReload } from '../sim/tower';
 import type { Bullet, Enemy, World } from '../sim/world';
 import { WORLD_RADIUS } from '../sim/world';
 
@@ -165,6 +178,55 @@ const DECK_MUZZLE_WIDTH = 3;
 /** 炮口线长度(× 格边长):够伸出格外半格,不至于整条埋在格子自己的填充色里 */
 const DECK_MUZZLE_LEN = 1;
 
+// —— 邻接连线(06 号 issue T3)——"这一格的加成落在哪座塔上"在画面上唯一的落点 ——
+// 配对表**一律问 sim 的 supportLinks**:正交相邻、受益格得是一座在线的塔、节流类型必须匹配 ——
+// 三条判据全在那一份里,渲染层一行都不许自己重写。与射界叠加层只调 cellArc 同一条口径:
+// 重推一份就是两个迟早走散的真相,而这一个走散了,甲板上就会出现一条"看得见却没生效"的线,
+// 那比不画更糟(06 号验收标准原文:节流类型不匹配时 UI 不画连线,避免误导)。
+// 色相取该设施自己的 tint(与它的格填充同色,见 deckCellFill)⇒ "这条线是哪种设施给的"不用猜;
+// **逐对 stroke** 而不是把全部配对攒成一条 path:两条半透明的线叠在一起会更亮,
+// 那正是"两座弹药库夹一门机炮 = 加成连乘"的读数;攒成一条 path 只会平铺成一个 alpha,叠加当场看不见。
+const DECK_LINK_WIDTH = 2;
+/**
+ * 不给满 1:连线是**叠在**甲板上的一层读数,压过格子本身的状态色就喧宾夺主了;
+ * 半透明同时是"多来源叠加"那条读数的载体(见上),给满就再也叠不出亮度差。
+ */
+const DECK_LINK_ALPHA = 0.6;
+/** 受益塔那一端的小实心圆:线有两个端点,没有它就读不出加成是**从哪一格流向哪一格**。
+ *  只点在塔这一头 —— 支援格那一头本来就长着设施自己的整块色 */
+const DECK_LINK_DOT_R = 3;
+
+// —— 装甲舱:它不作用于相邻塔,故**一条连线都不画**(画了就是误导),改用两条自己的读数 ——
+//   ① 格内一个盾形图标 = "这一格在给船体加 HP",判据是 def.hullHp > 0 —— 与 sim/damage 的
+//      hullMaxHp 读**同一个字段**,于是数值表把加成调成 0,盾自己就消失了;
+//   ② 沿它**自己每一条暴露边**一道粗线 = "它护的是这几舷",判据是 def.edgeDamageMul < 1 且该边暴露 ——
+//      舷向归属与 sim/damage 的 edgeDamageMul 一字同源(都问 isEdgeExposed)。
+// 于是内部格的装甲舱只剩一个盾、一条舷线都没有,正好把"只加 HP、不护舷"画成了它本来的样子;
+// 角落格的装甲舱同时描两舷,也与减伤真的落在两舷一致。
+// 舷线与 09 号的被撞舷闪红长在**同一批边**上,靠色域(冷 vs 暖红)与线宽两条通道分开:
+// 前者是"这一舷有护甲"的常驻读数,后者是"这一舷刚挨了一下"的半秒回执 ——
+// 闪红更宽、又压在更上层,挨打那半秒理应由它说话:那一刻要读的是伤害,不是护甲。
+const DECK_ARMOR_EDGE_WIDTH = 3.5;
+const DECK_ARMOR_EDGE_ALPHA = 0.9;
+/**
+ * 舷线从格边**往里缩**这么多(世界 px),而不是正压在边上。
+ * 压在边上会把那条边原本的读数一并盖掉:船体轮廓(DECK_HULL_WIDTH 2.5)还好,
+ * **船头亮边只有 4 px 宽** —— 一块装甲舱放在船头格,3.5 px 的带子正好把它啃得只剩两道边,
+ * 而"头尾一眼分得清"是 03 号立下的验收口径,不该被 06 号的一条读数换掉。
+ * 缩进去之后它读成"沿这一舷内壁铆的一层甲",三条线(轮廓 / 装甲 / 闪红)各在各的位置上共存。
+ */
+const DECK_ARMOR_EDGE_INSET = 3;
+// 舷线的颜色见下方的 DECK_ARMOR_EDGE_COLOR(它取冷白 FX_CORE_COLOR,得等那个常量先声明)
+/** 盾形图标的半长(沿船长)/半宽(沿舷宽),× 格边长 */
+const DECK_SHIELD_HALF_H = 0.22;
+const DECK_SHIELD_HALF_W = 0.17;
+/** 盾尖那一段的收腰位置(× 半长):肩到腰是直的,腰到尖才收 —— 少了它盾就退化成一个三角形 */
+const DECK_SHIELD_WAIST = 0.25;
+const DECK_SHIELD_WIDTH = 1.8;
+/** 盾用冷白描边 + 极淡填充:格填充已经是这块设施自己的 tint(见 deckCellFill),
+ *  图标再用同色就等于画在自己身上 —— 只有比它亮一档才认得出这是个图标 */
+const DECK_SHIELD_FILL_ALPHA = 0.18;
+
 // —— 节流读数(05 号 issue T5:"三种节流机制在 UI 上可读")——
 // 三套机制**各绑一种几何形状**,而不是三条一模一样的条换个颜色:颜色这条通道已经被"哪座塔"占满了
 // (读数一律取 def.tint,与该塔打出的弹、光效同色,于是"这一格是哪门炮"不用再猜),
@@ -209,6 +271,15 @@ const THR_LEVEL_DOT_GAP = 4.6;
 const FX_TINT_FALLBACK = 0x9adcff;
 /** 光效的高光芯色:比任何塔的 tint 都亮一档的冷白,给"能量"一个统一的核心 */
 const FX_CORE_COLOR = 0xeaf6ff;
+/**
+ * 装甲舱舷线的颜色(声明在这儿只因为它要用上面那个冷白;语义上属甲板那组)。
+ * **必须比格填充亮一档,绝不能取 def.tint** —— 舷线缩进 DECK_ARMOR_EDGE_INSET 之后整条
+ * 落在格填充里面,而格填充已经是这块设施自己的 tint(见 deckCellFill):
+ * 同色叠同色不透明底会合成回原色,整条线是零像素。这与盾图标那条规矩
+ * (DECK_SHIELD_FILL_ALPHA)是同一条,故取同一个冷白 —— 盾与舷线本就该读成
+ * 同一套"这块是装甲"的语汇。
+ */
+const DECK_ARMOR_EDGE_COLOR = FX_CORE_COLOR;
 const FX_BEAM_GLOW_WIDTH = 5;
 const FX_BEAM_GLOW_ALPHA = 0.3;
 const FX_BEAM_CORE_WIDTH = 1.6;
@@ -333,6 +404,12 @@ const screenPos: Vec2 = { x: 0, y: 0 };
 const arcTmp: Arc = { center: 0, half: 0 };
 /** 判定体半长/半宽的暂存(09 号 T4 的调试轮廓)。与上面两个同一条口径:模块级复用,零分配 */
 const coreTmp: Vec2 = { x: 0, y: 0 };
+/**
+ * 邻接连线的**第二个**端点(06 号 T3)。单独再开一个而不是复用 localPos:
+ * 一条连线要同时握住支援格心与受益塔格心两个点,而 cellLocalPos 是写进调用方给的 out ——
+ * 两次都传 localPos,第二次就把第一次的答案覆盖掉,线会从塔画到塔(长度恒 0)。
+ */
+const linkPos: Vec2 = { x: 0, y: 0 };
 
 /**
  * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
@@ -351,6 +428,13 @@ export interface PlacementUiState {
    * 而"高亮 = 规则"是 03 号立下的口径(ui 与渲染层都不许自己再判一遍合法性)。
    */
   towerType: number;
+  /**
+   * 要放的设施型号(SUP_*,见 data/supports),仅当 content = CELL_SUPPORT 时有意义
+   * (武器塔走 1..6 键,不看它)。与 towerType 同一条理由:合法性与它有关
+   * (支援型号非法 = PLACE_BAD_SUPPORT),故高亮层必须把它一并交给 canPlace ——
+   * 少传这一个参数,画面就会把"型号填错了"的那一次放置画成能放,点下去才被拒。
+   */
+  supportType: number;
   /** 悬停格在 deck.cells 里的下标,-1 = 不在甲板上 */
   hoverIndex: number;
   /** 刚被拒绝的格,-1 = 无;由 ui 层超时清零(渲染层不持有计时器) */
@@ -443,11 +527,18 @@ function clamp01(t: number): number {
 /**
  * 格填充色。离线格一律去色(灰),不按内容上色 —— "这格是塔还是支援"在它不工作时不重要,
  * "它不工作"才重要;把两条信息叠在同一个色块上,玩家一眼只会读到更抢眼的那条。
+ *
+ * 支援格(06 号)**按型上色**,色相取数值表的 SUPPORTS[supportType].tint:四种设施一眼分得开,
+ * 而连线取的是同一个 tint —— 于是"这条线从哪一格来"不必顺着线去找源头,看颜色就知道。
+ * 查不到(supportType 越界,或数值表被改坏)回落既有的 DECK_SUPPORT_FILL:
+ * 那一格仍然是一块冷青,只是不再说明自己是哪一型 —— 绝不让画面上冒出 undefined 色(GDD §12)。
+ * 收整个 cell 而不是两个散字段:支援格要多读一个 supportType,再往参数表里加一个 number
+ * 就成了三个位置相邻的同类型参数,调用点传错顺序编译器一声不吭。
  */
-function deckCellFill(content: number, online: boolean): number {
-  if (!online) return DECK_OFFLINE_FILL;
-  if (content === CELL_WEAPON) return DECK_WEAPON_FILL;
-  if (content === CELL_SUPPORT) return DECK_SUPPORT_FILL;
+function deckCellFill(cell: DeckCell): number {
+  if (!cell.online) return DECK_OFFLINE_FILL;
+  if (cell.content === CELL_WEAPON) return DECK_WEAPON_FILL;
+  if (cell.content === CELL_SUPPORT) return SUPPORTS[cell.supportType]?.tint ?? DECK_SUPPORT_FILL;
   return DECK_EMPTY_FILL;
 }
 
@@ -485,6 +576,14 @@ export class Renderer {
   private deckBaseG = new Graphics();
   /** 放置高亮:压在底板之上,否则合法格的半透明色块会被格子填充盖掉 */
   private deckHiliteG = new Graphics();
+  /**
+   * 邻接连线 + 装甲舱读数(06 号 T3)。**压在底板之上**:连线要从一格心画到另一格心,
+   * 画在底板之下会被两头的格子填充啃掉两截,中间那段悬空的线读不出是从哪儿连到哪儿。
+   * 与底板**共用 deck.revision 脏标记**(见 deckRevision):配对只在放置时变
+   * (supportLinks 只读 occupied/content/supportType/towerType/online,这几样一变 revision 就 +1),
+   * 每帧重画等于让一局里只变几次的几何陪着 60Hz 空转 —— 与底板同一条取舍,故干脆同一个标记。
+   */
+  private deckLinkG = new Graphics();
   /** 射界扇形(04 号):压在底板之下 —— 它是底衬,不许糊住格子本身的状态色 */
   private deckArcG = new Graphics();
   /**
@@ -518,6 +617,12 @@ export class Renderer {
    * 初值 -1 保证首帧必建一次(revision 从 0 起)。
    */
   private deckRevision = -1;
+  /**
+   * 邻接配对表的复用缓冲(扁平二元组:out[2k] = 支援格下标、out[2k+1] = 受益塔格下标)。
+   * 挂在实例上而不是每次现造:重建虽然只发生在放置那一下,但铁律 3 的口径是运行期零新增分配 ——
+   * sim 的 supportLinks 收 out 参数,正是为了让调用方能把这块缓冲整局用到底。
+   */
+  private linkPairs: number[] = [];
   /** 放置模式状态:由 ui 层塞进来,渲染层只读(见 PlacementUiState) */
   private placement: PlacementUiState | null = null;
   /** 高亮层上一帧是否画过东西:退出放置模式时只需 clear 一次,而不是每帧空转 */
@@ -633,16 +738,19 @@ export class Renderer {
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变),故与静态的边界圈分开
     this.telegraphG = new Graphics();
 
-    // 灰盒船体 = 甲板本身:六个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
-    // 子层序:射界扇形(底衬)→ 底板 → 被撞舷闪红(压住底板那条冷色轮廓线,否则等于没画)
+    // 灰盒船体 = 甲板本身:七个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 子层序:射界扇形(底衬)→ 底板 → 邻接连线(06 号:线要跨过格心,压在底板之下会被填充啃断)
+    // → 被撞舷闪红(压住底板那条冷色轮廓线,否则等于没画)
     // → 炮口线(炮管长在甲板上,理应压住底板)
     // → 节流读数(压住炮口线:按住 Tab 时那条线正好横穿格心,把读数划掉就白画了)
     // → 放置高亮(临时的交互层,"我要放哪一格"任何时候都不许被别的层盖住)。
-    // 闪红排在炮口线之下:炮管归位是每帧都要看的读数,不该被半秒钟的伤害反馈盖掉。
+    // 闪红排在炮口线之下:炮管归位是每帧都要看的读数,不该被半秒钟的伤害反馈盖掉;
+    // 而它排在连线之上是有意的 —— 装甲舱的舷线与闪红长在同一批边上,挨打那半秒该由闪红说话。
     // 这里不建几何 —— 格子内容要等 sync() 的脏标记在首帧补上(deckRevision = -1)。
     this.deckG.addChild(
       this.deckArcG,
       this.deckBaseG,
+      this.deckLinkG,
       this.deckHitG,
       this.deckMuzzleG,
       this.deckThrottleG,
@@ -744,6 +852,8 @@ export class Renderer {
     if (deck.revision !== this.deckRevision) {
       this.deckRevision = deck.revision;
       this.drawDeckBase(deck);
+      // 邻接连线与底板同一个脏标记:两者都只在放置那一下变(见 deckLinkG 的字段注释)
+      this.drawDeckLinks(deck);
     }
     this.drawDeckHit(deck);
     this.drawDeckHilite(deck);
@@ -825,7 +935,7 @@ export class Renderer {
       const c = cells[i]!;
       if (!c.occupied) continue; // 不属于船体的格不画:12 号扩建前恒为 true
       const p = cellLocalPos(deck, c.col, c.row, localPos);
-      const fill = deckCellFill(c.content, c.online);
+      const fill = deckCellFill(c);
       const a = c.online ? 1 : DECK_OFFLINE_ALPHA;
       g.rect(p.x - half + inset, p.y - half + inset, size - DECK_CELL_GAP, size - DECK_CELL_GAP)
         .fill({ color: fill, alpha: a })
@@ -872,6 +982,139 @@ export class Renderer {
       // 12 号把甲板焊歪之后它依然在船体正前方,这段不必跟着改
       const w = size * DECK_PROW_HALF_W;
       g.poly([bowX, -w, bowX + size * DECK_PROW_LEN, 0, bowX, w]).fill(DECK_BOW_COLOR);
+    }
+  }
+
+  /**
+   * 邻接效果的可视化(06 号 issue T3)—— 支援设施到受益塔的连线,外加装甲舱那两条自成一路的读数。
+   *
+   * 06 号验收标准第二条是"连线只出现在**真实生效**的配对上",本方法落实它的手段只有一条:
+   * 配对表**必须**来自 sim 的 supportLinks —— 正交相邻(不含斜角、洞不算邻居)、受益格得是一座
+   * 在线的塔、节流类型必须匹配(supportAffects),三条判据一个字都不在这里重写。
+   * 于是"画出来的就是真生效的"是**结构上的**:UI 与 buff 计算读的是同一份表,而不是两处各判一次
+   * (与射界叠加层只调 cellArc 完全同一条口径 —— 那边保的是"可视化 = 可命中区域")。
+   *
+   * 几何一律画在**甲板局部空间**(格心问 cellLocalPos,渲染层绝不自己再算一遍):
+   * 于是"连线随船旋转"与"甲板随船旋转"是同一件事,想差一帧都做不到。
+   * 只在 deck.revision 变化时调用(见 deckLinkG 的字段注释),故这里可以放心多跑几趟循环。
+   */
+  private drawDeckLinks(deck: Deck): void {
+    const g = this.deckLinkG;
+    g.clear();
+    const cells = deck.cells;
+
+    const pairs = supportLinks(deck, this.linkPairs);
+    for (let k = 0; k + 1 < pairs.length; k += 2) {
+      // 下标越界只是不画这一对,不炸掉整层(与敌人 kind 越界同一条兜底口径;
+      // noUncheckedIndexedAccess 也逼着判)
+      const sup = cells[pairs[k]!];
+      const tower = cells[pairs[k + 1]!];
+      if (!sup || !tower) continue;
+      const def = SUPPORTS[sup.supportType];
+      if (!def) continue;
+      // 两个端点必须落在两个不同的暂存上,理由见 linkPos 的注释
+      const a = cellLocalPos(deck, sup.col, sup.row, localPos);
+      const b = cellLocalPos(deck, tower.col, tower.row, linkPos);
+      // **逐对** stroke:同一座塔被两座弹药库夹着时,两条半透明的线叠出更亮的一段 ——
+      // 那正是"buff 可叠加"在画面上的读数(攒成一条 path 就只剩一个 alpha,叠加当场看不见)
+      g.moveTo(a.x, a.y)
+        .lineTo(b.x, b.y)
+        .stroke({ width: DECK_LINK_WIDTH, color: def.tint, alpha: DECK_LINK_ALPHA });
+      // 塔端的小实心圆 = 箭头:线是无向的,没有它就读不出加成**从哪一格流向哪一格**。
+      // 不透明度给满(与线相反):它是端点标记,不参与上面那条"叠加靠 alpha"的读数
+      g.circle(b.x, b.y, DECK_LINK_DOT_R).fill(def.tint);
+    }
+
+    // 装甲舱那一路:它对任何塔都不匹配 ⇒ supportLinks 永远不会给出它的配对,上面这个循环
+    // 天然一条线都画不到它头上(这正是"不作用于相邻塔就不该有连线"落在结构上、而不是靠一句特判)
+    this.drawDeckArmor(deck);
+  }
+
+  /**
+   * 装甲舱的两条读数(设计取舍见文件上方 DECK_ARMOR_* 那段)。
+   * 判据一律读**表字段**、绝不特判 SUP_ARMOR_BAY —— 与 sim/damage 的两个函数同源:
+   *   盾   ← def.hullHp > 0        :hullMaxHp 逐格加的就是这个字段;
+   *   舷线 ← def.edgeDamageMul < 1 且该边暴露:edgeDamageMul 逐格连乘的就是这个字段,
+   *          而"哪几舷"两边都问 isEdgeExposed 这**同一个函数**。
+   * 于是画面永远不会比数值表多承诺一分:把装甲舱的 edgeDamageMul 调回 1(= 不再减伤),
+   * 舷线自己就消失了;哪天给别的设施也加上船体加成,它当场就有盾,不必回头改这里。
+   * 内部格的装甲舱一条暴露边都没有 ⇒ 只剩一个盾,正好把"只加 HP、不护舷"画成了它本来的样子。
+   *
+   * 与连线共用 deckLinkG 与它那一次 clear(由 drawDeckLinks 负责):两者都只随 deck.revision 变,
+   * 分成两层就多一个必须记得一起 clear 的对象。
+   */
+  private drawDeckArmor(deck: Deck): void {
+    const g = this.deckLinkG;
+    const size = deckCellSize();
+    const half = size / 2;
+    const sh = size * DECK_SHIELD_HALF_H;
+    const sw = size * DECK_SHIELD_HALF_W;
+    const cells = deck.cells;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!c.occupied || c.content !== CELL_SUPPORT) continue;
+      const def = SUPPORTS[c.supportType];
+      if (!def) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+
+      // 一、它护的舷:逐格一次 stroke,边线几何照 drawDeckBase / drawDeckHit 那套四种端点写法,
+      // 只是整条往格内缩 DECK_ARMOR_EDGE_INSET(理由见那个常量:别把船头亮边啃掉)——
+      // 于是 12 号把甲板焊成非矩形之后,这道线依然沿着**真实的船体轮廓**走(与闪红同一批边)。
+      // 相邻两块装甲舱之间那条边本就不暴露,故不会有两格把同一条线描两遍的事
+      if (def.edgeDamageMul < 1) {
+        const ai = half - DECK_ARMOR_EDGE_INSET;
+        let drawn = 0;
+        for (let e = 0; e < EDGE_COUNT; e++) {
+          if (!isEdgeExposed(c, e)) continue;
+          // 局部 +X = 船头、+Y = 右舷(全仓唯一口径,与 sim/deck 的边下标一致)。
+          // 沿边那一轴仍取满格宽:角落格的两条带会在拐角交叉成一个 L,正是"两舷都护着"的样子
+          switch (e) {
+            case EDGE_BOW:
+              g.moveTo(p.x + ai, p.y - half).lineTo(p.x + ai, p.y + half);
+              break;
+            case EDGE_STARBOARD:
+              g.moveTo(p.x - half, p.y + ai).lineTo(p.x + half, p.y + ai);
+              break;
+            case EDGE_STERN:
+              g.moveTo(p.x - ai, p.y - half).lineTo(p.x - ai, p.y + half);
+              break;
+            case EDGE_PORT:
+              g.moveTo(p.x - half, p.y - ai).lineTo(p.x + half, p.y - ai);
+              break;
+            default:
+              continue; // 认不出的边下标只是不画,不炸掉整层
+          }
+          drawn++;
+        }
+        if (drawn > 0) {
+          g.stroke({
+            width: DECK_ARMOR_EDGE_WIDTH,
+            color: DECK_ARMOR_EDGE_COLOR,
+            alpha: DECK_ARMOR_EDGE_ALPHA,
+          });
+        }
+      }
+
+      // 二、盾形图标:肩在船头侧、尖朝船尾(= 常见的下垂盾,船头朝上时读起来最顺手)。
+      // 它只回答"这一格在给船体加 HP",不表示方向 —— 真正的方向读数是上面那几条舷线。
+      // 加成的**具体点数**由调参面板的"HP 上限"只读项 + 既有 HP 条给:
+      // 一格三十几 px 塞不下一个认得出的数字(与等级点不用数字同一条理由)
+      if (def.hullHp > 0) {
+        g.poly([
+          p.x + sh,
+          p.y - sw,
+          p.x + sh,
+          p.y + sw,
+          p.x - sh * DECK_SHIELD_WAIST,
+          p.y + sw,
+          p.x - sh,
+          p.y,
+          p.x - sh * DECK_SHIELD_WAIST,
+          p.y - sw,
+        ])
+          .fill({ color: FX_CORE_COLOR, alpha: DECK_SHIELD_FILL_ALPHA })
+          .stroke({ width: DECK_SHIELD_WIDTH, color: FX_CORE_COLOR });
+      }
     }
   }
 
@@ -975,7 +1218,8 @@ export class Renderer {
       // 合法 = isPlaceSuccess:空格(PLACE_OK)与**同型可叠级的格**(PLACE_UPGRADE)都算能放,
       // 判定口径与 world.place 的答复完全一致 —— 高亮层要是只认 PLACE_OK,
       // 玩家就会看着一片"不能放"的甲板,却点下去成功升了一级
-      if (!isPlaceSuccess(canPlace(deck, c.col, c.row, st.content, st.towerType))) continue;
+      if (!isPlaceSuccess(canPlace(deck, c.col, c.row, st.content, st.towerType, st.supportType)))
+        continue;
       const p = cellLocalPos(deck, c.col, c.row, localPos);
       g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box);
       ok++;
@@ -992,7 +1236,9 @@ export class Renderer {
     // 下标来自 ui 层,可能因甲板换了(12 号)而过期,故必须判空(noUncheckedIndexedAccess 也逼着判)
     const hover = st.hoverIndex >= 0 ? cells[st.hoverIndex] : undefined;
     if (hover) {
-      const legal = isPlaceSuccess(canPlace(deck, hover.col, hover.row, st.content, st.towerType));
+      const legal = isPlaceSuccess(
+        canPlace(deck, hover.col, hover.row, st.content, st.towerType, st.supportType),
+      );
       const p = cellLocalPos(deck, hover.col, hover.row, localPos);
       g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box).stroke({
         width: DECK_HOVER_WIDTH,
@@ -1232,8 +1478,12 @@ export class Renderer {
           const cap = towerMagazine(def, c.level);
           const ammo = cap > 0 ? clamp01(c.ammo / cap) : 0;
           if (ammo > 0) g.rect(x, y0, THR_BAR_THICK, len * ammo).fill(color);
-          if (c.reloadLeft > 0 && def.reload > 0) {
-            const t = clamp01(1 - c.reloadLeft / def.reload);
+          // 分母走 sim/tower 的 cellReload(而不是裸 def.reload):06 号的弹药库把装填时间乘短了,
+          // 拿基准值当分母,进度条会在真装完之前就走满,然后停在顶上等 —— 读数与实际节奏当场对不上。
+          // "读数与 sim 用的必须是同一个数"是 05 号那三套读数的立身之本
+          const reload = cellReload(c, def);
+          if (c.reloadLeft > 0 && reload > 0) {
+            const t = clamp01(1 - c.reloadLeft / reload);
             if (t > 0) {
               g.rect(x, y0, THR_BAR_THICK, len * t).fill({
                 color: FX_CORE_COLOR,
@@ -1251,7 +1501,10 @@ export class Renderer {
             color: THR_TRACK_COLOR,
             alpha: THR_TRACK_ALPHA,
           });
-          const max = towerHeatMax(def, c.level);
+          // 上限走 sim/tower 的 cellHeatMax(而不是裸 towerHeatMax):06 号的散热器把上限抬高之后,
+          // 拿基准值当分母的热量条会在塔还远没锁死时就画满 —— 而"收支平衡点"正是过热系的全部手感,
+          // 读数与 sim 用的必须是同一个数(理由同上面那条 cellReload)
+          const max = cellHeatMax(c, def);
           const t = max > 0 ? clamp01(c.heat / max) : 0;
           // 过热锁死:整条满长闪暖红。暖色是敌人的色域(GDD §12),故只许**这么小一条、这么短一阵**,
           // 而且必须是"闪"不是常亮 —— 常亮的暖条等于在自家甲板上钉死一块假的敌方色。

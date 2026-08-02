@@ -25,7 +25,13 @@
  * 就是升级:原格生效、不占新格、不移动任何东西,故与"不可移动、不可出售"共存,
  * 而不是在放置之外另开一个 upgrade API(那个 API 迟早会被当成"先拆再放"用)。
  * canPlace 只读、placeAt 才写:渲染层每帧拿 canPlace 算合法格高亮,不必担心把世界改脏。
+ *
+ * 支援设施(06 号)的型号与四个邻接加成缓存同样扁平挂在格上,但**邻接规则本身不在本文件**:
+ * 甲板只提供 neighborCell 这一份正交四邻偏移(全仓唯一,连 recomputeDeck 自己也走它),
+ * 谁跟谁配对、倍率怎么连乘全在 sim/support.ts —— 本文件**绝不 import 它**(那会成运行期环)。
+ * 甲板仍旧只当房东:它认识"这格有块几号设施",不认识"协同"这个概念。
  */
+import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT } from '../data/supports';
 import {
   TOWER_AUTOCANNON,
   TOWER_KIND_COUNT,
@@ -68,6 +74,12 @@ export const PLACE_UPGRADE = 5;
 export const PLACE_MAX_LEVEL = 6;
 /** content = CELL_WEAPON 但 towerType 不是合法塔型(TOWERS 的下标)。多半是 ui 的键位表漏了一档 */
 export const PLACE_BAD_TOWER = 7;
+/**
+ * content = CELL_SUPPORT 但 supportType 不是合法设施型(SUPPORTS 的下标)。
+ * 与 BAD_TOWER 分成两个码而不是合并成一个"型号不对":塔型与设施型是**两套互不相干的编号**
+ * (0 分别是自动机炮与弹药库),ui 照码说人话时得一眼看得出填错的是哪一套。
+ */
+export const PLACE_BAD_SUPPORT = 8;
 
 /**
  * 放置成功的唯一判据。成功从此有**两种**(新塔 PLACE_OK / 升级 PLACE_UPGRADE),
@@ -147,6 +159,37 @@ export interface DeckCell {
   coolLock: number;
   /** 充能进度 0..1 —— UI 的充能环;满 1.0 就停在那里等目标 */
   charge: number;
+
+  /*
+   * —— 支援设施与邻接加成(06 号 issue)——
+   * 与上面那八个塔字段同一条口径:**扁平挂在格上、建格时一次性声明齐**,清理也在同一处
+   * (recomputeDeck 的非占用分支)。设施与塔共用一个格对象而不是各开一套容器 ——
+   * 一格上要么是塔要么是设施,两套容器只会多出一个要同步生灭的东西。
+   */
+
+  /**
+   * SUP_*(见 data/supports)。**非支援格恒 -1** —— 0 是弹药库,拿它当"没有设施"会全盘串味:
+   * damage.ts 的 hullMaxHp 只认这一个字段(不再问一遍 content),填 0 等于给满甲板每个空格
+   * 都焊上一块弹药库。与 towerType 的 -1 是同一条「没有」的表达。
+   */
+  supportType: number;
+
+  /*
+   * —— 邻接 buff 缓存 —— **派生量**,由 sim/support.ts 的 recomputeSupportBuffs 全甲板重算,
+   * 读它的唯一地方是 sim/tower.ts 的四个 cell* 包装(取值链路只此一条,别处不许再算一份)。
+   * 缓存而不是每次现算:满甲板每帧要问几十次"这门炮实际多久一发",而配对只在甲板变了才变。
+   * **1 = 这一格没有任何加成**,复位值也是 **1 不是 0**:0 作倍率是把射速/热上限直接抹成 0,
+   * 与"没有加成"是两码事 —— 那样的甲板上每座塔都会瞬间过热且永远打不出下一发。
+   * 四个都是"越大越好":装填与蓄力那两档由取值函数决定是乘还是除,看表的人不必逐行想方向。
+   */
+  /** 射速倍率(> 1 = 更快),多块设施连乘 */
+  fireRateMul: number;
+  /** 装填时长倍率(< 1 = 更短),连乘 */
+  reloadMul: number;
+  /** 过热上限倍率(> 1 = 能连烧更久),连乘 */
+  heatMaxMul: number;
+  /** 充能速度倍率(> 1 = 攒得更快;蓄力时长除它),连乘 */
+  chargeRateMul: number;
 }
 
 export interface Deck {
@@ -156,6 +199,14 @@ export interface Deck {
   readonly cells: DeckCell[];
   /** 任一 occupied/content 变化即 +1,渲染层据此脏标记重建几何(每帧重画 12 个格没必要) */
   revision: number;
+  /**
+   * 邻接 buff 缓存最后一次重算时的 revision —— sim/support.ts 的 syncSupportBuffs 拿它当脏标记:
+   * 与 revision 相等就整帧 O(1) 跳过(配对只在甲板变了才会变,却是每帧都要问的东西)。
+   * 初值 **-1** 而不是 0:createDeck 出来的 revision 本身就是 0,填 0 等于开局就宣称"算过了",
+   * 于是第一次重算永远不会发生 —— 空甲板上看不出来,而 12 号从一块已经带设施的甲板起手时
+   * 就是整局都没有加成。**派生记账,不进 checksum**(与 exposed/online 同一条理由)。
+   */
+  buffRevision: number;
 }
 
 /** 局部坐标暂存:模块级复用而不是每次现造 —— 渲染层每帧会问一遍全部格心(铁律 3) */
@@ -196,10 +247,19 @@ export function createDeck(cols: number = DECK_COLS, rows: number = DECK_ROWS): 
         heat: 0,
         coolLock: 0,
         charge: 0,
+        // 设施型号与塔型同理:-1 而不是 0 —— 0 是弹药库,拿它当"没有设施"会让空甲板凭空加满血
+        supportType: -1,
+        // 四个邻接倍率的中性值是 **1**(乘 1 / 除 1 恒等):没有设施的甲板上,塔的取值链路
+        // 与 05 号那会儿逐位一字不差,既有的塔用例一条都不用改
+        fireRateMul: 1,
+        reloadMul: 1,
+        heatMaxMul: 1,
+        chargeRateMul: 1,
       });
     }
   }
-  const deck: Deck = { cols, rows, cells, revision: 0 };
+  // buffRevision 起手 -1:见接口里那段 —— 它必须与 revision(0)不等,好让第一次 sync 真的算一遍
+  const deck: Deck = { cols, rows, cells, revision: 0, buffRevision: -1 };
   // 构造末尾算一次:createDeck 出来的甲板必须立刻答得出"谁是边缘格",不许有未初始化的中间态
   recomputeDeck(deck);
   return deck;
@@ -214,6 +274,25 @@ export function cellIndex(deck: Deck, col: number, row: number): number {
 export function cellAt(deck: Deck, col: number, row: number): DeckCell | undefined {
   const i = cellIndex(deck, col, row);
   return i < 0 ? undefined : deck.cells[i];
+}
+
+/**
+ * 正交四邻的第 edge 个邻格 —— **全仓唯一一份四邻偏移**(EDGE_DCOL/EDGE_DROW 只在这里被读)。
+ * 暴露边推导、06 号的邻接配对、12 号的非矩形甲板于是天然共用同一条规则:
+ * 加一条"邻居"的定义只需改这一个函数,而斜角永远进不来 —— 只有四个 EDGE_* 偏移,没有第五个。
+ *
+ * **不存在、越界、!occupied 一律 undefined**:洞与船体外的空白是一回事(与 canPlace 的 NO_CELL、
+ * cellIndexAtWorld 的 -1 同一条口径)。于是 recomputeDeck 那句"邻格属于船体 → 这条边不算暴露"
+ * 与 support.ts 那句"洞不算邻居"读的是同一个判据,不必两处各写一遍 occupied。
+ * edge 不是 EDGE_* 时也给 undefined(而不是 ! 断言下去取到 NaN 坐标):本函数是四邻规则的
+ * 唯一出口,ui/渲染层把一个越界的边下标传进来时,该得到"没有那个邻居",而不是一次远处的崩溃。
+ */
+export function neighborCell(deck: Deck, cell: DeckCell, edge: number): DeckCell | undefined {
+  const dCol = EDGE_DCOL[edge];
+  const dRow = EDGE_DROW[edge];
+  if (dCol === undefined || dRow === undefined) return undefined;
+  const n = cellAt(deck, cell.col + dCol, cell.row + dRow);
+  return n && n.occupied ? n : undefined;
 }
 
 /**
@@ -254,13 +333,23 @@ export function recomputeDeck(deck: Deck): void {
       cell.heat = 0;
       cell.coolLock = 0;
       cell.charge = 0;
+      // 支援设施与它带来的加成同理,**五个字段一并清干净**:supportType 漏清,拆掉的装甲舱
+      // 就还在给全船加着 15 点 HP(damage.ts 的 hullMaxHp 只认这一个字段);四个倍率漏清,
+      // 就是"拆了再焊,新塔继承上一轮邻居给的射速"。倍率**复位成 1 不是 0**:0 是把塔抹死,
+      // 而这里要表达的是"这一格眼下没有任何加成"
+      cell.supportType = -1;
+      cell.fireRateMul = 1;
+      cell.reloadMul = 1;
+      cell.heatMaxMul = 1;
+      cell.chargeRateMul = 1;
       continue;
     }
     let mask = 0;
     let count = 0;
     for (let e = 0; e < EDGE_COUNT; e++) {
-      const n = cellAt(deck, cell.col + EDGE_DCOL[e]!, cell.row + EDGE_DROW[e]!);
-      if (n && n.occupied) continue; // 邻格属于船体 → 这条边被自家甲板挡住,不算暴露
+      // 邻格属于船体 → 这条边被自家甲板挡住,不算暴露。neighborCell 已经把 occupied 与越界
+      // 揉进"没有那个邻居"里,故这里不再自己判一遍(四邻规则全仓只有那一份)
+      if (neighborCell(deck, cell, e)) continue;
       mask |= 1 << e;
       count++;
     }
@@ -312,25 +401,44 @@ function isTowerType(towerType: number): boolean {
 }
 
 /**
+ * 合法设施型 = SUPPORTS 的下标。与 isTowerType 一字同源(含 NaN/1.5 那道 Number.isInteger):
+ * 越界的设施型放进去,SUPPORTS[cell.supportType] 在 damage.ts / 渲染层各取到一次 undefined,
+ * 表现是"这块设施既不加血也不上色",而报错点离放置现场十万八千里。
+ * 两套编号刻意分成两个函数、两个理由码:塔型与设施型的 0 是两种完全不同的东西。
+ */
+function isSupportType(supportType: number): boolean {
+  return Number.isInteger(supportType) && supportType >= 0 && supportType < SUPPORT_KIND_COUNT;
+}
+
+/**
  * 能不能往这一格放东西,返回 PLACE_*。**只读不写**:渲染层每帧对全甲板问一遍来算高亮,
  * ui 层每次点击前也问一遍,任何一次询问都不许改动世界。
  * @param towerType content = CELL_WEAPON 时的塔型(TOWERS 下标),其余内容忽略它。
  *   缺省 = 自动机炮 —— 它是 GDD §5.2 的"基础输出,万金油",默认它让既有的三参调用方
  *   (04 号那批只关心几何的用例、渲染层的合法格高亮)语义原样成立,不必逐处补一个参数。
+ * @param supportType content = CELL_SUPPORT 时的设施型(SUPPORTS 下标),其余内容忽略它。
+ *   与 towerType 各管各的一半:**第 4 参对支援设施完全无意义**,反过来也一样。
+ *   两套编号绝不并成一个"型号"参数 —— 并了之后一次填错就会静默变成另一套里的某一种,
+ *   而 0 恰好在两边都存在(自动机炮 / 弹药库),错得最深的那一档偏偏最不显眼。
+ *   缺省 = 弹药库,即 GDD §4.3 的"弹药库先行":漏传参数时放下去的,正是 MVP 唯一验过的那种。
  *
  * 判定顺序固定(理由码的语义靠它才唯一):
  *   1. content 不是武器塔/支援设施 → BAD_CONTENT。放在最前是因为它压根不是一次"放置请求",
  *      连问哪一格都无意义;顺带把"placeAt(格, CELL_EMPTY) 当拆除用"这条路堵在最外层;
  *   2. 武器塔但塔型非法 → BAD_TOWER。塔型对不对与哪一格无关,故也判在"问格"之前:
  *      同一个"塔型填错了"不能因为顺手点到界外就改口报 NO_CELL;
- *   3. 格不存在或不属于船体 → NO_CELL;
- *   4. 格已占:同种塔叠级(GDD §5.4)是**唯一**能落在占用格上的放置 —— 同 content、同 towerType
+ *   3. 支援设施但设施型非法 → BAD_SUPPORT。与上一条一模一样的理由,只是换了另一半编号;
+ *      两条天然互斥(一次放置只可能是其中一种内容),挨着写只为读的时候成对;
+ *   4. 格不存在或不属于船体 → NO_CELL;
+ *   5. 格已占:同种塔叠级(GDD §5.4)是**唯一**能落在占用格上的放置 —— 同 content、同 towerType
  *      → 未满 Lv5 给 UPGRADE、满级给 MAX_LEVEL;**其余一律 TAKEN**(换塔型、换内容都等于
  *      "出售 + 重放",GDD §4.5 明令战斗中不可移动、不可出售);
- *   5. 武器塔落在内部格 → INTERIOR(GDD §4.1:边缘格开火、内部格供能);
+ *      **支援设施本轮不叠级**:往已有设施的格上再放一律 TAKEN,哪怕型号相同 ——
+ *      GDD §5.3 的四种设施压根没有等级档,给它现编一条成长曲线不是本轮该做的事;
+ *   6. 武器塔落在内部格 → INTERIOR(GDD §4.1:边缘格开火、内部格供能);
  *      支援设施则任意空占用格都行,内部格正是它的主场。
  *
- * 第 4 步排在 INTERIOR 之前是有意的:被 12 号焊成内脏位的**离线塔照样能升级** ——
+ * 第 5 步排在 INTERIOR 之前是有意的:被 12 号焊成内脏位的**离线塔照样能升级** ——
  * 它只是不开火,不是不存在;而那一格早已不收新塔(空的内部格仍然一律 INTERIOR)。
  */
 export function canPlace(
@@ -339,9 +447,11 @@ export function canPlace(
   row: number,
   content: number,
   towerType: number = TOWER_AUTOCANNON,
+  supportType: number = SUP_AMMO_BAY,
 ): number {
   if (content !== CELL_WEAPON && content !== CELL_SUPPORT) return PLACE_BAD_CONTENT;
   if (content === CELL_WEAPON && !isTowerType(towerType)) return PLACE_BAD_TOWER;
+  if (content === CELL_SUPPORT && !isSupportType(supportType)) return PLACE_BAD_SUPPORT;
   const cell = cellAt(deck, col, row);
   if (!cell || !cell.occupied) return PLACE_NO_CELL;
   if (cell.content !== CELL_EMPTY) {
@@ -367,8 +477,9 @@ export function placeAt(
   row: number,
   content: number,
   towerType: number = TOWER_AUTOCANNON,
+  supportType: number = SUP_AMMO_BAY,
 ): number {
-  const code = canPlace(deck, col, row, content, towerType);
+  const code = canPlace(deck, col, row, content, towerType, supportType);
   if (!isPlaceSuccess(code)) return code;
   // canPlace 已经判过这一格存在且属于船体,故这里的 ! 是安全的(noUncheckedIndexedAccess)
   const cell = cellAt(deck, col, row)!;
@@ -396,9 +507,19 @@ export function placeAt(
     cell.heat = 0;
     cell.coolLock = 0;
     cell.charge = 0;
+    // 武器格**显式**写回 -1,而不是指望"反正建格时是 -1":同一条理由 —— 起手状态不该指望别处的
+    // 清理。漏了这一句,一格设施被 12 号拆掉再焊回来放上塔时,那座塔身上就还挂着一块弹药库,
+    // 而 damage.ts 的 hullMaxHp 只认 supportType,表现是船莫名其妙多 15 点血
+    cell.supportType = -1;
+  } else {
+    // 支援设施:**只写型号**,塔的那八个字段一概不碰(towerType/level 恒 -1/0,由建格初值与
+    // recomputeDeck 的清理保证)—— 它没有塔型,也没有节流机制。
+    // 也没有等级:本轮设施不叠级,故这里没有与 PLACE_UPGRADE 对应的分支,
+    // 上面 canPlace 那条"往已占的设施格再放一律 TAKEN"让这条路根本走不到。
+    // 四个邻接倍率同样不碰:它们是 sim/support.ts 的派生量,新设施带来的加成由本次
+    // revision++ 触发的那一遍 recomputeSupportBuffs 统一算(甲板不认识"协同"这回事)。
+    cell.supportType = supportType;
   }
-  // 支援设施不写上面那一段:它没有塔型也没有节流机制,towerType/level 恒 -1/0
-  // (由 createDeck 的初值与 recomputeDeck 的清理保证),塔的字段永远只属于武器格。
 
   // 暴露边没变(occupied 没动),只有这一格的 online 要跟着新内容走 —— 犯不着全量 recompute。
   // 有上面那条"武器塔只上边缘格"在,这一句今天算出来恒为 true;仍然照算,是为了让 online

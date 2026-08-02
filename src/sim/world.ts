@@ -27,6 +27,7 @@ import { Pool } from '../core/pool';
 import { Rng } from '../core/rng';
 import { SpatialHash } from '../core/spatialHash';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { SUP_AMMO_BAY } from '../data/supports';
 import {
   FX_LIFE_BEAM,
   FX_LIFE_BLAST,
@@ -69,6 +70,7 @@ import {
   resetFxEvent,
 } from './fx';
 import { createShip, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
+import { syncSupportBuffs } from './support';
 import { stepTurrets } from './turret';
 
 /** 渲染层与既有调用方都从 world 取 Enemy 类型,实体定义搬去 enemy.ts 后这条保持它们不破 */
@@ -271,9 +273,13 @@ export class World {
    * @param cmd 本逻辑帧的输入(纯数据)。只读不缓存引用,调用方可以整局复用同一个对象;
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
-   * 顺序定死(单测按此钉):船 → 贴边夹取 → 出怪 → 重建空间哈希 →
-   * 清 contacts / 清 broadside / edgePenalty 逐帧减 dt → 敌人(积分 + hitCd 递减 + 粗筛入 contacts)→
+   * 顺序定死(单测按此钉):**甲板派生量(邻接 buff + HP 上限)** → 船 → 贴边夹取 → 出怪 →
+   * 重建空间哈希 → 清 contacts / 清 broadside / edgePenalty 逐帧减 dt →
+   * 敌人(积分 + hitCd 递减 + 粗筛入 contacts)→
    * 炮管(含节流与开火)→ 子弹 → 船体受击结算 → 可视化事件老化 → 回收死者。
+   * 甲板派生量排在**最前**(见下面那两句):这一帧的塔按最新的邻接加成开火、这一帧的撞击按最新的
+   * 上限结算 —— 12 号拆掉一格甲板(setOccupied 清 supportType)后,加成与上限当帧就回落,
+   * 而不是靠下一次放置才想起来重刷(06 号验收第三条"拆除即时移除"的落点就在这两句)。
    * 出怪排在建哈希之前,新生的敌人当帧就参与分离;
    * 炮管排在敌人循环**之后**:敌人本帧已经动完,塔瞄的就是本帧位置 ——
    * 反过来的话每座塔都恒定落后一帧,贴脸高速目标会永远被瞄在身后(04 号 issue);
@@ -286,6 +292,23 @@ export class World {
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
+
+    // 甲板的两样派生量在帧首统一刷,于是"这一帧"的塔与"这一帧"的撞击读到的都是最新的甲板。
+    //
+    // 邻接加成:sync 自带 revision 守卫,甲板没变时整帧 O(1)(见 sim/support.ts),
+    // 故放在热路径上不心疼。放这里而不是只在 place 之后刷一次 —— 甲板还有 place 之外的改法
+    // (12 号的 setOccupied 焊/拆),而那条路不该被迫记得来调一次 buff 重算。
+    syncSupportBuffs(this.deck);
+    // HP 上限同理是**甲板的派生量**(装甲舱 +15,damage.hullMaxHp):拆掉装甲舱的当帧就该回落,
+    // 这正是 06 号验收第三条"拆除即时移除"要的即时性 —— place 里那一句只管得住"放下去"这一半。
+    // 每帧现算而不是记个脏标记:hullMaxHp 是十来格的一遍加法,比维护第二个 revision 便宜得多。
+    //
+    // **只夹不涨**:上限回落时把 hp 压进新上限(否则拆掉装甲舱会留下一艘 hp > maxHp 的船,
+    // 血条画出去满出来),但上限涨上去时 hp 一分不还 —— 装甲舱是船的规格,不是治疗
+    // (与 place 里那句"这一局打下来的账一分不还"同一条口径)。
+    // 不在这里判 shipDead:hp 已经是 0,夹取对它是恒等,多一个分支只是多一条要维护的路
+    this.ship.maxHp = hullMaxHp(this.deck);
+    if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
 
     // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后
     const ship = this.ship;
@@ -533,19 +556,35 @@ export class World {
    * @param towerType content = CELL_WEAPON 时的塔型;缺省 = 自动机炮(GDD §5.2 的万金油),
    *   于是既有的三参调用方语义原样成立。往已有**同种**塔的格上再放一座 = 同名叠级
    *   (PLACE_UPGRADE,GDD §5.4),换塔型/换内容仍然是 PLACE_TAKEN —— 规则全在 sim/deck,这里不复述。
+   * @param supportType content = CELL_SUPPORT 时的设施型;缺省 = 弹药库(GDD §4.3 的"弹药库先行"),
+   *   于是既有的三/四参调用方语义同样原样成立。两套编号各管各的一半、绝不合并 ——
+   *   0 在两边分别是自动机炮与弹药库,理由全文见 sim/deck 的 canPlace。
    * @returns PLACE_* 理由码;被拒时世界一个字段都没动,ui 层照码说人话(成功判定用 isPlaceSuccess)
    *
    * 它在 step() 之外改世界状态,与"面板改实体数量"同一个口径:一旦调用,
    * 之后的 checksum 不再与"同 seed 从头跑"可比(放置本身是确定性的,但它不在输入序列里)。
    * 10 号 issue 的"三选一 → 时停 → 放置"会把它收进正式流程,届时放置事件进输入序列,这条限制自动消失。
    */
-  place(col: number, row: number, content: number, towerType: number = TOWER_AUTOCANNON): number {
-    const code = placeAt(this.deck, col, row, content, towerType);
-    // 放置成功就重刷上限:HP 上限从设计上就是**甲板的派生量**(06 号的装甲舱 +15),
-    // 这条挂钩今天就得真的活着,否则 06 填完函数体还会发现装上装甲舱上限纹丝不动。
+  place(
+    col: number,
+    row: number,
+    content: number,
+    towerType: number = TOWER_AUTOCANNON,
+    supportType: number = SUP_AMMO_BAY,
+  ): number {
+    const code = placeAt(this.deck, col, row, content, towerType, supportType);
+    // 放置成功就重刷上限:HP 上限从设计上就是**甲板的派生量**(06 号的装甲舱 +15)。
+    // hullMaxHp 当场遍历 cells、不读任何缓存,故这一句放下去当帧就是新的上限。
     // **hp 不跟着涨**:上限是船的规格,当前 HP 是这一局打下来的账 —— 装一块装甲舱不该顺手治疗。
     // 被拒的放置一个字段都没动(见 sim/deck),自然也不必重刷
-    if (isPlaceSuccess(code)) this.ship.maxHp = hullMaxHp(this.deck);
+    if (isPlaceSuccess(code)) {
+      this.ship.maxHp = hullMaxHp(this.deck);
+      // 邻接加成也当场重算,不等下一帧的 step:放置发生在 step **之外**(ui 的一次点击),
+      // 而 10 号的"三选一 → 时停 → 放置"里时间是停的 —— 那时不补这一句,玩家就会看见
+      // 一块焊好的弹药库连着一门一动不动的机炮,直到时停结束才突然提速。
+      // 它自己带 revision 守卫,故与帧首那次 sync 重复调用是 O(1),不必怕多算一遍
+      syncSupportBuffs(this.deck);
+    }
     return code;
   }
 
@@ -630,9 +669,17 @@ export class World {
     // 就从确定性口径下漏掉了 —— 而节流状态恰恰决定了下一帧谁开火。
     // cooldown/reloadLeft/coolLock/charge × 100 的理由与"弧度换算成度"同源:
     // Math.round(v * 8) 对 0..1 量级的秒数/进度太粗(量化步长 0.125),抓不住一两帧的差别
+    //
+    // 支援设施的**型号**(06 号)与 towerType 同理是一次放置定死的世界状态,不是派生量:
+    // 漏了它,"该放弹药库却放成了散热器"这类回归会从确定性口径下漏掉 —— 而两者对同一门炮
+    // 一个提速一个不提速,下一帧谁开火就此不同。而那四个**邻接 buff 缓存与 buffRevision 一律不进**:
+    // 它们是 occupied/content/supportType/towerType/online 的纯函数(recomputeSupportBuffs 每次
+    // 全甲板重算,没有第二条来路),而这几样上下逐格全哈过了 —— 哈缓存只是把同一件事哈两遍,
+    // 与 exposed/online 跳过是同一条理由
     for (const c of this.deck.cells) {
       acc(c.occupied ? 1 : 0);
       acc(c.content);
+      acc(c.supportType);
       acc((c.turretOffset * 180) / Math.PI);
       acc(c.towerType);
       acc(c.level);

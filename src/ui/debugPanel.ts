@@ -17,6 +17,14 @@ export interface DebugStats {
    * 画面上那条灰盒血条只回答"在掉",拖倍率对比掉得多快得看数。
    */
   hp: number;
+  /**
+   * 船体 HP 上限(06 号 issue)。它**不是** tuning.shipHullHp,而是甲板的派生量:
+   * 基础值 + 每块装甲舱 +15(见 sim/damage.hullMaxHp),World 每逻辑帧重刷一次。
+   * 单独占一条只读项的理由:装甲舱是四种支援设施里唯一**不画邻接连线**的那种
+   * (它不作用于相邻塔),放下去之后画面上除了格子换色什么都不会变 ——
+   * 这个数跳 +15 就是"装甲舱真的生效了"唯一的肉眼落点(06 号验收标准第三条)。
+   */
+  maxHp: number;
   tick: number;
   checksum: string;
   seed: number;
@@ -80,6 +88,9 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   // 判定体那根还能按住 Tab 边拖边看轮廓变。
   const hit = pane.addFolder({ title: '受击(09)' });
   hit.addBinding(stats, 'hp', { label: '船体 HP', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  // 紧挨着 hp 放:这两个数只有摆在一起才读得出"还剩多少"。放一块装甲舱它当场 +15(见 DebugStats.maxHp),
+  // 而 hp 纹丝不动 —— 上限是船的规格,当前 HP 是这一局打下来的账,装甲不是治疗
+  hit.addBinding(stats, 'maxHp', { label: 'HP 上限', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 各型的 contactDamage 在 src/data/enemies.ts,这里是全局倍率:先拖它定"贴脸掉得多快",
   // 再回数值表分配各型的相对轻重(与塔的伤害倍率同一条用法)
   hit.addBinding(tuning, 'enemyContactDamageScale', { label: '撞击伤害倍率', min: 0, max: 5, step: 0.1 });
@@ -94,11 +105,12 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   // 判定体大小(GDD §4.4:判定小于外形)。按住 Tab 能看见那个矩形跟着这根滑杆实时变 ——
   // 那是它唯一的肉眼校准方式,拖完再去贴脸试"擦碰出火花 / 进核心才掉血"的分界对不对
   hit.addBinding(tuning, 'shipCoreScale', { label: '判定体×(按 Tab 看)', min: 0.2, max: 1.5, step: 0.02 });
-  // 上限**不是**只在开局读一次:hullMaxHp() 是现读的,而 World.place() 每次放置成功都会用它
-  // 重刷 ship.maxHp(为的是接 06 号装甲舱的 +15)—— 所以拖完这根滑杆再放一座塔,上限当场就变,
-  // 而 hp 不跟着回血。label 得说这个真话:写"重开生效"会让人以为血条自己掉了一截
+  // 只是**基础值**:真正的上限 = 它 + 每块装甲舱 +15(hullMaxHp 是甲板的派生量),
+  // 而 06 号起 World.step 每逻辑帧重刷一次 ship.maxHp —— 所以这根滑杆拖到哪儿,
+  // 上面那条只读「HP 上限」当帧就跟到哪儿(不必再放一座塔去触发),hp 则只夹不涨、不跟着回血。
+  // label 得说这个真话:写"重开生效"/"放塔后生效"都会让人以为拖了没用而白等
   hit.addBinding(tuning, 'shipHullHp', {
-    label: 'HP 上限(放塔后生效)',
+    label: 'HP 上限(基础)',
     min: 20,
     max: 500,
     step: 10,

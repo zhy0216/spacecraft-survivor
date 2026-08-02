@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   FX_LIFE_BEAM,
   TOWER_ARC,
@@ -53,6 +54,7 @@ import {
   PLACE_OK,
   PLACE_TAKEN,
   PLACE_UPGRADE,
+  setOccupied,
 } from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_SPARK } from './fx';
@@ -288,6 +290,124 @@ describe('甲板接线(world.place 是唯一放置入口)', () => {
     const capped = a.checksum();
     expect(a.place(0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_MAX_LEVEL);
     expect(a.checksum()).toBe(capped);
+  });
+});
+
+/** 装甲舱的数值只从表里取:GDD §5.3 那 15 点哪天改了,下面这几条断言跟着改,而不是各写死一个 15 */
+const ARMOR = SUPPORTS[SUP_ARMOR_BAY]!;
+
+/**
+ * 支援设施接线(06 号 issue T4)。邻接配对与倍率连乘在 support.test.ts 钉、
+ * HP 上限与舷向减伤的算式在 damage.test.ts 钉,这里只钉**世界这一层**的三件事:
+ *   place 的第 5 参真的送到了 sim/deck(而不是被吞掉走了缺省的弹药库);
+ *   加成与上限**放置即时生效、拆除即时移除**(验收标准第三条)—— 前一半靠 place 里那两句,
+ *     后一半靠 step 帧首那两句,因为 12 号的 setOccupied 根本不认识 World;
+ *   哪些进 checksum:设施型号进(一次放置定死的世界状态),四个 buff 缓存与 buffRevision 不进
+ *     (甲板的纯派生量,而甲板逐格哈过了)。
+ * 邻接加成对射速/装填的实测(验收标准第一条)在 tower.test.ts 那条链路上钉 ——
+ * 那是取值函数的事,世界这一层只负责每帧把缓存刷新到位。
+ */
+describe('支援设施接线(06 号 T4:放置即时生效、拆除即时移除)', () => {
+  it('装甲舱放下去**当帧**就抬上限,hp 一分不还;两块加两份,别的设施一分不加', () => {
+    tuning.stressEnemies = 0; // 这组用例只关心甲板,场上不必有人
+    const w = new World(11);
+    const base = w.ship.maxHp;
+    w.ship.hp = 40;
+
+    // 第 5 参真的送到了 deck:走缺省的话放下去的是弹药库,上限纹丝不动
+    expect(w.place(1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+    expect(cellAt(w.deck, 1, 1)!.supportType).toBe(SUP_ARMOR_BAY);
+    // **不等下一帧**:place 返回的这一刻上限就是新的(hullMaxHp 当场遍历 cells,不读任何缓存)
+    expect(w.ship.maxHp).toBe(base + ARMOR.hullHp);
+    expect(w.ship.hp).toBe(40); // 上限是船的规格,这一局打下来的账一分不还 —— 装甲舱不是治疗
+
+    // 加法叠加(GDD §5.3 的 HP 是点数不是比例):第二块照样 +15
+    expect(w.place(0, 0, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+    expect(w.ship.maxHp).toBe(base + 2 * ARMOR.hullHp);
+
+    // 别的设施一分不加:上限只认表里的 hullHp,不认"这格有东西"
+    expect(w.place(2, 0, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_OK);
+    expect(w.ship.maxHp).toBe(base + 2 * ARMOR.hullHp);
+
+    // 跑一帧不会把它抹回去:帧首那次重刷读的是同一块甲板,答案自然一样
+    w.step();
+    expect(w.ship.maxHp).toBe(base + 2 * ARMOR.hullHp);
+    expect(w.ship.hp).toBe(40);
+  });
+
+  it('setOccupied 拆掉装甲舱:下一帧上限回落、hp 被夹进新上限;反过来涨上限时 hp 一分不涨', () => {
+    tuning.stressEnemies = 0;
+    const w = new World(12);
+    const base = w.ship.maxHp;
+    expect(w.place(0, 0, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+    expect(w.ship.maxHp).toBe(base + ARMOR.hullHp);
+    w.ship.hp = w.ship.maxHp; // 满血:上限回落时才看得出那一下夹取
+
+    // 12 号焊/拆甲板的唯一入口。它只清 supportType(recomputeDeck 的非占用分支),
+    // **World 一个字都不知道这次拆除发生过** —— 上限回落全靠 step 帧首那次无条件重刷,
+    // 这就是"拆除即时移除"(验收标准第三条)在 MVP 里唯一能被真的走一遍的路径
+    setOccupied(w.deck, 0, 0, false);
+    expect(cellAt(w.deck, 0, 0)!.supportType).toBe(-1);
+    expect(w.ship.maxHp).toBe(base + ARMOR.hullHp); // 还没跑帧:上一次重刷留下的旧上限
+
+    w.step();
+    expect(w.ship.maxHp).toBe(base);
+    expect(w.ship.hp).toBe(base); // 夹进新上限,否则血条会画出一艘 hp > maxHp 的船
+
+    // 只夹不涨:上限重新长回去时,hp 停在原处
+    w.ship.hp = 50;
+    expect(w.place(0, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+    w.step();
+    expect(w.ship.maxHp).toBe(base + ARMOR.hullHp);
+    expect(w.ship.hp).toBe(50);
+  });
+
+  it('设施型号进 checksum:同一格同样是设施,一边弹药库一边散热器就分叉,换成同一种又合流', () => {
+    tuning.stressEnemies = 10;
+    const a = new World(79);
+    const b = new World(79);
+    for (let f = 0; f < 20; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 两边的 occupied/content 一模一样,唯一的差别就是 supportType:漏了它,
+    // "该放弹药库却放成了散热器"这类回归会从确定性口径下漏掉 —— 而这两种对同一门机炮
+    // 一个提速一个零效果,下一帧谁开火就此不同
+    expect(a.place(1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_OK);
+    expect(b.place(1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_RADIATOR)).toBe(PLACE_OK);
+    expect(cellAt(a.deck, 1, 1)!.content).toBe(cellAt(b.deck, 1, 1)!.content);
+    expect(a.checksum()).not.toBe(b.checksum());
+
+    // 第三个同 seed 世界补上与 b 一模一样的那一块 → 合流。
+    // 有这一条,上面那次分叉才排得掉"放置本身让哈希变了"这种空过
+    const c = new World(79);
+    for (let f = 0; f < 20; f++) c.step();
+    expect(c.place(1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_RADIATOR)).toBe(PLACE_OK);
+    expect(c.checksum()).toBe(b.checksum());
+  });
+
+  it('四个 buff 缓存与 buffRevision 不进 checksum(甲板的纯派生量,而甲板本身逐格哈过了)', () => {
+    tuning.stressEnemies = 0;
+    const w = new World(80);
+    w.step();
+    const before = w.checksum();
+
+    // 手改一格的四个倍率 + 记账用的 buffRevision:哈希纹丝不动。
+    // 它们是 occupied/content/supportType/towerType/online 的纯函数(recomputeSupportBuffs 每次
+    // 全甲板重算,没有第二条来路),哈它们只是把同一件事哈两遍 —— 与 exposed/online 跳过同一条理由
+    const cell = cellAt(w.deck, 0, 0)!;
+    cell.fireRateMul = 1.25;
+    cell.reloadMul = 0.7;
+    cell.heatMaxMul = 1.5;
+    cell.chargeRateMul = 1.3;
+    w.deck.buffRevision = 999;
+    expect(w.checksum()).toBe(before);
+
+    // 对照:同一格上真正的世界状态(设施型号)一动就分叉 —— 上面那条不是"甲板压根没进哈希"的空过
+    cell.supportType = SUP_AMMO_BAY;
+    expect(w.checksum()).not.toBe(before);
   });
 });
 

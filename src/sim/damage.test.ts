@@ -12,12 +12,21 @@
  *     且随船一起转;接触点压在船心上时恒归 BOW,不随朝向漂移;
  *   塔的舷向归属**走暴露边不走方位角**,角落格同时属于两舷 —— 连同"为什么不能每格只挑一条边"
  *     的那个理由(3×4 下 PORT/STERN 会瘪成 2 格)一起钉,免得将来有人"顺手简化"回去;
- *   06 号两个挂钩(hullMaxHp / edgeDamageMul)MVP 的恒定返回值 —— 06 只该改函数体,不该改签名。
+ *   装甲舱的两项船体加成(06 号):HP 是**加法**(两块 = +30)、舷减伤是**连乘**(同舷两块 = ×0.64),
+ *     而舷向归属复用的正是上一条那个 isEdgeExposed —— 角落格的一块砖挡两面,
+ *     内部格的那块只加 HP、一条舷都不护。两项都**不特判设施型号**,读的是 data/supports 的字段。
  *
  * 参数在文件顶部显式写死并 afterEach 还原(照 ship.test.ts / deck.test.ts 的做法):
  * shipCoreScale 的 0.72 是占位待调的数,平衡一动,断言里那些算得清的整数就全没了。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import {
+  SUP_AMMO_BAY,
+  SUP_ARMOR_BAY,
+  SUP_CAPACITOR,
+  SUP_RADIATOR,
+  SUPPORTS,
+} from '../data/supports';
 import { tuning } from './config';
 import {
   cellFireRateMul,
@@ -33,6 +42,7 @@ import {
   hullMaxHp,
 } from './damage';
 import {
+  CELL_SUPPORT,
   cellAt,
   createDeck,
   DECK_COLS,
@@ -473,21 +483,121 @@ describe('cellFireRateMul(塔的舷向归属走暴露边)', () => {
   });
 });
 
-describe('06 号支援设施的两个挂钩(MVP 恒定,只有函数体待填)', () => {
-  it('hullMaxHp 恒 = tuning.shipHullHp,与甲板大小无关', () => {
+describe('装甲舱的两项船体加成(hullMaxHp / edgeDamageMul)', () => {
+  /**
+   * 往 (col,row) 焊一块支援设施。**直接写格上那两个字段**而不是走 placeAt:
+   * 本文件测的是 damage.ts 那两个纯函数的算式(它们只认 cell.supportType 这一个字段),
+   * 放置规则自有 deck.test.ts 把关 —— 从这里绕开一层,每条用例才只钉一件事。
+   */
+  const putSupport = (deck: Deck, col: number, row: number, supportType: number): void => {
+    const cell = cellAt(deck, col, row)!;
+    cell.content = CELL_SUPPORT;
+    cell.supportType = supportType;
+  };
+
+  it('hullMaxHp = 基准 + 每块装甲舱 15 点(加法叠加,与甲板大小无关)', () => {
+    const armor = SUPPORTS[SUP_ARMOR_BAY]!;
+    expect(armor.hullHp).toBe(15); // GDD §5.3
+
     expect(hullMaxHp(createDeck())).toBe(100); // GDD §14 锁定的初值
     expect(hullMaxHp(createDeck())).toBe(tuning.shipHullHp);
-    // 装甲舱(GDD §5.3 的 +15)是 06 的活:今天焊多少格甲板都不该改变上限
+    // 空甲板焊多大都不改上限:上限会变的**唯一**原因是甲板上多了几块装甲舱
     expect(hullMaxHp(createDeck(5, 6))).toBe(tuning.shipHullHp);
 
-    tuning.shipHullHp = 250;
-    expect(hullMaxHp(createDeck())).toBe(250); // 现读 tuning,不是模块加载时算死的
+    const deck = createDeck();
+    putSupport(deck, 1, 1, SUP_ARMOR_BAY); // 内部格:HP 这一档不看舷向
+    expect(hullMaxHp(deck)).toBe(115);
+    putSupport(deck, 0, 0, SUP_ARMOR_BAY); // 角落格
+    // **加法**(+30)而不是连乘(×1.15² = 132.25):HP 是点数不是比例,
+    // 这是本轮唯一一项加法叠加,四个邻接倍率与下面的舷减伤一律连乘
+    expect(hullMaxHp(deck)).toBe(130);
+    expect(hullMaxHp(deck)).toBe(tuning.shipHullHp + 2 * armor.hullHp);
   });
 
-  it('edgeDamageMul 四舷恒 1', () => {
-    // 返回的是**倍率**而不是减伤值:06 填函数体时多块装甲舱天然连乘,不可能把伤害减成负数
+  it('其余三种设施一点 HP 都不加 —— 读的是表里的 hullHp,不是"这格是不是支援设施"', () => {
+    for (const type of [SUP_AMMO_BAY, SUP_RADIATOR, SUP_CAPACITOR]) {
+      expect(SUPPORTS[type]!.hullHp).toBe(0);
+      const deck = createDeck();
+      putSupport(deck, 1, 1, type);
+      putSupport(deck, 0, 0, type);
+      expect(hullMaxHp(deck)).toBe(tuning.shipHullHp);
+    }
+  });
+
+  it('hullMaxHp 现读 tuning,不是模块加载时算死的', () => {
+    tuning.shipHullHp = 250; // 面板拖一下立刻改体感,与 hullCoreHalfExtents 那批同口径
+    expect(hullMaxHp(createDeck())).toBe(250);
     const deck = createDeck();
+    putSupport(deck, 1, 1, SUP_ARMOR_BAY);
+    expect(hullMaxHp(deck)).toBe(265); // 装甲舱的 +15 叠在**新**基准上,而不是叠在 100 上
+  });
+
+  it('装甲舱只护它自己那几条暴露边所在的舷,没装甲的舷仍恒 1', () => {
+    const armor = SUPPORTS[SUP_ARMOR_BAY]!;
+    expect(armor.edgeDamageMul).toBe(0.8); // GDD §5.3 的"所在舷受撞伤害 -20%"
+
+    const deck = createDeck();
+    // 返回的是**倍率**不是减伤值,空甲板下四舷恒 1;焊多大都一样,变的只有装甲舱
     for (let e = 0; e < EDGE_COUNT; e++) expect(edgeDamageMul(deck, e)).toBe(1);
     expect(edgeDamageMul(createDeck(5, 6), EDGE_BOW)).toBe(1);
+
+    putSupport(deck, 1, 0, SUP_ARMOR_BAY); // 船头那一行的中间格:只暴露 BOW
+    expect(edgeDamageMul(deck, EDGE_BOW)).toBe(0.8);
+    expect(edgeDamageMul(deck, EDGE_STARBOARD)).toBe(1);
+    expect(edgeDamageMul(deck, EDGE_STERN)).toBe(1);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBe(1);
+
+    putSupport(deck, 1, 3, SUP_ARMOR_BAY); // 船尾中间格:只暴露 STERN
+    expect(edgeDamageMul(deck, EDGE_STERN)).toBe(0.8);
+    expect(edgeDamageMul(deck, EDGE_BOW)).toBe(0.8); // 两块各护各的舷,互不相干
+  });
+
+  it('同舷多块**连乘**:两块 ×0.64、四块 ×0.4096,永远推不到 ≤ 0', () => {
+    const deck = createDeck();
+    putSupport(deck, 0, 1, SUP_ARMOR_BAY); // 左舷中段两格:只暴露 PORT
+    putSupport(deck, 0, 2, SUP_ARMOR_BAY);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBeCloseTo(0.64, 12); // 连乘 0.8²,不是加法的 0.6
+    expect(edgeDamageMul(deck, EDGE_BOW)).toBe(1); // 这两格不沾船头
+
+    // 补满左舷一列(两头是角落格)。加法("每块 -20%")到第五块就把倍率抹成 0、第六块起变负
+    // = 撞一下反而回血;连乘只会收益递减 —— 这正是这个挂钩返回倍率而不是减伤值的理由
+    putSupport(deck, 0, 0, SUP_ARMOR_BAY);
+    putSupport(deck, 0, 3, SUP_ARMOR_BAY);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBeCloseTo(0.8 ** DECK_ROWS, 12);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBeCloseTo(0.4096, 12);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBeGreaterThan(0);
+  });
+
+  it('角落格的装甲舱同时护两舷 —— 舷向归属与 cellFireRateMul 一字同源', () => {
+    const deck = createDeck();
+    const corner = cellAt(deck, 0, 0)!; // 船头左舷角:BOW | PORT
+    expect(isEdgeExposed(corner, EDGE_BOW)).toBe(true);
+    expect(isEdgeExposed(corner, EDGE_PORT)).toBe(true);
+
+    putSupport(deck, 0, 0, SUP_ARMOR_BAY);
+    // 一块砖挡两面:角落格两面临敌,那既是它射界 +60° 的代价,也该是它在防御这一档的对价
+    expect(edgeDamageMul(deck, EDGE_BOW)).toBe(0.8);
+    expect(edgeDamageMul(deck, EDGE_PORT)).toBe(0.8);
+    expect(edgeDamageMul(deck, EDGE_STARBOARD)).toBe(1);
+    expect(edgeDamageMul(deck, EDGE_STERN)).toBe(1);
+  });
+
+  it('内部格的装甲舱只加 HP,一条舷都不护', () => {
+    const deck = createDeck();
+    const interior = cellAt(deck, 1, 1)!;
+    expect(interior.exposedCount).toBe(0); // 四面被围(GDD §4.1),它压根没有"所在舷"
+    putSupport(deck, 1, 1, SUP_ARMOR_BAY);
+
+    expect(hullMaxHp(deck)).toBe(tuning.shipHullHp + 15); // HP 这一档照加
+    for (let e = 0; e < EDGE_COUNT; e++) expect(edgeDamageMul(deck, e)).toBe(1);
+  });
+
+  it('其余三种设施四舷全 1 —— 减伤同样读表里的 edgeDamageMul', () => {
+    for (const type of [SUP_AMMO_BAY, SUP_RADIATOR, SUP_CAPACITOR]) {
+      expect(SUPPORTS[type]!.edgeDamageMul).toBe(1);
+      const deck = createDeck();
+      putSupport(deck, 0, 0, type); // 角落格:两条暴露边都会进循环
+      for (let e = 0; e < EDGE_COUNT; e++) expect(edgeDamageMul(deck, e)).toBe(1);
+    }
   });
 });

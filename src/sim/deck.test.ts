@@ -14,6 +14,7 @@
  * M0 会反复调 tuning,几何断言不该被平衡调整带崩。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT } from '../data/supports';
 import {
   TOWER_ARC,
   TOWER_AUTOCANNON,
@@ -54,7 +55,9 @@ import {
   isEdgeExposed,
   isInteriorCell,
   isPlaceSuccess,
+  neighborCell,
   PLACE_BAD_CONTENT,
+  PLACE_BAD_SUPPORT,
   PLACE_BAD_TOWER,
   PLACE_INTERIOR,
   PLACE_MAX_LEVEL,
@@ -680,7 +683,7 @@ describe('同名叠级 Lv1→Lv5(GDD §5.4)', () => {
     expect(cellAt(deck, 0, 0)!.level).toBe(2);
   });
 
-  it('isPlaceSuccess:只有 PLACE_OK 与 PLACE_UPGRADE 算成功,八个理由码互不撞号', () => {
+  it('isPlaceSuccess:只有 PLACE_OK 与 PLACE_UPGRADE 算成功,九个理由码互不撞号', () => {
     expect(isPlaceSuccess(PLACE_OK)).toBe(true);
     expect(isPlaceSuccess(PLACE_UPGRADE)).toBe(true); // 漏了这一个,升级就会被 ui 当成拒绝弹红字
     const rejects = [
@@ -690,12 +693,223 @@ describe('同名叠级 Lv1→Lv5(GDD §5.4)', () => {
       PLACE_BAD_CONTENT,
       PLACE_MAX_LEVEL,
       PLACE_BAD_TOWER,
+      // 06 号新增的那一半:设施型非法。isPlaceSuccess 不认它 —— 型号填错时若被当成成功,
+      // placeAt 会把一个查不到的下标写进 supportType,此后每一处 SUPPORTS[...] 都静默取到 undefined
+      PLACE_BAD_SUPPORT,
     ];
     for (const code of rejects) expect(isPlaceSuccess(code)).toBe(false);
 
     // ui 靠码分支说人话,撞号就会指错规则(玩家看到的解释与真正被拦的原因对不上)
     const codes = [PLACE_OK, PLACE_UPGRADE, ...rejects];
     expect(new Set(codes).size).toBe(codes.length);
+  });
+});
+
+/**
+ * 正交四邻(06 号 issue T1-a)。neighborCell 是**全仓唯一一份**四邻偏移:
+ * 暴露边推导、06 号的邻接配对、12 号的非矩形甲板都从这一个函数取邻居 ——
+ * 于是"斜角不算相邻""洞不算邻居"这两条规则只有一处实现,不必在每个调用点各判一遍。
+ * 最后一条把它与 exposed 掩码的互补关系钉死:那正是"recomputeDeck 复用了它"的可观察证据。
+ */
+describe('neighborCell:正交四邻的唯一出口', () => {
+  it('四个方向各取到对应的邻格,与"边下标 ↔ 邻格方向"那张表一致', () => {
+    const deck = createDeck();
+    for (const c of deck.cells) {
+      for (let e = 0; e < EDGE_COUNT; e++) {
+        const step = NEIGHBOR[e]!;
+        expect(neighborCell(deck, c, e)).toBe(cellAt(deck, c.col + step.dCol, c.row + step.dRow));
+      }
+    }
+  });
+
+  it('洞与船体外是一回事:越界与 !occupied 一律 undefined', () => {
+    const donut = deckFrom(['###', '#.#', '###']);
+    const bow = cellAt(donut, 1, 0)!;
+    expect(neighborCell(donut, bow, EDGE_BOW)).toBeUndefined(); // 船体外
+    // 洞给的是**同一个**答案 —— 06 号的"洞不算邻居"因此不必在 support.ts 里再判一次 occupied
+    expect(neighborCell(donut, bow, EDGE_STERN)).toBeUndefined();
+    expect(neighborCell(donut, bow, EDGE_PORT)).toBe(cellAt(donut, 0, 0));
+    expect(neighborCell(donut, bow, EDGE_STARBOARD)).toBe(cellAt(donut, 2, 0));
+  });
+
+  it('斜角永远进不来;越界的边下标给 undefined 而不是崩', () => {
+    const deck = createDeck();
+    const c = cellAt(deck, 1, 1)!;
+    // "正交四邻判定"的字面实现:四个方向里没有任何一个是斜对角
+    const diagonals = [
+      cellAt(deck, 0, 0),
+      cellAt(deck, 2, 0),
+      cellAt(deck, 0, 2),
+      cellAt(deck, 2, 2),
+    ];
+    for (let e = 0; e < EDGE_COUNT; e++) expect(diagonals).not.toContain(neighborCell(deck, c, e));
+    // 只有四个 EDGE_* 偏移,没有第五个:传进来一个越界的边下标该得到"没有那个邻居",
+    // 而不是拿 NaN 坐标去查表(那时炸的地方离现场十万八千里)
+    for (const bad of [-1, EDGE_COUNT, 99, 1.5, NaN]) {
+      expect(neighborCell(deck, c, bad)).toBeUndefined();
+    }
+  });
+
+  it('与 exposed 掩码严格互补 —— recomputeDeck 走的就是它,不是另抄一份偏移', () => {
+    const decks = [
+      createDeck(),
+      deckFrom(['#.#', '###', '#.#']),
+      createDeck(1, 4),
+      createDeck(1, 1),
+    ];
+    for (const deck of decks) {
+      for (const c of deck.cells) {
+        if (!c.occupied) continue;
+        for (let e = 0; e < EDGE_COUNT; e++) {
+          // 暴露 ⇔ 那个方向没有邻居。两边哪天走散,12 号的异形甲板会先在这里红
+          expect(isEdgeExposed(c, e)).toBe(neighborCell(deck, c, e) === undefined);
+        }
+      }
+    }
+  });
+});
+
+/**
+ * 支援设施的型号与邻接加成缓存(06 号 issue T1-a,GDD §5.3)。
+ * 本文件只钉**甲板这一侧** —— 谁跟谁配对、四个倍率怎么连乘在 sim/support.ts,不在这里
+ * (甲板不认识"协同"这个概念,它只是那几个字段的房东)。钉的几条:
+ *   设施型与塔型是**两套编号**,各有一个校验、一个理由码,第 4/5 参互不干涉;
+ *   非支援格恒 supportType -1 —— 0 是弹药库,拿它当"没有设施"会让 damage.ts 给全船凭空加满血;
+ *   四个倍率的中性值是 **1 不是 0**:0 作倍率是把塔抹死,与"这一格没有加成"是两码事;
+ *   拆格(12 号)要把这五个字段一并清干净,否则"拆了再焊"会继承上一轮的设施与加成;
+ *   **设施本轮不叠级**:往已占的设施格再放一律 TAKEN(GDD §5.3 的四种设施没有等级档)。
+ */
+describe('支援设施型号与邻接加成缓存(06 号 GDD §5.3)', () => {
+  /** 四个邻接倍率的当前读数,整组一起断言:漏检其中一个的话,漏清那一个也就永远看不见 */
+  const muls = (cell: DeckCell): number[] => [
+    cell.fireRateMul,
+    cell.reloadMul,
+    cell.heatMaxMul,
+    cell.chargeRateMul,
+  ];
+
+  it('建格一次性给齐初值:supportType -1、四个倍率 1、buffRevision -1', () => {
+    const deck = createDeck();
+    // 缓存脏标记起手必须与 revision(0)**不等**:填 0 等于开局就宣称"算过了",
+    // 于是第一次重算永远不发生 —— 空甲板上看不出来,12 号从带设施的甲板起手时是整局没加成
+    expect(deck.revision).toBe(0);
+    expect(deck.buffRevision).toBe(-1);
+    expect(deck.buffRevision).not.toBe(deck.revision);
+    for (const c of deck.cells) {
+      expect(c.supportType).toBe(-1);
+      // 复位值是 1 不是 0:填 0 的话每座塔一进场就是"射速 0、热上限 0",永远打不出下一发
+      expect(muls(c)).toEqual([1, 1, 1, 1]);
+    }
+  });
+
+  it('放设施:第 5 参写进 supportType,塔的字段与 buff 缓存一个都不碰', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+
+    const cell = cellAt(deck, 1, 1)!;
+    expect(cell.content).toBe(CELL_SUPPORT);
+    expect(cell.supportType).toBe(SUP_ARMOR_BAY);
+    // 设施不是"另一种塔":它没有塔型、没有等级,更没有节流状态
+    expect(cell.towerType).toBe(-1);
+    expect(cell.level).toBe(0);
+    // 四个倍率是 sim/support.ts 的派生量,放置这一步一个字都不写(重算由 revision++ 去触发)
+    expect(muls(cell)).toEqual([1, 1, 1, 1]);
+    expect(deck.revision).toBe(1);
+  });
+
+  it('设施型缺省 = 弹药库(GDD §4.3"弹药库先行",与 world.place / ui 的默认值同一个)', () => {
+    const deck = createDeck();
+    // 漏传第 5 参时放下去的,得正是 MVP 唯一验过的那一种 —— 三处默认值分家的话,
+    // 提示条说的与真放下去的会是两种设施
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_OK);
+    expect(cellAt(deck, 1, 1)!.supportType).toBe(SUP_AMMO_BAY);
+  });
+
+  it('四种设施逐个放得下,型号一一落到对应的格上(表里加第五种,这条自动跟上)', () => {
+    const deck = createDeck(SUPPORT_KIND_COUNT, 1); // 一行 N 格,一格一种
+    for (let t = 0; t < SUPPORT_KIND_COUNT; t++) {
+      expect(placeAt(deck, t, 0, CELL_SUPPORT, TOWER_AUTOCANNON, t)).toBe(PLACE_OK);
+      expect(cellAt(deck, t, 0)!.supportType).toBe(t);
+    }
+  });
+
+  it('非支援格恒 supportType -1:武器格显式写回 -1,空格从建格起就是 -1', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_RADIATOR)).toBe(PLACE_OK);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    for (const c of deck.cells) {
+      if (c.content === CELL_SUPPORT) continue;
+      // 0 是弹药库:拿它当"没有设施",hullMaxHp 会把满甲板的空格全算成 +15 点 HP
+      expect(c.supportType).toBe(-1);
+    }
+    expect(cellAt(deck, 1, 1)!.supportType).toBe(SUP_RADIATOR); // 上一条不是"都是 -1"的空过
+  });
+
+  it('拆掉的格把设施与四个倍率一并清干净(否则"拆了再焊"会继承上一轮的加成)', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 0, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_OK);
+    const cell = cellAt(deck, 0, 0)!;
+    // 手写一组"邻居给过加成"的读数:重算是 sim/support.ts 的活,这里只验甲板那一处清理
+    cell.fireRateMul = 1.25;
+    cell.reloadMul = 0.7;
+    cell.heatMaxMul = 1.5;
+    cell.chargeRateMul = 1.3;
+
+    setOccupied(deck, 0, 0, false);
+    expect(cell.content).toBe(CELL_EMPTY);
+    // 漏清 supportType,拆掉的装甲舱还在给全船加着 15 点 HP(hullMaxHp 只认这一个字段)
+    expect(cell.supportType).toBe(-1);
+    // 复位成 1 而不是 0:焊回来的新塔要的是"没有加成",不是"射速被抹成 0"
+    expect(muls(cell)).toEqual([1, 1, 1, 1]);
+
+    // 焊回来再放一座塔:上一轮的痕迹一点都不该继承
+    setOccupied(deck, 0, 0, true);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(cell.supportType).toBe(-1);
+    expect(muls(cell)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('设施不叠级:往已有设施的格上再放一律 PLACE_TAKEN(GDD §5.3 没有等级档)', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_OK);
+    const cell = cellAt(deck, 1, 1)!;
+    const rev = deck.revision;
+
+    // 同型再放一次:塔那边这是 UPGRADE,设施这边不是 —— 给它现编一条成长曲线不是本轮的事
+    expect(canPlace(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_TAKEN);
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_TAKEN);
+    // 换一种设施更不行:那等于"出售 + 重放"(GDD §4.5 明令战斗中不可移动、不可出售)
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_ARMOR_BAY)).toBe(PLACE_TAKEN);
+
+    expect(cell.supportType).toBe(SUP_AMMO_BAY); // 被拒的那几下一个字段都没写进去
+    expect(cell.level).toBe(0); // 尤其没有偷偷 +1:设施压根没有等级这回事
+    expect(deck.revision).toBe(rev);
+  });
+
+  it('设施型非法 → PLACE_BAD_SUPPORT,且判在"问格"之前;两套编号各管各的一半', () => {
+    const deck = createDeck();
+    for (const bad of [-1, SUPPORT_KIND_COUNT, 99, 1.5, NaN]) {
+      expect(canPlace(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, bad)).toBe(PLACE_BAD_SUPPORT);
+      // 与 BAD_TOWER 同一条口径:型号错了就是型号错了,顺手点到界外也不改口报 NO_CELL
+      expect(canPlace(deck, 99, 99, CELL_SUPPORT, TOWER_AUTOCANNON, bad)).toBe(PLACE_BAD_SUPPORT);
+      expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, bad)).toBe(PLACE_BAD_SUPPORT);
+    }
+    // 内容不合法时仍先报内容:BAD_CONTENT 还是最外面那一道
+    expect(canPlace(deck, 1, 1, CELL_EMPTY, TOWER_AUTOCANNON, 99)).toBe(PLACE_BAD_CONTENT);
+    // 武器塔压根没有设施型这回事,第 5 参传什么都不该拦
+    expect(canPlace(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON, 99)).toBe(PLACE_OK);
+    // 反过来同理:设施不看塔型 —— 两个型号同时填错时,报的是**这次要放的那种**的码
+    expect(canPlace(deck, 0, 0, CELL_WEAPON, 99, 99)).toBe(PLACE_BAD_TOWER);
+    expect(canPlace(deck, 1, 1, CELL_SUPPORT, 99, 99)).toBe(PLACE_BAD_SUPPORT);
+
+    expect(deck.revision).toBe(0); // 上面全是拒绝:一格都没落子
+    expect(deck.cells.every((c) => c.content === CELL_EMPTY)).toBe(true);
+    expect(deck.cells.every((c) => c.supportType === -1)).toBe(true);
+
+    // 已占的格上填错型号,报的还是型号错:BAD_SUPPORT 判在"问格"之前,TAKEN 在之后 ——
+    // 一句"格子已被占用"会把玩家的注意力引到完全无关的规则上
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_OK);
+    expect(canPlace(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, 99)).toBe(PLACE_BAD_SUPPORT);
   });
 });
 

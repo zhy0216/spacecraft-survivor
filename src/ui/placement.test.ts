@@ -9,12 +9,14 @@
  * 注意 ui 只 import type 渲染层,所以这里不会把 pixi 拖进 Node。
  */
 import { describe, expect, it } from 'vitest';
-import { TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS } from '../data/towers';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
+import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS } from '../data/towers';
 import {
   CELL_SUPPORT,
   CELL_WEAPON,
   isPlaceSuccess,
   PLACE_BAD_CONTENT,
+  PLACE_BAD_SUPPORT,
   PLACE_BAD_TOWER,
   PLACE_INTERIOR,
   PLACE_MAX_LEVEL,
@@ -23,7 +25,7 @@ import {
   PLACE_TAKEN,
   PLACE_UPGRADE,
 } from '../sim/deck';
-import { denyMessage, keyHintText, placeLabel, placedMessage } from './placement';
+import { denyMessage, keyHintText, nextSupportType, placeLabel, placedMessage } from './placement';
 
 const DENY_CODES = [
   PLACE_NO_CELL,
@@ -32,6 +34,7 @@ const DENY_CODES = [
   PLACE_BAD_CONTENT,
   PLACE_MAX_LEVEL,
   PLACE_BAD_TOWER,
+  PLACE_BAD_SUPPORT,
 ];
 
 describe('denyMessage', () => {
@@ -69,9 +72,20 @@ describe('placeLabel', () => {
     expect(new Set(names).size).toBe(TOWER_KIND_COUNT);
   });
 
-  it('支援设施不看塔型;塔型越界报回原始下标而不是悄悄换成另一座塔', () => {
+  it('支援设施报数值表里的设施名,四种各不相同', () => {
+    // 与塔名同一条口径(06 号起设施分四型):名字只在 src/data/supports.ts 存一份,ui 不抄第二份
+    const names = SUPPORTS.map((def) => placeLabel(CELL_SUPPORT, TOWER_AUTOCANNON, def.type));
+    expect(names).toEqual(SUPPORTS.map((def) => def.name));
+    expect(new Set(names).size).toBe(SUPPORT_KIND_COUNT);
+  });
+
+  it('两种型号互不相干;越界一律报回原始下标而不是悄悄换成另一种', () => {
+    // 支援设施不看塔型、武器塔不看设施型 —— 两个参数各自只在自己那种 content 下有意义
     expect(placeLabel(CELL_SUPPORT, 0)).toBe(placeLabel(CELL_SUPPORT, 99));
+    expect(placeLabel(CELL_WEAPON, TOWER_AUTOCANNON, 99)).toBe(placeLabel(CELL_WEAPON, TOWER_AUTOCANNON));
+    // 静默兜底成第 0 种 = 提示条说的和真放下去的是两码事,这两条就是拦网
     expect(placeLabel(CELL_WEAPON, 99)).toContain('99');
+    expect(placeLabel(CELL_SUPPORT, TOWER_AUTOCANNON, 99)).toContain('99');
   });
 });
 
@@ -92,6 +106,26 @@ describe('placedMessage', () => {
   });
 });
 
+describe('nextSupportType', () => {
+  it('支援模式里连按 0:四种一个不落地轮一圈,再按转回弹药库', () => {
+    let type = SUP_AMMO_BAY;
+    const seen: number[] = [];
+    for (let i = 0; i < SUPPORT_KIND_COUNT; i++) {
+      type = nextSupportType(CELL_SUPPORT, type);
+      seen.push(type);
+    }
+    // 少一次取模 / 少加一次 1,都会让某一种设施在灰盒里根本选不出来
+    expect(new Set(seen).size).toBe(SUPPORT_KIND_COUNT);
+    expect(type).toBe(SUP_AMMO_BAY);
+  });
+
+  it('刚才选的是武器塔时落回弹药库(弹药库先行),而不是接着上次的轮换位', () => {
+    // 与 world.place 的默认设施型同一个值:进支援模式看到的第一种 = 漏传参数时会放下去的那种
+    expect(nextSupportType(CELL_WEAPON, SUP_ARMOR_BAY)).toBe(SUP_AMMO_BAY);
+    expect(nextSupportType(CELL_WEAPON, SUP_AMMO_BAY)).toBe(SUP_AMMO_BAY);
+  });
+});
+
 describe('keyHintText', () => {
   it('六种塔的键位从数值表现生成:下标 + 1 = 数字键,塔名一个不落', () => {
     const hint = keyHintText();
@@ -100,5 +134,14 @@ describe('keyHintText', () => {
     }
     // 0 号键是支援设施(与 1..6 的武器塔分开):键位表漏了它,玩家就再也放不出支援设施
     expect(hint).toContain('0 支援设施');
+  });
+
+  it('四种设施的名字也从数值表现生成,且写明 0 键是轮换', () => {
+    const hint = keyHintText();
+    // 一种都不许落下:0 键是唯一的入口,提示条里没写出来的那种设施等于玩家不知道它存在
+    for (const def of SUPPORTS) expect(hint).toContain(def.name);
+    expect(SUPPORTS.length).toBe(SUPPORT_KIND_COUNT);
+    // "按 0 会在四种之间转"必须讲明白:只写"0 支援设施"的话,另外三种没有任何线索
+    expect(hint).toContain('轮换');
   });
 });

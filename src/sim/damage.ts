@@ -18,10 +18,14 @@
  * 调的都是这里的函数 —— 与 sim/arc.ts 让"可视化 = 可命中区域"成立的是同一条理由,
  * 各处再抄一遍矩形判定,迟早有一处写歪,而那时画出来的框与真正扣血的框就不是同一个了。
  *
- * 依赖只有 ./config、./deck、./ship 三条,**绝不 import world / turret / tower**:
- * 那三个都是本文件的下游(World 每帧问结算、turret 每帧问射速),引回去就是一个运行期循环依赖,
- * 在 ESM 里表现为"某一侧拿到 undefined",且只在改了 import 顺序时才炸(见 sim/fx.ts 的同一段)。
+ * 依赖只有 ./config、./deck、./ship 与数据表 ../data/supports 四条,
+ * **绝不 import world / turret / tower**:那三个都是本文件的下游(World 每帧问结算、
+ * turret 每帧问射速),引回去就是一个运行期循环依赖,在 ESM 里表现为"某一侧拿到 undefined",
+ * 且只在改了 import 顺序时才炸(见 sim/fx.ts 的同一段)。
+ * 装甲舱那两项(06 号)只读 data/supports 这张表、**不 import sim/support.ts**:
+ * 本文件要的是"甲板上有哪些设施",而不是"哪块设施正在给哪座塔加成" —— 后者才是那个模块的事。
  */
+import { SUPPORTS } from '../data/supports';
 import { tuning } from './config';
 import {
   DECK_COLS,
@@ -190,22 +194,58 @@ export function cellFireRateMul(cell: DeckCell, edgePenalty: readonly number[]):
 }
 
 /**
- * 船体 HP 上限。**06 号支援设施的挂钩** —— GDD §5.3 的装甲舱是"船体 HP +15",
- * 届时这里改成"基准 + 甲板上每块装甲舱各 +15"(遍历 deck.cells 数装甲舱),函数体之外一个字不用动:
- * World 已经在用它算 maxHp,调用点今天就接好了,06 只需要把函数体填掉。
- * MVP 没有支援设施的数值表,故恒返回 tuning.shipHullHp(GDD §14 锁定的 100)。
- * 参数留着 deck 不是摆设:HP 上限从设计上就是**甲板的派生量**,签名先立住,
- * 免得 06 那边为了拿甲板再去改一遍所有调用方。
+ * 船体 HP 上限 = 基准(tuning.shipHullHp,GDD §14 锁定的 100)+ 甲板上每块设施的 hullHp
+ * (GDD §5.3 的装甲舱 = +15,数值在 data/supports)。09 号立的签名一个字没动:
+ * HP 上限从设计上就是**甲板的派生量**,故参数一直是 deck 而不是一个数。
+ *
+ * **不特判 SUP_ARMOR_BAY,一律读表里的 hullHp 字段** —— 哪天 GDD §5.3 后半张表的维修机库也带几点血,
+ * 改 data/supports 的一个数就够了,本文件一个字不用动(06 号验收:改数据即可调平衡)。
+ * 判据只有"这一格的 supportType 在表里查得到":非支援格恒 -1(deck.ts 的建格与 recomputeDeck
+ * 的清理共同保证这条不变量),SUPPORTS[-1] 取到 undefined ⇒ `?? 0`。
+ * **不再问一遍 content**:同一件事两处各判一次,迟早有一处漏掉 —— 而 12 号拆掉一格甲板时,
+ * 加成当帧回落靠的正是那条清理,再补一个 content 判据只会掩盖它哪天失效。
+ *
+ * **加法叠加**(两块 = +30):HP 是**点数**不是比例,这是本轮唯一一项加法 ——
+ * 四个邻接倍率与下面的 edgeDamageMul 一律连乘,理由见 edgeDamageMul。
+ * **不读 buff 缓存、当场遍历 cells**:于是与 recomputeSupportBuffs 的时机完全无关,
+ * 放下去当帧就是新的(World.place 里那句 maxHp = hullMaxHp(deck) 因此不必等下一帧)。
+ * 每次现读 tuning 而不是模块加载时算死:shipHullHp 是面板上的旋钮,与 hullCoreHalfExtents 同口径。
  */
 export function hullMaxHp(deck: Deck): number {
-  return tuning.shipHullHp;
+  let hp = tuning.shipHullHp;
+  const cells = deck.cells;
+  for (let i = 0; i < cells.length; i++) {
+    hp += SUPPORTS[cells[i]!.supportType]?.hullHp ?? 0;
+  }
+  return hp;
 }
 
 /**
- * 某一舷的受撞减伤倍率。**06 号支援设施的挂钩** —— GDD §5.3 的装甲舱是"所在舷受撞伤害 -20%",
- * 届时这里改成"该舷每有一块装甲舱就 ×0.8",与 hullMaxHp 同一条口径(签名与调用点今天就位)。
- * MVP 恒返回 1 = 不减伤;返回倍率而不是减伤值,是为了让多块装甲舱天然连乘而不会把伤害减成负数。
+ * 某一舷的受撞减伤倍率 = 该舷上每块设施的 edgeDamageMul 连乘(GDD §5.3 的装甲舱 = ×0.8)。
+ * 同样不特判设施型号:表里那三种恒 1,乘上去是恒等,故循环里不需要按型号分支。
+ *
+ * 舷向归属**复用 isEdgeExposed**,与 cellFireRateMul / world.sink.fired 一字同源:
+ * 一块设施属于它**每一条**暴露边所在的舷 —— 角落格的装甲舱同时护两舷(它两面临敌,
+ * 那既是角落格 +60° 射界的代价,也该是它防御上的对价);内部格的装甲舱一条暴露边都没有,
+ * ⇒ 只加 HP、不护任何一舷。各处再写一遍"这一格算哪一舷",迟早有一处写歪,
+ * 那时护住的舷与闪红的舷就不是同一条了。
+ *
+ * **连乘而不是把 -20% 加起来**:同舷两块 = ×0.64 而不是 ×0.6,四块也只到 ×0.41 ——
+ * 倍率连乘永远推不到 ≤ 0,而"每块 -20%"的加法在五块围一舷时就把倍率抹成 0(撞上去一点都不疼),
+ * 再多一块直接变负(撞一下反而回血)。
+ * 代价是收益递减,但那正是要的:堆装甲该有天花板。
+ * 与 cellFireRateMul 那条"任一舷中招也只罚一次"不冲突 —— 那边罚的是**一座塔**
+ * (让角落格挨两次罚才扣一次等于补贴强位),这边算的是**一舷的防御**,每多焊一块就该多一分。
+ *
+ * 同样不读 buff 缓存、当场遍历(理由见 hullMaxHp):放下去当帧的那次撞击就吃到减伤。
  */
 export function edgeDamageMul(deck: Deck, edge: number): number {
-  return 1;
+  let mul = 1;
+  const cells = deck.cells;
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]!;
+    if (!isEdgeExposed(cell, edge)) continue;
+    mul *= SUPPORTS[cell.supportType]?.edgeDamageMul ?? 1;
+  }
+  return mul;
 }

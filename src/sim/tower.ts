@@ -20,6 +20,15 @@
  *   充能 THR_CHARGE :攒-放,节奏只由 chargeTime 给,**与射速旋钮完全无关**;满 1.0 停着等目标。
  * 每个分支只碰自己那套字段(tower.test.ts 有一条在逐帧扫"三者的读数字段互不复用"),
  * 于是 UI 那三种画法(弹夹条 / 热量条 / 充能环)读到的永远是三种真不同的东西。
+ *
+ * 06 号支援设施接入之后,本文件又多了一条唯一性:**四个 cell* 包装
+ * (cellFireInterval / cellReload / cellHeatMax / cellChargeTime)是全仓唯一读
+ * cell 上那四个邻接 buff 缓存的地方**,塔的每一处取值都必须从它们进 ——
+ * stepCooldown 的夹取上限、onFired 的三处冷却与装填/热上限、stepThrottle 的充能与装填夹取,
+ * 连渲染层的热量条/装填条也读同一份。别处再算一遍就是第二条取值链路,而漏掉的那一处
+ * 永远读的是"隔壁没有设施"的数 —— 这类漏网只在"放下设施之后的某个特定分支"里才现形。
+ * 缓存本身由 sim/support.ts 全甲板重算(邻接规则住在那边),本文件只读不写:
+ * 取值规则住在这边,两边各只有一份,谁都不必知道对方是怎么算的。
  */
 import {
   THR_AMMO,
@@ -73,6 +82,54 @@ export function cellTowerDef(cell: DeckCell): TowerDef | undefined {
   return TOWERS[cell.towerType];
 }
 
+/*
+ * —— 邻接加成后的取值(06 号 issue T2)——
+ * 四个包装一律 (cell, def) 入参:等级从格上取、加成也从格上取,于是调用点只需要"这一格 + 这份表"
+ * 就问得出实际读数,不必知道加成从哪来、是乘还是除、要不要过下限保护。
+ * 缓存(cell.fireRateMul / reloadMul / heatMaxMul / chargeRateMul)是 sim/support.ts 按
+ * 正交邻接**连乘**出来的派生量,1 = 这一格没有任何相邻设施 —— 故四个包装在没有设施的甲板上
+ * 与今天的链路逐位一字不差(乘 1 / 除 1 在 IEEE754 下是恒等),既有用例一条都不用改。
+ */
+
+/**
+ * 这一格的实际射击间隔(秒/次)= 等级取值 ÷ 全局倍率 ÷ 受击惩罚 ÷ **邻接加成**。
+ * 弹药库 fireRateMul = 1.25 ⇒ 机炮 0.4s → 0.32s。三个旋钮各除各的,理由见 effectiveFireInterval。
+ */
+export function cellFireInterval(cell: DeckCell, def: TowerDef, fireMul = 1): number {
+  return effectiveFireInterval(def, cell.level, fireMul, cell.fireRateMul);
+}
+
+/**
+ * 这一格的实际装填时长(秒)= 数值表的 reload × 邻接加成(弹药库 0.7 = 短三成)。
+ * **乘法而不是"每座 -30%"的加法**(06 号约定里"四个倍率一律连乘"那条):两座弹药库夹一门炮
+ * 是 0.7² = 0.49,而加法在四座围一门时会把装填推成负数 —— 负的 reloadLeft 让 canFire 当场放行,
+ * 那门炮此后再也不装填,弹药系的硬停顿整条消失。
+ * 不随等级成长:GDD §5.4 的成长档里没有装填这一项(弹夹是加法档,装填是定值),
+ * 故这里只有 def.reload 而没有 towerXxx(def, level) —— 与另外三个包装的形状差异是数值表决定的,不是漏写。
+ */
+export function cellReload(cell: DeckCell, def: TowerDef): number {
+  return def.reload * cell.reloadMul;
+}
+
+/**
+ * 这一格的实际过热上限 = 等级取值 × 邻接加成(散热器 1.5 = 能连烧半倍久)。
+ * 渲染层的热量条分母读的也是它:分子(cell.heat)夹在这个上限里,两边同源才不会画出框。
+ */
+export function cellHeatMax(cell: DeckCell, def: TowerDef): number {
+  return towerHeatMax(def, cell.level) * cell.heatMaxMul;
+}
+
+/**
+ * 这一格的实际蓄力时长(秒)= 等级取值 ÷ 邻接加成(电容组 1.3 = 攒快三成)。
+ * 缓存里存的是**充能速度**倍率(> 1 = 更快)而不是时长倍率,与 fireRateMul 同一口径:
+ * 数据表里四个倍率一律"越大越好",看表的人不必逐行想这一档到底是乘还是除。
+ * 除数过一遍 safeScale:与 effectiveFireInterval 同一道保护 —— 数值表被填成 0 会算出
+ * Infinity 的蓄力时长,那座塔此后一帧都攒不起来,而且从画面上完全看不出是表填错了。
+ */
+export function cellChargeTime(cell: DeckCell, def: TowerDef): number {
+  return towerChargeTime(def, cell.level) / safeScale(cell.chargeRateMul);
+}
+
 /**
  * 冷却倒计时,弹药系与过热系共用(充能系没有冷却,见下)。
  * 到期夹成**精确 0**:于是 canFire 那边只需比 `<= 0`,浮点残差只在这一处兜,不散到判据里去。
@@ -87,10 +144,14 @@ export function cellTowerDef(cell: DeckCell): TowerDef | undefined {
  * 在 0.5s 窗口结束的下一帧就被夹回基准间隔 —— 惩罚绝不会拖过它自己的窗口。
  * 故本函数**必须**收到与 onFired 同一个 fireMul:拿基准间隔来夹,惩罚期内写进去的长冷却
  * 会被当场夹回去,整条惩罚等于没有(09 号 T3 的射速惩罚会静默失效)。
+ *
+ * 第三条同源的理由属于 06 号:上限走 cellFireInterval(从格上取邻接加成),于是**放下弹药库
+ * 那一刻正在走的这一轮冷却当场变短** —— 不夹的话"射速 +25%"要等这一发的旧冷却走完才看得见,
+ * 而放置正是玩家最盯着看反馈的那一帧。
  */
 function stepCooldown(cell: DeckCell, def: TowerDef, dt: number, fireMul: number): void {
   if (cell.cooldown <= 0) return;
-  const max = effectiveFireInterval(def, cell.level, fireMul);
+  const max = cellFireInterval(cell, def, fireMul);
   if (cell.cooldown > max) cell.cooldown = max;
   cell.cooldown -= dt;
   if (cell.cooldown <= THROTTLE_EPS) cell.cooldown = 0;
@@ -110,6 +171,12 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul 
       // (reload 1.5s 远长于 fireInterval,冷却早就归 0 了;并行只是为了这条语义不依赖数值大小)
       stepCooldown(cell, def, dt, fireMul);
       if (cell.reloadLeft > 0) {
+        // 剩余装填每帧现夹在**当前**装填时长之内,理由与 stepCooldown 那道夹取一字同源:
+        // 放下弹药库,正在走的这一轮装填当场变短;不夹的话"装填 -30%"要等这一轮 1.5s 走完
+        // 才看得见,而那正是玩家盯着看反馈的那一秒半。反向也成立:设施被 12 号拆掉之后,
+        // 塔不会带着一段"买来的短装填"跑完这一轮(上限当帧回到基准,只夹不涨)
+        const max = cellReload(cell, def);
+        if (cell.reloadLeft > max) cell.reloadLeft = max;
         cell.reloadLeft -= dt;
         if (cell.reloadLeft <= THROTTLE_EPS) {
           cell.reloadLeft = 0;
@@ -145,7 +212,9 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul 
     case THR_CHARGE: {
       // 充能系**没有冷却**:cell.cooldown 从 placeAt 的初值 0 起就再没人写过非 0(onFired 也恒写 0),
       // 故这里连清零都不必 —— 热循环里不放一句注定为真的赋值。UI 的"充能系 cooldown 恒 0"由此成立。
-      const t = towerChargeTime(def, cell.level);
+      // 电容组的加成也从这里进(cellChargeTime 现读格上的 chargeRateMul):蓄力是充能系的
+      // **全部**节奏,加成不进这一句就等于电容组对磁轨完全无效
+      const t = cellChargeTime(cell, def);
       if (t > 0) {
         // 蓄力也乘 fireMul:充能系没有 cooldown 这条腿,不在这里乘,六塔里的迫击炮与磁轨
         // 就对受击**完全免疫** —— 被撞舷的三座塔里有两座照常输出,"被撞舷会顿一下"的反馈死掉一半。
@@ -210,12 +279,16 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
 
   switch (def.throttle) {
     case THR_AMMO: {
-      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul);
       cell.ammo -= n;
       if (cell.ammo <= 0) {
         cell.ammo = 0; // 夹 0:UI 直接把这个整数印出来,不能出现 -1 发
-        if (def.reload > 0) {
-          cell.reloadLeft = def.reload;
+        // 判据也走包装:写 `def.reload > 0` 而按加成后的时长去装填,两个数就会在
+        // reloadMul 把它压到 0(或表被填成负数)时分叉 —— 那时塔会带着一个 ≤ 0 的 reloadLeft
+        // 进"装填中",canFire 当场放行,弹夹却永远填不回来。一个数只算一次
+        const reload = cellReload(cell, def);
+        if (reload > 0) {
+          cell.reloadLeft = reload;
         } else {
           // 装填时间被调成 0 = 无停顿:当场满弹,而不是留下一座弹夹恒 0、永远打不响的塔
           cell.ammo = towerMagazine(def, cell.level);
@@ -225,9 +298,11 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
     }
 
     case THR_HEAT: {
-      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul);
       cell.heat += def.heatPerShot * n;
-      const max = towerHeatMax(def, cell.level);
+      // 散热器抬的是**上限**(cellHeatMax),不是每发热量:于是"能连烧多久"变长,
+      // 而单发的代价一个字不变 —— 与 GDD §5.3 那行"过热上限 +50%"逐字对应
+      const max = cellHeatMax(cell, def);
       if (cell.heat >= max) {
         // 夹到上限而不是让它冲过头:热量条是 heat / heatMax,超过 1 的条会画到框外面去
         cell.heat = max;
@@ -246,7 +321,7 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
       break;
 
     default:
-      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul);
       break;
   }
 }
@@ -257,18 +332,33 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
  * 冷却就按新倍率写进去,不必重开;缓存进模块常量就等于"改了要重启",调参面板也就白做了。
  * 充能系的 base 恒 0,除下来照样是 0,不必特判 —— 它的节奏在 chargeTime 那一边。
  *
- * 入参形状是 (def, level) 而不是 (cell):06 号支援设施的邻接加成只需在本函数里多读一步
- * "相邻格有没有供弹/散热设施",几十个调用点一个字都不用改。本轮不实现邻接。
+ * 入参形状是 (def, level) 而不是 (cell):06 号的邻接加成因此只是**多一个参数**,
+ * 与"哪一格"完全解耦 —— 从格上取那个数这一步收在 cellFireInterval 一处(见上面那组包装),
+ * 而不需要本函数认识 DeckCell 的字段布局。
  *
  * @param fireMul **受击射速惩罚**倍率(09 号 T3),缺省 1 = 没被撞;< 1 = 这一舷刚挨了一下,
  *   间隔按倍率变长。它是船体状态(world.edgePenalty)的函数,不是塔的属性,所以走参数而不是
  *   再读一次 tuning —— 本文件对甲板只剩类型依赖(见文件头),更不该反过来认识 World。
- *   与全局倍率**分两次除**而不是先乘成一个数:两个旋钮各自过一遍 safeScale 的下限保护,
- *   一边被拖成 0/NaN 不会顺着乘法把另一边一起吞掉(NaN × 有限数还是 NaN)。
- *   射速惩罚的唯一去处就是这一条式子:另开一份"惩罚后的间隔"必然与 stepCooldown 那道夹取错开口径。
+ * @param buffMul **邻接加成**倍率(06 号 T2:弹药库 1.25 = 快两成半),缺省 1 = 相邻没有生效的设施。
+ *   正常调用方一律不直接传它 —— 走 cellFireInterval 从格上取,免得"加成"在第二处被算一遍。
+ *
+ * 三个旋钮**各除各的、各自过一遍 safeScale**,而不是先乘成一个数再除:它们分别是数值面板、
+ * 船体状态、甲板布局的函数,合并之后任何一边被填坏(0/NaN)都会顺着乘法把另外两边一起吞掉
+ * (NaN × 有限数还是 NaN),而下限保护也只剩一道、护不住各自的量级。
+ * 射速的唯一去处就是这一条式子:另开一份"加成后的间隔"必然与 stepCooldown 那道夹取错开口径。
  */
-export function effectiveFireInterval(def: TowerDef, level: number, fireMul = 1): number {
-  return towerFireInterval(def, level) / safeScale(tuning.towerFireRateScale) / safeScale(fireMul);
+export function effectiveFireInterval(
+  def: TowerDef,
+  level: number,
+  fireMul = 1,
+  buffMul = 1,
+): number {
+  return (
+    towerFireInterval(def, level) /
+    safeScale(tuning.towerFireRateScale) /
+    safeScale(fireMul) /
+    safeScale(buffMul)
+  );
 }
 
 /**

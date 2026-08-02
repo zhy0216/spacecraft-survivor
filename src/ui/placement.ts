@@ -11,6 +11,7 @@
  * 状态对象 PlacementUiState 的定义在渲染层并由本文件 import type 进来,依赖方向单向 ui → render:
  * 本文件每帧就地改它的字段,渲染层只读 —— 两边不必再约定"通知"通道,也不新增分配(铁律 3)。
  */
+import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS } from '../data/towers';
 import {
   CELL_SUPPORT,
@@ -18,6 +19,7 @@ import {
   cellIndexAtWorld,
   isPlaceSuccess,
   PLACE_BAD_CONTENT,
+  PLACE_BAD_SUPPORT,
   PLACE_BAD_TOWER,
   PLACE_INTERIOR,
   PLACE_MAX_LEVEL,
@@ -84,6 +86,10 @@ export function denyMessage(code: number): string {
     // 本文件只会传数值表里存在的塔型,故正常点不出来;留着是为了将来加塔时不至于静默兜底
     case PLACE_BAD_TOWER:
       return '没有这种塔型(数值表里查不到)';
+    // 同上,设施型那一半(06 号):0 键的轮换永远落在 SUPPORTS 的下标内,故正常也点不出来。
+    // 与 BAD_TOWER 分成两句话而不是合并成"型号不对":型号填错的是塔还是设施,得一眼看得出
+    case PLACE_BAD_SUPPORT:
+      return '没有这种支援设施(数值表里查不到)';
     // 本文件只会传武器塔/支援设施,故正常点不出来;留着是为了将来加内容类型时不至于静默兜底
     case PLACE_BAD_CONTENT:
       return '只能放武器塔或支援设施(MVP 没有拆除)';
@@ -93,12 +99,14 @@ export function denyMessage(code: number): string {
 }
 
 /**
- * 当前选的是什么 —— 武器塔一律报**塔名**(取自数值表,不在 ui 里抄第二份名字),
- * 支援设施只有一种(06 号 issue 才分型),故先笼统叫它一声。
- * 塔型越界报回原始下标而不是兜底成机炮:选错了要看得见,静默换成另一座塔才是真的坑。
+ * 当前选的是什么 —— 武器塔报**塔名**、支援设施报**设施名**,两份名字都取自数值表,
+ * ui 里不抄第二份(06 号起设施分四型,抄一份就等于埋一处会和数据表走散的文案)。
+ * 型号越界一律报回原始下标而不是兜底成第 0 种:选错了要看得见,静默换成另一座塔/另一种设施才是真的坑。
+ * 第三参缺省 = 弹药库,与 world.place / placeAt 的默认值同一个值(「弹药库先行」,GDD §4.3):
+ * 漏传参数时的行为才与看得见的提示条一致 —— 两处默认值分家的话,提示条说的和真放下去的会是两种设施。
  */
-export function placeLabel(content: number, towerType: number): string {
-  if (content !== CELL_WEAPON) return '支援设施';
+export function placeLabel(content: number, towerType: number, supportType: number = SUP_AMMO_BAY): string {
+  if (content !== CELL_WEAPON) return SUPPORTS[supportType]?.name ?? `未知设施(${supportType})`;
   return TOWERS[towerType]?.name ?? `未知塔型(${towerType})`;
 }
 
@@ -113,15 +121,34 @@ export function placedMessage(code: number, label: string, level: number): strin
 }
 
 /**
- * 键位提示行。六种塔的键位**从数值表现生成**:数值表里加一座塔、改个名字,这行自动跟上,
+ * 按一次 0 键之后该选哪种支援设施(入参 = 按下之前的选择)。
+ * 已经在支援模式里 → 轮换到下一种;不在(刚才选的是武器塔)→ 落回第 0 种 = 弹药库先行(GDD §4.3),
+ * 与 world.place / placeAt 的默认设施型同一个值:进支援模式第一眼看到的,就是漏传参数时会放下去的那种。
+ * 取模现读 SUPPORT_KIND_COUNT,数值表里加第五种设施时这里一个字都不用改。
+ * 独立成纯函数、不碰 state 与 DOM,理由与 denyMessage 同:轮换是**环形**规则,
+ * 少一次取模要在浏览器里连按四下才看得出来,而这道拦网在 Node 里就能拦住。
+ */
+export function nextSupportType(content: number, supportType: number): number {
+  if (content !== CELL_SUPPORT) return SUP_AMMO_BAY;
+  return (supportType + 1) % SUPPORT_KIND_COUNT;
+}
+
+/**
+ * 键位提示行。塔与设施的名字**全部从数值表现生成**:表里加一座塔/一种设施、改个名字,这行自动跟上,
  * 不必回头改 ui(05 号验收口径:改数据文件即可,不改代码)。只在建面板时算一次,不进热循环。
+ * 设施单独占一行而不是挤在第一行末尾:四种设施一个键轮换,得把"按 0 会在这四种之间转"讲明白 ——
+ * 键位表里只写"0 支援设施"的话,玩家永远不会知道另外三种存在。
  */
 export function keyHintText(): string {
   let towers = '';
   for (let i = 0; i < TOWERS.length; i++) {
     towers += `${i > 0 ? ' · ' : ''}${i + 1} ${TOWERS[i]!.name}`;
   }
-  return `B 开关 · Esc 退出 · 左键放置 · 0 支援设施\n${towers}`;
+  let supports = '';
+  for (let i = 0; i < SUPPORTS.length; i++) {
+    supports += `${i > 0 ? ' · ' : ''}${SUPPORTS[i]!.name}`;
+  }
+  return `B 开关 · Esc 退出 · 左键放置\n${towers}\n0 支援设施(再按 0 轮换):${supports}`;
 }
 
 /** 焦点在调参面板的输入框里:此时数字键/B 是在打字,不该被当成键位抢走 */
@@ -134,7 +161,7 @@ function isTyping(): boolean {
 /**
  * 接线放置交互,返回给渲染层用的状态对象(整局就这一个,调用方原样交给 renderer.setPlacement)。
  * 键位刻意避开 WASD(那是 core/input 的航向键,放置模式下船照常能开):
- *   B 切换放置模式 · **1..6 直选六种武器塔** · 0 支援设施 · Esc 退出 · 鼠标左键放置。
+ *   B 切换放置模式 · **1..6 直选六种武器塔** · **0 进支援模式并轮换四种设施** · Esc 退出 · 鼠标左键放置。
  * 05 号起数字键直接选塔型(而不是先选"武器塔"再另找地方选型号):六座塔是这一号 issue 的主角,
  * 中间再插一层菜单只会让灰盒验收变慢;真正的选塔流程是 10 号的三选一卡片,那时这套键位整个作废。
  */
@@ -155,6 +182,8 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
     // 起手就是机炮:GDD §5.2 的"基础输出、万金油",也是 world.place 的默认塔型 ——
     // 两处默认值取同一座塔,漏传参数时的行为才与看得见的提示条一致
     towerType: TOWER_AUTOCANNON,
+    // 起手就是弹药库:06 号的"弹药库先行"(GDD §4.3),同样与 world.place 的默认设施型取同一个值
+    supportType: SUP_AMMO_BAY,
     hoverIndex: -1,
     denyIndex: -1,
   };
@@ -180,7 +209,7 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
   function refresh(): void {
     statusEl.style.color = state.active ? OK_COLOR : IDLE_COLOR;
     statusEl.textContent = state.active
-      ? `放置模式:开 · 当前 ${placeLabel(state.content, state.towerType)}`
+      ? `放置模式:开 · 当前 ${placeLabel(state.content, state.towerType, state.supportType)}`
       : '放置模式:关';
   }
 
@@ -232,14 +261,18 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
       flash(denyMessage(PLACE_NO_CELL), DENY_COLOR);
       return;
     }
-    // 合法性一律以 sim 的答复为准:ui 这边绝不预判(预判就是第二份会走散的规则)
-    const code = world.place(cell.col, cell.row, state.content, state.towerType);
+    // 合法性一律以 sim 的答复为准:ui 这边绝不预判(预判就是第二份会走散的规则)。
+    // 塔型与设施型一起递过去:两者各只在自己那种 content 下有意义,由 sim 挑,ui 不在这里分岔
+    const code = world.place(cell.col, cell.row, state.content, state.towerType, state.supportType);
     // 成功有两种(新放 PLACE_OK / 叠级 PLACE_UPGRADE),故判定走 isPlaceSuccess 而不是 === PLACE_OK:
     // 把码逐个列在 ui 这边,迟早会漏掉后加的那一个,然后一次成功的升级会被当成拒绝闪红
     if (isPlaceSuccess(code)) {
       state.denyIndex = -1;
       // 等级现读那一格(placeAt 已经写完):ui 不自己推"应该升到几级",省得与 sim 的夹取规则走散
-      flash(placedMessage(code, placeLabel(state.content, state.towerType), cell.level), OK_COLOR);
+      flash(
+        placedMessage(code, placeLabel(state.content, state.towerType, state.supportType), cell.level),
+        OK_COLOR,
+      );
       return;
     }
     state.denyIndex = i;
@@ -247,12 +280,15 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
   }
 
   /**
-   * 选内容/塔型。选了就直接进放置模式:灰盒入口下"选了却没开"只会让人以为键位没生效。
-   * 支援设施不动 towerType(它对支援设施无意义),于是按 0 看一眼再按回武器塔时,选的还是原来那座。
+   * 选内容/塔型/设施型。选了就直接进放置模式:灰盒入口下"选了却没开"只会让人以为键位没生效。
+   * 两个型号一律整份传进来(而不是只改跟 content 对得上的那一个):"另一个保持原样"还是"重置"
+   * 由调用点自己写明,于是"按 0 看一眼再按回武器塔时,选的还是原来那座"这条约定看得见,
+   * 而不是藏在这里的一句条件里。
    */
-  function select(content: number, towerType: number): void {
+  function select(content: number, towerType: number, supportType: number): void {
     state.content = content;
     state.towerType = towerType;
+    state.supportType = supportType;
     if (state.active) refresh();
     else setActive(true);
   }
@@ -268,15 +304,19 @@ export function createPlacementUi(opts: PlacementUiOpts): PlacementUi {
       if (state.active) setActive(false);
       return;
     }
-    // 数字键选内容:**0 = 支援设施,1..6 = 六种武器塔**(键 - 1 = TOWER_*,与数值表的顺序一致)。
+    // 数字键选内容:**0 = 支援设施(再按一次换下一种),1..6 = 六种武器塔**
+    // (键 - 1 = TOWER_*,与数值表的顺序一致)。
     // 按位数解析而不是逐个列 case:数值表里加一座塔就自动多一个键位,这里一个字都不用改
     // (数字键只到 9,塔多过 9 座就该上 10 号的三选一卡片了,而不是继续加键位)。
     // 只认主键盘的 DigitN:小键盘的 NumpadN 在放置这种低频操作上不值得再养一条分支
     if (!e.code.startsWith('Digit')) return;
     const n = Number(e.code.slice(5));
     if (!Number.isInteger(n)) return;
-    if (n === 0) select(CELL_SUPPORT, state.towerType);
-    else if (n <= TOWER_KIND_COUNT) select(CELL_WEAPON, n - 1);
+    // **一个 0 键管四种设施**(进支援模式 + 轮换,规则见 nextSupportType):不给四种各分一个键 ——
+    // 1..6 已被六座塔占满,往上排只剩 7/8/9 三个位,数值表加第五种设施时键位当场就断。
+    // 选武器塔则不动 supportType:按 0 看一眼再按回武器塔,选的还是原来那座塔(与 05 号的口径一致)
+    if (n === 0) select(CELL_SUPPORT, state.towerType, nextSupportType(state.content, state.supportType));
+    else if (n <= TOWER_KIND_COUNT) select(CELL_WEAPON, n - 1, state.supportType);
   });
 
   // 移动听 window:指针挪到调参面板上时悬停格不该冻在原地(世界还在那底下)。

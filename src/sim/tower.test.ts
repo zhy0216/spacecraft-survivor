@@ -16,10 +16,14 @@
  *   受击射速惩罚 fireMul(09 号 T3):只作用在**射击间隔与蓄力速度**上 ——
  *     装填、降温、过热锁三条腿一个字不动(挨一下就连装填也变慢 = 死亡螺旋),
  *     充能系也必须真的慢下来(不然六塔里有两座对受击完全免疫),
- *     且**缺省 1 时逐帧读数与今天一字不差**(既有调用方一个参数都不用补)。
+ *     且**缺省 1 时逐帧读数与今天一字不差**(既有调用方一个参数都不用补);
+ *   邻接加成(06 号 T2):四个 cell* 包装是**唯一**取值链路 —— 精确等式钉在纯函数上,
+ *     手感则用实测帧距钉(设施把 0.4s 压成 0.32s 这种非整帧时长,round 会读少一帧),
+ *     且**节流系不匹配时逐帧读数与"隔壁什么都没有"完全一致**(零效果就得是零效果)。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
+import { SUP_AMMO_BAY, SUP_CAPACITOR, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   THR_AMMO,
   THR_CHARGE,
@@ -51,13 +55,19 @@ import {
   PLACE_UPGRADE,
   placeAt,
 } from './deck';
+import { recomputeSupportBuffs } from './support';
 import {
   canFire,
+  cellChargeTime,
+  cellFireInterval,
+  cellHeatMax,
+  cellReload,
   cellTowerDef,
   effectiveDamage,
   effectiveFireInterval,
   onFired,
   stepThrottle,
+  THROTTLE_EPS,
 } from './tower';
 
 // 与 enemy.test.ts 同口径:全局倍率在文件顶部显式写死,免得 M0 反复调平衡时把机制断言带崩
@@ -126,6 +136,43 @@ function gaps(at: number[]): number[] {
 /** 秒 → 帧。装填/锁死这类"恰好 N 帧"的期望一律由数据算出,不写魔数 */
 function frames(sec: number): number {
   return Math.round(sec / SIM_DT);
+}
+
+/**
+ * 秒 → **帧距**:与 stepCooldown / stepThrottle 那条"逐帧减 dt,减到 ≤ THROTTLE_EPS 才算到期"
+ * 的判据同源。上面那个 frames() 是 Math.round,只对**整帧**时长成立;
+ * 而邻接加成后的 0.4 / 1.25 = 0.32s = 19.2 帧压根不是整帧 —— 照抄 frames() 会把一条
+ * 真实存在的 20 帧读成 19 帧,断言当场变成"钉住了一个不存在的行为"。
+ * 减掉 EPS 再取上整,于是整帧时长(1.5s = 90 帧)也照旧读得对,两种时长共用同一个算式。
+ */
+function gapFrames(sec: number): number {
+  return Math.ceil((sec - THROTTLE_EPS) / SIM_DT);
+}
+
+/** 蓄满一发要几帧:与 stepThrottle 充能分支那条 `charge >= 1 - THROTTLE_EPS` 同源(反向累加) */
+function chargeFrames(sec: number): number {
+  return Math.ceil(((1 - THROTTLE_EPS) * sec) / SIM_DT);
+}
+
+/**
+ * 造一座塔 + 若干相邻支援设施(06 号 T2)。塔一律落在船头一行的中格 (1,0):
+ * 它是边缘格(船头那条边暴露),而左 (0,0) / 右 (2,0) / 后 (1,1) 三个正交邻格都放得下设施 ——
+ * 于是"两座弹药库夹一门机炮"用同一块甲板就摆得出来,不必为它另造几何。
+ * @param sups [col, row, SUP_*] 三元组;空数组 = 对照组(同一几何、隔壁什么都没有)
+ *
+ * 末尾**显式重算一次 buff 缓存**:重算的时机归 World(sim/world.ts 的 place 与 step 各一次),
+ * 直接用 placeAt 的单测就得自己同步 —— 这一行本身就是"四个倍率是派生量、不是状态"的证据。
+ */
+function placeWithSupports(type: number, sups: readonly (readonly number[])[]): Placed {
+  const deck = createDeck();
+  expect(isPlaceSuccess(placeAt(deck, 1, 0, CELL_WEAPON, type))).toBe(true);
+  for (const s of sups) {
+    const code = placeAt(deck, s[0]!, s[1]!, CELL_SUPPORT, TOWER_AUTOCANNON, s[2]!);
+    expect(isPlaceSuccess(code), `设施 ${s[2]} @(${s[0]},${s[1]})`).toBe(true);
+  }
+  recomputeSupportBuffs(deck);
+  const cell = cellAt(deck, 1, 0)!;
+  return { deck, cell, def: cellTowerDef(cell)! };
 }
 
 describe('cellTowerDef(格 → 塔定义)', () => {
@@ -605,6 +652,187 @@ describe('受击射速惩罚 fireMul(09 号 T3:被撞舷的塔顿一下)', () =>
           expect(bare.cell[k], `${bare.def.name} 第 ${f} 帧的 ${k}`).toBe(one.cell[k]);
         }
       }
+    }
+  });
+});
+
+describe('邻接加成 cell*(06 号 T2:四个包装是全仓唯一的取值链路)', () => {
+  it('弹药库贴机炮:射速 ×1.25、装填 ×0.7,精确等式钉在纯函数上', () => {
+    const sup = SUPPORTS[SUP_AMMO_BAY]!;
+    const bare = placeWithSupports(TOWER_AUTOCANNON, []);
+    // 隔壁什么都没有时,四个包装与既有链路**逐位**一字不差(缓存初值 1,乘 1 / 除 1 是恒等):
+    // 06 号接进来之后,五个既有 describe 里那批断言仍然读的是同一条链路
+    expect(cellFireInterval(bare.cell, bare.def)).toBe(effectiveFireInterval(bare.def, 1));
+    expect(cellReload(bare.cell, bare.def)).toBe(bare.def.reload);
+
+    const p = placeWithSupports(TOWER_AUTOCANNON, [[0, 0, SUP_AMMO_BAY]]);
+    // 等式取自数值表本身,不写死 0.32/1.05:改 data/supports 的两个数,本断言跟着走(05 验收第三条)
+    expect(cellFireInterval(p.cell, p.def)).toBe(effectiveFireInterval(p.def, 1) / sup.fireRateMul);
+    expect(cellReload(p.cell, p.def)).toBe(p.def.reload * sup.reloadMul);
+    expect(cellFireInterval(p.cell, p.def)).toBeCloseTo(0.32, 12); // GDD §14 的 0.4s → 0.32s
+    expect(cellReload(p.cell, p.def)).toBeCloseTo(1.05, 12); // 1.5s → 1.05s
+
+    // 另外两个包装一动不动:弹药库只认弹药系那两个旋钮(热上限/蓄力是散热器与电容组的活)
+    expect(cellHeatMax(p.cell, p.def)).toBe(towerHeatMax(p.def, 1));
+    expect(cellChargeTime(p.cell, p.def)).toBe(towerChargeTime(p.def, 1));
+
+    // onFired **当场**写进去的就是加成后的时长,而不是靠下一帧的现夹去补:
+    // 渲染层的装填进度条 = 1 - reloadLeft / cellReload,分子若还是基准的 1.5s,
+    // 放下弹药库那一帧的进度条会先反向长出去一截、下一帧再跳回来
+    onFired(p.cell, p.def, towerMagazine(p.def, 1)); // 一梭子打空 → 进装填
+    expect(p.cell.ammo).toBe(0);
+    expect(p.cell.reloadLeft).toBe(cellReload(p.cell, p.def));
+    expect(p.cell.cooldown).toBe(cellFireInterval(p.cell, p.def));
+  });
+
+  it('弹药库贴机炮:帧距实测变密,那段硬停顿也真的短了三成', () => {
+    const p = placeWithSupports(TOWER_AUTOCANNON, [[0, 0, SUP_AMMO_BAY]]);
+    const mag = towerMagazine(p.def, 1);
+    // 0.32s = 19.2 帧 —— **不是整帧**,故帧距一律走 gapFrames(取上整),不照抄 frames() 的 round
+    const gap = gapFrames(cellFireInterval(p.cell, p.def));
+    const reloadGap = gapFrames(cellReload(p.cell, p.def));
+    expect(gap).toBe(20);
+    expect(reloadGap).toBe(63);
+    expect(gap).toBeLessThan(frames(towerFireInterval(p.def, 1))); // 24 帧 → 20 帧,真的更密
+    expect(reloadGap).toBeLessThan(frames(p.def.reload)); // 90 帧 → 63 帧
+
+    const at = run(p, 700);
+    // 节奏仍是"突发 - 停 - 突发"(弹药系的机制没被加成改掉),只是两段都按倍率缩了
+    expect(gaps(at).slice(0, mag - 1)).toEqual(new Array(mag - 1).fill(gap));
+    expect(gaps(at)[mag - 1]).toBe(reloadGap);
+    expect(gaps(at).slice(mag, mag + 5)).toEqual(new Array(5).fill(gap));
+  });
+
+  it('装填途中放下弹药库:正在走的那一轮当场变短(与 stepCooldown 那道现夹一字同源)', () => {
+    const p = placeWithSupports(TOWER_AUTOCANNON, []);
+    while (p.cell.reloadLeft <= 0) tick(p, true); // 打空进装填,此刻按基准的 1.5s 在走
+    expect(p.cell.reloadLeft).toBe(p.def.reload);
+
+    // 战斗中放下设施(GDD §4.5 允许);World 之外的调用方要自己同步一次派生缓存
+    const code = placeAt(p.deck, 0, 0, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY);
+    expect(isPlaceSuccess(code)).toBe(true);
+    recomputeSupportBuffs(p.deck);
+
+    // 下一帧就被夹进新的装填时长里。不夹的话"装填 -30%"要等这一轮 1.5s 走完才看得见 ——
+    // 而放下设施的那一秒半正是玩家盯着看反馈的时候
+    stepThrottle(p.cell, p.def, SIM_DT);
+    expect(p.cell.reloadLeft).toBeCloseTo(cellReload(p.cell, p.def) - SIM_DT, 12);
+
+    let spent = 1; // 上面那一帧
+    while (p.cell.reloadLeft > 0) {
+      stepThrottle(p.cell, p.def, SIM_DT);
+      spent++;
+    }
+    expect(spent).toBe(gapFrames(cellReload(p.cell, p.def))); // 整轮按新时长算,63 帧而不是 90
+    expect(p.cell.ammo).toBe(towerMagazine(p.def, 1));
+  });
+
+  it('散热器贴机炮:节流系不匹配 ⇒ 六个读数字段逐帧与对照组**完全一致**', () => {
+    const FIELDS = ['cooldown', 'ammo', 'reloadLeft', 'heat', 'coolLock', 'charge'] as const;
+    // 三面围满散热器:零效果就该是零效果,围几座都一样(不匹配的配对压根不进 supportLinks 那张表)
+    const p = placeWithSupports(TOWER_AUTOCANNON, [
+      [0, 0, SUP_RADIATOR],
+      [2, 0, SUP_RADIATOR],
+      [1, 1, SUP_RADIATOR],
+    ]);
+    const bare = placeWithSupports(TOWER_AUTOCANNON, []);
+
+    // 600 帧 = 10 秒:够走完一整轮"满弹 → 打空 → 装填 → 再满速",每一帧逐字段对
+    for (let f = 1; f <= 600; f++) {
+      expect(tick(p, true), `第 ${f} 帧`).toBe(tick(bare, true));
+      for (const k of FIELDS) expect(p.cell[k], `第 ${f} 帧的 ${k}`).toBe(bare.cell[k]);
+    }
+    // 取值链路那一头同样一字不差 —— 复位值是 1(无加成)而不是 0(把射速抹成 0 是另一回事)
+    expect(cellFireInterval(p.cell, p.def)).toBe(cellFireInterval(bare.cell, bare.def));
+    expect(cellReload(p.cell, p.def)).toBe(cellReload(bare.cell, bare.def));
+  });
+
+  it('散热器贴激光:过热上限 ×1.5 ⇒ 多打一发才被罚(抬的是上限,单发代价一个字不变)', () => {
+    // 换一组整齐的数好把每一帧写死(只改数值表、不改逻辑):热量 4/发、不降温、上限 10、
+    // 锁死 0.5s = 30 帧、射击间隔 6 帧 ⇒ 对照组第 3 发到顶,散热器把它推到第 4 发
+    Object.assign(TOWERS[TOWER_LASER]!, {
+      fireInterval: 0.1,
+      heatPerShot: 4,
+      coolPerSec: 0,
+      heatMax: 10,
+      overheatLock: 0.5,
+    });
+    const sup = SUPPORTS[SUP_RADIATOR]!;
+    const p = placeWithSupports(TOWER_LASER, [[0, 0, SUP_RADIATOR]]);
+    expect(cellHeatMax(p.cell, p.def)).toBe(towerHeatMax(p.def, 1) * sup.heatMaxMul);
+    expect(cellHeatMax(p.cell, p.def)).toBe(15);
+
+    const bare = placeWithSupports(TOWER_LASER, []);
+    expect(run(p, 60).slice(0, 5)).toEqual([1, 7, 13, 19, 49]); // 4 发才到顶
+    expect(run(bare, 60).slice(0, 5)).toEqual([1, 7, 13, 43, 49]); // 3 发就到顶,罚完才接得上
+    // 热量夹在**各自**的上限上:热量条的分子分母同源,加成后照样画不出框
+    expect(p.cell.heat).toBeLessThanOrEqual(cellHeatMax(p.cell, p.def));
+    expect(bare.cell.heat).toBeLessThanOrEqual(cellHeatMax(bare.cell, bare.def));
+    expect(cellHeatMax(bare.cell, bare.def)).toBe(10);
+  });
+
+  it('电容组贴磁轨:蓄力时长 ÷1.3 ⇒ 蓄满帧数按它变短,冷却那条恒 0 的腿没被拧开', () => {
+    const sup = SUPPORTS[SUP_CAPACITOR]!;
+    const p = placeWithSupports(TOWER_RAILGUN, [[0, 0, SUP_CAPACITOR]]);
+    expect(cellChargeTime(p.cell, p.def)).toBe(towerChargeTime(p.def, 1) / sup.chargeRateMul);
+
+    const need = chargeFrames(cellChargeTime(p.cell, p.def)); // 2.4 / 1.3 ≈ 1.846s ≈ 110.8 帧
+    expect(need).toBe(111);
+    expect(need).toBeLessThan(frames(towerChargeTime(p.def, 1))); // 144 帧 → 111 帧
+    // 攒-放的节奏整体变快,且每一轮都一样长(放完精确归零,加成不会在轮与轮之间漂)
+    expect(run(p, need * 3)).toEqual([need, need * 2, need * 3]);
+    expect(p.cell.cooldown).toBe(0);
+  });
+
+  it('两座弹药库夹一门机炮:四个倍率一律**连乘**(1.25² / 0.7²),不是"每座 -30%"的加法', () => {
+    const sup = SUPPORTS[SUP_AMMO_BAY]!;
+    const one = placeWithSupports(TOWER_AUTOCANNON, [[0, 0, SUP_AMMO_BAY]]);
+    const two = placeWithSupports(TOWER_AUTOCANNON, [
+      [0, 0, SUP_AMMO_BAY],
+      [2, 0, SUP_AMMO_BAY],
+    ]);
+
+    expect(cellFireInterval(two.cell, two.def)).toBe(
+      effectiveFireInterval(two.def, 1) / (sup.fireRateMul * sup.fireRateMul),
+    );
+    expect(cellReload(two.cell, two.def)).toBe(two.def.reload * (sup.reloadMul * sup.reloadMul));
+    // 连乘 = 两座的效果恰好是一座的**再来一遍**,而不是把两次折扣加起来:
+    // 加法在四座围一门炮时会把装填推成负数,而负的 reloadLeft 会让 canFire 当场放行 ——
+    // 那门炮此后再也不装填,弹药系的硬停顿整条消失(连乘则永远推不到 ≤ 0)
+    expect(cellReload(two.cell, two.def)).toBeCloseTo(
+      cellReload(one.cell, one.def) * sup.reloadMul,
+      12,
+    );
+    expect(cellReload(two.cell, two.def)).toBeGreaterThan(0);
+    expect(cellFireInterval(two.cell, two.def)).toBeCloseTo(0.256, 12); // 0.4 → 0.32 → 0.256
+
+    // 手感上也真的又密了一档:20 帧 → 16 帧
+    const gap = gapFrames(cellFireInterval(two.cell, two.def));
+    expect(gap).toBe(16);
+    expect(gap).toBeLessThan(gapFrames(cellFireInterval(one.cell, one.def)));
+    expect(gaps(run(two, 200)).slice(0, 5)).toEqual(new Array(5).fill(gap));
+  });
+
+  it('第 4 参 buffMul 与另外两个旋钮各除各的:各自过一遍 safeScale,一边坏掉不牵连另一边', () => {
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    expect(effectiveFireInterval(def, 1, 1, 1)).toBe(effectiveFireInterval(def, 1)); // 缺省 = 传 1
+    expect(effectiveFireInterval(def, 1, 1, 1.25)).toBe(0.4 / 1.25);
+
+    for (const bad of [0, -1, NaN]) {
+      // 加成是 sim 内部连乘出来的,但保护照给:Infinity 会写进 cell.cooldown 且再也减不回来,
+      // NaN 更会顺着 checksum 把整局的确定性口径搅烂 —— 少一道口子就够破一局
+      const interval = effectiveFireInterval(def, 1, 1, bad);
+      expect(Number.isFinite(interval), `buffMul ${bad}`).toBe(true);
+      expect(interval).toBeGreaterThan(0);
+      // 三个旋钮先乘成一个数的话,NaN × 有限数还是 NaN:受击惩罚坏掉会把邻接加成一起拖下水
+      expect(effectiveFireInterval(def, 1, bad, 1.25)).toBe(
+        effectiveFireInterval(def, 1, bad) / 1.25,
+      );
+      tuning.towerFireRateScale = bad;
+      expect(effectiveFireInterval(def, 1, 1, 1.25), `全局倍率 ${bad}`).toBe(
+        effectiveFireInterval(def, 1) / 1.25,
+      );
+      tuning.towerFireRateScale = 1;
     }
   });
 });
