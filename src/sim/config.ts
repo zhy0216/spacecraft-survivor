@@ -6,6 +6,7 @@
  * 分工:一型一个数的(各敌型血量/速度/前摇)进 src/data/enemies.ts;
  * 全局性的倍率与阈值留在这里 —— 后者才是面板上"拖一下看体感"的旋钮。
  */
+import { ARC_MEDIUM_DEG } from '../data/arcs';
 import { ENEMY_RADIUS_MAX } from '../data/enemies';
 
 export const tuning = {
@@ -51,6 +52,12 @@ export const tuning = {
   enemyMixStrafer: 15,
   enemyMixTrailer: 10,
   enemyMixBeetle: 5,
+
+  // —— 射界与炮管(04 号 issue)——三项全是占位:05 号的塔数值表接手后一塔一档,这里整段作废。
+  // 与 stepShip 同口径:sim 每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
+  turretArcDeg: ARC_MEDIUM_DEG, // 中 100°(GDD §4.2);本轮所有武器格统一用这一档
+  turretRange: 380, // 自动机炮射程(GDD §14);本轮所有武器格统一用它
+  turretTurnRate: 360, // 炮管转速上限 °/s(与 shipTurnRate 同单位口径),追瞄与归位共用
 };
 
 export type Tuning = typeof tuning;

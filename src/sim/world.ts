@@ -6,9 +6,9 @@
  *   一艘玩家船(输入只以纯数据 ShipCommand 从外部灌入,sim 永不读键盘),
  *   N 只按 tuning.enemyMix* 混出来的敌人,M 颗子弹直线飞行、出界后确定性重生。
  *
- * 分工:单只敌人的行为(追踪/绕行/冲锋状态机)在 sim/enemy.ts,本文件只做"世界这一层"的接线 ——
- * 出怪、邻居分离、积分位置、接触检测、死亡回收。拆开的理由是行为能脱开世界单测(见 enemy.test.ts),
- * 而这里钉的是顺序与生命周期。
+ * 分工:单只敌人的行为(追踪/绕行/冲锋状态机)在 sim/enemy.ts,炮管的追瞄与归位在 sim/turret.ts,
+ * 本文件只做"世界这一层"的接线 —— 出怪、邻居分离、积分位置、接触检测、死亡回收。
+ * 拆开的理由是它们能脱开世界单测(见 enemy.test.ts / turret.test.ts),而这里钉的是顺序与生命周期。
  *
  * 本文件对后续 issue 只留挂钩、不抢活:contacts 交给 09(伤害/无敌帧/四舷),
  * onEnemyDeath 交给 10(残骸掉落),出怪器交给 08(波次脚本)。
@@ -30,6 +30,7 @@ import {
   stepEnemyBehavior,
 } from './enemy';
 import { createShip, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
+import { stepTurrets } from './turret';
 
 /** 渲染层与既有调用方都从 world 取 Enemy 类型,实体定义搬去 enemy.ts 后这条保持它们不破 */
 export type { Enemy } from './enemy';
@@ -114,7 +115,9 @@ export class World {
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
    * 顺序定死(单测按此钉):船 → 贴边夹取 → 出怪 → 重建空间哈希 → 清 contacts →
-   * 敌人 → 子弹 → 回收死者。出怪排在建哈希之前,新生的敌人当帧就参与分离;
+   * 敌人 → 炮管 → 子弹 → 回收死者。出怪排在建哈希之前,新生的敌人当帧就参与分离;
+   * 炮管排在敌人循环**之后**:敌人本帧已经动完,塔瞄的就是本帧位置 ——
+   * 反过来的话每座塔都恒定落后一帧,贴脸高速目标会永远被瞄在身后(04 号 issue);
    * 回收排在最后,于是"本帧被打死的敌人"在整帧里始终可见(渲染/结算读到的是同一批人)。
    */
   step(cmd: ShipCommand = IDLE): void {
@@ -200,6 +203,10 @@ export class World {
       const cr = contactR + def.radius;
       if (cdx * cdx + cdy * cdy < cr * cr) this.contacts.push(e);
     }
+
+    // 炮管:朝射界内最近的敌人转,没得打就归位(04 号 issue)。塔本身不开火 —— 那是 05 号的活。
+    // 传 this.grid 而不是 enemies:1000 敌 × 十座塔的线性扫描是 GDD §13 明令要用哈希避开的那件事
+    stepTurrets(this.deck, ship, this.grid, SIM_DT);
 
     // 子弹:直线飞行,出界重生
     const bullets = this.bullets.items;
@@ -326,10 +333,14 @@ export class World {
     acc((this.ship.heading * 180) / Math.PI);
     // 甲板紧跟着船:build 也是世界状态,少了它,"塔放错格"或"扩建没同步"这类回归会从确定性口径下漏掉。
     // 顺序 = deck.cells 的下标顺序(row-major,见 sim/deck),与渲染遍历同一条,永不改;
-    // exposed/online 是 occupied 的派生量,进哈希只是把同一件事哈两遍,故只累加 occupied 与 content
+    // exposed/online 是 occupied 的派生量,进哈希只是把同一件事哈两遍,故跳过。
+    // turretOffset 则**不是**派生量,而是逐帧追瞄/归位演化出来的状态(04 号 issue):
+    // 漏了它,"塔瞄错方向"这类回归就从确定性口径下漏掉,而它恰恰是 05 号开火方向的唯一依据。
+    // 换算成度的理由与 heading 那句一致 —— Math.round(v*8) 对弧度太粗
     for (const c of this.deck.cells) {
       acc(c.occupied ? 1 : 0);
       acc(c.content);
+      acc((c.turretOffset * 180) / Math.PI);
     }
     for (const e of this.enemies.items) {
       acc(e.x);

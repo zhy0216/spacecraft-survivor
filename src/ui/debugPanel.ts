@@ -65,6 +65,16 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
   ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });
 
+  // 射界(04 号 issue):三项全是**占位** —— 05 号的塔数值表接手后一塔一档(弧度/射程/转速
+  // 都进那张表),这个 folder 连同 tuning 里对应的三项一起作废,别在它上面接更多东西。
+  // 用法:按住 Tab 亮出扇形,一边拖一边看 —— 这是本轮唯一能肉眼校准"扇形 = 可命中区域"的手段
+  // (扇形半径直接取 turretRange、几何取自 sim 的射界函数,所以拖动时两者不可能对不上)。
+  const arc = pane.addFolder({ title: '射界(04)' });
+  arc.addBinding(tuning, 'turretArcDeg', { label: '射界 °', min: 30, max: 360, step: 10 });
+  arc.addBinding(tuning, 'turretRange', { label: '射程 px', min: 100, max: 900, step: 20 });
+  // 拖到最低能看清"塔转不过来就打不到":归位与追瞄共用这一根上限
+  arc.addBinding(tuning, 'turretTurnRate', { label: '炮管转速 °/s', min: 30, max: 1080, step: 30 });
+
   // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效
   const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });
   camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.1, max: 0.4, step: 0.01 });

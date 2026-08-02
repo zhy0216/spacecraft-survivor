@@ -12,6 +12,11 @@
  * 而不是靠两处变换算得一样。逐格用 cellWorldPos 摆 12 个 Graphics 也能画出同一幅画面,
  * 但那等于每帧重做一遍船体变换,格与格之间还会各自吃到浮点误差而抖动。
  * 注意:11 号 issue 会要求战斗中甲板走简化渲染(远景只留轮廓),本轮**不做两套**,先把一套画对。
+ *
+ * 射界叠加层(04 号 issue,按住 Tab):同样挂在 deckG 里、同样只画局部几何,
+ * 于是"扇形随船实时旋转"与"甲板随船旋转"是同一件事,不可能差一帧。
+ * 扇形的角度与半径**一律问 sim**(cellArc / tuning.turretRange),渲染层一行射界数学都不许自己写 ——
+ * 04 号的验收标准是"可视化与实际可命中区域一致",重算一份就等于埋下两个迟早走散的真相。
  */
 import {
   Application,
@@ -23,6 +28,7 @@ import {
   type Texture,
 } from 'pixi.js';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
+import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
 import {
   canPlace,
@@ -92,6 +98,19 @@ const DECK_HILITE_WIDTH = 2;
 const DECK_HOVER_WIDTH = 3; // 悬停格比其它合法格粗一档:光标在哪一格必须无歧义
 const DECK_DENY_FILL_ALPHA = 0.22;
 
+// —— 射界叠加层(04 号 issue,按住 Tab):我方冷色域(GDD §12),与弹道/合法格同一支蓝 ——
+// 扇形是"这一片我打得到"的读数而不是实体,故填充压到极淡的一层、边界靠描边交代:
+// 十座塔的扇形大面积互相重叠,填充再重一点就叠成一整块亮斑,反而读不出各塔的边界在哪。
+const DECK_ARC_COLOR = 0x9adcff;
+const DECK_ARC_FILL_ALPHA = 0.1;
+const DECK_ARC_STROKE_ALPHA = 0.45;
+const DECK_ARC_WIDTH = 1.5;
+/** 炮口线取比扇形更亮一档的冷白(与船头标识同色):它是"炮管归位"在画面上唯一看得见的东西 */
+const DECK_MUZZLE_COLOR = 0xdff2ff;
+const DECK_MUZZLE_WIDTH = 3;
+/** 炮口线长度(× 格边长):够伸出格外半格,不至于整条埋在格子自己的填充色里 */
+const DECK_MUZZLE_LEN = 1;
+
 /**
  * 前摇指示器每帧重建几何(Graphics 不像粒子那样能只改位置),故设硬上限:超配额的本帧不画。
  * 配额**按型均分**而不是共享一个池:共享时按 kind 顺序消费,前摇短、数量多的侧掠者会先抽干,
@@ -117,6 +136,8 @@ interface Interpolatable {
  */
 const localPos: Vec2 = { x: 0, y: 0 };
 const screenPos: Vec2 = { x: 0, y: 0 };
+/** 射界暂存:同理,叠加层每帧要向 sim 问一遍全部塔的扇形,现造就是每秒上千次分配(铁律 3) */
+const arcTmp: Arc = { center: 0, half: 0 };
 
 /**
  * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
@@ -204,6 +225,13 @@ export class Renderer {
   private deckBaseG = new Graphics();
   /** 放置高亮:压在底板之上,否则合法格的半透明色块会被格子填充盖掉 */
   private deckHiliteG = new Graphics();
+  /** 射界扇形(04 号):压在底板之下 —— 它是底衬,不许糊住格子本身的状态色 */
+  private deckArcG = new Graphics();
+  /**
+   * 炮口线。与扇形分开一层,是因为两者的寿命不同:扇形几何一局里只变几次(放塔、改参数),
+   * 炮管却每帧都在转 —— 同一个 Graphics 里没法只 clear 一半,合在一起就等于扇形也跟着每帧重建。
+   */
+  private deckMuzzleG = new Graphics();
   /**
    * 底板几何的脏标记。占用/内容一局里只变几次(放塔、12 号焊接拼块),
    * 却要每帧出现在画面上 —— 故按 deck.revision 重建,而不是每帧 clear 重画。
@@ -214,6 +242,17 @@ export class Renderer {
   private placement: PlacementUiState | null = null;
   /** 高亮层上一帧是否画过东西:退出放置模式时只需 clear 一次,而不是每帧空转 */
   private hiliteDrawn = false;
+  /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab'),渲染层只存 bool、不持有输入 */
+  private arcOverlay = false;
+  /**
+   * 扇形几何的三个缓存键:几何只随"哪些格是在线塔"(deck.revision)与两个 tuning 数变化,
+   * 三者都没动就一帧都不用重画。初值 -1 保证首次按住 Tab 必建一次(合法值全为正)。
+   */
+  private arcRevision = -1;
+  private arcDeg = -1;
+  private arcRange = -1;
+  /** 叠加层上一帧是否画过:松开 Tab 时 clear 一次即可(照 hiliteDrawn 的写法) */
+  private arcDrawn = false;
 
   static async create(world: World): Promise<Renderer> {
     const app = new Application();
@@ -277,9 +316,11 @@ export class Renderer {
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变),故与静态的边界圈分开
     this.telegraphG = new Graphics();
 
-    // 灰盒船体 = 甲板本身:底板 + 高亮装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 灰盒船体 = 甲板本身:四个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 子层序:射界扇形(底衬)→ 底板 → 炮口线(炮管长在甲板上,理应压住底板)
+    // → 放置高亮(临时的交互层,"我要放哪一格"任何时候都不许被别的层盖住)。
     // 这里不建几何 —— 格子内容要等 sync() 的脏标记在首帧补上(deckRevision = -1)。
-    this.deckG.addChild(this.deckBaseG, this.deckHiliteG);
+    this.deckG.addChild(this.deckArcG, this.deckBaseG, this.deckMuzzleG, this.deckHiliteG);
 
     // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
     // 不会被蜂群蛭糊掉)→ 弹 → 甲板。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
@@ -347,6 +388,7 @@ export class Renderer {
       this.drawDeckBase(deck);
     }
     this.drawDeckHilite(deck);
+    this.drawDeckArcs(deck);
     this.deckG.position.set(sx, sy);
     this.deckG.rotation = sh;
   }
@@ -370,6 +412,15 @@ export class Renderer {
   setPlacement(state: PlacementUiState | null): void {
     this.placement = state;
     // 摘掉时不留残影:下一次 drawDeckHilite 会看 hiliteDrawn 补一次 clear
+  }
+
+  /**
+   * 射界叠加层开关(GDD §4.2:**按住** Tab 显示,不是 toggle,所以这里收的是"键此刻是否按着"
+   * 而不是一次按键事件)。渲染层不 import core/input —— 键盘状态由 main.ts 每渲染帧灌进来,
+   * 与 setPlacement 同一条依赖方向(输入/ui → render,render 不反向依赖)。
+   */
+  setArcOverlay(on: boolean): void {
+    this.arcOverlay = on;
   }
 
   /**
@@ -504,6 +555,97 @@ export class Renderer {
         .fill({ color: DECK_HILITE_DENY, alpha: DECK_DENY_FILL_ALPHA })
         .stroke({ width: DECK_HILITE_WIDTH, color: DECK_HILITE_DENY });
     }
+  }
+
+  /**
+   * 射界叠加层(按住 Tab,GDD §4.2)。04 号的两条验收标准都由"画在船体局部空间 + 几何全问 sim"落实:
+   *   一、"可视化与实际可命中区域一致":扇形的中心角/半角一律取自 sim 的 cellArc(heading 传 0
+   *     就得到局部中心角),半径直接取 tuning.turretRange —— 这两个数正是 sim 索敌判定用的那两个,
+   *     不是渲染层照着规则重推的第二份;
+   *   二、"船旋转时射界实时跟随、无一帧延迟":整层挂在 deckG 下,吃的是与底板同一个插值位姿,
+   *     于是"扇形跟着船转"与"甲板跟着船转"在结构上就是同一件事,想差一帧都做不到。
+   * 扇形几何只随 deck.revision(放塔、12 号焊接)与两个 tuning 数变化 → 三个缓存键脏标记重建;
+   * 炮管每帧在动,炮口线只能每帧重画,所以两者分在两层 Graphics 上(见 deckMuzzleG)。
+   */
+  private drawDeckArcs(deck: Deck): void {
+    if (!this.arcOverlay) {
+      // 松开 Tab 时清一次就够(照 drawDeckHilite),顺手把缓存键作废:
+      // 下次按住 Tab 才会重建几何,否则清掉的画面再也不会被补回来
+      if (this.arcDrawn) {
+        this.deckArcG.clear();
+        this.deckMuzzleG.clear();
+        this.arcDrawn = false;
+        this.arcRevision = -1;
+      }
+      return;
+    }
+    this.arcDrawn = true;
+
+    // 现读 tuning(与 sim 每逻辑帧现读同口径):面板拖射界档位/射程时,扇形当场跟着变
+    const arcDeg = tuning.turretArcDeg;
+    const range = tuning.turretRange;
+    if (deck.revision !== this.arcRevision || arcDeg !== this.arcDeg || range !== this.arcRange) {
+      this.arcRevision = deck.revision;
+      this.arcDeg = arcDeg;
+      this.arcRange = range;
+      this.drawArcFans(deck, arcDeg, range);
+    }
+    this.drawArcMuzzles(deck, arcDeg);
+  }
+
+  /**
+   * 扇形本体。全部塔攒成一条 path 只 fill + stroke 一次(照底板/高亮层的写法):
+   * 扇形是"我打得到哪里"的整体读数,不需要逐塔不同的表现。
+   * 只画在线的武器塔 —— isTurretCell 已经把 online 判进去(离线塔不开火,画出扇形就是骗玩家),
+   * cellArc 再兜一层"没有暴露边就返回 false"。
+   */
+  private drawArcFans(deck: Deck, arcDeg: number, range: number): void {
+    const g = this.deckArcG;
+    g.clear();
+    const cells = deck.cells;
+    let drawn = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!isTurretCell(c) || !cellArc(c, 0, arcDeg, arcTmp)) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      // 圆心 = 格心(sim 索敌也是从格心量距离),moveTo → arc → closePath 合成一块扇形
+      g.moveTo(p.x, p.y)
+        .arc(p.x, p.y, range, arcTmp.center - arcTmp.half, arcTmp.center + arcTmp.half)
+        .closePath();
+      drawn++;
+    }
+    if (drawn > 0) {
+      g.fill({ color: DECK_ARC_COLOR, alpha: DECK_ARC_FILL_ALPHA }).stroke({
+        width: DECK_ARC_WIDTH,
+        color: DECK_ARC_COLOR,
+        alpha: DECK_ARC_STROKE_ALPHA,
+      });
+    }
+  }
+
+  /**
+   * 炮口线:起点格心、长一格,方向 = 局部射界中心 + cell.turretOffset ——
+   * sim 存的是**相对射界中心**的偏角(见 deck.ts 的字段注释),所以这里加一下就是局部朝向,
+   * 不必再去追船体 heading(那是 deckG 的 rotation 已经替我们做完的事)。
+   * 有它,"射界内无目标 → 炮管归位"才在画面上看得见:没有它,叠加层只能证明扇形画对了,
+   * 证不出塔真的在转、真的会回中(而这正是 04 号里唯一需要肉眼抽查的一条)。
+   */
+  private drawArcMuzzles(deck: Deck, arcDeg: number): void {
+    const g = this.deckMuzzleG;
+    g.clear();
+    const len = deckCellSize() * DECK_MUZZLE_LEN;
+    const cells = deck.cells;
+    let drawn = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (!isTurretCell(c) || !cellArc(c, 0, arcDeg, arcTmp)) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      // 不必 wrapAngle:cos/sin 对超出 ±π 的角一样正确,折回只是白算两次三角函数
+      const a = arcTmp.center + c.turretOffset;
+      g.moveTo(p.x, p.y).lineTo(p.x + Math.cos(a) * len, p.y + Math.sin(a) * len);
+      drawn++;
+    }
+    if (drawn > 0) g.stroke({ width: DECK_MUZZLE_WIDTH, color: DECK_MUZZLE_COLOR });
   }
 
   /**

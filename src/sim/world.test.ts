@@ -1,8 +1,9 @@
 /**
  * 本文件在 Node 环境运行,这本身就是"sim 不依赖 Pixi/DOM"的验证(01 号 issue)。
  *
- * 单只敌人的行为(状态机/前摇/冲刺锁定)在 enemy.test.ts 钉;这里钉的是**世界这一层的接线**:
- * step 的顺序、出怪混型的随机序列、接触检测只检测不结算、死亡回收的下标坑与掉落挂钩。
+ * 单只敌人的行为(状态机/前摇/冲刺锁定)在 enemy.test.ts 钉、炮管的追瞄与归位在 turret.test.ts 钉;
+ * 这里钉的是**世界这一层的接线**:step 的顺序(含炮管排在敌人循环之后)、出怪混型的随机序列、
+ * 接触检测只检测不结算、死亡回收的下标坑与掉落挂钩,以及哪些状态进 checksum。
  *
  * 07 验收标准里可自动化的那几条也钉在这里(T5):它们的口径都是"一整个世界连着跑若干秒",
  * 单只敌人的用例复现不出来 —— 方向压力得有一艘真在机动的船,HP 时间缩放得真跑到第 5 分钟。
@@ -11,11 +12,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { type Arc, cellArc } from './arc';
 import { tuning } from './config';
 import {
   CELL_SUPPORT,
   CELL_WEAPON,
   cellAt,
+  cellWorldPos,
   DECK_COLS,
   DECK_ROWS,
   PLACE_INTERIOR,
@@ -39,6 +42,11 @@ const BASE = {
   enemyMixStrafer: 15,
   enemyMixTrailer: 10,
   enemyMixBeetle: 5,
+  // 04 号 issue 的三项占位(05 号的塔数值表接手后作废):显式写死在这里而不是读 config 的初值,
+  // 否则 05 一调平衡,下面那些"转到 25° 就停"的断言会跟着莫名其妙地红
+  turretArcDeg: 100,
+  turretRange: 380,
+  turretTurnRate: 360,
 };
 Object.assign(tuning, BASE);
 /** 有用例要临时改甲虫前摇(证明"时长可配"),与 enemy.test.ts 同口径:跑完必须还原 */
@@ -184,6 +192,150 @@ describe('甲板接线(world.place 是唯一放置入口)', () => {
     const before = a.checksum();
     expect(a.place(0, 0, CELL_SUPPORT)).toBe(PLACE_TAKEN);
     expect(a.checksum()).toBe(before);
+  });
+});
+
+/**
+ * 炮管接线(04 号 issue T2)。射界几何在 arc.test.ts 钉、炮管的时间维度行为在 turret.test.ts 钉,
+ * 这里只钉**世界这一层**的三件事:
+ *   step() 里真的每帧推进了炮管(接线不通的话上面两个文件全绿、游戏里炮管一动不动);
+ *   炮管排在敌人循环**之后** —— 塔瞄的是敌人本帧的位置,而不是上一帧的;
+ *   turretOffset 进 checksum —— 它是逐帧演化出来的状态,不是 occupied 的派生量。
+ * "射界内最近优先 / 圈外界外一律不理 / 没得打就归位"这三条口径也在真世界里各走一遍:
+ * 单测过了而接线接错(比如塔拿船心当炮位、或者哈希查询半径不够)时,只有这一层拦得住。
+ */
+describe('炮管接线(04 号:塔只打射界内的目标,没得打就归位)', () => {
+  it('step() 每帧推进炮管:射界内有目标就追瞄,目标被挤出射界就归位到扇形中心', () => {
+    const w = turretWorld(61, 2);
+    const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
+    const [target, behind] = w.enemies.items as [Enemy, Enemy];
+    parkAt(w, target, 25, 200);
+    parkAt(w, behind, 170, 150); // 船尾方向:射界外,归位那一段不会被它半路勾回去
+
+    expect(cell.turretOffset).toBe(0); // 起手归位
+    for (let f = 0; f < 30; f++) w.step();
+    expect(aimDeg(w)).toBeCloseTo(25, 6); // 每帧 6°,30 帧足够转到位并停住
+
+    // 目标挪到 80°(仍在射程内,只是出了半角 50° 的扇形)→ 判据是"射界内无目标",不是"世上无敌人"
+    parkAt(w, target, 80, 200);
+    let prev = cell.turretOffset;
+    for (let f = 0; f < Math.ceil(25 / MAX_TURN_DEG); f++) {
+      w.step();
+      const now = cell.turretOffset;
+      expect(now).toBeLessThan(prev); // 单调收回,肉眼能看见炮管在转(而不是某一帧啪地弹回)
+      expect(now).toBeGreaterThanOrEqual(-1e-9); // 不过冲:绝不越过 0 荡到另一侧
+      prev = now;
+    }
+    expect(cell.turretOffset).toBe(0); // 末帧差值不足一格上限 → 当帧精确落到中心
+    for (let f = 0; f < 20; f++) w.step();
+    expect(cell.turretOffset).toBe(0); // 停住,不在 0 附近抖
+  });
+
+  it('射界内两只都够得着 → 瞄最近的;近的那只跑出射程,火力立刻交给远的', () => {
+    const w = turretWorld(62, 2);
+    const [near, far] = w.enemies.items as [Enemy, Enemy];
+    parkAt(w, near, 20, 120);
+    parkAt(w, far, -35, 300); // 也在射界内,只是远得多
+
+    for (let f = 0; f < 30; f++) w.step();
+    expect(aimDeg(w)).toBeCloseTo(20, 6);
+
+    parkAt(w, near, 20, 500); // 方位不变,只是退到射程外
+    for (let f = 0; f < 30; f++) w.step();
+    expect(aimDeg(w)).toBeCloseTo(-35, 6);
+  });
+
+  it('只打射界扇形 ∩ 射程圆内的目标:圈外一步、界外一度都当没看见', () => {
+    const w = turretWorld(63, 1);
+    const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
+    const e = w.enemies.items[0]!;
+    const half = tuning.turretArcDeg / 2; // 船头正中格只有 BOW 一条暴露边,不加宽
+
+    parkAt(w, e, 25, tuning.turretRange + 5); // 方位在射界正中,但差五步进不了射程
+    for (let f = 0; f < 20; f++) w.step();
+    expect(cell.turretOffset).toBe(0); // 逐位为 0:压根没被推过,而不是"转出去又转回来"
+
+    parkAt(w, e, 25, tuning.turretRange - 5); // 同一个方位,踏进射程圆
+    for (let f = 0; f < 20; f++) w.step();
+    expect(aimDeg(w)).toBeCloseTo(25, 6);
+
+    parkAt(w, e, half + 1, 150); // 近在 150,但方位比半角多 1°
+    for (let f = 0; f < 20; f++) w.step();
+    expect(cell.turretOffset).toBe(0);
+
+    parkAt(w, e, half - 1, 150); // 界内 1°:该追。边界"含在内"的逐位口径在 arc.test.ts 钉
+    for (let f = 0; f < 20; f++) w.step();
+    expect(aimDeg(w)).toBeCloseTo(half - 1, 6);
+  });
+
+  it('炮管排在敌人循环之后:塔瞄的是敌人**本帧**的位置,不是上一帧的', () => {
+    const w = turretWorld(64, 1);
+    const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
+    const e = w.enemies.items[0]!;
+    const bearing = 25;
+
+    // 对照组:同样停在射程外 4px,不给速度就永远进不来 —— 下面那一帧的位移才是唯一的分水岭
+    parkAt(w, e, bearing, tuning.turretRange + 4);
+    w.step();
+    expect(cell.turretOffset).toBe(0);
+
+    // 给它一发朝炮口的径向速度:本帧位移 9px(> 4)且方位角一点不变(径向 = 只缩距离)。
+    // 帧首在圈外、帧尾在圈内 —— 若 stepTurrets 排在敌人循环之前,它读到的还是帧首那个
+    // "射程外"的位置,炮管会纹丝不动
+    parkAt(w, e, bearing, tuning.turretRange + 4);
+    const a = bearing * DEG2RAD;
+    e.vx = -Math.cos(a) * 600;
+    e.vy = -Math.sin(a) * 600;
+    w.step();
+
+    expect(distToGun(w, e.px, e.py)).toBeGreaterThan(tuning.turretRange); // 帧首:还在圈外
+    expect(distToGun(w, e.x, e.y)).toBeLessThan(tuning.turretRange); // 帧尾:已经进圈
+    expect(cell.turretOffset / DEG2RAD).toBeCloseTo(MAX_TURN_DEG, 9); // 当帧就转满了一格上限
+  });
+
+  it('放塔后同 seed 两个世界仍逐位一致,且与未放塔的世界不同', () => {
+    tuning.stressEnemies = 100;
+    tuning.stressBullets = 0;
+    const a = armedWorld(88);
+    const b = armedWorld(88);
+    const c = new World(88); // 对照:同 seed,但一座塔都不放
+    for (let f = 0; f < 90; f++) {
+      a.step();
+      b.step();
+      c.step();
+    }
+
+    // 非空过:这 90 帧里炮管确实转过。全 0 的话下面两条断言退化成"甲板 content 一致"
+    expect(a.deck.cells.some((cell) => cell.turretOffset !== 0)).toBe(true);
+    expect(a.checksum()).toBe(b.checksum());
+    // 未放塔的世界连 content 都不同,故这一条只兜住"放塔确实改变了世界状态";
+    // turretOffset **单独**进哈希由下一条钉死
+    expect(a.checksum()).not.toBe(c.checksum());
+  });
+
+  it('turretOffset 单独进 checksum:把转过的偏角抹平就分叉,照另一边补回来又合流', () => {
+    tuning.stressEnemies = 100;
+    tuning.stressBullets = 0;
+    const a = armedWorld(89);
+    const b = armedWorld(89);
+    for (let f = 0; f < 90; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 只动 turretOffset 一个字段(= 同一块甲板,但"炮管一次都没转过"):
+    // 分叉 = 它真的进了哈希,"塔瞄错方向"这类回归才不会从确定性口径下漏掉
+    const saved = a.deck.cells.map((cell) => cell.turretOffset);
+    expect(saved.some((v) => v !== 0)).toBe(true);
+    for (const cell of a.deck.cells) cell.turretOffset = 0;
+    expect(a.checksum()).not.toBe(b.checksum());
+
+    // 补回同一组偏角就又对上了:上面的差异确实来自炮管,而不是别处早就在漂移
+    a.deck.cells.forEach((cell, i) => {
+      cell.turretOffset = saved[i]!;
+    });
+    expect(a.checksum()).toBe(b.checksum());
   });
 });
 
@@ -688,6 +840,76 @@ function watchStates(
     prev.clear();
     for (const e of w.enemies.items) prev.set(e, e.state);
   };
+}
+
+/**
+ * 炮管用例的靶场夹具。船头正中那一格(3×4 甲板上只有 BOW 一条暴露边)当炮位:
+ * 射界中心 = 船头朝向、半角 = 弧度/2,断言里不必再扣掉角落格的 +60°。
+ */
+const BOW_COL = 1;
+const BOW_ROW = 0;
+/** 每帧转速上限(度)。拿 BASE 算而不是写死 6,改了参数也不会悄悄失配 */
+const MAX_TURN_DEG = BASE.turretTurnRate * SIM_DT;
+/** 炮位与射界的暂存:与被测代码同口径,复用一份,不在断言里现造对象 */
+const gun: Vec2 = { x: 0, y: 0 };
+const gunArc: Arc = { center: 0, half: 0 };
+
+/**
+ * 一个静止靶场:船停在原点、船头朝 **+X**(算方位角时不必再扣掉 createShip 的 -π/2),
+ * 船头正中一座塔,场上 count 只蜂群蛭等着调用方 parkAt 摆到位。
+ * 敌速倍率归零 = 把敌人钉死在摆好的位置(期望速度整体 ×0,park 之后 v 恒为 0),
+ * 于是射界/射程的边界断言算的是什么就是什么,不会被每帧一两 px 的漂移搅掉 ——
+ * 本组用例考的是"塔朝哪",不是"敌人往哪走"。
+ */
+function turretWorld(seed: number, count: number): World {
+  onlyKind(KIND_SWARM);
+  tuning.stressEnemies = count;
+  tuning.stressBullets = 0;
+  tuning.enemySpeedScale = 0;
+  const w = new World(seed);
+  w.step(); // 帧首出怪:此后场上恰好 count 只
+  expect(w.enemies.size).toBe(count);
+  expect(w.ship.x).toBe(0); // 没有输入 → 船一步没挪,炮位算得清
+  expect(w.ship.y).toBe(0);
+  w.ship.heading = w.ship.pheading = 0;
+  expect(w.place(BOW_COL, BOW_ROW, CELL_WEAPON)).toBe(PLACE_OK);
+  return w;
+}
+
+/** 船头与左舷各一座塔:两座塔的射界互不重叠,checksum 里就有两条独立演化的偏角 */
+function armedWorld(seed: number): World {
+  const w = new World(seed);
+  expect(w.place(BOW_COL, BOW_ROW, CELL_WEAPON)).toBe(PLACE_OK);
+  expect(w.place(0, 2, CELL_WEAPON)).toBe(PLACE_OK);
+  return w;
+}
+
+/** 炮位 = 格心的世界坐标(**不是船心**:舷侧塔与船心差着大半个船长) */
+function gunPos(w: World): Vec2 {
+  return cellWorldPos(w.deck, w.ship, BOW_COL, BOW_ROW, gun);
+}
+
+/** 某点离炮口多远。射程判定的口径就是这一条,断言照抄它才不会各算各的 */
+function distToGun(w: World, x: number, y: number): number {
+  gunPos(w);
+  return Math.hypot(x - gun.x, y - gun.y);
+}
+
+/** 把敌人钉在"离炮口 dist、方位 bearingDeg"处 —— 用例想说的永远是"偏 25°、200 远",不是两个坐标 */
+function parkAt(w: World, e: Enemy, bearingDeg: number, dist: number): void {
+  gunPos(w);
+  const a = bearingDeg * DEG2RAD;
+  park(e, gun.x + Math.cos(a) * dist, gun.y + Math.sin(a) * dist);
+}
+
+/**
+ * 炮口的世界朝向(度)= 射界中心 + 相对偏角 —— sim/deck 对 turretOffset 的定义就是这一句。
+ * 断言比"世界朝向"而不是比 offset:后者与射界中心一起变,换一格炮位就得重算一遍期望值。
+ */
+function aimDeg(w: World): number {
+  const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
+  expect(cellArc(cell, w.ship.heading, tuning.turretArcDeg, gunArc)).toBe(true);
+  return wrapAngle(gunArc.center + cell.turretOffset) / DEG2RAD;
 }
 
 /** 把敌人钉在某处并清速度:构造判定用的确定构型,免得被上一帧的惯性带走 */

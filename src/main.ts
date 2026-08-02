@@ -52,6 +52,10 @@ async function boot(): Promise<void> {
     if (!run.paused) loop.advance(ticker.elapsedMS * run.timeScale);
     // 船动了、光标没动,悬停格也得跟着重算 —— 否则高亮框会跟着甲板飘走(见 placement.syncHover)
     placement.syncHover();
+    // 按住 Tab 叠加显示各塔射界(GDD §4.2:**按住**,不是 toggle,所以这里每帧灌"此刻是否按着"
+    // 而不是监听一次按键事件)。按渲染帧采样即可 —— 它纯是可视化开关,不进 World.step,
+    // 也就不参与确定性回放;放在 sync 之前是为了同一帧内先定开关再画,不留一帧迟滞。
+    renderer.setArcOverlay(input.isDown('Tab'));
     renderer.sync(loop.alpha);
 
     stats.fps = Math.round(renderer.app.ticker.FPS);

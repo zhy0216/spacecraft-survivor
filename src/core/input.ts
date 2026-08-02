@@ -7,11 +7,25 @@ export interface Vec2 {
   y: number;
 }
 
+/**
+ * 需要吞掉浏览器默认行为的键(按 e.code 匹配)。
+ * Tab 是 04 号射界叠加层的"按住显示"键(GDD §4.2):不拦的话浏览器会拿它切焦点,
+ * 焦点一路移进调参面板的输入框 —— 按住 Tab 就变成"焦点在一格格跳",
+ * 而且松手的 keyup 会落到那个新获得焦点的元素上、根本传不回 window,
+ * keys 里的 'Tab' 于是永远清不掉,叠加层卡在常亮(blur 兜底也只在整个窗口失焦时才触发)。
+ * 只列真正需要的键:全量 preventDefault 会把浏览器快捷键与将来的文本输入一起废掉。
+ */
+const PREVENT_DEFAULT = new Set(['Tab']);
+
 export class Input {
   private keys = new Set<string>();
 
   constructor(target: Window = window) {
-    target.addEventListener('keydown', (e) => this.keys.add(e.code));
+    target.addEventListener('keydown', (e) => {
+      // 拦默认行为 ≠ 吞掉这次按键:照常记进 keys,否则"按住 Tab 显示射界"就没了触发源
+      if (PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+      this.keys.add(e.code);
+    });
     target.addEventListener('keyup', (e) => this.keys.delete(e.code));
     target.addEventListener('blur', () => this.keys.clear());
   }

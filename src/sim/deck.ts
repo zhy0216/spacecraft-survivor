@@ -80,6 +80,17 @@ export interface DeckCell {
   exposedCount: number;
   /** 见 recomputeDeck:只有武器塔会因失去全部暴露边而离线 */
   online: boolean;
+  /**
+   * 炮口**相对射界中心**的偏角(弧度),0 = 归位。04 号只需要这一个运行期状态;
+   * 05 号的塔框架会在同一个对象上继续加(冷却/热量/弹夹),故不另开平行数组 ——
+   * 格与塔一一对应,12 号焊/拆甲板时它跟着格一起生灭,不会有第二个需要同步的容器。
+   * 存相对量而不是世界角:船一转炮管跟着船体走(物理上正确),不必每帧追赶 heading;
+   * 于是"归位"就是 turretOffset → 0,与船朝向无关,可观察、可单测。
+   * 世界朝向 = wrapAngle(arc.center + turretOffset)。
+   * 本文件只负责它的生灭(建格时 0、拆格时清零),唯一的写入方是 sim/turret.ts ——
+   * 甲板不认识"敌人"这个概念,它只是那块状态的房东。
+   */
+  turretOffset: number;
 }
 
 export interface Deck {
@@ -118,6 +129,7 @@ export function createDeck(cols: number = DECK_COLS, rows: number = DECK_ROWS): 
         exposed: 0,
         exposedCount: 0,
         online: true,
+        turretOffset: 0,
       });
     }
   }
@@ -159,11 +171,13 @@ export function recomputeDeck(deck: Deck): void {
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i]!;
     if (!cell.occupied) {
-      // 不属于船体的格没有"边"也没有内容:一律清干净,免得 12 号拆改后留下过期的掩码/塔
+      // 不属于船体的格没有"边"也没有内容:一律清干净,免得 12 号拆改后留下过期的掩码/塔。
+      // 炮管偏角一起清:拆掉这格再焊回来,新塔必须从归位状态起手,而不是继承上一座塔的指向
       cell.exposed = 0;
       cell.exposedCount = 0;
       cell.content = CELL_EMPTY;
       cell.online = true;
+      cell.turretOffset = 0;
       continue;
     }
     let mask = 0;
