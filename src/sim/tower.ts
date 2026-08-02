@@ -82,10 +82,15 @@ export function cellTowerDef(cell: DeckCell): TowerDef | undefined {
  *     而不是要等这一轮走完 —— "面板拖动即时生效"才是完整的;
  *   二、倍率一度被拖到极小值时写进去的那个天文数字,拖回来的下一帧就被夹掉,
  *     那座塔一定救得回来。不夹的话它会一直冻到本局结束(cooldown 只减不设上限)。
+ *
+ * 同一夹也是受击惩罚(fireMul)"不制造死亡螺旋"的机械保证:惩罚期内写进去的那个更长的冷却,
+ * 在 0.5s 窗口结束的下一帧就被夹回基准间隔 —— 惩罚绝不会拖过它自己的窗口。
+ * 故本函数**必须**收到与 onFired 同一个 fireMul:拿基准间隔来夹,惩罚期内写进去的长冷却
+ * 会被当场夹回去,整条惩罚等于没有(09 号 T3 的射速惩罚会静默失效)。
  */
-function stepCooldown(cell: DeckCell, def: TowerDef, dt: number): void {
+function stepCooldown(cell: DeckCell, def: TowerDef, dt: number, fireMul: number): void {
   if (cell.cooldown <= 0) return;
-  const max = effectiveFireInterval(def, cell.level);
+  const max = effectiveFireInterval(def, cell.level, fireMul);
   if (cell.cooldown > max) cell.cooldown = max;
   cell.cooldown -= dt;
   if (cell.cooldown <= THROTTLE_EPS) cell.cooldown = 0;
@@ -96,13 +101,14 @@ function stepCooldown(cell: DeckCell, def: TowerDef, dt: number): void {
  * 只在有目标时推进,弹药塔就会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
  * 调用方(sim/turret.ts)先按 isTurretCell 挡掉离线塔:离线塔一切冻结(与 04 号炮管同口径),
  * 所以本函数不认识 online —— 它只管"这一帧的时间过去了,状态该走到哪"。
+ * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞。见 effectiveFireInterval 那段。
  */
-export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number): void {
+export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul = 1): void {
   switch (def.throttle) {
     case THR_AMMO: {
       // 冷却与装填**并行**推进:装填完毕那一帧就该能开火,不再叠一层射击间隔。
       // (reload 1.5s 远长于 fireInterval,冷却早就归 0 了;并行只是为了这条语义不依赖数值大小)
-      stepCooldown(cell, def, dt);
+      stepCooldown(cell, def, dt, fireMul);
       if (cell.reloadLeft > 0) {
         cell.reloadLeft -= dt;
         if (cell.reloadLeft <= THROTTLE_EPS) {
@@ -115,7 +121,9 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number): void {
     }
 
     case THR_HEAT: {
-      stepCooldown(cell, def, dt);
+      // 惩罚只作用在射击间隔上,降温与锁死那两条腿一个字都不改:
+      // 挨一下就连降温也变慢的话,被撞舷的过热塔会越挨越打不动 —— 那正是"死亡螺旋"本身
+      stepCooldown(cell, def, dt, fireMul);
       // 降温**任何时候都在跑**,含强制冷却期间:UI 的热量条因此一直在往下走,
       // 玩家看得见"还剩多久能打",而不是锁死期间冻在顶上、解锁那一刻突然归零。
       if (cell.heat > 0) {
@@ -139,7 +147,12 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number): void {
       // 故这里连清零都不必 —— 热循环里不放一句注定为真的赋值。UI 的"充能系 cooldown 恒 0"由此成立。
       const t = towerChargeTime(def, cell.level);
       if (t > 0) {
-        cell.charge += dt / t;
+        // 蓄力也乘 fireMul:充能系没有 cooldown 这条腿,不在这里乘,六塔里的迫击炮与磁轨
+        // 就对受击**完全免疫** —— 被撞舷的三座塔里有两座照常输出,"被撞舷会顿一下"的反馈死掉一半。
+        // 这与"充能系的节奏只由 chargeTime 给"不矛盾:fireMul 不是射速旋钮
+        // (面板上的 towerFireRateScale 在 effectiveFireInterval 里,那条路对充能系照旧恒 0),
+        // 它是**受击惩罚** —— 一次外部事件让这座塔顿 0.5s,与"塔本身多快"是两回事
+        cell.charge += (dt * safeScale(fireMul)) / t;
         // 满了就**精确停在 1.0**(而不是留个 0.9999…):UI 的充能环要能画满,
         // canFire 那边也才能干干净净地比 `>= 1`。这一夹同时就是"满充后停着等目标"——
         // 无目标也照常蓄、蓄满不外溢,于是目标一进射界就是当场一发,而不是再等一个周期
@@ -154,7 +167,7 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number): void {
 
     default:
       // 未知节流(数值表被改坏)退化成纯冷却:这样的塔至少还打得响,便于当场看出是表填错了
-      stepCooldown(cell, def, dt);
+      stepCooldown(cell, def, dt, fireMul);
       break;
   }
 }
@@ -187,14 +200,17 @@ export function canFire(cell: DeckCell, def: TowerDef): boolean {
  * @param shots 这一次打出去几发(机炮 Lv3 双管 = 2,见 towerBurst)。
  *   连发的代价按发算:不乘 shots 就等于"升到 Lv3 之后多出来的那一发是免费的",
  *   弹夹与热量这两套机制会随着等级悄悄变弱 —— 而它们正是 06 号要作用的锚点。
+ * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞。**只进射击间隔**:
+ *   惩罚期内挨的这一发照常扣一发弹药/一份热量,不多不少 —— 惩罚是"下一发慢一点",
+ *   不是"这一发更贵",否则被撞舷会连带更快见底/更快过热,那就成了死亡螺旋。
  */
-export function onFired(cell: DeckCell, def: TowerDef, shots: number): void {
+export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 1): void {
   // 至少算一发:调用点就是"确实开火了"那一处,传 0/NaN 进来会让弹夹永不见底 = 节流形同虚设
   const n = shots > 1 ? Math.floor(shots) : 1;
 
   switch (def.throttle) {
     case THR_AMMO: {
-      cell.cooldown = effectiveFireInterval(def, cell.level);
+      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
       cell.ammo -= n;
       if (cell.ammo <= 0) {
         cell.ammo = 0; // 夹 0:UI 直接把这个整数印出来,不能出现 -1 发
@@ -209,7 +225,7 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number): void {
     }
 
     case THR_HEAT: {
-      cell.cooldown = effectiveFireInterval(def, cell.level);
+      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
       cell.heat += def.heatPerShot * n;
       const max = towerHeatMax(def, cell.level);
       if (cell.heat >= max) {
@@ -230,7 +246,7 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number): void {
       break;
 
     default:
-      cell.cooldown = effectiveFireInterval(def, cell.level);
+      cell.cooldown = effectiveFireInterval(def, cell.level, fireMul);
       break;
   }
 }
@@ -243,9 +259,16 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number): void {
  *
  * 入参形状是 (def, level) 而不是 (cell):06 号支援设施的邻接加成只需在本函数里多读一步
  * "相邻格有没有供弹/散热设施",几十个调用点一个字都不用改。本轮不实现邻接。
+ *
+ * @param fireMul **受击射速惩罚**倍率(09 号 T3),缺省 1 = 没被撞;< 1 = 这一舷刚挨了一下,
+ *   间隔按倍率变长。它是船体状态(world.edgePenalty)的函数,不是塔的属性,所以走参数而不是
+ *   再读一次 tuning —— 本文件对甲板只剩类型依赖(见文件头),更不该反过来认识 World。
+ *   与全局倍率**分两次除**而不是先乘成一个数:两个旋钮各自过一遍 safeScale 的下限保护,
+ *   一边被拖成 0/NaN 不会顺着乘法把另一边一起吞掉(NaN × 有限数还是 NaN)。
+ *   射速惩罚的唯一去处就是这一条式子:另开一份"惩罚后的间隔"必然与 stepCooldown 那道夹取错开口径。
  */
-export function effectiveFireInterval(def: TowerDef, level: number): number {
-  return towerFireInterval(def, level) / safeScale(tuning.towerFireRateScale);
+export function effectiveFireInterval(def: TowerDef, level: number, fireMul = 1): number {
+  return towerFireInterval(def, level) / safeScale(tuning.towerFireRateScale) / safeScale(fireMul);
 }
 
 /**

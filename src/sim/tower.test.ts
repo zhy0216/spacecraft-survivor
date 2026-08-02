@@ -12,7 +12,11 @@
  *   过热:半速点射跑满 60 秒一次都不停(与弹药系的分水岭),贪连射到顶才被锁死 overheatLock;
  *   充能:无目标也照常蓄、**满 1.0 精确封顶停在那里等目标**,节奏与射速旋钮完全无关;
  *   effectiveDamage / effectiveFireInterval 每次现读 tuning(面板拖动即时生效),
- *     且倍率被拖到 0/负/NaN 也不许把塔永久卡死。
+ *     且倍率被拖到 0/负/NaN 也不许把塔永久卡死;
+ *   受击射速惩罚 fireMul(09 号 T3):只作用在**射击间隔与蓄力速度**上 ——
+ *     装填、降温、过热锁三条腿一个字不动(挨一下就连装填也变慢 = 死亡螺旋),
+ *     充能系也必须真的慢下来(不然六塔里有两座对受击完全免疫),
+ *     且**缺省 1 时逐帧读数与今天一字不差**(既有调用方一个参数都不用补)。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
@@ -90,18 +94,27 @@ function upgrade(p: Placed): void {
   expect(placeAt(p.deck, 0, 0, CELL_WEAPON, p.cell.towerType)).toBe(PLACE_UPGRADE);
 }
 
-/** 与 sim/turret.ts 的每帧顺序同口径:节流先推进(有没有目标都跑),再问节流放不放行 */
-function tick(p: Placed, hasTarget: boolean, shots = 1): boolean {
-  stepThrottle(p.cell, p.def, SIM_DT);
+/**
+ * 与 sim/turret.ts 的每帧顺序同口径:节流先推进(有没有目标都跑),再问节流放不放行。
+ * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞 —— 与 stepThrottle/onFired 的缺省一致,
+ *   于是上面那批既有用例连一个参数都不用补,读到的仍是今天这条链路
+ */
+function tick(p: Placed, hasTarget: boolean, shots = 1, fireMul = 1): boolean {
+  stepThrottle(p.cell, p.def, SIM_DT, fireMul);
   if (!hasTarget || !canFire(p.cell, p.def)) return false;
-  onFired(p.cell, p.def, shots);
+  onFired(p.cell, p.def, shots, fireMul);
   return true;
 }
 
 /** 跑 frames 帧,返回开火落在第几帧(1-based)。hasTarget 按帧给,默认恒有目标 */
-function run(p: Placed, frames: number, hasTarget: (f: number) => boolean = () => true): number[] {
+function run(
+  p: Placed,
+  frames: number,
+  hasTarget: (f: number) => boolean = () => true,
+  fireMul = 1,
+): number[] {
   const at: number[] = [];
-  for (let f = 1; f <= frames; f++) if (tick(p, hasTarget(f))) at.push(f);
+  for (let f = 1; f <= frames; f++) if (tick(p, hasTarget(f), 1, fireMul)) at.push(f);
   return at;
 }
 
@@ -491,5 +504,107 @@ describe('effectiveDamage / effectiveFireInterval(全局倍率现读 tuning)', (
     // 不必等那个天文数字慢慢走完(不夹的话这座塔会一直冻到本局结束)
     tuning.towerFireRateScale = 1;
     expect(run(p, frames(towerFireInterval(p.def, 1)) + 1)).toEqual([24]);
+  });
+});
+
+describe('受击射速惩罚 fireMul(09 号 T3:被撞舷的塔顿一下)', () => {
+  /**
+   * 本组一律显式写死倍率、不读 tuning.hitFireRateMul:这里钉的是"惩罚怎么作用",
+   * 而那个数是 M0 要反复拖的占位(09 号约定 §2),让它把机制断言带崩没有意义。
+   * 0.75 = 出货占位值,恰好把机炮的 24 帧变成整 32 帧,帧距读得出来。
+   */
+  const MUL = 0.75;
+
+  it('射击间隔再除一次 fireMul:< 1 变慢,缺省即 1,两个旋钮各除各的', () => {
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    expect(effectiveFireInterval(def, 1, 1)).toBe(effectiveFireInterval(def, 1)); // 缺省 = 传 1
+    expect(effectiveFireInterval(def, 1, 0.5)).toBeCloseTo(0.8, 12);
+    // 全局射速倍率(面板旋钮)与受击惩罚(船体状态)是两件事,谁都不吞掉谁:
+    // 拖快到 2 倍的塔挨了撞,仍然只是"比自己的 2 倍慢一截",而不是回到基准
+    tuning.towerFireRateScale = 2;
+    expect(effectiveFireInterval(def, 1, 0.5)).toBeCloseTo(0.4, 12);
+  });
+
+  it('fireMul 被喂成 0 / 负 / NaN:走与全局倍率同一道下限保护,且不顺着乘法污染另一边', () => {
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    for (const bad of [0, -1, NaN]) {
+      // Infinity 会写进 cell.cooldown 并再也减不回来,NaN 会顺着 checksum 搅烂确定性口径 ——
+      // 惩罚倍率是 sim 内部算出来的,但保护照给:少一道口子就够破一局的确定性
+      const interval = effectiveFireInterval(def, 1, bad);
+      expect(Number.isFinite(interval), `fireMul ${bad}`).toBe(true);
+      expect(interval).toBeGreaterThan(0);
+
+      // 分两次除而不是先乘成一个数:NaN × 有限数还是 NaN,合并的话一边坏掉必然把另一边一起拖下水
+      tuning.towerFireRateScale = bad;
+      expect(effectiveFireInterval(def, 1, 1), `全局倍率 ${bad}`).toBe(effectiveFireInterval(def, 1));
+      tuning.towerFireRateScale = 1;
+    }
+  });
+
+  it('弹药系:帧距按倍率变长,而那段硬停顿(装填)一帧都不变', () => {
+    const p = place(TOWER_AUTOCANNON);
+    const mag = towerMagazine(p.def, 1);
+    const slow = frames(towerFireInterval(p.def, 1) / MUL);
+    expect(slow).toBe(32); // 24 帧 → 32 帧
+
+    const at = run(p, 900, () => true, MUL);
+    expect(gaps(at).slice(0, mag - 1)).toEqual(new Array(mag - 1).fill(slow));
+    // 装填是"塔自己的一段停顿",不是射击间隔:惩罚一秒都不该加在它头上 ——
+    // 挨一下就连装填也变慢,被撞舷会越挨越打不动,那正是"死亡螺旋"本身
+    expect(gaps(at)[mag - 1]).toBe(frames(p.def.reload));
+    expect(p.cell.ammo).toBeGreaterThan(0); // 惩罚期内开的火照常一发扣一发,不多扣
+  });
+
+  it('过热系:射击间隔变长,降温速率与过热锁死时长一个字不变', () => {
+    // 与上面那条贪连射用例同一组整齐数值(热量 3/发、降温 6/秒、上限 10、锁死 0.5s、间隔 0.1s):
+    // 只改数值表、不改逻辑,好把每一帧写死
+    Object.assign(TOWERS[TOWER_LASER]!, {
+      fireInterval: 0.1,
+      heatPerShot: 3,
+      coolPerSec: 6,
+      heatMax: 10,
+      overheatLock: 0.5,
+    });
+    const p = place(TOWER_LASER);
+    const def = p.def;
+
+    // 只有两种间隔:被惩罚拉长的射击间隔(0.1 / 0.5 = 0.2s = 12 帧),
+    // 与**没被惩罚碰过**的过热锁(0.5s = 30 帧)—— 后者要是也乘了倍率,罚的时长就不再是设计者定的那个数
+    const at = run(p, 600, () => true, 0.5);
+    expect(new Set(gaps(at))).toEqual(new Set([frames(0.2), frames(def.overheatLock)]));
+
+    // 降温同口径:惩罚只作用在射击间隔上,挨一下不该连"还剩多久能打"都跟着变慢
+    const q = place(TOWER_LASER);
+    onFired(q.cell, def, 1, 0.5);
+    for (let i = 0; i < 6; i++) stepThrottle(q.cell, def, SIM_DT, 0.5);
+    expect(q.cell.heat).toBeCloseTo(def.heatPerShot - def.coolPerSec * SIM_DT * 6, 12);
+  });
+
+  it('充能系也真的慢下来:不然六塔里有两座对受击完全免疫', () => {
+    const p = place(TOWER_RAILGUN);
+    const need = frames(towerChargeTime(p.def, 1)); // 2.4s = 144 帧
+    const slow = frames(towerChargeTime(p.def, 1) / MUL); // 192 帧
+    expect(slow).toBe(192);
+
+    // 充能系没有 cooldown 那条腿,惩罚只能进蓄力速度。它与"节奏只由 chargeTime 给"不矛盾:
+    // fireMul 不是射速旋钮(那个是 towerFireRateScale,对充能系照旧无效,见上一组的对照用例),
+    // 它是一次外部事件带来的**受击惩罚**
+    expect(run(p, slow * 3, () => true, MUL)).toEqual([slow, slow * 2, slow * 3]);
+    expect(p.cell.cooldown).toBe(0); // 充能系那条恒 0 的腿没被惩罚顺手拧开
+  });
+
+  it('缺省 fireMul = 1:六塔逐帧读数与既有链路一字不差(既有调用方一个字都不用改)', () => {
+    const FIELDS = ['cooldown', 'ammo', 'reloadLeft', 'heat', 'coolLock', 'charge'] as const;
+    for (let type = 0; type < TOWER_KIND_COUNT; type++) {
+      const bare = place(type); // 走缺省参数 = 今天的调用形状
+      const one = place(type); // 显式传 1
+      // 600 帧 = 10 秒:够弹药走完一整轮装填、过热罚一次、充能放四次
+      for (let f = 1; f <= 600; f++) {
+        expect(tick(bare, true), `${bare.def.name} 第 ${f} 帧`).toBe(tick(one, true, 1, 1));
+        for (const k of FIELDS) {
+          expect(bare.cell[k], `${bare.def.name} 第 ${f} 帧的 ${k}`).toBe(one.cell[k]);
+        }
+      }
+    }
   });
 });

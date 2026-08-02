@@ -28,6 +28,18 @@ export interface Ship {
   heading: number;
   /** 上一逻辑帧朝向,渲染插值用 */
   pheading: number;
+  /**
+   * 船体 HP(09 号 issue)。**全局一份,无逐格血量、无逐塔摧毁**(GDD §4.6)——
+   * 挂在船上而不是甲板上:它是"这一局还剩多少余地"这一个数,与甲板拓扑无关,
+   * 12 号扩建焊上去的格子也不带血。归零 = 局终(失败流程本身是 08 号 issue)。
+   * 扣血的唯一入口是 World.damageShip;stepShip 一个字都不碰它 —— 运动与受击是两件事。
+   */
+  hp: number;
+  /**
+   * HP 上限。做成实体上的字段而不是每次现读 tuning:06 号的装甲舱会让它变成甲板的派生量
+   * (damage.ts 的 hullMaxHp),届时"上限"就不再是一个常数,HUD 的血条比例也得读同一个数。
+   */
+  maxHp: number;
 }
 
 export const DEG2RAD = Math.PI / 180;
@@ -48,8 +60,21 @@ export function lerpAngle(a: number, b: number, t: number): number {
 }
 
 export function createShip(): Ship {
-  // 船头默认朝屏幕上方:y 轴朝下,所以是 -π/2
-  return { x: 0, y: 0, px: 0, py: 0, vx: 0, vy: 0, heading: -Math.PI / 2, pheading: -Math.PI / 2 };
+  // 船头默认朝屏幕上方:y 轴朝下,所以是 -π/2。
+  // 满血进场,上限现读 tuning.shipHullHp(GDD §14 锁定的 100)—— 船不进对象池,
+  // 这里就是它一生中唯一一次初始化,故"改了 HP 要重开一局才生效"是这条口径的必然结论
+  return {
+    x: 0,
+    y: 0,
+    px: 0,
+    py: 0,
+    vx: 0,
+    vy: 0,
+    heading: -Math.PI / 2,
+    pheading: -Math.PI / 2,
+    hp: tuning.shipHullHp,
+    maxHp: tuning.shipHullHp,
+  };
 }
 
 /**

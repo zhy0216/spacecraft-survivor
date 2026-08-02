@@ -27,6 +27,14 @@
  * broadside 反馈(单舷 ≥3 塔同帧开火)的衰减计时**只在渲染层自持**:它纯是表现,
  * 进了 sim 就等于让确定性回放去为一次镜头抖动负责(铁律 1 的边界就画在这儿)。
  *
+ * 受击表现(09 号 issue T4):被撞的那一舷把**该舷全部暴露边**描一遍暖红,alpha 随 world.edgePenalty
+ * 衰减 —— 计时器与"该舷塔射速惩罚"读的是同一个数,于是"闪红"与"变慢"天然同窗口、想差一帧都做不到。
+ * 暖色出现在自家甲板上是 GDD §4.6 明令的例外(与过热闪红同一条豁免),不是 §12 敌我色域分离被破了:
+ * 满屏冷蓝里"这一舷刚挨了一下"只有靠色相反转才喊得出来。
+ * 擦碰与真伤害必须**一眼分得开**(sim 侧本就是两件事:核心区外只出火花、一分血不掉):
+ * 故 FXV_SPARK = 冷白星芒随 life 收缩、FXV_HULL_HIT = 暖红圆环随 life 扩散 ——
+ * 色域与形变两条通道各自独立,色盲玩家丢了色相仍分得出"擦了一下"和"掉血了"。
+ *
  * 节流读数(05 号 issue T5):deckThrottleG 逐帧把每座在线塔的节流状态画在它自己那一格上 ——
  * 弹夹条 + 装填进度 / 热量条 + 过热闪红 / 充能环,外加一排等级点。三套机制**各绑一种几何形状**
  * (沿 Y 的条 / 沿 X 的条 / 一个圆),而不是三条一样的条换个颜色:颜色这条通道已经被"哪座塔"
@@ -63,6 +71,7 @@ import {
 } from '../data/towers';
 import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
+import { deckOuterRadius, hullCoreHalfExtents } from '../sim/damage';
 import {
   canPlace,
   CELL_SUPPORT,
@@ -80,7 +89,17 @@ import {
   isPlaceSuccess,
 } from '../sim/deck';
 import { ST_WINDUP } from '../sim/enemy';
-import { FXV_BEAM, FXV_BLAST, FXV_CHAIN, FXV_LANCE, FXV_MUZZLE } from '../sim/fx';
+import {
+  FX_LIFE_HULL_HIT,
+  FX_LIFE_SPARK,
+  FXV_BEAM,
+  FXV_BLAST,
+  FXV_CHAIN,
+  FXV_HULL_HIT,
+  FXV_LANCE,
+  FXV_MUZZLE,
+  FXV_SPARK,
+} from '../sim/fx';
 import { lerpAngle, type Vec2 } from '../sim/ship';
 import type { Bullet, Enemy, World } from '../sim/world';
 import { WORLD_RADIUS } from '../sim/world';
@@ -216,6 +235,62 @@ const FX_BLAST_FILL_ALPHA = 0.16;
 const FX_MUZZLE_RADIUS = 4;
 const FX_MUZZLE_ALPHA = 0.8;
 
+// —— 受击表现(09 号 issue T4)——被撞舷闪红 / 船体真伤害 / 判定体轮廓共用的暖红 ——
+/**
+ * 我方甲板上**唯一许可的暖色**,GDD §4.6 明令的例外(与 THR_HEAT 的过热闪红同一条豁免)。
+ * 别把它当成 §12 敌我色域分离被破了:恰恰相反,正因为整艘船连弹带光效都是冷色,
+ * "这一舷刚挨了一下"才只能靠色相反转喊出来 —— 换成又一支冷蓝,它就会淹进底板与读数里。
+ * 代价是它只许出现在**线**上(舷边、圆环、判定体轮廓)且**短促**,绝不铺成色块:
+ * 大面积暖色会把玩家的"暖色 = 敌人"这条条件反射整个污染掉(DECK_HILITE_DENY 同一条取舍)。
+ */
+const HULL_HIT_COLOR = 0xff5a48;
+/** 闪红的线宽比船体轮廓(DECK_HULL_WIDTH)粗一档:它要盖住那条冷色轮廓线,而不是并排画在旁边 */
+const HULL_HIT_WIDTH = 5;
+/** 惩罚满格时的不透明度。不给满 1:闪红是"叠在船体上的一层伤",不该把那一舷的轮廓整条替换掉 */
+const HULL_HIT_ALPHA = 0.85;
+/** 判定体轮廓(按住 Tab):细线 + 半透明 —— 它是叠在甲板上的调试读数,不许压过格子本身的状态色 */
+const HULL_CORE_WIDTH = 2;
+const HULL_CORE_ALPHA = 0.7;
+
+// —— 船体 HP 条(09 号 issue T4 的**灰盒**读数)——整条会被 11 号 issue 的战斗 HUD 换掉,见 drawShipHp。
+// 故这批常量刻意只有"槽 + 填充 + 一记受击回执"这几个,不做数字、分段、渐变、低血警告:
+// 本轮要的只是"被撞了、掉了多少"在画面上存在,好看是 11 号的事。
+/** 条长 = 船宽 × 它。与船同宽,于是"这条是这艘船的血"不用任何图例就读得出来 */
+const HP_BAR_WIDTH_MUL = 1;
+const HP_BAR_HEIGHT = 7;
+/** 条与船体外接圆之间的留白(世界 px):贴着画会在急转弯时被甲板的角蹭到 */
+const HP_BAR_GAP = 12;
+/** 槽底沿用节流读数那一档暗色(THR_TRACK_COLOR),alpha 再高一点:HP 见底时槽必须还在(理由同 THR_TRACK_*) */
+const HP_TRACK_ALPHA = 0.75;
+/** 填充取船体轮廓那支冷蓝(GDD §12 我方冷色域):血条是船的一部分,不该另起一个色 */
+const HP_FILL_COLOR = SHIP_EDGE;
+/** 受击回执:暖红描边的线宽 + 横向抖动的幅度(世界 px)与衰减期内走完的振荡周期数(相位写法见 stepBroadside) */
+const HP_HIT_WIDTH = 2;
+const HP_HIT_SHAKE = 4;
+const HP_HIT_CYCLES = 2.5;
+
+/**
+ * 火花 FXV_SPARK = "蹭到甲板了、但没进核心区,一分血都没掉"。冷白(与我方光效同一支芯色)、
+ * 小、**随 life 收缩**;真伤害 FXV_HULL_HIT 则是暖红圆环**随 life 扩散**。
+ * 两者在**色域 + 形状 + 形变**三条通道上同时相反,是因为 sim 侧它们是截然不同的两件事
+ * (擦碰不结算伤害,见 09 号设计约定),画面上分不开就等于让玩家学错自己的判定体到底多大。
+ */
+const FX_SPARK_COLOR = FX_CORE_COLOR;
+/** 星芒射线的满长(世界 px)与线宽:比子弹还小一圈 —— 它是"没事"的读数,不该抢戏 */
+const FX_SPARK_LEN = 7;
+const FX_SPARK_WIDTH = 1.6;
+/**
+ * 从命中点向外发散的四条射线的单位方向(±√2/2,合起来是一个 ×)。定死不掷随机,
+ * 与链电折角(FX_CHAIN_KINK_*)同一条理由:渲染层掷随机就等于在 sim 之外又开了一条随机源,
+ * 同 seed 回放会画出不同的画面。
+ * 取对角而不是正交:甲板格线与两条节流条已经把水平/垂直占满了,斜的才认得出是"另一件事"。
+ */
+const FX_SPARK_DIRS = [0.707, 0.707, -0.707, 0.707, -0.707, -0.707, 0.707, -0.707];
+/** 真伤害圆环:从 R0 扩到 R1(世界 px)。起手就比火花大一圈 —— "掉血了"必须比"擦到了"更响 */
+const FX_HULL_HIT_R0 = 5;
+const FX_HULL_HIT_R1 = 17;
+const FX_HULL_HIT_WIDTH = 2.5;
+
 // —— broadside 反馈(05 号 issue T5 可选项)——
 /** 触发门槛:与 sim 的口径一致(world.broadsideCount ≥ 3 = 单舷齐射) */
 const BROADSIDE_MIN = 3;
@@ -256,6 +331,8 @@ const localPos: Vec2 = { x: 0, y: 0 };
 const screenPos: Vec2 = { x: 0, y: 0 };
 /** 射界暂存:同理,叠加层每帧要向 sim 问一遍全部塔的扇形,现造就是每秒上千次分配(铁律 3) */
 const arcTmp: Arc = { center: 0, half: 0 };
+/** 判定体半长/半宽的暂存(09 号 T4 的调试轮廓)。与上面两个同一条口径:模块级复用,零分配 */
+const coreTmp: Vec2 = { x: 0, y: 0 };
 
 /**
  * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
@@ -411,6 +488,13 @@ export class Renderer {
   /** 射界扇形(04 号):压在底板之下 —— 它是底衬,不许糊住格子本身的状态色 */
   private deckArcG = new Graphics();
   /**
+   * 被撞舷闪红(09 号 T4)。**压在底板之上**:它要盖掉那一舷原本的冷色轮廓线,
+   * 画在底板之下就会被格子填充整块挡住,"被撞了"这件事在画面上根本不存在。
+   * 与炮口线/读数分层的理由同源:它只在受击后的 hitPenaltyTime 秒里有东西可画,
+   * 合进底板就等于让一局只变几次的底板陪着这半秒钟每帧重建。
+   */
+  private deckHitG = new Graphics();
+  /**
    * 炮口线。与扇形分开一层,是因为两者的寿命不同:扇形几何一局里只变几次(放塔、改参数),
    * 炮管却每帧都在转 —— 同一个 Graphics 里没法只 clear 一半,合在一起就等于扇形也跟着每帧重建。
    */
@@ -421,6 +505,13 @@ export class Renderer {
    * 挂在 deckG 里(局部坐标)而不是 worldLayer:读数是"这一格上那座塔的状态",必须跟着格子转。
    */
   private deckThrottleG = new Graphics();
+  /**
+   * 船体 HP 条(09 号 T4 的灰盒读数,11 号 issue 会整条换掉 —— 见 drawShipHp)。
+   * 挂在 **worldLayer 的最上层**、**不进 deckG**:进了甲板容器就会跟着船一起转,
+   * 船头朝下时玩家得倒着读自己的血量;排在最上层则是因为它是"这一局还剩多少余地"这一个数,
+   * 千敌贴脸时正是最该看见它的时刻,不许被任何东西盖住。
+   */
+  private shipHpG = new Graphics();
   /**
    * 底板几何的脏标记。占用/内容一局里只变几次(放塔、12 号焊接拼块),
    * 却要每帧出现在画面上 —— 故按 deck.revision 重建,而不是每帧 clear 重画。
@@ -435,6 +526,11 @@ export class Renderer {
   private arcOverlay = false;
   /** 叠加层上一帧是否画过:松开 Tab 时 clear 一次即可(照 hiliteDrawn 的写法) */
   private arcDrawn = false;
+  /**
+   * 闪红层上一帧是否画过。整局绝大多数帧四舷惩罚都是 0(受击才有,每次只有半秒),
+   * 照 hiliteDrawn / arcDrawn 那条口径:惩罚归零后 clear 一次就够,不必每帧空转一个 Graphics。
+   */
+  private hitDrawn = false;
   /**
    * broadside 反馈的三个运行期状态(05 号 T5 可选项)。**只在渲染层**:
    * 它纯是表现,进了 sim 就等于让确定性回放为一次镜头抖动负责(见文件头)。
@@ -537,28 +633,32 @@ export class Renderer {
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变),故与静态的边界圈分开
     this.telegraphG = new Graphics();
 
-    // 灰盒船体 = 甲板本身:五个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
-    // 子层序:射界扇形(底衬)→ 底板 → 炮口线(炮管长在甲板上,理应压住底板)
+    // 灰盒船体 = 甲板本身:六个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 子层序:射界扇形(底衬)→ 底板 → 被撞舷闪红(压住底板那条冷色轮廓线,否则等于没画)
+    // → 炮口线(炮管长在甲板上,理应压住底板)
     // → 节流读数(压住炮口线:按住 Tab 时那条线正好横穿格心,把读数划掉就白画了)
     // → 放置高亮(临时的交互层,"我要放哪一格"任何时候都不许被别的层盖住)。
+    // 闪红排在炮口线之下:炮管归位是每帧都要看的读数,不该被半秒钟的伤害反馈盖掉。
     // 这里不建几何 —— 格子内容要等 sync() 的脏标记在首帧补上(deckRevision = -1)。
     this.deckG.addChild(
       this.deckArcG,
       this.deckBaseG,
+      this.deckHitG,
       this.deckMuzzleG,
       this.deckThrottleG,
       this.deckHiliteG,
     );
 
     // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
-    // 不会被蜂群蛭糊掉)→ 弹 → 开火光效 → 甲板。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
+    // 不会被蜂群蛭糊掉)→ 弹 → 开火光效 → 甲板 → HP 条。指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
     // 光效排在弹之后、甲板之前:它是"这一发打出去了"的读数,压住敌人才看得见命中在谁身上,
     // 但绝不许盖住甲板自己的格子(放塔与节流读数在那上面)。
-    // 甲板最后加:压在敌与弹之上,千敌贴脸时自己的格子不会被糊掉 —— 放塔时更是必须看得见
+    // 甲板压在敌与弹之上,千敌贴脸时自己的格子不会被糊掉 —— 放塔时更是必须看得见;
+    // HP 条再压在甲板之上收尾:蜂群把船埋了的那一刻,正是"还剩多少血"最不能被盖住的时候。
     this.worldLayer.addChild(ring, this.telegraphG);
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
-    this.worldLayer.addChild(this.fxG, this.deckG);
+    this.worldLayer.addChild(this.fxG, this.deckG, this.shipHpG);
     // 闪光片挂在 stage 最上层(屏幕空间),不进 worldLayer —— 理由见 flashG 的字段注释
     this.flashG.visible = false;
     app.stage.addChild(this.worldLayer, this.flashG);
@@ -645,11 +745,34 @@ export class Renderer {
       this.deckRevision = deck.revision;
       this.drawDeckBase(deck);
     }
+    this.drawDeckHit(deck);
     this.drawDeckHilite(deck);
     this.drawDeckThrottle(deck);
     this.drawDeckArcs(deck);
     this.deckG.position.set(sx, sy);
     this.deckG.rotation = sh;
+
+    // HP 条吃的是同一个插值船位、却**只吃位置不吃朝向**(见 shipHpG 字段注释),故不能塞进上面那两行
+    this.drawShipHp(sx, sy);
+  }
+
+  /**
+   * 四舷里剩余最久的那一档惩罚秒数;0 = 本帧没有任何一舷在挨罚。
+   *
+   * 被撞舷闪红与 HP 条的受击回执共用它 —— 两处读的都是 **sim 的那一个计时器**
+   * (world.edgePenalty,与该舷塔的射速惩罚同源),于是"闪红 / 血条抖一下 / 塔变慢"
+   * 三件事天然同起同落,想差一帧都做不到;渲染层要是为血条另起一个衰减计时器,
+   * 玩家看到的三条反馈就会各走各的,而它们本该是同一次挨打。
+   * 取最大值而不是"有没有":两舷同时挨打时,回执理应按**还没走完的那一档**继续给。
+   */
+  private hitPenaltyLeft(): number {
+    const penalty = this.world.edgePenalty;
+    let left = 0;
+    for (let e = 0; e < EDGE_COUNT; e++) {
+      const v = penalty[e]!;
+      if (v > left) left = v;
+    }
+    return left;
   }
 
   /**
@@ -753,6 +876,75 @@ export class Renderer {
   }
 
   /**
+   * 被撞舷闪红(09 号 issue T4 —— "被撞了"这件事在画面上唯一的落点)。
+   *
+   * 读的是 world.edgePenalty:**射速惩罚用的同一个计时器**,不是渲染层自持的第二个 ——
+   * 于是"这一舷在闪红"与"这一舷的塔在变慢"永远是同一段时间窗,想差一帧都做不到
+   * (broadside 顿挫那种表现计时才该留在渲染层:它不对应任何 sim 状态)。
+   * 惩罚的"不可叠加延长"语义也一并白送:计时器不重置,闪红自然也不会被连续受击刷成常亮。
+   *
+   * 逐边一次 stroke,而不是四条边攒成一条 path:四舷各有各的剩余时间,合成一条就只剩一个 alpha,
+   * "哪一舷刚挨的、哪一舷快好了"这条读数当场作废(与 drawFx 逐事件 stroke 同一条理由)。
+   * 边线几何照 drawDeckBase 那套四种端点写法逐格描 —— 于是 12 号把甲板焊成非矩形之后,
+   * 闪红依然沿着**真实的船体轮廓**走,不必在这里再补一条特例。
+   */
+  private drawDeckHit(deck: Deck): void {
+    const g = this.deckHitG;
+    const penalty = this.world.edgePenalty;
+    // 先看四舷有没有事:整局绝大多数帧全是 0(见 hitDrawn 字段注释),归零后 clear 一次就够。
+    // 判据问 hitPenaltyLeft —— HP 条的受击回执读的是同一个数,"有没有一舷在挨罚"不该有第二份写法
+    if (this.hitPenaltyLeft() <= 0) {
+      if (this.hitDrawn) {
+        g.clear();
+        this.hitDrawn = false;
+      }
+      return;
+    }
+    g.clear();
+    this.hitDrawn = true;
+
+    const size = deckCellSize();
+    const half = size / 2;
+    const cells = deck.cells;
+    for (let e = 0; e < EDGE_COUNT; e++) {
+      const left = penalty[e]!;
+      if (left <= 0) continue;
+      let drawn = 0;
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i]!;
+        if (!c.occupied || !isEdgeExposed(c, e)) continue;
+        const p = cellLocalPos(deck, c.col, c.row, localPos);
+        // 局部 +X = 船头、+Y = 右舷(全仓唯一口径,与 sim/deck 的边下标一致)
+        switch (e) {
+          case EDGE_BOW:
+            g.moveTo(p.x + half, p.y - half).lineTo(p.x + half, p.y + half);
+            break;
+          case EDGE_STARBOARD:
+            g.moveTo(p.x - half, p.y + half).lineTo(p.x + half, p.y + half);
+            break;
+          case EDGE_STERN:
+            g.moveTo(p.x - half, p.y - half).lineTo(p.x - half, p.y + half);
+            break;
+          case EDGE_PORT:
+            g.moveTo(p.x - half, p.y - half).lineTo(p.x + half, p.y - half);
+            break;
+          default:
+            continue; // 认不出的边下标只是不画,不炸掉整层(与敌人 kind 越界同一条兜底口径)
+        }
+        drawn++;
+      }
+      // clamp01 兜住 hitPenaltyTime 被面板拖到 0 的情形(除出来的 Infinity/NaN 会画出 alpha 为 NaN 的线)
+      if (drawn > 0) {
+        g.stroke({
+          width: HULL_HIT_WIDTH,
+          color: HULL_HIT_COLOR,
+          alpha: HULL_HIT_ALPHA * clamp01(left / tuning.hitPenaltyTime),
+        });
+      }
+    }
+  }
+
+  /**
    * 放置高亮:合法格铺一层薄色 + 悬停格加粗描边 + 被拒格短促闪一下。
    * 合法性每帧现问 canPlace(只读不写),于是 ui 层不必缓存一份"哪些格能放"——
    * 一局里甲板会变(放塔、12 号扩建),缓存就是又一个会走散的真相。
@@ -845,6 +1037,9 @@ export class Renderer {
     this.arcDrawn = true;
     this.drawArcFans(deck);
     this.drawArcMuzzles(deck);
+    // 判定体轮廓与射界扇形同开同关(09 号 T4 验收点名):它必须排在 drawArcMuzzles 之后,
+    // 因为两者共用 deckMuzzleG,而那个方法开头就 clear 一次(见下面 drawHullCore 的说明)
+    this.drawHullCore();
   }
 
   /**
@@ -914,6 +1109,84 @@ export class Renderer {
       drawn++;
     }
     if (drawn > 0) g.stroke({ width: DECK_MUZZLE_WIDTH, color: DECK_MUZZLE_COLOR });
+  }
+
+  /**
+   * 受击判定体轮廓(09 号 issue T4,按住 Tab 与射界扇形同开同关)。
+   *
+   * 半长/半宽一律问 sim 的 hullCoreHalfExtents,渲染层一行判定几何都不许自己推 ——
+   * 与射界叠加层那条"可视化与实际可命中区域一致"是同一条口径:重算一份就是两个迟早走散的真相,
+   * 而这一个走散了,玩家学到的"我这么大"就是假的。
+   * 它**恒等于初始 3×4 甲板的核心区**(GDD §4.4:判定小于外形,且不随扩建变大):
+   * 12 号焊出再大的甲板,这个矩形一格也不涨 —— 调试模式下"外形变大了、挨打的地方没变"必须一眼可见,
+   * 否则这条设计只存在于 sim 的注释里,谁也验不了。
+   *
+   * 画进 deckMuzzleG 而不是 deckArcG:后者是压在底板**之下**的底衬(见构造函数的层序),
+   * 核心区整个落在甲板范围内,画在那儿会被格子填充一块不剩地盖掉。
+   * 与炮口线共用一层还顺带保证了"同开同关"—— 松开 Tab 时 drawDeckArcs 那一次 clear 把两者一起收走。
+   */
+  private drawHullCore(): void {
+    const h = hullCoreHalfExtents(coreTmp);
+    // 局部 +X = 半长(船头方向)、+Y = 半宽(右舷方向),与甲板格心同一套局部坐标;
+    // 甲板对称于船心,故矩形直接以原点为中心铺开
+    this.deckMuzzleG.rect(-h.x, -h.y, h.x * 2, h.y * 2).stroke({
+      width: HULL_CORE_WIDTH,
+      color: HULL_HIT_COLOR,
+      alpha: HULL_CORE_ALPHA,
+    });
+  }
+
+  /**
+   * 船体 HP 条(09 号 issue T4)——"被撞了、掉了多少"在画面上的落点。
+   * 没有它,09 号整条链路(判定体 → 结算 → 惩罚)在屏幕上就只剩几个火花,肉眼验收无从谈起。
+   *
+   * **这是可以整条删掉的灰盒版**:11 号 issue 的战斗 HUD 会把血量搬进屏幕空间,届时本方法、
+   * shipHpG 字段与那批 HP_* 常量一起删除,sim 侧一个字都不用改 —— 它读的只有
+   * world.ship.hp / maxHp 两个公开字段,除此之外不持有任何状态。所以这里刻意不做
+   * 数字、分段、渐变、低血量警告:那些是 11 号要连着整套 HUD 一起定的事,
+   * 现在做了,11 号只会得到一份必须先拆掉的旧设计。
+   *
+   * 挂在 worldLayer(见 shipHpG 字段注释)⇒ 它吃的是镜头的缩放,单位是**世界 px**:
+   * 船在画面里多大,血条就多长。11 号会反过来把它做成屏幕空间的固定尺寸,不再随镜头变。
+   * 竖直偏移问 sim 的 deckOuterRadius(与 World 粗筛同一个数,渲染层不自己推第二份):
+   * 那是船体在**任何朝向**下的最大外延,于是"血条不压在船身上"与船头指哪儿无关,
+   * 12 号把甲板焊大之后它也自动让开。
+   *
+   * 每帧 clear 重画,不做脏标记:船一直在动,条的位置每帧都变(与 drawDeckThrottle 同一条取舍)。
+   */
+  private drawShipHp(sx: number, sy: number): void {
+    const g = this.shipHpG;
+    g.clear();
+    const ship = this.world.ship;
+    const w = tuning.shipWidth * HP_BAR_WIDTH_MUL;
+
+    // 受击回执的强度取 sim 的惩罚计时器(见 hitPenaltyLeft):于是"血条抖一下"与"那一舷闪红"
+    // 是同一段时间窗 —— 玩家把两件事连起来看,正是这条反馈存在的目的。
+    // clamp01 兜住 hitPenaltyTime 被面板拖到 0 的情形(除出来的 Infinity/NaN 会画出 NaN 几何)
+    const k = clamp01(this.hitPenaltyLeft() / tuning.hitPenaltyTime);
+    // 相位照 stepBroadside 那一顿的写法:cos 起手 = 1,受击那一帧立刻给出最大位移
+    // (先 sin 的话第一帧纹丝不动,"抖了一下"就没了);幅度再乘 k,于是自己衰减回原位。
+    // 按**已走过的比例**推进而不是按秒:惩罚时长被拖长拖短,这一抖都刚好走完 HP_HIT_CYCLES 个来回
+    const kick = k > 0 ? Math.cos((1 - k) * HP_HIT_CYCLES * Math.PI * 2) * k * HP_HIT_SHAKE : 0;
+    const x0 = sx - w / 2 + kick;
+    const y0 = sy + deckOuterRadius(this.world.deck) + HP_BAR_GAP;
+
+    // 槽底:空槽也要看得出"这里有一条血条",否则 HP 见底 = 读数整条消失(与 THR_TRACK_* 同一条取舍)
+    g.rect(x0, y0, w, HP_BAR_HEIGHT).fill({ color: THR_TRACK_COLOR, alpha: HP_TRACK_ALPHA });
+    // 比例每帧现算、不缓存:maxHp 是甲板的派生量(06 号的装甲舱会让它变,见 damage.hullMaxHp),
+    // 缓存住就会与真实上限走散。maxHp ≤ 0 时直接当空槽,不让除法把 NaN 宽度喂进 Graphics
+    const t = ship.maxHp > 0 ? clamp01(ship.hp / ship.maxHp) : 0;
+    if (t > 0) g.rect(x0, y0, w * t, HP_BAR_HEIGHT).fill(HP_FILL_COLOR);
+    // 挨打的回执:整条描一圈暖红(甲板上的暖色是 GDD §4.6 明令的例外,见 HULL_HIT_COLOR)+ 横向抖动。
+    // 色相与位移两条通道一起上,是因为一次撞击掉的血可能只有几个点 ——
+    // 光靠填充长度那一丁点变化,肉眼根本抓不住"刚刚挨了一下",而那正是本条要交代的事
+    if (k > 0) {
+      g.rect(x0, y0, w, HP_BAR_HEIGHT).stroke({
+        width: HP_HIT_WIDTH,
+        color: HULL_HIT_COLOR,
+        alpha: HULL_HIT_ALPHA * k,
+      });
+    }
   }
 
   /**
@@ -1104,6 +1377,38 @@ export class Renderer {
           g.circle(e.x0, e.y0, r).stroke({
             width: FX_BLAST_RING_WIDTH,
             color: FX_CORE_COLOR,
+            alpha: t,
+          });
+          break;
+        }
+        case FXV_SPARK: {
+          // "蹭到甲板轮廓、但没进核心区" —— **一分血都没掉**(sim 侧压根没走结算,见 09 号设计约定)。
+          // 冷白 + 星芒 + 随 life 收缩,三条通道与下面那支暖红扩散环处处相反:
+          // 玩家要靠这个差别学会自己的判定体到底多大,分不开就等于没给反馈。
+          // 色相**不取 def.tint**:它不是任何一座塔打出来的(sim 侧填进去的 towerType 没有意义),
+          // 顺着 def 取色只会在数值表一改就跟着乱跳
+          const t = fxFade(e.life, FX_LIFE_SPARK);
+          const len = FX_SPARK_LEN * t;
+          // 四条射线一律**从命中点向外**画,而不是各画一条过中心的对称线段 ——
+          // 后者的四个方向两两相反,等于把同一个 × 描两遍(半透明时还会叠出一根深浅不匀的芯)
+          for (let k = 0; k < FX_SPARK_DIRS.length; k += 2) {
+            const dx = FX_SPARK_DIRS[k]! * len;
+            const dy = FX_SPARK_DIRS[k + 1]! * len;
+            g.moveTo(e.x0, e.y0).lineTo(e.x0 + dx, e.y0 + dy);
+          }
+          // 四条射线共用一次 stroke:同一个事件同一个 alpha,拆开画只是白跑三趟
+          g.stroke({ width: FX_SPARK_WIDTH, color: FX_SPARK_COLOR, alpha: t });
+          break;
+        }
+        case FXV_HULL_HIT: {
+          // 真伤害:暖红圆环随 life 扩散淡出。暖色出现在自家船上是 GDD §4.6 明令的例外
+          // (与被撞舷闪红同一条豁免,见 HULL_HIT_COLOR),不是 §12 敌我色域分离被破了。
+          // 与 FXV_BLAST 的扩张环形状同族、色域相反:那是我方炸到敌人,这是敌人啃到我方
+          const t = fxFade(e.life, FX_LIFE_HULL_HIT);
+          const r = FX_HULL_HIT_R0 + (FX_HULL_HIT_R1 - FX_HULL_HIT_R0) * (1 - t);
+          g.circle(e.x0, e.y0, r).stroke({
+            width: FX_HULL_HIT_WIDTH,
+            color: HULL_HIT_COLOR,
             alpha: t,
           });
           break;

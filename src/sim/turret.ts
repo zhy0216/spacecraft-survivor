@@ -41,6 +41,7 @@ import {
 } from '../data/towers';
 import { type Arc, cellArc, findArcTarget, isTurretCell } from './arc';
 import { BK_DIRECT, BK_MORTAR } from './bullet';
+import { cellFireRateMul } from './damage';
 import { cellWorldPos, type Deck, type DeckCell, deckCellSize } from './deck';
 import type { Enemy } from './enemy';
 import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE } from './fx';
@@ -87,6 +88,10 @@ function towerOutreach(def: TowerDef, level: number): number {
  * @param sink 开火的去处(World 实现)。**传 null = 只追瞄、不开火** ——
  *   04 号那批纯几何用例因此不必造一整套世界,而"炮管朝哪"这件事本就不该依赖"打得出打不出"。
  *   节流(装填/降温/蓄力)无论有没有 sink 都照常推进:它是时间的函数,不是开火的副作用。
+ * @param edgePenalty 四舷的受击惩罚剩余秒(world.edgePenalty,下标 = EDGE_*),09 号 T3 的射速惩罚。
+ *   **传 null = 没有受击这回事**(04/05 那批用例与任何不关心受击的调用方走这条),逐塔恒 1 倍。
+ *   舷向归属由 cellFireRateMul 按**暴露边**判(角落格同时属于两舷),不按格心方位角 ——
+ *   规则与 world.sink.fired 的 broadside 统计同一条,只此一份(见 sim/damage.ts)。
  *
  * 三条性能口径(1000 敌 + 满甲板塔是 01 号压测场景的常态):
  *   一、没有一座在线武器塔就**直接返回** —— 压测场景默认空甲板,不该为它白掏一次查询;
@@ -112,6 +117,7 @@ export function stepTurrets(
   grid: SpatialHash<Enemy>,
   dt: number,
   sink: FireSink | null,
+  edgePenalty: readonly number[] | null = null,
 ): void {
   const cells = deck.cells;
   // 一趟扫出两件事:有没有在线塔、全甲板最大射程是多少。
@@ -145,9 +151,14 @@ export function stepTurrets(
     if (!def) continue;
     const level = cell.level;
 
+    // 这一格的受击射速惩罚(09 号 T3):它任一条暴露边所在舷正在惩罚中就变慢。
+    // 逐塔现算而不是逐舷预先算一遍:角落格同时属于两舷,预先按舷分组反而要处理重复归属
+    const fireMul = edgePenalty ? cellFireRateMul(cell, edgePenalty) : 1;
+
     // 节流**有没有目标都要推进**:装填、降温、蓄力都在这里,只在有目标时跑的话,
-    // 弹药塔会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳
-    stepThrottle(cell, def, dt);
+    // 弹药塔会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
+    // 惩罚跟着一起进节流(而不是只在开火那一刻扣):蓄力也要慢下来,否则充能系对受击免疫
+    stepThrottle(cell, def, dt, fireMul);
 
     if (!cellArc(cell, ship.heading, towerArcDeg(def, level), arc)) continue;
     cellWorldPos(deck, ship, cell.col, cell.row, muzzle);
@@ -186,7 +197,9 @@ export function stepTurrets(
     // shots = 0 只可能是数值表被改坏(弹速非正、fx 越界):那种塔当场哑火,
     // 而**不记代价** —— 记了就会白扣一发弹药/一份热量,现场看上去像"塔在打但没伤害"
     if (shots <= 0) continue;
-    onFired(cell, def, shots);
+    // 与 stepThrottle 传同一个 fireMul:写进 cooldown 的那个间隔和逐帧夹取它的那个上限
+    // 必须同源,否则惩罚期内写进去的长冷却会被下一帧按基准间隔夹回去,惩罚静默失效
+    onFired(cell, def, shots, fireMul);
     sink.fired(cell);
   }
 

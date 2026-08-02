@@ -25,6 +25,16 @@ import {
 import { type Arc, cellArc } from './arc';
 import { tuning } from './config';
 import {
+  classifyHit,
+  deckHalfExtents,
+  deckOuterRadius,
+  HIT_CORE,
+  HIT_GRAZE,
+  HIT_NONE,
+  hullCoreHalfExtents,
+  hullMaxHp,
+} from './damage';
+import {
   CELL_SUPPORT,
   CELL_WEAPON,
   cellAt,
@@ -32,6 +42,10 @@ import {
   DECK_COLS,
   DECK_ROWS,
   EDGE_BOW,
+  EDGE_COUNT,
+  EDGE_PORT,
+  EDGE_STARBOARD,
+  EDGE_STERN,
   isPlaceSuccess,
   PLACE_BAD_TOWER,
   PLACE_INTERIOR,
@@ -41,7 +55,7 @@ import {
   PLACE_UPGRADE,
 } from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
-import { FXV_BEAM } from './fx';
+import { FXV_BEAM, FXV_HULL_HIT, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { World } from './world';
 
@@ -52,7 +66,6 @@ const BASE = {
   enemySeparation: 14,
   enemySpeedScale: 1,
   enemyHpScalePerMinute: 0.09,
-  shipContactRadius: 56,
   enemyMixSwarm: 70,
   enemyMixStrafer: 15,
   enemyMixTrailer: 10,
@@ -60,6 +73,15 @@ const BASE = {
   // 塔的全局倍率:有用例要临时把伤害归零(见 turretWorld),跑完必须还原
   towerDamageScale: 1,
   towerFireRateScale: 1,
+  // 受击模型那一组(09 号):有用例要假装 06 号的装甲舱抬了 HP 上限、或把撞击伤害翻倍,
+  // 跑完必须还原。09 落地时一并把 shipContactRadius 从这里删掉了 ——
+  // 粗筛半径此后由甲板外接圆算出来(damage.deckOuterRadius),不再是一个手抄的占位数
+  shipHullHp: 100,
+  shipCoreScale: 0.72,
+  enemyHitInterval: 0.6,
+  enemyContactDamageScale: 1,
+  hitFireRateMul: 0.75,
+  hitPenaltyTime: 0.5,
 };
 Object.assign(tuning, BASE);
 
@@ -486,8 +508,9 @@ describe('开火接线(05 号:塔真的打出东西来)', () => {
     // 容差本身的行为在 turret.test.ts 钉,这里要的是"同一帧里有三座塔开了火"
     GUN.aimTolDeg = 90;
     const w = firingWorld(73, 1);
-    // 船头一整行三格:(0,0) 与 (2,0) 是角落格,但三格暴露边的**最低位**都是 BOW ——
-    // "算哪一舷"的口径就是这一条(与 sim/arc.ts 的退化分支同源)
+    // 船头一整行三格:(0,0) 与 (2,0) 是角落格,它们**同时**算进 BOW 与各自的侧舷 ——
+    // 归属规则是"每一条暴露边各投一票"(与 damage.cellFireRateMul 同一条,见 world.sink.fired)。
+    // 于是船头拿满 3 票、左右舷各 1 票,最高的那一舷仍是 BOW
     expect(w.place(0, 0, CELL_WEAPON)).toBe(PLACE_OK);
     expect(w.place(2, 0, CELL_WEAPON)).toBe(PLACE_OK);
     parkAt(w, w.enemies.items[0]!, 0, 150);
@@ -506,6 +529,50 @@ describe('开火接线(05 号:塔真的打出东西来)', () => {
     expect(w.bullets.size).toBe(3); // 没有新弹出膛(0.4s 的射击间隔还没走完)
     expect(w.broadsideEdge).toBe(-1);
     expect(w.broadsideCount).toBe(0);
+  });
+
+  it('broadside 在 PORT/STERN 也凑得满 3:角落格同时算进两舷(09 号 T3 换掉了"每格挑一条边")', () => {
+    // 容差临时放到 90°,理由与上一条相同:射界中心互差 45°~90°,不放宽就凑不出"同帧"
+    GUN.aimTolDeg = 90;
+
+    /** 在给定几格上各放一座机炮,把唯一的靶子摆到船的 (dx, dy) 方向上,跑一帧 */
+    const volley = (
+      seed: number,
+      cells: ReadonlyArray<readonly [number, number]>,
+      dx: number,
+      dy: number,
+    ): World => {
+      const w = firingWorld(seed, 1);
+      for (const [col, row] of cells) expect(w.place(col, row, CELL_WEAPON)).toBe(PLACE_OK);
+      park(w.enemies.items[0]!, w.ship.x + dx, w.ship.y + dy);
+      w.step();
+      // 三座塔真的同帧开了火,下面比的才是"这三票记给了谁",而不是"有几座塔转到位了"
+      expect(w.bullets.size).toBe(3);
+      return w;
+    };
+
+    // 左舷一整列三格:(0,0) 是 BOW|PORT 的角落格,另外两格只有 PORT。
+    // 换成"每格只挑一条边"(05 号临时的 lowestEdge),(0,0) 会被算给 BOW,左舷当场只剩 2 票 ——
+    // 而 3×4 甲板上 PORT 一共 4 格、其中两格是角落,那一舷就永远够不着"≥3 塔齐射"这条门槛
+    const PORT_COLUMN: ReadonlyArray<readonly [number, number]> = [
+      [0, 0],
+      [0, 1],
+      [0, 2],
+    ];
+    const port = volley(75, PORT_COLUMN, 0, -200);
+    expect(port.broadsideEdge).toBe(EDGE_PORT);
+    expect(port.broadsideCount).toBe(3);
+
+    // 船尾一整行三格:两头都是角落格((0,3) = PORT|STERN,(2,3) = STARBOARD|STERN),
+    // 挑一条边的话它们分别被算给 STERN 与 STARBOARD,船尾只剩 2 票 —— 同一个病的另一半
+    const STERN_ROW: ReadonlyArray<readonly [number, number]> = [
+      [0, 3],
+      [1, 3],
+      [2, 3],
+    ];
+    const stern = volley(76, STERN_ROW, -250, 0);
+    expect(stern.broadsideEdge).toBe(EDGE_STERN);
+    expect(stern.broadsideCount).toBe(3);
   });
 
   it('塔的节流状态与子弹位置进 checksum:抹掉就分叉,补回来又合流', () => {
@@ -785,20 +852,26 @@ describe('07 验收标准(可自动化的部分)', () => {
   });
 });
 
-describe('接触检测(只检测,伤害结算是 09 号 issue)', () => {
-  it('判定圆 = shipContactRadius + 该型体型,圈外的不登记', () => {
+/**
+ * 接触粗筛(09 号 T1)。三层判定的几何本身在 damage.test.ts 逐条钉死,这里只钉**世界这一层**:
+ * contacts 是一份**超集**(粗筛宁大勿小),精筛与结算全在 settleHullDamage 一处。
+ * "超集"这条不是文字游戏 —— 粗筛漏一个人,那只敌人这一帧就彻底结算不到,
+ * 而名单里多几个没真碰上的,只是让帧尾多跑几次矩形判定。
+ */
+describe('接触粗筛(contacts = 粗筛候选,是"真碰上的人"的超集)', () => {
+  it('粗筛圆 = 甲板外接圆 + 体型 ×√2,圈外的不登记', () => {
     onlyKind(KIND_SWARM);
     tuning.stressEnemies = 3;
     const w = new World(2);
     w.step();
 
-    const r = tuning.shipContactRadius + ENEMIES[KIND_SWARM]!.radius;
+    const r = coarseRadius(KIND_SWARM, w);
     const [near, far, away] = w.enemies.items as [Enemy, Enemy, Enemy];
-    // near 卡在船体判定圆之外、算上体型之内:漏掉 def.radius 那一项的话它就检不出来了
+    // near 卡在甲板外接圆之外、算上体型之内:漏掉体型那一项的话它就检不出来了
     park(near, r - 3, 0);
     park(far, r + 5, 0);
     park(away, 900, 0);
-    expect(r - 3).toBeGreaterThan(tuning.shipContactRadius);
+    expect(r - 3).toBeGreaterThan(deckOuterRadius(w.deck));
     w.step();
 
     expect(w.contacts).toContain(near);
@@ -806,39 +879,77 @@ describe('接触检测(只检测,伤害结算是 09 号 issue)', () => {
     expect(w.contacts).not.toContain(away);
   });
 
-  it('只登记不结算:血量、状态、数量一概不动(09 接手前不许提前扣血)', () => {
+  it('超集:凡 classifyHit ≠ HIT_NONE 的一个不漏,而名单里的未必真碰上', () => {
     onlyKind(KIND_SWARM);
-    tuning.stressEnemies = 4;
-    const w = new World(13);
+    tuning.stressEnemies = 24;
+    tuning.enemySpeedScale = 0; // 钉死在摆好的位置:这一条考的是判定,不是它们往哪走
+    const w = new World(42);
     w.step();
-    for (const e of w.enemies.items) park(e, 0, 0); // 全压在船身上
-    const hp = w.enemies.items.map((e) => e.hp);
+    // 斜着摆船:矩形判定体与圆形粗筛的差别只有在非轴对齐时才露得出来
+    w.ship.heading = w.ship.pheading = 0.7;
 
+    const def = ENEMIES[KIND_SWARM]!;
+    const coarse = coarseRadius(KIND_SWARM, w);
+    const items = w.enemies.items;
+    // 绕一圈铺开,半径从船心一路排到粗筛圆外:核心区/擦碰/圈内没碰上/圈外,四种情形都排得到
+    for (let i = 0; i < items.length; i++) {
+      const a = (i / items.length) * Math.PI * 2;
+      const d = (coarse * (i % 6)) / 4;
+      park(items[i]!, Math.cos(a) * d, Math.sin(a) * d);
+    }
+
+    // 四个角再单独摆一遍 —— 粗筛与精筛唯一会分家的地方就在这里:精筛把矩形按体型**两轴各外扩**,
+    // 那个盒子的角(hypot(半长+r, 半宽+r))比"外接圆 + r"还远。粗筛半径少乘那个 √2 的话,
+    // 这四只会一边被 classifyHit 判成擦碰、一边落在名单之外 —— 于是永远结算不到
+    const h = deckHalfExtents(w.deck, halfOut);
+    const cos = Math.cos(w.ship.heading);
+    const sin = Math.sin(w.ship.heading);
+    const lx = h.x + def.radius * 0.9;
+    const ly = h.y + def.radius * 0.9;
+    for (let i = 0; i < 4; i++) {
+      const sx = i < 2 ? lx : -lx;
+      const sy = i % 2 === 0 ? ly : -ly;
+      // 局部 → 世界(船停在原点):与 classifyHit 那条转置旋转互为逆变换
+      park(items[i]!, sx * cos - sy * sin, sx * sin + sy * cos);
+    }
     w.step();
-    expect(w.contacts.length).toBe(4);
-    expect(w.enemies.size).toBe(4);
-    expect(w.kills).toBe(0);
-    expect(w.enemies.items.map((e) => e.hp)).toEqual(hp);
-    for (const e of w.enemies.items) expect(e.dead).toBe(false);
+
+    let touched = 0;
+    let loose = 0;
+    for (const e of items) {
+      const listed = w.contacts.includes(e);
+      if (classifyHit(w.ship, w.deck, e.x, e.y, def.radius) !== HIT_NONE) {
+        // ① 真碰上的一个不漏 —— 粗筛漏掉的人,帧尾的结算永远看不见
+        expect(listed).toBe(true);
+        touched++;
+      } else if (listed) {
+        loose++;
+      }
+      // ② 名单里的都在粗筛圆内:粗筛的定义就是这一条,多一个人进来都是判据写歪了
+      if (listed) expect(Math.hypot(e.x - w.ship.x, e.y - w.ship.y)).toBeLessThan(coarse);
+    }
+    expect(touched).toBeGreaterThan(0); // 非空过:确实有人碰上了
+    expect(loose).toBeGreaterThan(0); // 也确实有人只是进了圈却一层都没碰上 —— 这才叫超集
+    expect(new Set(w.contacts).size).toBe(w.contacts.length); // 同一只不会被登记两次
   });
 
-  it('把船挪进敌群:名单与"真的贴到船"的那批人逐个吻合,下一帧开头清空', () => {
+  it('把船挪进敌群:名单与"真的落进粗筛圆"的那批人逐个吻合,下一帧开头清空', () => {
     onlyKind(KIND_SWARM);
     tuning.stressEnemies = 12;
     const w = new World(41);
     w.step();
 
-    // 把敌群摆成一串,距离从判定圆内一路排到圈外,然后把船直接挪进这堆人中间
+    // 把敌群摆成一串,距离从粗筛圆内一路排到圈外,然后把船直接挪进这堆人中间
     const items = w.enemies.items;
     for (let i = 0; i < items.length; i++) park(items[i]!, 400, 20 + i * 12);
     w.ship.x = 400;
     w.ship.y = 0;
     w.step();
 
-    const r = tuning.shipContactRadius + ENEMIES[KIND_SWARM]!.radius;
+    const r = coarseRadius(KIND_SWARM, w);
     let inside = 0;
     for (const e of items) {
-      // 接触检测在敌人积分之后、船本帧也早已走完 → 拿收尾坐标复算,与检测时的口径严格一致
+      // 粗筛在敌人积分之后、船本帧也早已走完 → 拿收尾坐标复算,与检测时的口径严格一致
       const touching = Math.hypot(e.x - w.ship.x, e.y - w.ship.y) < r;
       expect(w.contacts.includes(e)).toBe(touching);
       if (touching) inside++;
@@ -846,10 +957,9 @@ describe('接触检测(只检测,伤害结算是 09 号 issue)', () => {
     expect(inside).toBeGreaterThan(0); // 圈内圈外都得有人,否则这条断言是空过的
     expect(inside).toBeLessThan(items.length);
     expect(w.contacts.length).toBe(inside);
-    expect(new Set(w.contacts).size).toBe(w.contacts.length); // 同一只不会被登记两次
 
     // 清空发生在敌人循环**之前**:这一帧一只敌人都没有,名单照样得是空的。
-    // 若改成"靠重新检测覆盖",空帧就会把上一帧的名单留给 09 号 issue,变成幽灵碰撞
+    // 若改成"靠重新检测覆盖",空帧就会把上一帧的名单留给帧尾的结算,变成幽灵碰撞
     const ref = w.contacts;
     tuning.stressEnemies = 0;
     w.step();
@@ -869,6 +979,424 @@ describe('接触检测(只检测,伤害结算是 09 号 issue)', () => {
     for (const e of w.enemies.items) park(e, 900, 0);
     w.step();
     expect(w.contacts.length).toBe(0);
+  });
+});
+
+/**
+ * 船体 HP 与受击结算(09 号 T1)。判定几何(核心区/甲板轮廓/四舷/射速倍率)在 damage.test.ts
+ * 逐条钉死,这里只钉**世界这一层**的接线:
+ *   HP 上限走 damage.hullMaxHp 这条 06 号挂钩,而不是各处现读 tuning;
+ *   damageShip 是船体受伤的唯一入口(碰撞结算与将来的敌方弹幕都走它);
+ *   撞进核心区才扣血、蹭到核心外的甲板只出火花(GDD §4.4);
+ *   同一只敌人的无敌帧、四舷惩罚"不可叠加延长",以及这几样进不进 checksum。
+ */
+describe('船体 HP 与受击结算(09 号 T1/T2)', () => {
+  it('开局满血,上限走 damage.hullMaxHp(deck)——06 号装甲舱的挂钩今天就接着', () => {
+    const w = new World(1);
+    expect(w.ship.maxHp).toBe(hullMaxHp(w.deck));
+    expect(w.ship.hp).toBe(w.ship.maxHp);
+    expect(w.ship.hp).toBe(tuning.shipHullHp); // GDD §14 锁定的 100
+    expect(w.shipDead).toBe(false);
+    expect(w.edgePenalty).toEqual([0, 0, 0, 0]);
+  });
+
+  it('放置成功后重刷上限(06 号挂钩真的活着),hp 不跟着回血;被拒的放置不重刷', () => {
+    const w = new World(1);
+    w.ship.hp = 40;
+
+    // 拖 shipHullHp 冒充"06 号的装甲舱把上限抬了上去":重刷若没接上,maxHp 会一直停在 100
+    tuning.shipHullHp = 160;
+    expect(w.ship.maxHp).toBe(100); // 还没放置:上限是构造时那一次读的
+    expect(w.place(1, 1, CELL_SUPPORT)).toBe(PLACE_OK);
+    expect(w.ship.maxHp).toBe(160);
+    expect(w.ship.hp).toBe(40); // 上限涨了,这一局打下来的账一分不还 —— 装甲舱不是治疗
+
+    // 被拒的放置一个字段都没动(见 sim/deck),自然也不该重刷
+    tuning.shipHullHp = 200;
+    expect(w.place(1, 1, CELL_SUPPORT)).toBe(PLACE_TAKEN);
+    expect(w.ship.maxHp).toBe(160);
+  });
+
+  it('damageShip:按接触点相对船头的方位角定舷,扣血夹 0,amount ≤ 0 一律不算数', () => {
+    const w = new World(2);
+    w.ship.heading = w.ship.pheading = 0; // 船头 +X,四舷的方位一眼可读
+    const full = w.ship.maxHp;
+
+    // 零伤害/负伤害不算数:否则"零伤害的接触"也会把那一舷刷成闪红 + 射速惩罚,反馈就成了噪音
+    expect(w.damageShip(0, 100, 0)).toBe(false);
+    expect(w.damageShip(-5, 100, 0)).toBe(false);
+    expect(w.ship.hp).toBe(full);
+    expect(w.edgePenalty).toEqual([0, 0, 0, 0]);
+
+    expect(w.damageShip(10, 100, 0)).toBe(true); // 正 +X = 船头
+    expect(w.ship.hp).toBe(full - 10);
+    expect(w.edgePenalty[EDGE_BOW]).toBe(tuning.hitPenaltyTime);
+    expect(w.edgePenalty[EDGE_STARBOARD]).toBe(0);
+
+    expect(w.damageShip(10, 0, 100)).toBe(true); // +Y = 右舷(口径沿用 deck 的 EDGE_NORMAL)
+    expect(w.edgePenalty[EDGE_STARBOARD]).toBe(tuning.hitPenaltyTime);
+    expect(w.damageShip(10, 0, -100)).toBe(true);
+    expect(w.edgePenalty[EDGE_PORT]).toBe(tuning.hitPenaltyTime);
+    expect(w.damageShip(10, -100, 0)).toBe(true);
+    expect(w.edgePenalty[EDGE_STERN]).toBe(tuning.hitPenaltyTime);
+
+    // 一发过量伤害:hp 夹在 0,血条/HUD 不必各自再兜一次负数
+    expect(w.damageShip(9999, 100, 0)).toBe(true);
+    expect(w.ship.hp).toBe(0);
+  });
+
+  it('HP 归零:置 shipDead 并触发一次 onShipDestroyed,此后一切停手(局终流程是 08 号)', () => {
+    tuning.stressEnemies = 0;
+    const w = new World(3);
+    let dead = 0;
+    w.onShipDestroyed = () => dead++;
+
+    expect(w.damageShip(w.ship.maxHp - 1, 100, 0)).toBe(true);
+    expect(w.shipDead).toBe(false);
+    expect(dead).toBe(0);
+
+    expect(w.damageShip(1, 100, 0)).toBe(true);
+    expect(w.ship.hp).toBe(0);
+    expect(w.shipDead).toBe(true);
+    expect(dead).toBe(1);
+
+    // 尸体上再打多少下都不再响,也不再刷惩罚:08 那边不必自己去重
+    const penalty = [...w.edgePenalty];
+    expect(w.damageShip(50, 0, 100)).toBe(false);
+    expect(dead).toBe(1);
+    expect([...w.edgePenalty]).toEqual(penalty);
+
+    // 本轮**只到状态位为止**:不做结算界面、不重开、不暂停、不动 loop —— 世界照常往下跑
+    const tick = w.tick;
+    w.step();
+    expect(w.tick).toBe(tick + 1);
+    expect(w.shipDead).toBe(true);
+  });
+
+  it('四舷判定:敌人分别压在船头/右舷/船尾/左舷的核心区,只有对应那一位被点亮', () => {
+    // 沿四个方向各取核心区半长/半宽的一半:落点必在核心区内,方位角也正对着那一舷的法线。
+    // 尺寸问 damage.hullCoreHalfExtents 而不是手抄一个数 —— 拖一下 shipCoreScale
+    // 不该让这条用例莫名其妙地红(它考的是"撞在哪一舷",不是"核心区多大")
+    const core = hullCoreHalfExtents(halfOut);
+    const CASES: ReadonlyArray<readonly [number, number, number]> = [
+      [EDGE_BOW, core.x / 2, 0],
+      [EDGE_STARBOARD, 0, core.y / 2],
+      [EDGE_STERN, -core.x / 2, 0],
+      [EDGE_PORT, 0, -core.y / 2],
+    ];
+    const def = ENEMIES[KIND_SWARM]!;
+
+    for (const [edge, dx, dy] of CASES) {
+      // 一舷一个世界:惩罚计时是累积状态,点亮过的舷要 0.5s 才灭 ——
+      // 四舷挤在同一局里的话,"只有这一位亮"从第二舷起就必然不成立
+      const w = hullWorld(58 + edge);
+      const e = w.enemies.items[0]!;
+      park(e, w.ship.x + dx, w.ship.y + dy);
+      w.step();
+
+      // 撞的确实是核心区(而不是擦碰):否则下面四条会在"一分血都没结算"的前提下集体空过
+      expect(classifyHit(w.ship, w.deck, e.x, e.y, def.radius)).toBe(HIT_CORE);
+      expect(w.ship.hp).toBe(w.ship.maxHp - def.contactDamage);
+      // 被撞舷闪红(渲染层)与该舷塔的射速惩罚读的都是这一位 —— 点错一位,两件事一起错。
+      // 逐位断言而不是只看被撞的那一位:漏判成"四舷全亮"时,只查一位照样绿
+      for (let i = 0; i < EDGE_COUNT; i++) {
+        expect(w.edgePenalty[i]).toBe(i === edge ? tuning.hitPenaltyTime : 0);
+      }
+    }
+  });
+
+  it('惩罚不可叠加延长:0.3s 后再挨一下,惩罚仍在**第一次**受击后的第 0.5s 结束', () => {
+    tuning.stressEnemies = 0; // 空场:这几十帧里只有计时器在动
+    const w = new World(4);
+    w.ship.heading = w.ship.pheading = 0;
+    w.step();
+
+    w.damageShip(1, 100, 0);
+    expect(w.edgePenalty[EDGE_BOW]).toBe(tuning.hitPenaltyTime);
+
+    for (let f = 0; f < frames(0.3); f++) w.step();
+    const left = w.edgePenalty[EDGE_BOW]!;
+    expect(left).toBeCloseTo(0.2, 9);
+
+    // 再挨一下:计时**不许**被推回 0.5s —— 每次受击都重置的话,蜂群贴脸就是一条常亮的红边
+    // 加上永不恢复的射速,正是 GDD §4.6 要避开的那条死亡螺旋
+    w.damageShip(1, 100, 0);
+    expect(w.edgePenalty[EDGE_BOW]).toBe(left);
+
+    // 从头算的第 0.5s(第 30 帧)恰好走完;叠加延长的话这里还剩 0.3s
+    for (let f = 0; f < frames(0.2) - 1; f++) w.step();
+    expect(w.edgePenalty[EDGE_BOW]).toBeGreaterThan(0);
+    w.step();
+    expect(w.edgePenalty[EDGE_BOW]).toBeCloseTo(0, 9);
+    w.step();
+    expect(w.edgePenalty[EDGE_BOW]).toBe(0); // 夹 0,不跑成负数
+  });
+
+  it('连续受击(无敌帧关到 0 = 每帧都在咬):惩罚是 0.5s 的锯齿,而不是一条常亮的红边', () => {
+    // 验收标准第三条("连续受击时射速惩罚保持 0.5s 上限")的最极端形态:把无敌帧拖到 0,
+    // 让这一只每帧都咬一口。上一条走的是 damageShip 直调,这一条走的是真碰撞那条路。
+    // HP 上限临时抬高(World 构造时读一次,故必须在 hullWorld 之前拖):
+    // 血扣光了 damageShip 就一切停手,读到的便不再是那条锯齿而是"死了之后没人再挨罚"
+    tuning.shipHullHp = 1e6;
+    tuning.enemyHitInterval = 0;
+    const w = hullWorld(57);
+    const def = ENEMIES[KIND_SWARM]!;
+    park(w.enemies.items[0]!, w.ship.x + hullCoreHalfExtents(halfOut).x / 2, w.ship.y); // 正对船头
+
+    const period = cooldownFrames(tuning.hitPenaltyTime);
+    const armed: number[] = [];
+    for (let f = 0; f < period * 3; f++) {
+      w.step();
+      const left = w.edgePenalty[EDGE_BOW]!;
+      // 上限就是 hitPenaltyTime:每次受击都重置的话它会**恒等于**上限,一帧都走不下来
+      expect(left).toBeLessThanOrEqual(tuning.hitPenaltyTime);
+      if (left === tuning.hitPenaltyTime) armed.push(f);
+    }
+
+    // 重新点亮只发生在计时走完的那一帧,间隔恰好一个 hitPenaltyTime:中间那几十帧照样在挨咬,
+    // 惩罚却一帧都没被延长。闪红读的是同一个计时器,于是玩家看到的红边也跟着一起脉动 ——
+    // 那正是"还在挨打"与"已经挨了很久"的区别,常亮的红边什么都说不出来
+    expect(armed).toEqual([0, period, period * 2]);
+    // 非空过:这段时间里真的每帧都咬到了(不然上面那条对着一串 0 也照样绿)
+    expect(w.ship.hp).toBe(w.ship.maxHp - def.contactDamage * period * 3);
+  });
+
+  it('撞进核心区 → 扣血 + 暖红事件;伤害速率跟着 enemyContactDamageScale 走', () => {
+    const w = hullWorld(51);
+    const e = w.enemies.items[0]!;
+    const def = ENEMIES[KIND_SWARM]!;
+    park(e, 0, 0); // 压在船心 = 核心区
+    const full = w.ship.hp;
+
+    w.step();
+    expect(classifyHit(w.ship, w.deck, e.x, e.y, def.radius)).toBe(HIT_CORE);
+    expect(w.ship.hp).toBe(full - def.contactDamage);
+    expect(fxKinds(w)).toContain(FXV_HULL_HIT);
+    expect(fxKinds(w)).not.toContain(FXV_SPARK); // 先判核心后判轮廓:核心区里的敌人不出火花
+    // 撞完不击退、不消灭、不改状态机(VS 式:它继续磨)
+    expect(e.x).toBe(0);
+    expect(e.dead).toBe(false);
+    expect(e.state).toBe(ST_APPROACH);
+    expect(w.kills).toBe(0);
+
+    // "蜂群贴脸掉血速率可控可调"的那根旋钮:同一口咬下去,伤害跟着倍率走
+    tuning.enemyContactDamageScale = 3;
+    e.hitCd = 0;
+    const before = w.ship.hp;
+    w.step();
+    expect(w.ship.hp).toBe(before - def.contactDamage * 3);
+  });
+
+  it('蹭到核心区之外的甲板 → 只出火花,一分血都不结算(GDD §4.4)', () => {
+    const w = hullWorld(52);
+    const e = w.enemies.items[0]!;
+    const def = ENEMIES[KIND_SWARM]!;
+    // 核心区之外、甲板轮廓之内。位置由 classifyHit 当场自证,不靠断言里手抄的数
+    park(e, 70, 0);
+    const full = w.ship.hp;
+
+    w.step();
+    expect(classifyHit(w.ship, w.deck, e.x, e.y, def.radius)).toBe(HIT_GRAZE);
+    expect(w.ship.hp).toBe(full); // 一分血都没掉 —— 判定体小于外形,这就是玩家能读到的证据
+    expect(fxKinds(w)).toContain(FXV_SPARK);
+    expect(fxKinds(w)).not.toContain(FXV_HULL_HIT);
+    expect(w.edgePenalty).toEqual([0, 0, 0, 0]); // 没结算就不闪红:擦碰不是"挨打"
+
+    // 再挪到甲板轮廓之外:粗筛名单里还有它(超集),但一层都没碰上 → 连火花都不出
+    park(e, 90, 0);
+    e.hitCd = 0;
+    w.step();
+    expect(classifyHit(w.ship, w.deck, e.x, e.y, def.radius)).toBe(HIT_NONE);
+    expect(w.contacts).toContain(e);
+    expect(w.ship.hp).toBe(full);
+    expect(fxKinds(w)).not.toContain(FXV_HULL_HIT);
+  });
+
+  it('无敌帧:同一只敌人贴着船,每 enemyHitInterval 才咬得动一口(一次接触只结算一次)', () => {
+    const w = hullWorld(53);
+    park(w.enemies.items[0]!, 0, 0);
+    const def = ENEMIES[KIND_SWARM]!;
+    const full = w.ship.hp;
+
+    // 逐帧记下"第几帧掉的血":间隔本身就是验收标准第一条要的那个读数
+    const hits: number[] = [];
+    let hp = full;
+    for (let f = 0; f < frames(2); f++) {
+      w.step();
+      if (w.ship.hp < hp) {
+        hits.push(f);
+        hp = w.ship.hp;
+      }
+    }
+    expect(hits.length).toBeGreaterThanOrEqual(3); // 非空过:这 2s 里真被咬了好几口
+    for (let i = 1; i < hits.length; i++) {
+      // 一帧一跳的话这里全是 1 —— 贴脸就是瞬杀,而 GDD §4.6 要的是一条可读的掉血曲线
+      expect(hits[i]! - hits[i - 1]!).toBeGreaterThanOrEqual(frames(tuning.enemyHitInterval));
+    }
+    expect(w.ship.hp).toBe(full - def.contactDamage * hits.length);
+    // 火花与伤害共用同一个冷却 ⇒ 每只敌人每 interval 最多产出一个事件,蜂群贴脸也刷不爆 fx 池
+    expect(w.fx.size).toBeLessThanOrEqual(1);
+  });
+
+  it('无敌帧的节拍:两口之间恰好一个冷却那么多帧,n 帧里共 ⌈n / 冷却帧数⌉ 口', () => {
+    const w = hullWorld(55);
+    const e = w.enemies.items[0]!;
+    const def = ENEMIES[KIND_SWARM]!;
+    park(e, 0, 0);
+    const full = w.ship.hp;
+
+    const n = frames(2);
+    const hits: number[] = [];
+    let hp = full;
+    for (let f = 0; f < n; f++) {
+      w.step();
+      if (w.ship.hp < hp) {
+        hits.push(f);
+        hp = w.ship.hp;
+      }
+    }
+
+    const period = cooldownFrames(tuning.enemyHitInterval);
+    // 第一口在**第一帧**就咬:initEnemy 起手 hitCd = 0(理由见那里的注释),
+    // 于是"贴着不动 n 帧"的掉血口数有一个闭式:⌈n / 冷却帧数⌉ —— 验收标准第一条要的就是这个读数
+    expect(hits[0]).toBe(0);
+    expect(hits.length).toBe(Math.ceil(n / period));
+    // 间隔恰好等于冷却帧数、**一帧不多**:hitCd 的递减排在敌人循环里、结算之前,
+    // 挪到结算之后的话每一口都要白等一帧(period + 1)。这条断言就是那个顺序的守门人 ——
+    // 上面那条只钉"不短于一个间隔",漏一帧它照样绿
+    for (let i = 1; i < hits.length; i++) expect(hits[i]! - hits[i - 1]!).toBe(period);
+    expect(w.ship.hp).toBe(full - def.contactDamage * hits.length);
+  });
+
+  it('冷却递减挂在敌人循环里:飞离船体的那几帧照样在走,回来不留陈旧冷却', () => {
+    const w = hullWorld(56);
+    const e = w.enemies.items[0]!;
+    const def = ENEMIES[KIND_SWARM]!;
+    park(e, 0, 0);
+    w.step();
+    expect(e.hitCd).toBe(tuning.enemyHitInterval); // 咬了一口,冷却满上
+
+    // 退到粗筛圈外待着:这几帧它连 contacts 都进不去 —— 递减若挂在结算里,这段时间一帧都不走
+    park(e, 900, 0);
+    for (let f = 0; f < cooldownFrames(tuning.enemyHitInterval); f++) w.step();
+    expect(w.contacts.length).toBe(0);
+    expect(e.hitCd).toBe(0);
+
+    // 贴回来当帧就咬得动。玩家侧的语义是"躲开这一下再压上去,伤害照常结算",
+    // 而不是"离开期间攒下一笔陈旧冷却,回来还得白站半秒"
+    const hp = w.ship.hp;
+    park(e, 0, 0);
+    w.step();
+    expect(w.ship.hp).toBe(hp - def.contactDamage);
+  });
+
+  it('蜂群贴脸:掉血 = 只数 × 单口伤害 × 全局倍率 × 口数,两根旋钮各自线性可调', () => {
+    const n = frames(3);
+    const one = swarmHpLoss(61, 1, n);
+    expect(one).toBe(swarmRate(1, n));
+
+    // 二十只压上来:**每只各带一份无敌帧** ⇒ 速率按只数线性涨。
+    // 全船共用一个冷却的话,这一行会与上面那只单打独斗的一模一样 —— 蜂群也就不成其为压力
+    const many = swarmHpLoss(62, 20, n);
+    expect(many).toBe(swarmRate(20, n));
+    expect(many).toBe(20 * one);
+
+    // 旋钮一:全局撞击倍率。蜂群贴脸太疼(或太不疼)时先拖它,不必去动数值表里每一型的 contactDamage
+    tuning.enemyContactDamageScale = 2.5;
+    const scaled = swarmHpLoss(63, 20, n);
+    expect(scaled).toBe(swarmRate(20, n));
+    expect(scaled).toBe(2.5 * many);
+
+    // 旋钮二:无敌帧间隔。GDD 没写这个数,但它才是"一帧一跳的瞬杀"与"可读的掉血曲线"之间的那根杆 ——
+    // 拉长一倍,同一群人磨出来的血就少一截(⌈n/周期⌉,不是精确的一半)
+    tuning.enemyContactDamageScale = 1;
+    tuning.enemyHitInterval *= 2;
+    const slower = swarmHpLoss(64, 20, n);
+    expect(slower).toBe(swarmRate(20, n));
+    expect(slower).toBeLessThan(many);
+  });
+
+  it('结算排在子弹之后:本帧刚被打死的敌人不许再咬一口', () => {
+    const w = hullWorld(54);
+    const e = w.enemies.items[0]!;
+    park(e, 0, 0);
+    const full = w.ship.hp;
+
+    expect(w.damageEnemy(e, 9999)).toBe(true); // 尸体整帧都还在池里,也照旧进得了粗筛名单
+    w.step();
+    expect(w.contacts).toContain(e);
+    expect(w.ship.hp).toBe(full);
+    expect(w.kills).toBe(1);
+  });
+
+  it('射速惩罚接线:被撞舷的塔在惩罚期内确实打得更慢(逐塔归属在 damage.cellFireRateMul)', () => {
+    /** 开一炮,返回那一发之后的冷却 = 下一发要等多久 */
+    const shoot = (hit: boolean): number => {
+      const w = firingWorld(74, 1);
+      parkAt(w, w.enemies.items[0]!, 0, 150);
+      if (hit) w.damageShip(1, 100, 0); // 船头朝 +X ⇒ 这一下撞的是 BOW,正是那座塔的暴露边
+      w.step();
+      expect(w.bullets.size).toBe(1); // 两边都真的开了火,比的才是同一件事
+      return cellAt(w.deck, BOW_COL, BOW_ROW)!.cooldown;
+    };
+    // 接线断了的话两边一模一样:stepTurrets 收不到 edgePenalty,整条惩罚链路在游戏里就是死的
+    expect(shoot(true)).toBeGreaterThan(shoot(false));
+  });
+
+  it('ship.hp / edgePenalty / hitCd 进 checksum;maxHp 与 shipDead 是派生量,不进', () => {
+    tuning.stressEnemies = 6;
+    const a = new World(66);
+    const b = new World(66);
+    for (let f = 0; f < 30; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+
+    // hp:漏了它,"撞击没结算""擦碰也扣了血"这两类回归会从确定性口径下漏掉
+    const hp = a.ship.hp;
+    a.ship.hp -= 1;
+    expect(a.checksum()).not.toBe(b.checksum());
+    a.ship.hp = hp;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 四舷各自独立进哈希:任何一舷单独动一下都得分叉,否则"某一舷的惩罚早退了一帧"看不出来
+    for (let e = 0; e < EDGE_COUNT; e++) {
+      a.edgePenalty[e] = 0.1;
+      expect(a.checksum()).not.toBe(b.checksum());
+      a.edgePenalty[e] = 0;
+      expect(a.checksum()).toBe(b.checksum());
+    }
+
+    // 无敌帧剩余秒:它决定"这一口该不该咬",× 100 之后才抓得住一两帧的差别
+    const victim = a.enemies.items[0]!;
+    victim.hitCd = 0.25;
+    expect(a.checksum()).not.toBe(b.checksum());
+    victim.hitCd = 0;
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 派生量一律不进:maxHp 由甲板定(甲板本身逐格哈过了),shipDead 由 hp 定 ——
+    // 哈它们只是把同一件事哈两遍
+    const before = a.checksum();
+    a.ship.maxHp += 15;
+    a.shipDead = true;
+    expect(a.checksum()).toBe(before);
+  });
+
+  it('撞击真的会让两个同 seed 世界分叉:只给一边喂一口,补上同一口又合流', () => {
+    tuning.stressEnemies = 8;
+    const a = new World(67);
+    const b = new World(67);
+    for (let f = 0; f < 30; f++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+
+    expect(a.damageShip(7, a.ship.x + 100, a.ship.y)).toBe(true);
+    expect(a.checksum()).not.toBe(b.checksum());
+    expect(b.damageShip(7, b.ship.x + 100, b.ship.y)).toBe(true);
+    expect(a.checksum()).toBe(b.checksum());
   });
 });
 
@@ -1074,6 +1602,8 @@ const MAX_TURN_DEG = GUN_BASE.turnRate * SIM_DT;
 /** 炮位与射界的暂存:与被测代码同口径,复用一份,不在断言里现造对象 */
 const gun: Vec2 = { x: 0, y: 0 };
 const gunArc: Arc = { center: 0, half: 0 };
+/** 甲板半长/半宽的暂存(受击那组摆"贴着甲板四角"的构型用) */
+const halfOut: Vec2 = { x: 0, y: 0 };
 
 /**
  * 一个静止靶场:船停在原点、船头朝 **+X**(算方位角时不必再扣掉 createShip 的 -π/2),
@@ -1142,6 +1672,90 @@ function aimDeg(w: World): number {
   const cell = cellAt(w.deck, BOW_COL, BOW_ROW)!;
   expect(cellArc(cell, w.ship.heading, GUN.arcDeg, gunArc)).toBe(true);
   return wrapAngle(gunArc.center + cell.turretOffset) / DEG2RAD;
+}
+
+/**
+ * 粗筛圆半径 = 甲板外接圆 + 体型 ×√2 —— 与 world.ts 敌人循环里那一句同一条式子。
+ * 断言照抄被测代码的口径,而不是自己再推一个:两处走散时该红的是这条式子,不是某个坐标。
+ * √2 的理由见 world.ts:精筛把矩形按体型两轴各外扩,那个盒子的角比 R + r 还远。
+ */
+function coarseRadius(kind: number, w: World): number {
+  return deckOuterRadius(w.deck) + ENEMIES[kind]!.radius * Math.SQRT2;
+}
+
+/** 秒 → 逻辑帧数。受击那组的计时断言一律用它,免得把 30 这种数写死在用例里 */
+function frames(seconds: number): number {
+  return Math.round(seconds * SIM_HZ);
+}
+
+/**
+ * 无敌帧跑完要几逻辑帧 —— 照抄 world 敌人循环那句累减(逐帧减 SIM_DT、夹 0)。
+ * **不写成 interval / SIM_DT**:浮点累减未必落在整数帧上(0.5s 要 31 帧而不是 30),
+ * 而这组用例钉的恰恰是"两口之间一帧不多一帧不少" —— 拿理想值当期望,断言就得放宽成 ±1 帧,
+ * 而那一帧正是"递减排在结算之前还是之后"的全部差别。
+ */
+function cooldownFrames(seconds: number): number {
+  let left = seconds;
+  let n = 0;
+  while (left > 0) {
+    left = Math.max(0, left - SIM_DT);
+    n++;
+  }
+  return n;
+}
+
+/** 本帧在场的可视化事件种类。受击那组只关心"出没出、出的是哪一种" */
+function fxKinds(w: World): number[] {
+  return w.fx.items.map((e) => e.kind);
+}
+
+/**
+ * 蜂群贴脸的掉血读数:count 只蜂群蛭全压在船心(核心区),跑 n 帧,返回这段时间掉了多少血。
+ * 敌速倍率归零把它们钉在原地 —— 这条用例考的是掉血速率,不是它们往哪走。
+ *
+ * HP 上限临时抬到扛得完整段(World 构造时读一次,故必须在 new World **之前**拖;BASE 会还原):
+ * 血一旦夹到 0,读到的就不再是"速率"而是"扣光了",而这里要的正是那条速率曲线。
+ */
+function swarmHpLoss(seed: number, count: number, n: number): number {
+  onlyKind(KIND_SWARM);
+  tuning.stressEnemies = count;
+  tuning.enemySpeedScale = 0;
+  tuning.shipHullHp = 1e6;
+  const w = new World(seed);
+  w.step(); // 帧首出怪:此后场上恰好 count 只(出生环在船外几百 px,这一帧还咬不着)
+  expect(w.enemies.size).toBe(count);
+  for (const e of w.enemies.items) park(e, w.ship.x, w.ship.y);
+
+  const full = w.ship.hp;
+  for (let f = 0; f < n; f++) w.step();
+  expect(w.shipDead).toBe(false); // 没扣光:读数才还是速率
+  return full - w.ship.hp;
+}
+
+/**
+ * 上面那个读数的闭式:只数 × 单口伤害 × 全局倍率 × 口数,口数 = ⌈n / 冷却帧数⌉(第一口在第一帧就咬)。
+ * 现读 tuning 而不是收参数:这条式子里的每一项都是面板上的一根旋钮,
+ * "蜂群贴脸掉血速率可控可调"(验收标准第一条)说的就是它们各自线性、互不纠缠。
+ */
+function swarmRate(count: number, n: number): number {
+  const bites = Math.ceil(n / cooldownFrames(tuning.enemyHitInterval));
+  return count * ENEMIES[KIND_SWARM]!.contactDamage * tuning.enemyContactDamageScale * bites;
+}
+
+/**
+ * 受击结算用的靶场:船停在原点、船头朝 **+X**(四舷的方位一眼可读),场上一只蜂群蛭,
+ * 敌速倍率归零把它钉在调用方 park 的位置上 —— 这组用例考的是"撞在哪一层",不是它往哪走。
+ * 一座塔都不放:塔一开火就会把靶子打死,而这里要的是一只一直贴在船上的敌人。
+ */
+function hullWorld(seed: number): World {
+  onlyKind(KIND_SWARM);
+  tuning.stressEnemies = 1;
+  tuning.enemySpeedScale = 0;
+  const w = new World(seed);
+  w.step(); // 帧首出怪:此后场上恰好一只
+  expect(w.enemies.size).toBe(1);
+  w.ship.heading = w.ship.pheading = 0;
+  return w;
 }
 
 /** 把敌人钉在某处并清速度:构造判定用的确定构型,免得被上一帧的惯性带走 */

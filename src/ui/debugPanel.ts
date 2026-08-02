@@ -11,6 +11,12 @@ export interface DebugStats {
   enemies: number;
   bullets: number;
   speed: number; // 船速 px/s,用来确认巡航参数改动真的生效
+  /**
+   * 船体 HP(09 号 issue)。11 号 issue 的战斗 HUD 会给它一条正式血条,在那之前,
+   * 这个只读数是"蜂群贴脸掉血速率可控可调"(09 号验收标准)唯一的**量化**读数 ——
+   * 画面上那条灰盒血条只回答"在掉",拖倍率对比掉得多快得看数。
+   */
+  hp: number;
   tick: number;
   checksum: string;
   seed: number;
@@ -67,6 +73,36 @@ export function createDebugPanel(stats: DebugStats, run: RunState): void {
   ship.addBinding(tuning, 'shipCruiseSpeed', { label: '巡航 px/s', min: 40, max: 400, step: 5 });
   ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
   ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });
+
+  // 受击(09 号 issue):HP 读数与五根旋钮放在同一个抽屉里 —— 调"蜂群贴脸掉血速率"时要盯的
+  // 就是这个数掉得多快,读数与旋钮分家的话得在面板上来回找两个位置。
+  // 五根旋钮全部由 sim 现读,故拖动即时生效、无需重开(shipHullHp 稍特殊,见它自己那段);
+  // 判定体那根还能按住 Tab 边拖边看轮廓变。
+  const hit = pane.addFolder({ title: '受击(09)' });
+  hit.addBinding(stats, 'hp', { label: '船体 HP', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  // 各型的 contactDamage 在 src/data/enemies.ts,这里是全局倍率:先拖它定"贴脸掉得多快",
+  // 再回数值表分配各型的相对轻重(与塔的伤害倍率同一条用法)
+  hit.addBinding(tuning, 'enemyContactDamageScale', { label: '撞击伤害倍率', min: 0, max: 5, step: 0.1 });
+  // 同一只敌人两次结算之间的间隔。下限不给 0:那等于每逻辑帧咬一口,贴脸就是 60 倍速瞬杀,
+  // 拖到那儿只会以为是 bug 而不是"调到了极端"
+  hit.addBinding(tuning, 'enemyHitInterval', { label: '无敌帧 s', min: 0.1, max: 3, step: 0.05 });
+  // <1 = 被撞舷的塔变慢。下限同样不给 0:0 = 那一舷彻底哑火,而"不制造死亡螺旋"正是这条设计的前提
+  hit.addBinding(tuning, 'hitFireRateMul', { label: '受击射速×', min: 0.2, max: 1, step: 0.05 });
+  // 闪红与射速惩罚共用这一个计时器(GDD §4.6 锁定 0.5s),拖它等于同时改两件事的时长 ——
+  // 想验"惩罚不可叠加延长"就把它拖长,连续撞击时它也只会从**第一次**受击起算
+  hit.addBinding(tuning, 'hitPenaltyTime', { label: '惩罚时长 s', min: 0.1, max: 3, step: 0.1 });
+  // 判定体大小(GDD §4.4:判定小于外形)。按住 Tab 能看见那个矩形跟着这根滑杆实时变 ——
+  // 那是它唯一的肉眼校准方式,拖完再去贴脸试"擦碰出火花 / 进核心才掉血"的分界对不对
+  hit.addBinding(tuning, 'shipCoreScale', { label: '判定体×(按 Tab 看)', min: 0.2, max: 1.5, step: 0.02 });
+  // 上限**不是**只在开局读一次:hullMaxHp() 是现读的,而 World.place() 每次放置成功都会用它
+  // 重刷 ship.maxHp(为的是接 06 号装甲舱的 +15)—— 所以拖完这根滑杆再放一座塔,上限当场就变,
+  // 而 hp 不跟着回血。label 得说这个真话:写"重开生效"会让人以为血条自己掉了一截
+  hit.addBinding(tuning, 'shipHullHp', {
+    label: 'HP 上限(放塔后生效)',
+    min: 20,
+    max: 500,
+    step: 10,
+  });
 
   // 塔(05 号 issue):这里**只剩两根全局倍率**。04 号那三项全塔共用的占位
   // (turretArcDeg / turretRange / turretTurnRate)已被数值表一塔一档取代 —— 弧度、射程、转速、

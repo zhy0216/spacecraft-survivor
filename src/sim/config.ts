@@ -42,15 +42,26 @@ export const tuning = {
   // 与 stepShip 同口径:敌人状态机每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
   enemySpeedScale: 1, // 全局敌速倍率:压测想让虫潮慢下来看清行为时拖它,不去动数值表
   enemyHpScalePerMinute: 0.09, // GDD §14:敌方 HP ×(1 + 0.09·t分钟),单地图星区乘数固定 ×1
-  // 占位:船体接触判定圆(= shipWidth/2)。09 号 issue 会换成固定核心区 + 四舷判定,
-  // 现在只用来把"贴到船了"这件事检出来放进 world.contacts,不结算伤害。
-  shipContactRadius: 56,
   // 出怪占比(轮盘赌权重,不必凑成 100)。08 号 issue 的波次脚本接手前的临时出怪器;
   // 只影响新生成的敌人,已在场的不会变型。
   enemyMixSwarm: 70,
   enemyMixStrafer: 15,
   enemyMixTrailer: 10,
   enemyMixBeetle: 5,
+
+  // —— 受击模型(GDD §4.6 / §14,09 号 issue)——判定几何全在 src/sim/damage.ts,这里只有数。
+  // 与 stepShip 那批同口径:除 shipHullHp 外全部每帧现读,面板拖一下立刻改体感。
+  // GDD §14 锁定。hullMaxHp() 现读它,而 World.place() 每次放置成功都重刷 ship.maxHp
+  //(为的是 06 号装甲舱的「船体 HP +15」)—— 所以拖它之后放一座塔,上限当场就变,hp 不回血
+  shipHullHp: 100,
+  // 核心区 = 初始 3×4 包围盒 × 它(GDD §4.4:判定小于外形,扩建不把船变成更大的靶子);占位待调
+  shipCoreScale: 0.72,
+  // 同一只敌人两次结算之间的间隔(无敌帧),秒。GDD 未写,但一帧一跳的话贴脸就是瞬杀 ——
+  // 它与下面那个倍率合起来才是"蜂群贴脸掉血速率可控可调"的两根旋钮;占位待调
+  enemyHitInterval: 0.6,
+  enemyContactDamageScale: 1, // 全局撞击伤害倍率(各型的 contactDamage 在 src/data/enemies.ts)
+  hitFireRateMul: 0.75, // 被撞舷的塔在惩罚期内的射速倍率(<1 = 变慢);轻微,不制造死亡螺旋
+  hitPenaltyTime: 0.5, // GDD §4.6 锁定:被撞舷闪红 + 射速惩罚的时长(秒),两者共用这一个计时器
 
   // —— 武器塔(05 号 issue)——一塔一个数的(伤害/射程/弧度/转速/节流)全在 src/data/towers.ts,
   // 这里只留**全局倍率**:与 enemySpeedScale 同口径,是面板上"整体拖一下看体感"的那种旋钮。

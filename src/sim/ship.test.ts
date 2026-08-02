@@ -57,7 +57,7 @@ describe('角度工具', () => {
 });
 
 describe('createShip', () => {
-  it('静止、船头朝屏幕上方,且 px/py/pheading 与当前值一致', () => {
+  it('静止、船头朝屏幕上方,px/py/pheading 与当前值一致,且满血进场', () => {
     const ship = createShip();
     expect(ship.heading).toBe(-Math.PI / 2);
     // 首帧渲染插值的两端必须重合,否则船会从别处"飞"进场
@@ -65,6 +65,10 @@ describe('createShip', () => {
     expect(ship.px).toBe(ship.x);
     expect(ship.py).toBe(ship.y);
     expect(speed(ship)).toBe(0);
+    // 全局船体 HP(09 号):船不进对象池,createShip 是它一生中唯一一次初始化 ——
+    // 上限现读 tuning,所以"改了 HP 要重开一局才生效"是这条口径的必然结论
+    expect(ship.hp).toBe(tuning.shipHullHp);
+    expect(ship.maxHp).toBe(tuning.shipHullHp);
   });
 });
 

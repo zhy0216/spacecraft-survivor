@@ -44,6 +44,10 @@ import {
   createDeck,
   type Deck,
   type DeckCell,
+  EDGE_BOW,
+  EDGE_COUNT,
+  EDGE_PORT,
+  isEdgeExposed,
   PLACE_OK,
   PLACE_UPGRADE,
   placeAt,
@@ -61,6 +65,9 @@ const BASE = {
   // 全局倍率显式写死(与 tower.test.ts 同口径):M0 反复调平衡时不该把这里的行为断言带崩
   towerDamageScale: 1,
   towerFireRateScale: 1,
+  // 受击射速惩罚倍率同理(出货占位是 0.75)。刻意压到 0.5 = 帧距整整翻一倍(24 → 48),
+  // 一眼读得出"这座塔顿了";本文件钉的是"惩罚有没有接到 stepTurrets 这条链路上",不是那个占位数本身
+  hitFireRateMul: 0.5,
 };
 Object.assign(tuning, BASE);
 
@@ -816,5 +823,137 @@ describe('stepTurrets:五种开火表现', () => {
     expect(fx.x1).toBeCloseTo(BOW_MUZZLE_X + GUN.range, 9);
     expect(fx.y1).toBeCloseTo(BOW_MUZZLE_Y, 9);
     expect(cell.charge).toBe(0);
+  });
+});
+
+// —— 以下是 09 号 issue T3 的受击射速惩罚(塔侧的接线;判定几何全在 sim/damage.ts)——————————
+
+describe('stepTurrets:受击射速惩罚(被撞舷的塔顿一下,别的舷照常打)', () => {
+  /** 没挨罚的射击间隔(帧):0.4s @60Hz,GDD §14 锚点 —— 与上面几组读到的是同一个数 */
+  const FAST = 24;
+  /** 挨罚后的间隔(帧):0.4 / hitFireRateMul 0.5 = 0.8s。整整一倍,帧距一眼读得出 */
+  const SLOW = 48;
+  /** 观察窗口(帧):最多 13 枪 < 一夹 20 发 —— 装填那段硬停顿不会混进帧距里来搅局 */
+  const FRAMES = 300;
+
+  /** 这几舷正在惩罚中。剩余秒具体是多少不影响倍率(判据只是 > 0),照 World 的口径给一个整窗口 */
+  function penalized(...edges: number[]): number[] {
+    const p = new Array<number>(EDGE_COUNT).fill(0);
+    for (const e of edges) p[e] = tuning.hitPenaltyTime;
+    return p;
+  }
+
+  /**
+   * 三座塔的 3×4 全占用甲板:船头正中(只有 BOW 一条暴露边)、船头左舷**角落格**
+   * (BOW + PORT 两条)、右舷中段(只有 STARBOARD)—— 两座各属一舷,外加一座横跨两舷的。
+   *
+   * 塔一律拧成**全向射界 + 容差 360°**:射界与"炮口对没对准"这两道门槛当场作废,
+   * 于是"隔多少帧响一枪"只剩节流这一个变量 —— 本组要读的正是射速惩罚,
+   * 不该被"炮管转不转得过来"混进来(那件事上面几组各自钉过了)。
+   */
+  function penaltyDeck(): {
+    deck: Deck;
+    ship: Ship;
+    grid: SpatialHash<Enemy>;
+    bow: DeckCell;
+    corner: DeckCell;
+    starboard: DeckCell;
+  } {
+    Object.assign(TOWERS[TOWER_AUTOCANNON]!, GUN, { arcDeg: 360, aimTolDeg: 360, range: 400 });
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON)).toBe(PLACE_OK);
+    expect(placeAt(deck, 2, 1, CELL_WEAPON)).toBe(PLACE_OK);
+    const bow = cellAt(deck, 1, 0)!;
+    const corner = cellAt(deck, 0, 0)!;
+    const starboard = cellAt(deck, 2, 1)!;
+
+    // 先确认夹具的舷向归属就是想要的那三种,免得下面的断言其实在对着另一块甲板空过
+    expect([bow.exposedCount, corner.exposedCount, starboard.exposedCount]).toEqual([1, 2, 1]);
+    expect(isEdgeExposed(corner, EDGE_BOW) && isEdgeExposed(corner, EDGE_PORT)).toBe(true);
+
+    // 敌人摆在船正前方 300:全向射界下三座塔都够得着(离各自炮位 ≤ 283 < 射程 400),
+    // 于是三座塔逐帧都有目标 —— 谁慢下来就一定是惩罚的功劳,而不是"这一帧没瞄着人"
+    return { deck, ship: shipAt(0, 0, 0), grid: gridOf([foe(300, 0)]), bow, corner, starboard };
+  }
+
+  /**
+   * 跑一局 FRAMES 帧,返回三座塔各自开火落在第几帧(1-based)。**每次现造夹具** ——
+   * 冷却与弹夹不许跨场景带过去,否则第二个场景的第一枪就已经欠着上一局的账。
+   * 逐帧调 stepTurrets 而不是一次 run(n):sink.fired 只记"哪一格开了火"、不记时间,而本组要读的正是帧距。
+   *
+   * @param args 省掉它 = 走 stepTurrets 的**缺省调用形状**(04/05 那批用例走的就是这条)。
+   *   这里真的分两条路调,而不是把一个 undefined 转手传下去 —— "既有调用方一个字都不用改"
+   *   这条口径,只有真的按既有形状调一次才验得到
+   */
+  function cadence(...args: [] | [readonly number[] | null]): {
+    bow: number[];
+    corner: number[];
+    starboard: number[];
+  } {
+    const { deck, ship, grid, bow, corner, starboard } = penaltyDeck();
+    const log = fireLog();
+    const at = new Map<DeckCell, number[]>();
+    for (let f = 1; f <= FRAMES; f++) {
+      log.fired.length = 0;
+      stepTurrets(deck, ship, grid, SIM_DT, log.sink, ...args);
+      for (const cell of log.fired) {
+        const list = at.get(cell);
+        if (list) list.push(f);
+        else at.set(cell, [f]);
+      }
+    }
+    return {
+      bow: at.get(bow) ?? [],
+      corner: at.get(corner) ?? [],
+      starboard: at.get(starboard) ?? [],
+    };
+  }
+
+  /** 期望的开火帧序列:第 1 帧起,每 gap 帧一枪。写成"隔多少帧一枪",不手抄一串数字 */
+  function beat(gap: number): number[] {
+    const at: number[] = [];
+    for (let f = 1; f <= FRAMES; f += gap) at.push(f);
+    return at;
+  }
+
+  it('省参数 / 传 null / 全零四元组:三条路逐帧读数一字不差', () => {
+    const omitted = cadence();
+    // 缺省值一旦不是 null,04/05 那批省参数的用例会在毫无关系的地方开始漂
+    expect(cadence(null)).toEqual(omitted);
+    // 全零 = "四舷都没在挨罚",必须与"压根没有受击这回事"同一条读数 ——
+    // 差一点就是"World 一构造出来全船就在挨罚",而那是整局都不会有人发现的慢性病
+    expect(cadence(new Array<number>(EDGE_COUNT).fill(0))).toEqual(omitted);
+
+    // 反向确认上面三条不是在对着三个空数组空过:没惩罚时三座塔都是基准节奏
+    expect(omitted.bow).toEqual(beat(FAST));
+    expect(omitted.corner).toEqual(beat(FAST));
+    expect(omitted.starboard).toEqual(beat(FAST));
+  });
+
+  it('PORT 挨了一下:左舷角落格顿下来,船头塔与右舷塔一帧不差', () => {
+    const hit = cadence(penalized(EDGE_PORT));
+
+    // 角落格只有 PORT 这一条边中招,照样整格挨罚 —— 塔的舷向归属按**每一条暴露边**算。
+    // 3×4 甲板上 PORT 一共只有 2 格,换成"每格只挑一条边"的规则(05 的 lowestEdge,
+    // 或按格心方位角),这座角落格会被算成 BOW,左舷的受击反馈当场少掉一半
+    expect(hit.corner).toEqual(beat(SLOW));
+    // 没中招的两舷一帧不差:惩罚要是漏到全甲板,"被撞舷"这三个字就没有意义了
+    expect(hit.bow).toEqual(beat(FAST));
+    expect(hit.starboard).toEqual(beat(FAST));
+  });
+
+  it('BOW 挨了一下:角落格同时属于两舷,于是它跟着船头塔一起顿', () => {
+    const hit = cadence(penalized(EDGE_BOW));
+    expect(hit.bow).toEqual(beat(SLOW));
+    expect(hit.corner).toEqual(beat(SLOW)); // 两条暴露边任一中招都算数
+    expect(hit.starboard).toEqual(beat(FAST));
+
+    // 两条边**同时**在罚:倍率只算一次,不按舷数连乘(连乘那条是 0.5 × 0.5 = 0.25 → 96 帧)。
+    // 角落格本就是天然优质炮位(射界 +60°,GDD §4.2),两面临敌、两面可能挨罚已经是那份优势的代价;
+    // 再叠一层就成了死亡螺旋 —— 挨得越多、打得越少、于是挨得更多
+    const both = cadence(penalized(EDGE_BOW, EDGE_PORT));
+    expect(both.corner).toEqual(beat(SLOW));
+    expect(both.starboard).toEqual(beat(FAST));
   });
 });

@@ -23,6 +23,22 @@ export const FXV_CHAIN = 1; // 逐跳折线:电弧的一跳
 export const FXV_LANCE = 2; // 粗光柱:磁轨的一次贯穿
 export const FXV_BLAST = 3; // 圆环:迫击炮落点的一次 AoE
 export const FXV_MUZZLE = 4; // 炮口闪:真子弹类塔开火时的短促提示
+// —— 挨打的那一半(09 号 issue)。两种撞击必须一眼分得开,故分成两个 kind 而不是共用一个加字段:
+// 渲染层照 kind 分派画法(冷白小火花 vs 暖红扩散环),色域 + 形状两条通道都不同 ——
+// "蹭到了但没伤害"与"真掉血"在蜂群贴脸时是玩家唯一读得到的反馈差别。
+export const FXV_SPARK = 5; // 蹭到核心区之外的甲板:只出火花,一分血都不结算(GDD §4.4)
+export const FXV_HULL_HIT = 6; // 撞进核心区:真掉血
+
+/**
+ * 上面这两种的存续秒数。**刻意不进 data/towers 的 FX_LIFE_* 那一组** ——
+ * 那组是"某座塔开火的表现有多长"(改激光的 fireInterval 就得跟着改光束时长),
+ * 而挨打与塔一点关系都没有:船上一座塔都没有照样会被撞。放进数值表反而会让平衡调整
+ * 与受击反馈莫名其妙地耦在一起。World.fxLife 与渲染层读的是这同一份常量,两边不会各算各的。
+ * 都比开火那组更短:撞击是高频事件(蜂群贴脸时每只每 enemyHitInterval 一个),
+ * 拖太长会在船身上糊成一片,反而看不出"撞在哪一舷"。
+ */
+export const FX_LIFE_SPARK = 0.12; // 占位待调
+export const FX_LIFE_HULL_HIT = 0.22; // 占位待调 —— 比火花长:真掉血那一下得留得住眼睛
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),

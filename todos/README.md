@@ -21,7 +21,7 @@
 | 06 | [06-support-facilities.md](06-support-facilities.md) | 支援设施与邻接协同 | P1 | 03, 05 |
 | 07 | [07-enemies.md](done/07-enemies.md) | 敌人系统与 4 种 MVP 敌人 | P0 ✅ | 01, 02 |
 | 08 | [08-waves-map.md](08-waves-map.md) | 波次脚本与单局地图 | P1 | 02, 07 |
-| 09 | [09-damage-model.md](09-damage-model.md) | 受击模型与船体 HP | P0 | 02, 07 |
+| 09 | [09-damage-model.md](done/09-damage-model.md) | 受击模型与船体 HP | P0 ✅ | 02, 07 |
 | 10 | [10-economy-upgrade.md](10-economy-upgrade.md) | 残骸经济与三选一升级 | P1 | 03, 05, 06 |
 | 11 | [11-hud.md](11-hud.md) | HUD 与威胁罗盘 | P1 | 08, 09, 10 |
 | 12 | [12-deck-expansion.md](12-deck-expansion.md) | 甲板拼块扩建(延伸) | P2 | 03, 04, 10 |

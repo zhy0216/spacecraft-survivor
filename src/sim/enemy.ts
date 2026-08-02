@@ -72,6 +72,14 @@ export interface Enemy {
   lockY: number;
   /** +1/-1:绕行型从左舷还是右舷切入。生成时定死 —— 每帧现选会让它在船头前来回抖 */
   side: number;
+  /**
+   * 距下次可以再咬船一口的剩余秒(09 号 issue 的无敌帧)。
+   * **每只敌人各自一份**,不是全船一个冷却:后者在蜂群贴脸时只有最先判到的那一只咬得动,
+   * "一百只压上来"与"一只压上来"的掉血速率会一模一样,GDD §4.6 的挫败曲线当场作废。
+   * 伤害与火花共用它(见 World 的结算):于是每只敌人每 interval 最多产出一个事件,
+   * 蜂群贴脸也刷不爆 fx 池。递减在 World 的敌人循环里,与 timer 同口径逐帧减 dt。
+   */
+  hitCd: number;
   /** 本帧被打死,step 末尾统一回收(遍历中就地删会踩 swap-remove 的下标坑) */
   dead: boolean;
 }
@@ -93,6 +101,7 @@ export function createEnemy(): Enemy {
     lockX: 0,
     lockY: 0,
     side: 1,
+    hitCd: 0,
     dead: false,
   };
 }
@@ -118,6 +127,7 @@ export function resetEnemy(e: Enemy): void {
   e.lockX = 0;
   e.lockY = 0;
   e.side = 1;
+  e.hitCd = 0;
   e.dead = false;
 }
 
@@ -155,6 +165,9 @@ export function initEnemy(
   e.lockX = 0;
   e.lockY = 0;
   e.side = rng.next() < 0.5 ? -1 : 1;
+  // 起手 0 = 一出生就能咬:出生点在船外几百 px(见 World.spawnEnemy),
+  // 给它一个初始冷却只会让"生在船脸上"这类将来的出怪规则悄悄免掉第一口伤害
+  e.hitCd = 0;
   e.dead = false;
 }
 

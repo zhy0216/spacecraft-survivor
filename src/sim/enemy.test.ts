@@ -111,8 +111,11 @@ describe('initEnemy(出生)', () => {
     expect(e.hp).toBeGreaterThan(def.hp); // 第 5 分钟的确实更硬,不是把缩放算丢了
   });
 
-  it('出生姿态干净:APPROACH、px/py 与 x/y 重合、静止、无锁定、未死', () => {
+  it('出生姿态干净:APPROACH、px/py 与 x/y 重合、静止、无锁定、未死、能立刻咬', () => {
     const e = createEnemy();
+    // 先弄脏受击冷却:World 的出生路径是 reset → init,但 initEnemy 自己也得把这一格写齐 ——
+    // 只靠 resetEnemy 的话,Object.keys 那条用例检不出 initEnemy 的漏写(它清完就是 0)
+    e.hitCd = 5;
     initEnemy(e, KIND_BEETLE, 7, 9, 0, new Rng(42));
 
     expect(e.kind).toBe(KIND_BEETLE);
@@ -127,6 +130,9 @@ describe('initEnemy(出生)', () => {
     expect(e.lockY).toBe(0);
     expect(e.dead).toBe(false);
     expect(Math.abs(e.side)).toBe(1);
+    // 起手 0 = 一出生就能咬(09 号的无敌帧)。出生点在船外几百 px,给初始冷却只会让将来
+    // "生在船脸上"那类出怪规则悄悄免掉第一口伤害
+    expect(e.hitCd).toBe(0);
   });
 
   it('固定消耗 1 次 rng(出怪的随机序列不因敌型逻辑变动而移位),左右舷都出得来', () => {

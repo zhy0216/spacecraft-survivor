@@ -28,7 +28,8 @@ async function boot(): Promise<void> {
   });
   const renderer = await Renderer.create(world);
 
-  const stats: DebugStats = { fps: 0, enemies: 0, bullets: 0, speed: 0, tick: 0, checksum: '—', seed };
+  // hp 初值直接取船的当前血:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0
+  const stats: DebugStats = { fps: 0, enemies: 0, bullets: 0, speed: 0, hp: world.ship.hp, tick: 0, checksum: '—', seed };
   const run: RunState = { paused: false, timeScale: 1 };
   createDebugPanel(stats, run);
 
@@ -64,6 +65,9 @@ async function boot(): Promise<void> {
     stats.bullets = world.bullets.size;
     // 拖巡航滑杆时盯这个数爬到新上限,才算证实了"改参数无需重启"(02 号 issue 验收标准)
     stats.speed = Math.hypot(world.ship.vx, world.ship.vy);
+    // 船体 HP(09 号 issue):画面上那条灰盒血条只回答"在掉",拖撞击伤害倍率 / 无敌帧对比
+    // "掉得多快"要看这个数(09 号验收标准的"可控可调")。11 号 issue 的 HUD 会接手这条读数
+    stats.hp = world.ship.hp;
     stats.tick = loop.tick;
     if (loop.tick - lastChecksumTick >= SIM_HZ) {
       stats.checksum = world.checksum();
