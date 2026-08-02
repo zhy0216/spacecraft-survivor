@@ -59,6 +59,7 @@ async function boot(): Promise<void> {
     enemies: 0,
     bullets: 0,
     speed: 0,
+    turnRate: world.turnRate,
     hp: world.ship.hp,
     maxHp: world.ship.maxHp,
     tick: 0,
@@ -181,6 +182,7 @@ async function boot(): Promise<void> {
     stats.checksum = '—';
     stats.hp = world.ship.hp;
     stats.maxHp = world.ship.maxHp;
+    stats.turnRate = world.turnRate;
     stats.seed = seed + runIndex;
     stats.kills = 0;
     stats.scrap = 0;
@@ -248,6 +250,7 @@ async function boot(): Promise<void> {
     stats.bullets = world.bullets.size;
     // 拖巡航滑杆时盯这个数爬到新上限,才算证实了"改参数无需重启"(02 号 issue 验收标准)
     stats.speed = Math.hypot(world.ship.vx, world.ship.vy);
+    stats.turnRate = world.turnRate;
     // 船体 HP 同时进正式 HUD 与调参面板；面板保留数值精度，便于对比撞击伤害倍率 / 无敌帧。
     stats.hp = world.ship.hp;
     // 上限每帧现读(06 号 issue):它是甲板的派生量,放一块装甲舱当帧 +15、12 号拆掉当帧回落 ——

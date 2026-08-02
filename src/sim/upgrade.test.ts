@@ -4,7 +4,14 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
-import { UPGRADE_CHOICE_COUNT, UPGRADE_SKIP_REFUND } from '../data/economy';
+import {
+  OFFER_WEIGHT_DECK,
+  OFFER_WEIGHT_SUPPORT,
+  OFFER_WEIGHT_TOWER,
+  UPGRADE_CHOICE_COUNT,
+  UPGRADE_SKIP_REFUND,
+} from '../data/economy';
+import { DECK_PIECES } from '../data/deckPieces';
 import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
 import {
   TOWER_AUTOCANNON,
@@ -15,21 +22,26 @@ import {
 } from '../data/towers';
 import { tuning } from './config';
 import {
+  CELL_EMPTY,
   CELL_SUPPORT,
   CELL_WEAPON,
   cellAt,
   createDeck,
+  canWeldPiece,
   isPlaceSuccess,
   PLACE_NO_CELL,
   placeAt,
+  WELD_OK,
 } from './deck';
 import { RESULT_WIN, World } from './world';
 import {
   OFFER_SUPPORT,
   OFFER_TOWER,
+  OFFER_DECK,
   optionContent,
   optionLabel,
   optionLegalCells,
+  optionHasLegalPlacement,
   optionSupportType,
   optionTowerType,
   rollUpgradeOffer,
@@ -48,6 +60,7 @@ class CountingRng {
 
 const tower = (type: number, level = 0): UpgradeOption => ({ kind: OFFER_TOWER, type, level });
 const support = (type: number): UpgradeOption => ({ kind: OFFER_SUPPORT, type, level: 0 });
+const deckPiece = (type: number): UpgradeOption => ({ kind: OFFER_DECK, type, level: 0 });
 
 function fillWithSupportsExcept(deck: ReturnType<typeof createDeck>, except: number): void {
   for (let i = 0; i < deck.cells.length; i++) {
@@ -68,11 +81,17 @@ describe('候选翻译与合法格', () => {
     expect(optionContent(bay)).toBe(CELL_SUPPORT);
     expect(optionTowerType(bay)).toBe(TOWER_AUTOCANNON);
     expect(optionSupportType(bay)).toBe(SUP_AMMO_BAY);
+
+    const hull = deckPiece(0);
+    expect(optionContent(hull)).toBe(CELL_EMPTY);
+    expect(optionTowerType(hull)).toBe(TOWER_AUTOCANNON);
+    expect(optionSupportType(hull)).toBe(SUP_AMMO_BAY);
   });
 
   it('名字只取数值表,型号越界把原始下标报出来', () => {
     expect(optionLabel(tower(TOWER_AUTOCANNON))).toBe(TOWERS[TOWER_AUTOCANNON]!.name);
     expect(optionLabel(support(SUP_AMMO_BAY))).toBe(SUPPORTS[SUP_AMMO_BAY]!.name);
+    expect(optionLabel(deckPiece(0))).toBe(DECK_PIECES[0]!.name);
     expect(optionLabel(tower(99))).toContain('99');
     expect(optionLabel(support(88))).toContain('88');
   });
@@ -110,8 +129,7 @@ describe('rollUpgradeOffer', () => {
     expect(count).toBe(UPGRADE_CHOICE_COUNT);
     expect(out).toHaveLength(count);
     expect(new Set(out.map((o) => `${o.kind}:${o.type}`)).size).toBe(count);
-    const legal: number[] = [];
-    for (const opt of out) expect(optionLegalCells(deck, opt, legal)).toBeGreaterThan(0);
+    for (const opt of out) expect(optionHasLegalPlacement(deck, opt)).toBe(true);
   });
 
   it('同 seed + 同甲板得到逐字段相同的候选', () => {
@@ -122,7 +140,7 @@ describe('rollUpgradeOffer', () => {
     expect(a).toEqual(b);
   });
 
-  it('掷中的类别没得放就退到另一类,且不额外消耗 rng', () => {
+  it('掷中的类别没得放就退到其他类,且不额外消耗 rng', () => {
     const deck = createDeck();
     // 十个边缘格全被设施占住,只留两个内部空格:塔类完全没得放,设施仍可放。
     for (const c of deck.cells) {
@@ -137,7 +155,7 @@ describe('rollUpgradeOffer', () => {
     expect(out.every((opt) => opt.kind === OFFER_SUPPORT)).toBe(true);
   });
 
-  it('满甲板时只剩同型叠级卡;卡片 level 取该型最高等级', () => {
+  it('满甲板仍可抽扩建;若抽到同型叠级卡,level 取该型最高等级', () => {
     const deck = createDeck();
     const targetIndex = 0;
     const target = deck.cells[targetIndex]!;
@@ -147,11 +165,13 @@ describe('rollUpgradeOffer', () => {
     fillWithSupportsExcept(deck, targetIndex);
 
     const out: UpgradeOption[] = [];
-    expect(rollUpgradeOffer(deck, new Rng(7), out)).toBe(1);
-    expect(out).toEqual([tower(TOWER_AUTOCANNON, 3)]);
+    expect(rollUpgradeOffer(deck, new Rng(7), out)).toBe(3);
+    expect(out.some((o) => o.kind === OFFER_DECK)).toBe(true);
+    const gun = out.find((o) => o.kind === OFFER_TOWER);
+    if (gun) expect(gun).toEqual(tower(TOWER_AUTOCANNON, 3));
   });
 
-  it('所有格都占满且唯一塔也满级 → 0 张候选,但六次 rng 一次不少', () => {
+  it('所有既有格都占满且唯一塔也满级 → 回退甲板拼块,六次 rng 一次不少', () => {
     const deck = createDeck();
     const target = deck.cells[0]!;
     for (let lv = 0; lv < TOWER_MAX_LEVEL; lv++) {
@@ -161,8 +181,8 @@ describe('rollUpgradeOffer', () => {
     const rng = new CountingRng();
     const stale = [tower(4), support(2)];
 
-    expect(rollUpgradeOffer(deck, rng as unknown as Rng, stale)).toBe(0);
-    expect(stale).toEqual([]); // 上一次留下的尾卡必须截掉
+    expect(rollUpgradeOffer(deck, rng as unknown as Rng, stale)).toBe(3);
+    expect(stale.every((o) => o.kind === OFFER_DECK)).toBe(true);
     expect(rng.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
   });
 
@@ -172,9 +192,22 @@ describe('rollUpgradeOffer', () => {
       rollUpgradeOffer(createDeck(), new Rng(seed), out);
       for (const opt of out) {
         if (opt.kind === OFFER_TOWER) expect(opt.type).toBeLessThan(TOWER_KIND_COUNT);
-        else expect(opt.type).toBeLessThan(SUPPORTS.length);
+        else if (opt.kind === OFFER_SUPPORT) expect(opt.type).toBeLessThan(SUPPORTS.length);
+        else expect(opt.type).toBeLessThan(DECK_PIECES.length);
       }
     }
+  });
+
+  it('类别轮盘按 45:25:15 解释并在法令缺席时按总和 85 归一化', () => {
+    expect([OFFER_WEIGHT_TOWER, OFFER_WEIGHT_SUPPORT, OFFER_WEIGHT_DECK]).toEqual([45, 25, 15]);
+    const deck = createDeck();
+    const out: UpgradeOption[] = [];
+    rollUpgradeOffer(
+      deck,
+      new CountingRng([0.1, 0, 0.6, 0, 0.95, 0]) as unknown as Rng,
+      out,
+    );
+    expect(out.map((o) => o.kind)).toEqual([OFFER_TOWER, OFFER_SUPPORT, OFFER_DECK]);
   });
 });
 
@@ -217,10 +250,23 @@ describe('World 三选一经济接线', () => {
     expect(w.upgrades).toBe(0);
     expect(w.offer).toEqual(beforeOffer);
 
-    const cells: number[] = [];
-    optionLegalCells(w.deck, w.offer[0]!, cells);
-    const cell = w.deck.cells[cells[0]!]!;
-    expect(isPlaceSuccess(w.takeUpgrade(0, cell.col, cell.row))).toBe(true);
+    const opt = w.offer[0]!;
+    if (opt.kind === OFFER_DECK) {
+      let welded = false;
+      for (let row = -4; row <= 7 && !welded; row++) {
+        for (let col = -4; col <= 6 && !welded; col++) {
+          if (canWeldPiece(w.deck, opt.type, 0, col, row) !== WELD_OK) continue;
+          expect(w.takeUpgrade(0, col, row, 0)).toBe(WELD_OK);
+          welded = true;
+        }
+      }
+      expect(welded).toBe(true);
+    } else {
+      const cells: number[] = [];
+      optionLegalCells(w.deck, opt, cells);
+      const cell = w.deck.cells[cells[0]!]!;
+      expect(isPlaceSuccess(w.takeUpgrade(0, cell.col, cell.row))).toBe(true);
+    }
     expect(w.scrap).toBe(0);
     expect(w.upgrades).toBe(1);
     expect(w.offer).toEqual([]);
@@ -241,7 +287,7 @@ describe('World 三选一经济接线', () => {
     expect([w.scrap, w.upgrades]).toEqual(snapshot);
   });
 
-  it('甲板彻底没得放时自动按跳过结算,不弹空卡也不响回调', () => {
+  it('既有甲板全满时仍弹拼块卡,不再把可扩建的船误判成“彻底没得放”', () => {
     Object.assign(tuning, WORLD_TUNING);
     const w = new World(13);
     for (const c of w.deck.cells) placeAt(w.deck, c.col, c.row, CELL_SUPPORT, 0, SUP_AMMO_BAY);
@@ -251,10 +297,11 @@ describe('World 三选一经济接线', () => {
     w.scrap = cost;
 
     w.step();
-    expect(w.offer).toEqual([]);
-    expect(offers).toBe(0);
-    expect(w.upgrades).toBe(1);
-    expect(w.scrap).toBe(Math.min(UPGRADE_SKIP_REFUND, cost));
+    expect(w.offer.length).toBeGreaterThan(0);
+    expect(w.offer.every((o) => o.kind === OFFER_DECK)).toBe(true);
+    expect(offers).toBe(1);
+    expect(w.upgrades).toBe(0);
+    expect(w.scrap).toBe(cost);
   });
 
   it('局终之后不再生成升级候选', () => {

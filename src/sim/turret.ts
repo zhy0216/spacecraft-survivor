@@ -41,7 +41,7 @@ import {
 } from '../data/towers';
 import { type Arc, cellArc, findArcTarget, isTurretCell } from './arc';
 import { BK_DIRECT, BK_MORTAR } from './bullet';
-import { cellFireRateMul } from './damage';
+import { cellFireRateMul, deckOuterRadius } from './damage';
 import { cellWorldPos, type Deck, type DeckCell, deckCellSize } from './deck';
 import type { Enemy } from './enemy';
 import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE, FXV_MUZZLE } from './fx';
@@ -138,7 +138,7 @@ export function stepTurrets(
 
   // 甲板外接半径:任何格心离船心都不超过它,故"离某炮位 ≤ maxOutreach 的敌人"必然落在这个圆里 ——
   // 一次查询覆盖全塔的充分条件,少一分就会漏掉舷侧塔够得到、船心够不到的那一圈目标
-  const reach = maxOutreach + (Math.hypot(deck.rows, deck.cols) * deckCellSize()) / 2;
+  const reach = maxOutreach + deckOuterRadius(deck);
   grid.query(ship.x, ship.y, reach, candidates);
 
   for (let i = 0; i < cells.length; i++) {

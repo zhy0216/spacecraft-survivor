@@ -82,7 +82,12 @@ export function createShip(): Ship {
  * 存上一帧 → 转向(有上限)→ 沿船头推力 → 夹巡航速度 / 或纯阻尼 → 积分位置。
  * 四个 tuning 参数一律每帧现读 —— 这就是"面板拖动即时改变手感、无需重启"的唯一实现机制。
  */
-export function stepShip(ship: Ship, desired: Vec2 | null, dt: number): void {
+export function stepShip(
+  ship: Ship,
+  desired: Vec2 | null,
+  dt: number,
+  turnRateDeg: number = tuning.shipTurnRate,
+): void {
   ship.px = ship.x;
   ship.py = ship.y;
   ship.pheading = ship.heading;
@@ -93,7 +98,7 @@ export function stepShip(ship: Ship, desired: Vec2 | null, dt: number): void {
     // 只取方向不看长度:摇杆推半程也是全速,快慢由加速度决定而非输入幅度
     const want = Math.atan2(dy, dx);
     const diff = wrapAngle(want - ship.heading);
-    const maxTurn = tuning.shipTurnRate * DEG2RAD * dt;
+    const maxTurn = Math.max(0, turnRateDeg) * DEG2RAD * dt;
     // 以转向速率为上限追随期望航向,绝不瞬间对齐 —— 转向速率是全游戏最重要的手感参数(GDD §3.2)
     ship.heading = wrapAngle(ship.heading + Math.max(-maxTurn, Math.min(maxTurn, diff)));
 

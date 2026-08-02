@@ -63,7 +63,17 @@ import {
   hitBroadside,
   hullMaxHp,
 } from './damage';
-import { createDeck, type Deck, EDGE_COUNT, isEdgeExposed, isPlaceSuccess, placeAt } from './deck';
+import {
+  createDeck,
+  type Deck,
+  deckTurnRate,
+  EDGE_COUNT,
+  isEdgeExposed,
+  isPlaceSuccess,
+  isWeldSuccess,
+  placeAt,
+  weldPiece,
+} from './deck';
 import { createDrop, type Drop, resetDrop, stepDrops } from './drop';
 import {
   applyDamage,
@@ -95,6 +105,7 @@ import {
   optionSupportType,
   optionTowerType,
   rollUpgradeOffer,
+  OFFER_DECK,
   type UpgradeOption,
   UPGRADE_NO_OFFER,
 } from './upgrade';
@@ -439,6 +450,11 @@ export class World {
     return economyUpgradeCost(this.upgrades);
   }
 
+  /** 当前实际转向速率(°/s)= tuning 基础值 − 每个扩建占用格 1°/s。 */
+  get turnRate(): number {
+    return deckTurnRate(this.deck);
+  }
+
   /**
    * 当前主压方向 —— 世界系**绝对角**(弧度,0 = +X,顺时针为正,与 ship.heading 同一套),
    * 不是相对船头的角(相对船头的话玩家转舵就没意义了,GDD §6.3「最优舷持续漂移」)。
@@ -520,7 +536,7 @@ export class World {
 
     // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后
     const ship = this.ship;
-    stepShip(ship, cmd.desiredHeading, SIM_DT);
+    stepShip(ship, cmd.desiredHeading, SIM_DT, this.turnRate);
 
     // 战场是有边界的,但它**只夹船**(WORLD_RADIUS 是交战范围不是地图墙,理由见常量注释):
     // 超出就沿径向贴回边上,并清掉速度的外向分量 —— 否则贴边时推力仍在往外积速,一转头就会弹射出去
@@ -623,11 +639,10 @@ export class World {
 
       // 粗筛:甲板外接圆 + 敌人体型。只登记,不扣血、不弹开、不消灭 ——
       // 三层判定(核心区/甲板轮廓/没碰上)与结算全在帧尾的 settleHullDamage 一处做完,
-      // 这里多做一步都会跟它打架(而且要在 1000 敌的热循环里付两次矩形判定的钱)。
+      // 这里多做一步都会跟它打架(而且要在 1000 敌的热循环里重复付核心/稀疏轮廓判定的钱)。
       //
-      // 体型那一项乘 √2 而不是直接加 radius:精筛(classifyHit)把矩形按体型**两轴各外扩** radius,
-      // 那个盒子的外接半径是 hypot(半长+r, 半宽+r),而它**严格大于** hypot(半长, 半宽) + r
-      //(三角不等式:半长 + 半宽 > 外接半径)—— 只加 r 会在甲板四角漏掉一小片真擦碰,
+      // 体型那一项乘 √2 而不是直接加 radius:精筛把核心/每个甲板格按体型**两轴各外扩** radius,
+      // 扩出的角点距离会比原外接半径 + r 更远 —— 只加 r 会在甲板格四角漏掉一小片真擦碰,
       // 而粗筛漏掉的人这一帧就彻底结算不到(名单是超集才有意义)。
       // R + r√2 是它的紧上界(hypot(半长+r, 半宽+r) ≤ hypot(半长, 半宽) + hypot(r, r)),
       // 代价只是一次乘法 —— 逐只现算精确外接半径要一次开方,那才是 1000 敌热循环里付不起的钱
@@ -703,7 +718,7 @@ export class World {
    * 帧尾检查是否该生成一次三选一。候选存在时一律不重掷:玩家停在卡片前多久都看到同一组三张,
    * rng 也不会因为 UI 停留时间不同而继续往前走。
    *
-   * 甲板彻底没得放时 rollUpgradeOffer 返回 0:当场按「跳过」结算并且**不响回调** ——
+   * 三类都没有合法项时 rollUpgradeOffer 返回 0:当场按「跳过」结算并且**不响回调** ——
    * 弹一张空面板会把玩家永久卡在时停里;什么都不做则下一帧又满足够钱条件,形成每帧重掷死循环。
    */
   private settleUpgrade(): void {
@@ -773,7 +788,7 @@ export class World {
 
   /**
    * 本帧的船体受击结算 —— 三层判定(核心区 / 甲板轮廓 / 没碰上)与扣血**全仓只有这一处**。
-   * 只走 contacts 那份粗筛名单:精筛是"转回局部系 + 两次矩形判定",给全场 1000 只人手来一遍
+   * 只走 contacts 那份粗筛名单:精筛是"转回局部系 + 固定核心 + 稀疏 occupied 格",给全场 1000 只人手来一遍
    * 是白付的钱,而粗筛圆罩得住两层判定的全部范围(半径怎么取见敌人循环里那段 √2 的说明)。
    *
    * 撞完**不击退、不消灭敌人、不改它的状态机**:VS 式的贴脸就是"它压在那儿继续磨",
@@ -873,9 +888,14 @@ export class World {
    * 真正放置仍走 this.place 这唯一入口;只有 PLACE_OK / PLACE_UPGRADE 才扣费并清空候选。
    * 被拒时残骸、升级次数与 offer 一个字段都不动,玩家可以换格或退回重选。
    */
-  takeUpgrade(choice: number, col: number, row: number): number {
+  takeUpgrade(choice: number, col: number, row: number, rotation: number = 0): number {
     const opt = this.offer[choice];
     if (!opt) return UPGRADE_NO_OFFER;
+    if (opt.kind === OFFER_DECK) {
+      const code = this.weld(opt.type, rotation, col, row);
+      if (isWeldSuccess(code)) this.completeUpgrade(0);
+      return code;
+    }
     const code = this.place(
       col,
       row,
@@ -884,6 +904,17 @@ export class World {
       optionSupportType(opt),
     );
     if (isPlaceSuccess(code)) this.completeUpgrade(0);
+    return code;
+  }
+
+  /** 拼块焊接的 World 入口:原子改拓扑后，当场同步 online / 邻接 / HP 上限。 */
+  weld(pieceType: number, rotation: number, col: number, row: number): number {
+    const code = weldPiece(this.deck, pieceType, rotation, col, row);
+    if (isWeldSuccess(code)) {
+      syncSupportBuffs(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck);
+      if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    }
     return code;
   }
 
@@ -1066,6 +1097,8 @@ export class World {
     // 全甲板重算,没有第二条来路),而这几样上下逐格全哈过了 —— 哈缓存只是把同一件事哈两遍,
     // 与 exposed/online 跳过是同一条理由
     for (const c of this.deck.cells) {
+      acc(c.col);
+      acc(c.row);
       acc(c.occupied ? 1 : 0);
       acc(c.content);
       acc(c.supportType);

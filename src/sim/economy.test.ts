@@ -7,9 +7,9 @@ import { afterEach, expect, it } from 'vitest';
 import { SIM_HZ } from '../core/loop';
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import { tuning } from './config';
-import { isPlaceSuccess } from './deck';
+import { canWeldPiece, isPlaceSuccess, WELD_OK } from './deck';
 import { applyStartingLoadout } from './loadout';
-import { optionLegalCells } from './upgrade';
+import { OFFER_DECK, optionLegalCells } from './upgrade';
 import { RESULT_WIN, World } from './world';
 
 const before = {
@@ -25,6 +25,18 @@ const legal: number[] = [];
 function settleOffer(w: World): void {
   const opt = w.offer[0];
   if (!opt) return;
+  if (opt.kind === OFFER_DECK) {
+    for (let rotation = 0; rotation < 4; rotation++) {
+      for (let row = w.deck.minRow - 4; row < w.deck.minRow + w.deck.rows + 4; row++) {
+        for (let col = w.deck.minCol - 4; col < w.deck.minCol + w.deck.cols + 4; col++) {
+          if (canWeldPiece(w.deck, opt.type, rotation, col, row) !== WELD_OK) continue;
+          expect(w.takeUpgrade(0, col, row, rotation)).toBe(WELD_OK);
+          return;
+        }
+      }
+    }
+    throw new Error('拼块候选没有合法焊接锚点');
+  }
   expect(optionLegalCells(w.deck, opt, legal)).toBeGreaterThan(0);
   const cell = w.deck.cells[legal[0]!]!;
   expect(isPlaceSuccess(w.takeUpgrade(0, cell.col, cell.row))).toBe(true);

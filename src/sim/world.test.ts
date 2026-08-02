@@ -13,6 +13,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { DROP_MAX_ALIVE } from '../data/economy';
+import { DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
@@ -64,6 +65,7 @@ import {
   PLACE_TAKEN,
   PLACE_UPGRADE,
   setOccupied,
+  WELD_OK,
 } from './deck';
 import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
@@ -99,6 +101,7 @@ const BASE = {
   enemyContactDamageScale: 1,
   hitFireRateMul: 0.75,
   hitPenaltyTime: 0.5,
+  shipTurnRate: 100,
   // 磁吸那三根(10 号 T1):掉落那一组用例会把起吸半径拖大拖小(验收标准第四条就是这么验的),
   // 跑完必须还原。三条规则本身在 drop.test.ts 钉,这里只关心"世界把它接对了没有"
   dropMagnetRadius: 170,
@@ -226,6 +229,35 @@ describe('World 确定性', () => {
  * 以及甲板内容进 checksum —— build 也是世界状态,少了它,"塔放错格"会从确定性口径下漏掉。
  */
 describe('甲板接线(world.place 是唯一放置入口)', () => {
+  it('world.weld 原子接线:边缘内化后塔即时离线，邻接缓存同一刻撤销', () => {
+    tuning.stressEnemies = 0;
+    const w = new World(4);
+    expect(w.place(0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(w.place(1, 1, CELL_SUPPORT, 0, SUP_AMMO_BAY)).toBe(PLACE_OK);
+    const tower = cellAt(w.deck, 0, 1)!;
+    expect(tower.online).toBe(true);
+    expect(tower.fireRateMul).toBeGreaterThan(1);
+
+    expect(w.weld(DECK_PIECE_SQUARE, 0, -2, 1)).toBe(WELD_OK);
+    expect(tower.online).toBe(false);
+    expect(tower.exposed).toBe(0);
+    expect(tower.fireRateMul).toBe(1);
+  });
+
+  it('World.step 使用扩建后的实际转向速率:2×2 四格精确少 4°/s', () => {
+    tuning.stressEnemies = 0;
+    const base = new World(3);
+    const expanded = new World(3);
+    expect(expanded.weld(DECK_PIECE_SQUARE, 0, -2, 1)).toBe(WELD_OK);
+    expect(base.turnRate).toBe(100);
+    expect(expanded.turnRate).toBe(96);
+
+    const cmd: ShipCommand = { desiredHeading: { x: 1, y: 0 } };
+    base.step(cmd);
+    expanded.step(cmd);
+    expect(base.ship.heading - expanded.ship.heading).toBeCloseTo((4 * DEG2RAD) / SIM_HZ, 12);
+  });
+
   it('新世界自带一块 T0 的 3×4 空甲板,place 原样转发理由码', () => {
     const w = new World(5);
     expect(w.deck.cells.length).toBe(DECK_COLS * DECK_ROWS);

@@ -5,8 +5,8 @@
  *   模块内只留一个复用的暂存(照 world.ts 的 desired 写法),热循环里不新增分配。
  *
  * 甲板 = 正交网格,唯一要记住的规则是 GDD §4.1:**边缘格开火、内部格供能**。
- * MVP 只有 T0 拾荒艇的 3×4(10 边缘 + 2 内部),但暴露边**一律从 occupied 集合动态推导**,
- * 绝不把"哪些格是边缘"写成常量表:12 号 issue 的甲板扩建会焊上 L/T/2×2 异形拼块,
+ * 起始是 T0 拾荒艇的 3×4(10 边缘 + 2 内部),暴露边**一律从 occupied 集合动态推导**,
+ * 绝不把"哪些格是边缘"写成常量表:甲板扩建会焊上 1×2/L/T/2×2 异形拼块,
  * 旧边缘格会被包成内部格(炮位变"内脏位"),写死的表当场作废。
  * 推导只看四个正交邻格是否存在且 occupied,**不做"从外部可达"的洪水填充** ——
  * 与 GDD §4.1"四面被围"的字面一致,而且 O(1)、与遍历顺序无关(中心挖空的洞对四周算暴露)。
@@ -15,7 +15,8 @@
  *   船体局部系 **+X = 船头**、**+Y = 右舷** —— 依据是既有代码(renderer 的船体多边形把船头画在
  *     +len/2,createShip 的 heading 起手 -π/2 = 屏幕上方,y 轴朝下),不另立新口径;
  *   row 沿船长,**row 0 = 最靠船头的一行**,row 增大朝船尾;col 沿船宽,**col 0 = 左舷**;
- *   cells 下标 = row * cols + col(row-major)。这个顺序是 checksum 与渲染遍历的唯一顺序,永不改。
+ *   逻辑 col/row 永远不改；cells 是当前 bounds 的 row-major backing，向负坐标扩容时只重排下标,
+ *   不改变任何旧格的局部坐标。checksum 同时哈 col/row，故拓扑不依赖 backing 下标碰巧是多少。
  *
  * 放置规则(canPlace/placeAt,GDD §4.1 格子规则 + §4.5 战斗中放置规则)也落在本文件。
  * 本模块**只提供放置,不提供拆除/移动/出售** —— "已放置的塔不可移动、不可出售"这条规则的实现
@@ -32,6 +33,7 @@
  * 甲板仍旧只当房东:它认识"这格有块几号设施",不认识"协同"这个概念。
  */
 import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT } from '../data/supports';
+import { DECK_PIECES } from '../data/deckPieces';
 import {
   TOWER_AUTOCANNON,
   TOWER_KIND_COUNT,
@@ -45,6 +47,20 @@ import { type Ship, type Vec2, wrapAngle } from './ship';
 /** 起始船体 3×4(GDD §4.1 的 T0 拾荒艇):列 = 舷宽方向,行 = 船头→船尾 */
 export const DECK_COLS = 3;
 export const DECK_ROWS = 4;
+
+/** 拼块旋转档:每档顺时针 90°。 */
+export const DECK_ROTATIONS = 4;
+
+/** 焊接结果码。与 PLACE_* 分开编号:焊接不是往既有格里放内容。 */
+export const WELD_OK = 20;
+export const WELD_BAD_PIECE = 21;
+export const WELD_BAD_ROTATION = 22;
+export const WELD_OVERLAP = 23;
+export const WELD_DETACHED = 24;
+
+export function isWeldSuccess(code: number): boolean {
+  return code === WELD_OK;
+}
 
 /** 格内容。不用 enum(照 data/enemies.ts 的口径):数字常量在热循环里最省事 */
 export const CELL_EMPTY = 0;
@@ -193,11 +209,18 @@ export interface DeckCell {
 }
 
 export interface Deck {
-  readonly cols: number;
-  readonly rows: number;
-  /** 下标 = row * cols + col,顺序固定 */
+  /** 当前 backing rectangle 的尺寸；焊到负坐标侧时会扩容，但逻辑格坐标不变。 */
+  cols: number;
+  rows: number;
+  /** backing rectangle 左上角对应的稳定逻辑坐标。起始均为 0。 */
+  minCol: number;
+  minRow: number;
+  /** 初始船体尺寸；局部坐标永远以它为中心，扩建不会把旧格整体推走。 */
+  readonly baseCols: number;
+  readonly baseRows: number;
+  /** 下标 = (row-minRow) * cols + (col-minCol)，按当前 bounds row-major。 */
   readonly cells: DeckCell[];
-  /** 任一 occupied/content 变化即 +1,渲染层据此脏标记重建几何(每帧重画 12 个格没必要) */
+  /** 任一 occupied/content 变化即 +1,渲染层据此脏标记重建几何(每帧重画局内几十格没必要) */
   revision: number;
   /**
    * 邻接 buff 缓存最后一次重算时的 revision —— sim/support.ts 的 syncSupportBuffs 拿它当脏标记:
@@ -211,6 +234,32 @@ export interface Deck {
 
 /** 局部坐标暂存:模块级复用而不是每次现造 —— 渲染层每帧会问一遍全部格心(铁律 3) */
 const local: Vec2 = { x: 0, y: 0 };
+
+function createCell(col: number, row: number, occupied: boolean): DeckCell {
+  return {
+    col,
+    row,
+    occupied,
+    content: CELL_EMPTY,
+    exposed: 0,
+    exposedCount: 0,
+    online: true,
+    turretOffset: 0,
+    towerType: -1,
+    level: 0,
+    cooldown: 0,
+    ammo: 0,
+    reloadLeft: 0,
+    heat: 0,
+    coolLock: 0,
+    charge: 0,
+    supportType: -1,
+    fireRateMul: 1,
+    reloadMul: 1,
+    heatMaxMul: 1,
+    chargeRateMul: 1,
+  };
+}
 
 /**
  * 格边长:由船体尺寸推导,绝不在第三处再写死一个数(渲染层的船体多边形、config 的包围盒、这里)。
@@ -228,38 +277,21 @@ export function createDeck(cols: number = DECK_COLS, rows: number = DECK_ROWS): 
   // 先行后列地推入:写入顺序本身就是"下标 = row * cols + col"这条约定
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      cells.push({
-        col,
-        row,
-        occupied: true,
-        content: CELL_EMPTY,
-        exposed: 0,
-        exposedCount: 0,
-        online: true,
-        turretOffset: 0,
-        // 塔的运行期状态:建格时一次性给齐(哪怕这格永远不放塔),此后只改值不加字段。
-        // towerType 用 -1 而不是 0 —— 0 是自动机炮,拿它当"没有塔"会让满甲板空格都自称机炮
-        towerType: -1,
-        level: 0,
-        cooldown: 0,
-        ammo: 0,
-        reloadLeft: 0,
-        heat: 0,
-        coolLock: 0,
-        charge: 0,
-        // 设施型号与塔型同理:-1 而不是 0 —— 0 是弹药库,拿它当"没有设施"会让空甲板凭空加满血
-        supportType: -1,
-        // 四个邻接倍率的中性值是 **1**(乘 1 / 除 1 恒等):没有设施的甲板上,塔的取值链路
-        // 与 05 号那会儿逐位一字不差,既有的塔用例一条都不用改
-        fireRateMul: 1,
-        reloadMul: 1,
-        heatMaxMul: 1,
-        chargeRateMul: 1,
-      });
+      cells.push(createCell(col, row, true));
     }
   }
   // buffRevision 起手 -1:见接口里那段 —— 它必须与 revision(0)不等,好让第一次 sync 真的算一遍
-  const deck: Deck = { cols, rows, cells, revision: 0, buffRevision: -1 };
+  const deck: Deck = {
+    cols,
+    rows,
+    minCol: 0,
+    minRow: 0,
+    baseCols: cols,
+    baseRows: rows,
+    cells,
+    revision: 0,
+    buffRevision: -1,
+  };
   // 构造末尾算一次:createDeck 出来的甲板必须立刻答得出"谁是边缘格",不许有未初始化的中间态
   recomputeDeck(deck);
   return deck;
@@ -267,8 +299,10 @@ export function createDeck(cols: number = DECK_COLS, rows: number = DECK_ROWS): 
 
 /** 越界 -1。col/row 由世界坐标反查而来时可能是任意整数,所以边界检查放在这一处统一做 */
 export function cellIndex(deck: Deck, col: number, row: number): number {
-  if (col < 0 || col >= deck.cols || row < 0 || row >= deck.rows) return -1;
-  return row * deck.cols + col;
+  const c = col - deck.minCol;
+  const r = row - deck.minRow;
+  if (c < 0 || c >= deck.cols || r < 0 || r >= deck.rows) return -1;
+  return r * deck.cols + c;
 }
 
 export function cellAt(deck: Deck, col: number, row: number): DeckCell | undefined {
@@ -308,7 +342,7 @@ function updateOnline(cell: DeckCell): void {
 
 /**
  * 从 occupied 集合全量重算 exposed/exposedCount/online。
- * 全量而不是就地打补丁:改一格会牵动四个邻格,12 格量级下这点开销买的是"绝不漏更新";
+ * 全量而不是就地打补丁:改一格会牵动四个邻格,局内几十格量级下这点开销买的是"绝不漏更新";
  * 而且结果与遍历顺序无关 —— 只读邻格的 occupied,不读邻格刚算出来的掩码。
  */
 export function recomputeDeck(deck: Deck): void {
@@ -359,13 +393,178 @@ export function recomputeDeck(deck: Deck): void {
   }
 }
 
-/** 12 号扩建的唯一入口:焊上/拆掉一格甲板。内部重算暴露边并 bump revision */
+/** 调试/测试用的单格占用开关；正式拼块扩建走 weldPiece 的原子入口。 */
 export function setOccupied(deck: Deck, col: number, row: number, occupied: boolean): void {
   const cell = cellAt(deck, col, row);
   if (!cell) return;
   cell.occupied = occupied;
   recomputeDeck(deck);
   deck.revision++;
+}
+
+export interface DeckGridCoord {
+  col: number;
+  row: number;
+}
+
+/** 第 index 个拼块格经 rotation 旋转后的逻辑坐标，写进 out。 */
+export function deckPieceCellAt(
+  pieceType: number,
+  rotation: number,
+  anchorCol: number,
+  anchorRow: number,
+  index: number,
+  out: DeckGridCoord,
+): DeckGridCoord | undefined {
+  const def = DECK_PIECES[pieceType];
+  const dCol = def?.cells[index * 2];
+  const dRow = def?.cells[index * 2 + 1];
+  if (dCol === undefined || dRow === undefined || !Number.isInteger(rotation)) return undefined;
+  let c = dCol;
+  let r = dRow;
+  const turns = ((rotation % DECK_ROTATIONS) + DECK_ROTATIONS) % DECK_ROTATIONS;
+  for (let i = 0; i < turns; i++) {
+    const nextC = -r;
+    r = c;
+    c = nextC;
+  }
+  out.col = anchorCol + c;
+  out.row = anchorRow + r;
+  return out;
+}
+
+const weldCell: DeckGridCoord = { col: 0, row: 0 };
+
+/**
+ * 焊接合法性:拼块每格都在当前船体外，且至少一格与既有船体正交相邻。
+ * 只读不扩容，UI 可逐帧拿它画绿/红 ghost；所有格先验完，确认时才能原子写入。
+ */
+export function canWeldPiece(
+  deck: Deck,
+  pieceType: number,
+  rotation: number,
+  anchorCol: number,
+  anchorRow: number,
+): number {
+  const def = DECK_PIECES[pieceType];
+  if (!def) return WELD_BAD_PIECE;
+  if (!Number.isInteger(rotation) || rotation < 0 || rotation >= DECK_ROTATIONS)
+    return WELD_BAD_ROTATION;
+  if (!Number.isInteger(anchorCol) || !Number.isInteger(anchorRow)) return WELD_DETACHED;
+
+  const count = def.cells.length / 2;
+  for (let i = 0; i < count; i++) {
+    deckPieceCellAt(pieceType, rotation, anchorCol, anchorRow, i, weldCell);
+    if (cellAt(deck, weldCell.col, weldCell.row)?.occupied) return WELD_OVERLAP;
+  }
+
+  for (let i = 0; i < count; i++) {
+    deckPieceCellAt(pieceType, rotation, anchorCol, anchorRow, i, weldCell);
+    for (let e = 0; e < EDGE_COUNT; e++) {
+      const dc = EDGE_DCOL[e]!;
+      const dr = EDGE_DROW[e]!;
+      if (cellAt(deck, weldCell.col + dc, weldCell.row + dr)?.occupied) return WELD_OK;
+    }
+  }
+  return WELD_DETACHED;
+}
+
+function resizeDeckBounds(
+  deck: Deck,
+  minCol: number,
+  minRow: number,
+  maxCol: number,
+  maxRow: number,
+): void {
+  const oldMinCol = deck.minCol;
+  const oldMinRow = deck.minRow;
+  const oldCols = deck.cols;
+  const oldRows = deck.rows;
+  const old = deck.cells.slice();
+  const cols = maxCol - minCol + 1;
+  const rows = maxRow - minRow + 1;
+  deck.cells.length = 0;
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      const oc = col - oldMinCol;
+      const or = row - oldMinRow;
+      const existing =
+        oc >= 0 && oc < oldCols && or >= 0 && or < oldRows
+          ? old[or * oldCols + oc]
+          : undefined;
+      deck.cells.push(existing ?? createCell(col, row, false));
+    }
+  }
+  deck.minCol = minCol;
+  deck.minRow = minRow;
+  deck.cols = cols;
+  deck.rows = rows;
+}
+
+/** 原子焊接:先完整校验，再一次扩容、一次占用写入、一次全量派生重算、一次 revision++。 */
+export function weldPiece(
+  deck: Deck,
+  pieceType: number,
+  rotation: number,
+  anchorCol: number,
+  anchorRow: number,
+): number {
+  const code = canWeldPiece(deck, pieceType, rotation, anchorCol, anchorRow);
+  if (!isWeldSuccess(code)) return code;
+  const count = DECK_PIECES[pieceType]!.cells.length / 2;
+  let minCol = deck.minCol;
+  let minRow = deck.minRow;
+  let maxCol = deck.minCol + deck.cols - 1;
+  let maxRow = deck.minRow + deck.rows - 1;
+  for (let i = 0; i < count; i++) {
+    deckPieceCellAt(pieceType, rotation, anchorCol, anchorRow, i, weldCell);
+    minCol = Math.min(minCol, weldCell.col);
+    minRow = Math.min(minRow, weldCell.row);
+    maxCol = Math.max(maxCol, weldCell.col);
+    maxRow = Math.max(maxRow, weldCell.row);
+  }
+  if (
+    minCol !== deck.minCol ||
+    minRow !== deck.minRow ||
+    maxCol !== deck.minCol + deck.cols - 1 ||
+    maxRow !== deck.minRow + deck.rows - 1
+  ) {
+    resizeDeckBounds(deck, minCol, minRow, maxCol, maxRow);
+  }
+  for (let i = 0; i < count; i++) {
+    deckPieceCellAt(pieceType, rotation, anchorCol, anchorRow, i, weldCell);
+    cellAt(deck, weldCell.col, weldCell.row)!.occupied = true;
+  }
+  recomputeDeck(deck);
+  deck.revision++;
+  return WELD_OK;
+}
+
+/** 至少存在一个可焊锚点。候选生成只在升级时调用，扫描一圈小边界换来合法性不写死。 */
+export function hasWeldPlacement(deck: Deck, pieceType: number): boolean {
+  const def = DECK_PIECES[pieceType];
+  if (!def) return false;
+  const pad = def.cells.length / 2;
+  for (let rotation = 0; rotation < DECK_ROTATIONS; rotation++) {
+    for (let row = deck.minRow - pad; row < deck.minRow + deck.rows + pad; row++) {
+      for (let col = deck.minCol - pad; col < deck.minCol + deck.cols + pad; col++) {
+        if (canWeldPiece(deck, pieceType, rotation, col, row) === WELD_OK) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function occupiedCellCount(deck: Deck): number {
+  let count = 0;
+  for (let i = 0; i < deck.cells.length; i++) if (deck.cells[i]!.occupied) count++;
+  return count;
+}
+
+/** 扩建转向惩罚:GDD §4.4 每新增一个占用格 -1°/s。 */
+export function deckTurnRate(deck: Deck): number {
+  const added = Math.max(0, occupiedCellCount(deck) - deck.baseCols * deck.baseRows);
+  return Math.max(0, tuning.shipTurnRate - added);
 }
 
 export function isEdgeExposed(cell: DeckCell, edge: number): boolean {
@@ -532,8 +731,9 @@ export function placeAt(
 /** 格心的船体局部坐标(+X = 船头,+Y = 右舷),整块甲板对称于船心 */
 export function cellLocalPos(deck: Deck, col: number, row: number, out: Vec2): Vec2 {
   const size = deckCellSize();
-  out.x = ((deck.rows - 1) / 2 - row) * size; // row 越小越靠船头,故取负号方向
-  out.y = (col - (deck.cols - 1) / 2) * size;
+  // **只以初始船体为中心**:backing bounds 往船头/左舷扩容时，旧格绝不能整体平移。
+  out.x = ((deck.baseRows - 1) / 2 - row) * size;
+  out.y = (col - (deck.baseCols - 1) / 2) * size;
   return out;
 }
 
@@ -572,12 +772,23 @@ export function cellWorldPosAt(
  * 非占用格一律 -1 —— 洞与船体外的空白对拾取是一回事。
  */
 export function cellIndexAtLocal(deck: Deck, lx: number, ly: number): number {
-  const size = deckCellSize();
-  const col = Math.floor(ly / size + deck.cols / 2);
-  const row = Math.floor(deck.rows / 2 - lx / size);
-  const i = cellIndex(deck, col, row);
+  deckGridAtLocal(deck, lx, ly, weldCell);
+  const i = cellIndex(deck, weldCell.col, weldCell.row);
   if (i < 0) return -1;
   return deck.cells[i]!.occupied ? i : -1;
+}
+
+/** 局部坐标反查稳定逻辑格坐标；即使落在当前 bounds 外也返回格，供拼块 ghost 拾取。 */
+export function deckGridAtLocal(
+  deck: Deck,
+  lx: number,
+  ly: number,
+  out: DeckGridCoord,
+): DeckGridCoord {
+  const size = deckCellSize();
+  out.col = Math.floor(ly / size + deck.baseCols / 2);
+  out.row = Math.floor(deck.baseRows / 2 - lx / size);
+  return out;
 }
 
 /**

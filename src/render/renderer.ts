@@ -75,6 +75,7 @@ import {
   type Texture,
 } from 'pixi.js';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
+import { DECK_PIECES } from '../data/deckPieces';
 import { SUPPORTS } from '../data/supports';
 import {
   FX_BULLET,
@@ -98,12 +99,14 @@ import { tuning } from '../sim/config';
 import { hullCoreHalfExtents } from '../sim/damage';
 import {
   canPlace,
+  canWeldPiece,
   CELL_SUPPORT,
   CELL_WEAPON,
   cellLocalPos,
   type Deck,
   type DeckCell,
   deckCellSize,
+  deckPieceCellAt,
   EDGE_BOW,
   EDGE_COUNT,
   EDGE_PORT,
@@ -112,6 +115,7 @@ import {
   edgeWorldNormal,
   isEdgeExposed,
   isPlaceSuccess,
+  WELD_OK,
 } from '../sim/deck';
 import type { Drop } from '../sim/drop';
 import { ST_WINDUP } from '../sim/enemy';
@@ -446,6 +450,7 @@ const coreTmp: Vec2 = { x: 0, y: 0 };
  * 两次都传 localPos,第二次就把第一次的答案覆盖掉,线会从塔画到塔(长度恒 0)。
  */
 const linkPos: Vec2 = { x: 0, y: 0 };
+const weldCoord = { col: 0, row: 0 };
 
 /**
  * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
@@ -471,6 +476,15 @@ export interface PlacementUiState {
    * 少传这一个参数,画面就会把"型号填错了"的那一次放置画成能放,点下去才被拒。
    */
   supportType: number;
+  /** >=0 = 甲板拼块焊接模式；-1 = 普通塔/设施放置。 */
+  weldPieceType: number;
+  /** 拼块顺时针 90° 旋转档。 */
+  weldRotation: number;
+  /** 焊接 ghost 的稳定逻辑锚点；可落在当前 backing rectangle 外。 */
+  hoverCol: number;
+  hoverRow: number;
+  /** 最近一次焊接拒绝，供 ghost 短促红闪。 */
+  weldDenied: boolean;
   /** 悬停格在 deck.cells 里的下标,-1 = 不在甲板上 */
   hoverIndex: number;
   /** 刚被拒绝的格,-1 = 无;由 ui 层超时清零(渲染层不持有计时器) */
@@ -1191,20 +1205,32 @@ export class Renderer {
     // 全部朝船头的暴露边加亮描边(高速转向时看的是这条最亮的边),外加一个艏尖三角(静止时看形状)
     let bow = 0;
     let bowX = -Infinity;
+    let bowY = 0;
     for (let i = 0; i < cells.length; i++) {
       const c = cells[i]!;
       if (!c.occupied || !isEdgeExposed(c, EDGE_BOW)) continue;
       const p = cellLocalPos(deck, c.col, c.row, localPos);
       g.moveTo(p.x + half, p.y - half).lineTo(p.x + half, p.y + half);
-      if (p.x + half > bowX) bowX = p.x + half; // 艏尖挂在最靠前的那条暴露边上
+      const edgeX = p.x + half;
+      if (edgeX > bowX || (edgeX === bowX && Math.abs(p.y) < Math.abs(bowY))) {
+        bowX = edgeX;
+        bowY = p.y;
+      }
       bow++;
     }
     if (bow > 0) {
       g.stroke({ width: DECK_BOW_WIDTH, color: DECK_BOW_COLOR });
-      // 艏尖挂在最靠前的那条暴露边上、顶在中线(局部 y = 0):
-      // 12 号把甲板焊歪之后它依然在船体正前方,这段不必跟着改
+      // 艏尖挂在最靠前、且最接近原船中线的那条真实暴露边上。异形扩建可能只向一侧伸出，
+      // 若仍写死 y=0，三角会悬在空气里，与实际船形脱节。
       const w = size * DECK_PROW_HALF_W;
-      g.poly([bowX, -w, bowX + size * DECK_PROW_LEN, 0, bowX, w]).fill(DECK_BOW_COLOR);
+      g.poly([
+        bowX,
+        bowY - w,
+        bowX + size * DECK_PROW_LEN,
+        bowY,
+        bowX,
+        bowY + w,
+      ]).fill(DECK_BOW_COLOR);
     }
   }
 
@@ -1414,7 +1440,7 @@ export class Renderer {
    * 放置高亮:合法格铺一层薄色 + 悬停格加粗描边 + 被拒格短促闪一下。
    * 合法性每帧现问 canPlace(只读不写),于是 ui 层不必缓存一份"哪些格能放"——
    * 一局里甲板会变(放塔、12 号扩建),缓存就是又一个会走散的真相。
-   * 每帧重画 12 个矩形的代价可忽略(相比之下底板走脏标记,是因为它一直在画面上却极少变)。
+   * 每帧重画局内几十个矩形的代价可忽略(相比之下底板走脏标记,是因为它一直在画面上却极少变)。
    */
   private drawDeckHilite(deck: Deck): void {
     const g = this.deckHiliteG;
@@ -1429,6 +1455,11 @@ export class Renderer {
     }
     g.clear();
     this.hiliteDrawn = true;
+
+    if (st.weldPieceType >= 0) {
+      this.drawWeldHilite(deck, st);
+      return;
+    }
 
     const size = deckCellSize();
     const half = size / 2;
@@ -1477,6 +1508,60 @@ export class Renderer {
       g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box)
         .fill({ color: DECK_HILITE_DENY, alpha: DECK_DENY_FILL_ALPHA })
         .stroke({ width: DECK_HILITE_WIDTH, color: DECK_HILITE_DENY });
+    }
+  }
+
+  /** 拼块焊接高亮:所有合法锚点给冷色标记，鼠标下整块 ghost 按 sim 判据显示绿/红。 */
+  private drawWeldHilite(deck: Deck, st: PlacementUiState): void {
+    const g = this.deckHiliteG;
+    const def = DECK_PIECES[st.weldPieceType];
+    if (!def) return;
+    const size = deckCellSize();
+    const half = size / 2;
+    const pad = def.cells.length / 2;
+
+    let anchors = 0;
+    for (let row = deck.minRow - pad; row < deck.minRow + deck.rows + pad; row++) {
+      for (let col = deck.minCol - pad; col < deck.minCol + deck.cols + pad; col++) {
+        if (canWeldPiece(deck, st.weldPieceType, st.weldRotation, col, row) !== WELD_OK) continue;
+        const p = cellLocalPos(deck, col, row, localPos);
+        g.circle(p.x, p.y, Math.max(2, size * 0.08));
+        anchors++;
+      }
+    }
+    if (anchors > 0) g.fill({ color: DECK_HILITE_OK, alpha: 0.75 });
+
+    const code = canWeldPiece(
+      deck,
+      st.weldPieceType,
+      st.weldRotation,
+      st.hoverCol,
+      st.hoverRow,
+    );
+    const legal = code === WELD_OK && !st.weldDenied;
+    const color = legal ? DECK_HILITE_OK : DECK_HILITE_DENY;
+    const count = def.cells.length / 2;
+    for (let i = 0; i < count; i++) {
+      if (
+        !deckPieceCellAt(
+          st.weldPieceType,
+          st.weldRotation,
+          st.hoverCol,
+          st.hoverRow,
+          i,
+          weldCoord,
+        )
+      )
+        continue;
+      const p = cellLocalPos(deck, weldCoord.col, weldCoord.row, localPos);
+      g.rect(
+        p.x - half + DECK_HILITE_PAD,
+        p.y - half + DECK_HILITE_PAD,
+        size - DECK_HILITE_PAD * 2,
+        size - DECK_HILITE_PAD * 2,
+      )
+        .fill({ color, alpha: legal ? DECK_HILITE_FILL_ALPHA : DECK_DENY_FILL_ALPHA })
+        .stroke({ width: DECK_HOVER_WIDTH, color });
     }
   }
 

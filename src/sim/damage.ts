@@ -10,13 +10,13 @@
  *   核心区恒按**初始 3×4**(DECK_ROWS/DECK_COLS 两个常量)算,**绝不读 deck.rows/cols** ——
  *   12 号扩建往上焊多少块甲板,判定体都一格不变大。扩建的真实代价是边缘内化(GDD §4.1)
  *   与转向惩罚,而**不是把船变成更大的靶子**(STG 惯例:判定小于外形);
- *   甲板轮廓(deckHalfExtents)则随扩建一起长,但它只决定"蹭到了没有"这件表现事 ——
+ *   甲板轮廓则按真实稀疏 occupied 格集合增长,但它只决定"蹭到了没有"这件表现事 ——
  *   蹭到轮廓却没进核心 → 只出火花,一分血都不结算(GDD §4.4 明写的那句)。
  * 两套尺寸从此各归各:渲染改船形不会悄悄改变受击面积,反过来也一样。
  *
  * 判定几何**全仓只有这一份**:World 的结算、turret 的射速惩罚、渲染层 Tab 里那个判定体轮廓
  * 调的都是这里的函数 —— 与 sim/arc.ts 让"可视化 = 可命中区域"成立的是同一条理由,
- * 各处再抄一遍矩形判定,迟早有一处写歪,而那时画出来的框与真正扣血的框就不是同一个了。
+ * 各处再抄一遍核心矩形/稀疏格判定,迟早有一处写歪,而那时画出来的框与真正扣血的框就不是同一个了。
  *
  * 依赖只有 ./config、./deck、./ship 与数据表 ../data/supports 四条,
  * **绝不 import world / turret / tower**:那三个都是本文件的下游(World 每帧问结算、
@@ -33,6 +33,7 @@ import {
   type Deck,
   type DeckCell,
   deckCellSize,
+  cellLocalPos,
   EDGE_BOW,
   EDGE_COUNT,
   EDGE_PORT,
@@ -61,6 +62,7 @@ const THREE_QUARTERS = (3 * Math.PI) / 4;
  * 循环里 new 一个对象就是直接写在 GC 停顿上(铁律 3)。**只在一次调用内有效**,不跨调用留值。
  */
 const half: Vec2 = { x: 0, y: 0 };
+const cellPos: Vec2 = { x: 0, y: 0 };
 
 /**
  * 受击核心区的半长(out.x,沿局部 +X = 船头)与半宽(out.y,沿 +Y = 右舷)。
@@ -80,26 +82,44 @@ export function hullCoreHalfExtents(out: Vec2): Vec2 {
 }
 
 /**
- * 当前甲板轮廓的半长/半宽(读 deck.rows/cols)—— **只给"蹭到甲板"的火花判定用**,随扩建变大。
- * 它与 hullCoreHalfExtents 的唯一区别就是读不读甲板尺寸,而这正是那两件事的分界线:
+ * 当前真实 occupied 格集合的轴对齐半长/半宽 —— 给调试读数与外接范围使用,随异形扩建变大。
+ * 它与 hullCoreHalfExtents 的区别就是读可见甲板还是固定核心,而这正是两件事的分界线:
  * 玩家看得见的船有多大 vs 敌人打得疼的地方有多大。
  */
 export function deckHalfExtents(deck: Deck, out: Vec2): Vec2 {
-  const size = deckCellSize();
-  out.x = (deck.rows * size) / 2;
-  out.y = (deck.cols * size) / 2;
+  const h = deckCellSize() / 2;
+  out.x = 0;
+  out.y = 0;
+  for (let i = 0; i < deck.cells.length; i++) {
+    const cell = deck.cells[i]!;
+    if (!cell.occupied) continue;
+    cellLocalPos(deck, cell.col, cell.row, cellPos);
+    out.x = Math.max(out.x, Math.abs(cellPos.x) + h);
+    out.y = Math.max(out.y, Math.abs(cellPos.y) + h);
+  }
   return out;
 }
 
 /**
- * 甲板外接圆半径 = hypot(半长, 半宽)。World 敌人循环的粗筛用:一次廉价的圆判定就把
+ * 甲板外接圆半径 = 所有 occupied 格最远角点到船心的最大距离。World 敌人循环的粗筛用:
  * "这一帧可能蹭到船的人"筛进 contacts,精筛(classifyHit)只对那一小撮做。
- * 与 sim/turret.ts 里算共享候选圈的那一句同源(同一个 hypot(rows, cols) × 格边长 / 2)——
- * 甲板外接半径全仓只有这一个口径,turret 那边将来也该回来调它。
+ * sim/turret.ts 的共享候选圈直接调用本函数,甲板外接半径全仓只有这一个口径。
  * 取外接圆而不是内切:粗筛宁大勿小,少一分就会漏掉贴着甲板四角进来的那一圈敌人。
  */
 export function deckOuterRadius(deck: Deck): number {
-  return (Math.hypot(deck.rows, deck.cols) * deckCellSize()) / 2;
+  const size = deckCellSize();
+  const halfSize = size / 2;
+  let radius = 0;
+  for (let i = 0; i < deck.cells.length; i++) {
+    const cell = deck.cells[i]!;
+    if (!cell.occupied) continue;
+    cellLocalPos(deck, cell.col, cell.row, cellPos);
+    radius = Math.max(
+      radius,
+      Math.hypot(Math.abs(cellPos.x) + halfSize, Math.abs(cellPos.y) + halfSize),
+    );
+  }
+  return radius;
 }
 
 /**
@@ -108,13 +128,13 @@ export function deckOuterRadius(deck: Deck): number {
  * @param radius 敌人体型半径;传 0 就是纯点判定(渲染层/单测问"这个点在不在核心区"用)
  *
  * 先把点转回船体局部系(旋转的逆 = 转置,与 deck.cellIndexAtWorld 一字同源的那条变换),
- * 再做两次矩形判定 —— 判定体跟着船转,却不必为每一帧的朝向重算四个角点。
+ * 再先判固定核心矩形、后逐 occupied 格判可见轮廓 —— 判定跟着船转,却不必重算世界角点。
  * **先判核心再判轮廓**:核心区整个含在轮廓里,顺序反过来的话核心区里的敌人会先被判成擦碰,
  * 于是"贴在船心的蜂群只出火花不掉血"—— 这条顺序是 World 那边"火花分支永远走不到核心区敌人"的前提。
  *
  * **含边界**(|lx| ≤ 半长 + radius 即算碰上),与 arcContains / findArcTarget / fireLance
  * 那批命中判据同口径:边界上的目标一律算碰上,可视化画出来的框才名副其实。
- * 两个轴各自加 radius = 把矩形按体型外扩(闵可夫斯基和的矩形近似),四个角上比真圆角多算一丁点:
+ * 两个轴各自加 radius = 把核心与每个甲板格按体型外扩,四个角上比真圆角多算一丁点:
  * 那点误差远小于一只敌人的半径,而换来的是零开方、零分支 —— 与"粗筛宁大勿小"同一条取舍。
  */
 export function classifyHit(
@@ -128,13 +148,26 @@ export function classifyHit(
   const dy = y - ship.y;
   const cos = Math.cos(ship.heading);
   const sin = Math.sin(ship.heading);
-  const lx = Math.abs(dx * cos + dy * sin);
-  const ly = Math.abs(-dx * sin + dy * cos);
+  const localX = dx * cos + dy * sin;
+  const localY = -dx * sin + dy * cos;
+  const lx = Math.abs(localX);
+  const ly = Math.abs(localY);
 
   hullCoreHalfExtents(half);
   if (lx <= half.x + radius && ly <= half.y + radius) return HIT_CORE;
-  deckHalfExtents(deck, half);
-  if (lx <= half.x + radius && ly <= half.y + radius) return HIT_GRAZE;
+  // 可见轮廓是**稀疏占用格集合**，不能拿扩容后的 backing rectangle 充数：L/T 拼块凹口里的空气
+  // 仍该是空气。逐格做扩半格矩形判定，格数只在升级时增长，contacts 又已由外接圆粗筛过。
+  const cellHalf = deckCellSize() / 2;
+  for (let i = 0; i < deck.cells.length; i++) {
+    const cell = deck.cells[i]!;
+    if (!cell.occupied) continue;
+    cellLocalPos(deck, cell.col, cell.row, cellPos);
+    if (
+      Math.abs(localX - cellPos.x) <= cellHalf + radius &&
+      Math.abs(localY - cellPos.y) <= cellHalf + radius
+    )
+      return HIT_GRAZE;
+  }
   return HIT_NONE;
 }
 

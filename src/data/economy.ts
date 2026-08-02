@@ -59,17 +59,17 @@ export function upgradeCost(upgrades: number): number {
 export const UPGRADE_CHOICE_COUNT = 3;
 
 /**
- * 三选一里"塔类 / 支援"的类别权重(todos/10 的占位 65/35,可调)。
- * **不必凑 100**:sim/upgrade.ts 按两者之和归一化,于是想让设施更常见时改一个数就够,
- * 不用两个数一起动(两个数一起动的表最容易只改对一半)。
- * MVP 的卡池只剩这两类 —— GDD §7 那份 45/25/15/15 里的甲板拼块(12 号)与法令(M2)都还没进池,
- * 故这里是那张表**裁剪后**的口径,不是它的复刻。
+ * 三选一里"塔类 / 支援 / 甲板拼块"的类别权重，恢复 GDD §7 的 45/25/15。
+ * **不必凑 100**:法令(M2)尚未实装，sim/upgrade.ts 按三者之和 85 归一化；以后补法令 15
+ * 只需把第四类接进同一轮盘，不必重写现有三类的相对权重。
  *
  * 权重只决定"掷出来的那个数怎么解释",**不决定掷几次**:每个候选位恒定消耗 2 次 rng
- *(见 rollUpgradeOffer),于是改这两个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
+ *(见 rollUpgradeOffer),于是改这三个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
  */
-export const OFFER_WEIGHT_TOWER = 65;
-export const OFFER_WEIGHT_SUPPORT = 35;
+export const OFFER_WEIGHT_TOWER = 45;
+export const OFFER_WEIGHT_SUPPORT = 25;
+/** 甲板拼块恢复 GDD §7 的 15% 占位；法令尚未实装，三类按 45:25:15 自动归一化。 */
+export const OFFER_WEIGHT_DECK = 15;
 
 /**
  * 跳过一次升级的返还额(GDD §7:"可跳过(返还 15 残骸)")。

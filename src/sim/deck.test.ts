@@ -14,6 +14,7 @@
  * M0 会反复调 tuning,几何断言不该被平衡调整带崩。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT } from '../data/supports';
 import {
   TOWER_ARC,
@@ -29,6 +30,7 @@ import { tuning } from './config';
 import * as deckApi from './deck';
 import {
   canPlace,
+  canWeldPiece,
   CELL_EMPTY,
   CELL_SUPPORT,
   CELL_WEAPON,
@@ -45,6 +47,9 @@ import {
   type Deck,
   type DeckCell,
   deckCellSize,
+  deckGridAtLocal,
+  deckPieceCellAt,
+  deckTurnRate,
   EDGE_BOW,
   EDGE_COUNT,
   EDGE_PORT,
@@ -56,6 +61,7 @@ import {
   isEdgeExposed,
   isInteriorCell,
   isPlaceSuccess,
+  isWeldSuccess,
   neighborCell,
   PLACE_BAD_CONTENT,
   PLACE_BAD_SUPPORT,
@@ -69,6 +75,10 @@ import {
   placeAt,
   recomputeDeck,
   setOccupied,
+  WELD_DETACHED,
+  WELD_OK,
+  WELD_OVERLAP,
+  weldPiece,
 } from './deck';
 import { createShip, type Vec2, wrapAngle } from './ship';
 
@@ -1121,5 +1131,102 @@ describe('暴露边法线', () => {
         }
       }
     }
+  });
+});
+
+describe('甲板拼块焊接(GDD §4.4)', () => {
+  it('1×2 / L / 2×2 / T 均可旋转吸附到四条任意外边缘', () => {
+    const coord = { col: 0, row: 0 };
+    const sideHit = (type: number, rotation: number, col: number, row: number, side: number): boolean => {
+      const count = DECK_PIECES[type]!.cells.length / 2;
+      for (let i = 0; i < count; i++) {
+        deckPieceCellAt(type, rotation, col, row, i, coord);
+        if (side === EDGE_BOW && coord.row === -1 && coord.col >= 0 && coord.col < DECK_COLS) return true;
+        if (side === EDGE_STERN && coord.row === DECK_ROWS && coord.col >= 0 && coord.col < DECK_COLS) return true;
+        if (side === EDGE_PORT && coord.col === -1 && coord.row >= 0 && coord.row < DECK_ROWS) return true;
+        if (side === EDGE_STARBOARD && coord.col === DECK_COLS && coord.row >= 0 && coord.row < DECK_ROWS) return true;
+      }
+      return false;
+    };
+
+    for (const def of DECK_PIECES) {
+      for (const side of [EDGE_BOW, EDGE_STARBOARD, EDGE_STERN, EDGE_PORT]) {
+        const deck = createDeck();
+        let found = false;
+        for (let rotation = 0; rotation < 4 && !found; rotation++) {
+          for (let row = -5; row <= 8 && !found; row++) {
+            for (let col = -5; col <= 7 && !found; col++) {
+              if (canWeldPiece(deck, def.type, rotation, col, row) !== WELD_OK) continue;
+              found = sideHit(def.type, rotation, col, row, side);
+            }
+          }
+        }
+        expect(found, `${def.name} 无法吸附 edge=${side}`).toBe(true);
+      }
+    }
+  });
+
+  it('非法重叠/悬空是原子的:bounds、格对象内容与 revision 一个字段都不动', () => {
+    const deck = createDeck();
+    const before = JSON.stringify(deck);
+    expect(weldPiece(deck, DECK_PIECE_SQUARE, 0, 0, 0)).toBe(WELD_OVERLAP);
+    expect(JSON.stringify(deck)).toBe(before);
+    expect(weldPiece(deck, DECK_PIECE_SQUARE, 0, 20, 20)).toBe(WELD_DETACHED);
+    expect(JSON.stringify(deck)).toBe(before);
+  });
+
+  it('向船头/左舷扩容不移动任何起始格的船体局部坐标', () => {
+    const deck = createDeck();
+    const before = new Map<string, Vec2>();
+    for (let row = 0; row < DECK_ROWS; row++) {
+      for (let col = 0; col < DECK_COLS; col++) {
+        before.set(`${col},${row}`, { ...cellLocalPos(deck, col, row, v()) });
+      }
+    }
+    expect(weldPiece(deck, DECK_PIECE_SQUARE, 0, -2, 1)).toBe(WELD_OK);
+    expect(deck.minCol).toBe(-2);
+    for (const [key, p] of before) {
+      const [col, row] = key.split(',').map(Number);
+      expect(cellLocalPos(deck, col!, row!, v())).toEqual(p);
+    }
+  });
+
+  it('故意用 2×2 围死左舷塔:确认当帧 online=false、射界来源 exposed 清零', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    const tower = cellAt(deck, 0, 1)!;
+    expect(tower.online).toBe(true);
+    expect(tower.exposed).toBe(bit(EDGE_PORT));
+
+    expect(weldPiece(deck, DECK_PIECE_SQUARE, 0, -2, 1)).toBe(WELD_OK);
+    expect(tower.exposed).toBe(0);
+    expect(tower.exposedCount).toBe(0);
+    expect(tower.online).toBe(false);
+  });
+
+  it('新焊的非矩形格可由局部坐标精确拾取，凹口/空白仍返回 -1', () => {
+    const deck = createDeck();
+    expect(weldPiece(deck, DECK_PIECE_SQUARE, 0, -2, 1)).toBe(WELD_OK);
+    const p = cellLocalPos(deck, -2, 1, v());
+    const i = cellIndexAtLocal(deck, p.x, p.y);
+    expect(i).toBe(cellIndex(deck, -2, 1));
+    expect(deck.cells[i]!.occupied).toBe(true);
+
+    const empty = cellLocalPos(deck, -2, 0, v());
+    expect(cellIndexAtLocal(deck, empty.x, empty.y)).toBe(-1);
+    const grid = { col: 0, row: 0 };
+    deckGridAtLocal(deck, empty.x, empty.y, grid);
+    expect(grid).toEqual({ col: -2, row: 0 });
+  });
+
+  it('每个新增占用格精确扣 1°/s，基础 tuning 改动仍即时生效', () => {
+    const deck = createDeck();
+    const base = tuning.shipTurnRate;
+    expect(deckTurnRate(deck)).toBe(base);
+    expect(isWeldSuccess(weldPiece(deck, DECK_PIECE_SQUARE, 0, -2, 1))).toBe(true);
+    expect(deckTurnRate(deck)).toBe(base - 4);
+    tuning.shipTurnRate = base + 10;
+    expect(deckTurnRate(deck)).toBe(base + 6);
+    tuning.shipTurnRate = base;
   });
 });

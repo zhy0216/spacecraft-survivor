@@ -16,6 +16,8 @@ export interface DebugStats {
   enemies: number;
   bullets: number;
   speed: number; // 船速 px/s,用来确认巡航参数改动真的生效
+  /** 扩建惩罚后的实际转向速率(°/s)。 */
+  turnRate: number;
   /**
    * 船体 HP(09 号 issue)。正式 HUD 给状态读数；这个只读数保留更多精度，
    * 用来量化对比撞击伤害倍率 / 无敌帧等调参效果。
@@ -83,6 +85,7 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   perf.addBinding(stats, 'bullets', { label: '弹(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 拖巡航滑杆时盯这个数:它爬到新的上限,才算"参数改动无需重启即可体感对比"落实了
   perf.addBinding(stats, 'speed', { label: '船速 px/s', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  perf.addBinding(stats, 'turnRate', { label: '实际转向 °/s', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
   perf.addBinding(stats, 'tick', { readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'checksum', { readonly: true, interval: 500 });
   perf.addBinding(stats, 'seed', { readonly: true, format: (v: number) => String(v) });

@@ -29,11 +29,12 @@
  * 状态对象 PlacementUiState 的定义在渲染层并由本文件 import type 进来,依赖方向单向 ui → render:
  * 本文件就地改它的字段,渲染层只读 —— 两边不必再约定"通知"通道,也不新增分配(铁律 3)。
  *
- * 卡片上的名称 / 一句话描述 / 当前等级**一律从数值表现生成**,不给 data/towers 与 data/supports
- * 加 desc 字段:表里改一个数、加一座塔,卡片自己就跟上(05 号验收口径:改数据文件即可调平衡,
- * 不改代码);而多一个手写的描述字段,就是多一处迟早与数值走散的真相。
+ * 卡片上的名称 / 一句话描述 / 当前等级**一律从数值表现生成**,不给 data/towers、data/supports
+ * 与 data/deckPieces 加 desc 字段:表里改一个数、加一座塔/拼块,卡片自己就跟上
+ * (05 号验收口径:改数据文件即可调平衡,不改代码);而多一个手写描述字段,就是多一处会走散的真相。
  */
 import { UPGRADE_SKIP_REFUND } from '../data/economy';
+import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
 import {
   SUP_AMMO_BAY,
   SUP_ARMOR_BAY,
@@ -60,7 +61,10 @@ import {
 import {
   CELL_WEAPON,
   cellIndexAtLocal,
+  deckGridAtLocal,
+  DECK_ROTATIONS,
   isPlaceSuccess,
+  isWeldSuccess,
   PLACE_BAD_CONTENT,
   PLACE_BAD_SUPPORT,
   PLACE_BAD_TOWER,
@@ -69,11 +73,16 @@ import {
   PLACE_NO_CELL,
   PLACE_TAKEN,
   PLACE_UPGRADE,
+  WELD_BAD_PIECE,
+  WELD_BAD_ROTATION,
+  WELD_DETACHED,
+  WELD_OVERLAP,
 } from '../sim/deck';
 import type { Vec2 } from '../sim/ship';
 import {
   OFFER_SUPPORT,
   OFFER_TOWER,
+  OFFER_DECK,
   optionContent,
   optionLabel,
   optionSupportType,
@@ -147,6 +156,7 @@ const FLASH_MS = 1400;
 
 /** 甲板局部坐标暂存:模块级复用(照 sim/world.ts 的 desired 写法),鼠标移动不该按帧新建对象 */
 const deckLocal: Vec2 = { x: 0, y: 0 };
+const deckGrid = { col: 0, row: 0 };
 
 // —— 流程阶段。三个值互斥,**没有第四种**:收着 / 选卡 / 放置 ——
 const PHASE_OFF = 0;
@@ -183,6 +193,14 @@ export function denyMessage(code: number): string {
     // 留着是为了将来加内容类型时不至于静默兜底
     case PLACE_BAD_CONTENT:
       return '只能放武器塔或支援设施(MVP 没有拆除)';
+    case WELD_OVERLAP:
+      return '拼块与既有甲板重叠';
+    case WELD_DETACHED:
+      return '拼块必须贴住船体任意一条外边缘(GDD §4.4)';
+    case WELD_BAD_PIECE:
+      return '没有这种甲板拼块';
+    case WELD_BAD_ROTATION:
+      return '拼块旋转档无效';
     // 10 号 issue 新增的一档:卡还在屏幕上,World 那边的待选却已经没了
     //(重开了一局、或这一次升级已经被结算过)。它**不是**放置规则被撞上,
     // 故文案里不提甲板 —— 提了只会让玩家去找一个根本不存在的格子问题
@@ -226,10 +244,11 @@ export function cardTitle(opt: UpgradeOption): string {
 
 /**
  * 无外部资产的卡片图标。型号仍然取 UpgradeOption.type(也就是数值表下标),不按卡名做字符串猜测:
- * 改名不会让图标走丢,塔/设施两套同编号也不会串台。每种内容各用一个简明的几何符号,
+ * 改名不会让图标走丢,塔/设施/拼块三套同编号也不会串台。每种内容各用一个简明的几何符号,
  * 即使系统没有彩色 emoji 字体也能稳定显示;未知型号显式报 ?,不静默冒充第 0 型。
  */
 export function cardIcon(opt: UpgradeOption): string {
+  if (opt.kind === OFFER_DECK) return DECK_PIECES[opt.type]?.icon ?? '?';
   if (opt.kind === OFFER_TOWER) {
     switch (optionTowerType(opt)) {
       case TOWER_AUTOCANNON:
@@ -347,6 +366,12 @@ function supportDesc(def: SupportDef): string {
  * 型号越界不静默兜底(与 placeLabel 同一条口径):把下标印出来,免得玩家照着另一座塔的读数下判断。
  */
 export function cardDesc(opt: UpgradeOption): string {
+  if (opt.kind === OFFER_DECK) {
+    const def = DECK_PIECES[opt.type];
+    if (!def) return `数值表里查不到这种甲板拼块(型号 ${opt.type})`;
+    const cells = deckPieceCellCount(opt.type);
+    return `${cells} 格 · 可旋转 · 焊到任意外边缘 · 转向 -${cells}°/s`;
+  }
   if (opt.kind === OFFER_TOWER) {
     const def = TOWERS[optionTowerType(opt)];
     if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
@@ -369,6 +394,7 @@ export function cardDesc(opt: UpgradeOption): string {
  * (与渲染层的 clamp01 同一条写法)。
  */
 export function cardLevelText(opt: UpgradeOption): string {
+  if (opt.kind === OFFER_DECK) return '确认即焊死 · 局内不可拆/不可挪';
   if (opt.kind === OFFER_SUPPORT) return '设施不叠级 · 本次新建';
   const lv = opt.level;
   if (!(lv >= 1)) return '未装备';
@@ -453,6 +479,11 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     // 仍然取 world.place 的两个默认值(自动机炮 / 弹药库),漏填时的行为才与提示文案一致
     towerType: TOWER_AUTOCANNON,
     supportType: SUP_AMMO_BAY,
+    weldPieceType: -1,
+    weldRotation: 0,
+    hoverCol: 0,
+    hoverRow: 0,
+    weldDenied: false,
     hoverIndex: -1,
     denyIndex: -1,
   };
@@ -471,7 +502,10 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   const backBtn = document.createElement('button');
   backBtn.style.cssText = BTN_CSS;
   backBtn.textContent = '重选(Esc / 右键)';
-  btnRow.append(skipBtn, backBtn);
+  const rotateBtn = document.createElement('button');
+  rotateBtn.style.cssText = BTN_CSS;
+  rotateBtn.textContent = '旋转(R)';
+  btnRow.append(skipBtn, backBtn, rotateBtn);
   panel.append(headEl, cardsEl, btnRow);
   const toast = document.createElement('div');
   toast.style.cssText = TOAST_CSS;
@@ -534,6 +568,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       toast.style.display = 'none';
       // 渲染层不持有计时器,那格红闪存留多久由这里说了算(见 PlacementUiState.denyIndex)
       state.denyIndex = -1;
+      state.weldDenied = false;
     }, FLASH_MS);
   }
 
@@ -550,6 +585,18 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     return cellIndexAtLocal(world.deck, p.x, p.y);
   }
 
+  function pickGrid(clientX: number, clientY: number): void {
+    const rect = canvas.getBoundingClientRect();
+    const p = screenToDeckLocal(clientX - rect.left, clientY - rect.top, deckLocal);
+    deckGridAtLocal(world.deck, p.x, p.y, deckGrid);
+    if (deckGrid.col !== state.hoverCol || deckGrid.row !== state.hoverRow) {
+      // 拒绝红闪只钉住刚才点下去的锚点；移到另一格后重新按当前 sim 判据显示绿/红。
+      state.weldDenied = false;
+    }
+    state.hoverCol = deckGrid.col;
+    state.hoverRow = deckGrid.row;
+  }
+
   /** 按当前阶段刷面板:选卡阶段露卡片 + 跳过,放置阶段露一行提示 + 重选 */
   function syncPanel(): void {
     if (phase === PHASE_PICK) {
@@ -560,9 +607,17 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       cardsEl.style.display = 'flex';
       skipBtn.style.display = 'block';
       backBtn.style.display = 'none';
+      rotateBtn.style.display = 'none';
       return;
     }
-    headEl.textContent = `放置:${placeLabel(state.content, state.towerType, state.supportType)} —— 点甲板上高亮的格确认`;
+    if (state.weldPieceType >= 0) {
+      const name = DECK_PIECES[state.weldPieceType]?.name ?? `未知甲板拼块(${state.weldPieceType})`;
+      headEl.textContent = `焊接:${name} · 旋转 ${state.weldRotation * 90}° —— R 旋转，点绿色 ghost 确认`;
+      rotateBtn.style.display = 'block';
+    } else {
+      headEl.textContent = `放置:${placeLabel(state.content, state.towerType, state.supportType)} —— 点甲板上高亮的格确认`;
+      rotateBtn.style.display = 'none';
+    }
     cardsEl.style.display = 'none';
     skipBtn.style.display = 'none';
     backBtn.style.display = 'block';
@@ -595,6 +650,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     chosen = -1;
     // 高亮层一并熄掉:留着 active 的话,恢复战斗后甲板上会一直挂着一圈"能放这里"的框
     state.active = false;
+    state.weldPieceType = -1;
+    state.weldRotation = 0;
+    state.weldDenied = false;
     state.hoverIndex = -1;
     state.denyIndex = -1;
     panel.style.display = 'none';
@@ -627,9 +685,13 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     state.content = optionContent(opt);
     state.towerType = optionTowerType(opt);
     state.supportType = optionSupportType(opt);
+    state.weldPieceType = opt.kind === OFFER_DECK ? opt.type : -1;
+    state.weldRotation = 0;
+    state.weldDenied = false;
     state.active = true;
     state.denyIndex = -1;
-    state.hoverIndex = pick(lastX, lastY);
+    if (state.weldPieceType >= 0) pickGrid(lastX, lastY);
+    else state.hoverIndex = pick(lastX, lastY);
     phase = PHASE_PLACE;
     clearFlash();
     syncPanel();
@@ -643,6 +705,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     if (phase !== PHASE_PLACE) return;
     chosen = -1;
     state.active = false;
+    state.weldPieceType = -1;
+    state.weldRotation = 0;
+    state.weldDenied = false;
     state.hoverIndex = -1;
     state.denyIndex = -1;
     phase = PHASE_PICK;
@@ -653,6 +718,30 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
 
   /** 点甲板确认放置。合法性一律以 sim 的答复为准:ui 这边绝不预判(预判就是第二份会走散的规则) */
   function confirm(clientX: number, clientY: number): void {
+    if (state.weldPieceType >= 0) {
+      pickGrid(clientX, clientY);
+      const code = world.takeUpgrade(
+        chosen,
+        state.hoverCol,
+        state.hoverRow,
+        state.weldRotation,
+      );
+      if (isWeldSuccess(code)) {
+        state.weldDenied = false;
+        const name = DECK_PIECES[state.weldPieceType]?.name ?? `甲板拼块(${state.weldPieceType})`;
+        flash(`已焊接:${name} · 转向 ${world.turnRate}°/s`, OK_COLOR);
+        resolve();
+        return;
+      }
+      if (code === UPGRADE_NO_OFFER) {
+        flash(denyMessage(code), DENY_COLOR);
+        resolve();
+        return;
+      }
+      state.weldDenied = true;
+      flash(denyMessage(code), DENY_COLOR);
+      return;
+    }
     const i = pick(clientX, clientY);
     const cell = i >= 0 ? world.deck.cells[i] : undefined;
     if (!cell) {
@@ -705,12 +794,24 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
 
   skipBtn.addEventListener('click', skip);
   backBtn.addEventListener('click', cancel);
+  function rotate(): void {
+    if (phase !== PHASE_PLACE || state.weldPieceType < 0) return;
+    state.weldRotation = (state.weldRotation + 1) % DECK_ROTATIONS;
+    state.weldDenied = false;
+    pickGrid(lastX, lastY);
+    syncPanel();
+  }
+  rotateBtn.addEventListener('click', rotate);
 
   window.addEventListener('keydown', (e) => {
     // 收着的时候一律不认:战斗中按 Esc/数字键不该动到升级流程
     if (phase === PHASE_OFF || e.repeat || isTyping()) return;
     if (e.code === 'Escape') {
       cancel();
+      return;
+    }
+    if (e.code === 'KeyR') {
+      rotate();
       return;
     }
     // 数字键直选卡片(1..N = 从左到右)。只认主键盘的 DigitN:小键盘在这种低频操作上
@@ -725,7 +826,10 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   window.addEventListener('mousemove', (e) => {
     lastX = e.clientX;
     lastY = e.clientY;
-    if (state.active) state.hoverIndex = pick(lastX, lastY);
+    if (state.active) {
+      if (state.weldPieceType >= 0) pickGrid(lastX, lastY);
+      else state.hoverIndex = pick(lastX, lastY);
+    }
   });
 
   canvas.addEventListener('click', (e) => {
@@ -758,6 +862,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       chosen = -1;
       // 选卡阶段**不高亮**:还没决定放什么,"哪些格合法"这个问题根本还没有答案
       state.active = false;
+      state.weldPieceType = -1;
+      state.weldRotation = 0;
+      state.weldDenied = false;
       state.hoverIndex = -1;
       state.denyIndex = -1;
       renderCards();
@@ -766,7 +873,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     },
     hide,
     syncHover(): void {
-      if (state.active) state.hoverIndex = pick(lastX, lastY);
+      if (!state.active) return;
+      if (state.weldPieceType >= 0) pickGrid(lastX, lastY);
+      else state.hoverIndex = pick(lastX, lastY);
     },
     setWorld(next: World): void {
       world = next;

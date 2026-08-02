@@ -7,35 +7,49 @@
  *
  * 本文件只回答两个问题,别的一概不管:
  *   **这一次能选什么**(rollUpgradeOffer:掷类别 → 掷型号,去重、剔掉放不下的);
- *   **某个候选能放到哪几格**(optionLegalCells:渲染层的合法格高亮、ui 的确认、
- *     单测里的自动玩家,读的都是这一个函数)。
+ *   **某个候选有没有落点**(optionHasLegalPlacement):塔/设施走 optionLegalCells，拼块走船体外锚点。
  * 扣费、时停、弹卡、放置本身都不在这里:费用与结算在 World.takeUpgrade / skipUpgrade,
  * 时停在 main.ts,卡片在 ui/upgradeFlow.ts,而"能不能放"这条规则从头到尾只有 sim/deck.ts 那一份。
  *
  * —— 合法性只有一份 ——
- * 候选合法 ⟺ optionLegalCells(...) > 0 ⟺ 至少有一格 canPlace 给成功码。
+ * 塔/设施候选合法 ⟺ optionLegalCells(...) > 0；拼块候选合法 ⟺ hasWeldPlacement(...)。
  * 写成"就是那个函数"而不是另写一遍判据,于是 todos/10 的"不出当前放不下的选项"是**结构上**成立的:
  * 卡面上出现的每一型,玩家点下去必然至少有一格能落;而 ui 高亮的格与生成候选时数过的格是同一批。
  * 甲板在时停期间不会变(World 不自己跑帧),故生成那一刻的合法性到玩家点下去时仍然成立。
  *
  * —— rng 消耗口径(定死,与 World.stressPickKind 一字同源)——
- * **每个候选位恰好消耗 2 次 rng**:先掷类别(按 data/economy 的 65/35),再在该类别的可选表里掷下标。
- * 即使这一位最终空着(甲板上两类都没得放了)也照样消耗,即消耗次数与**甲板状态、权重、去重结果全无关**。
+ * **每个候选位恰好消耗 2 次 rng**:先掷类别(45/25/15 按总和归一化),再在该类别的可选表里掷下标。
+ * 即使这一位最终空着(三类都无合法项)也照样消耗,即消耗次数与**甲板状态、权重、去重结果全无关**。
  * 少了这条,一次平衡调整(改权重)或一次放置(改甲板)就会把整条随机序列往前后挪一格,
  * 于是"同 seed 同出怪序列"当场作废 —— 而那是 08 号那批用例与整个确定性口径的地基。
  */
 import type { Rng } from '../core/rng';
-import { OFFER_WEIGHT_SUPPORT, OFFER_WEIGHT_TOWER, UPGRADE_CHOICE_COUNT } from '../data/economy';
+import {
+  OFFER_WEIGHT_DECK,
+  OFFER_WEIGHT_SUPPORT,
+  OFFER_WEIGHT_TOWER,
+  UPGRADE_CHOICE_COUNT,
+} from '../data/economy';
+import { DECK_PIECE_KIND_COUNT, DECK_PIECES } from '../data/deckPieces';
 import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
-import { canPlace, CELL_SUPPORT, CELL_WEAPON, type Deck, isPlaceSuccess } from './deck';
+import {
+  canPlace,
+  CELL_EMPTY,
+  CELL_SUPPORT,
+  CELL_WEAPON,
+  type Deck,
+  hasWeldPlacement,
+  isPlaceSuccess,
+} from './deck';
 
 /**
- * 候选的两个类别。数字常量而非 enum(与 data/enemies.ts、deck.ts 的 CELL_* 同口径)。
- * MVP 的卡池就只有这两类:甲板拼块归 12 号、法令归 M2(GDD §7 的四类在 todos/10 里已裁剪成两类)。
+ * 候选的三个类别。数字常量而非 enum(与 data/enemies.ts、deck.ts 的 CELL_* 同口径)。
+ * 法令仍归 M2；当前三类对应 GDD §7 的 45/25/15，缺席的法令权重不冒充空气卡。
  */
 export const OFFER_TOWER = 0;
 export const OFFER_SUPPORT = 1;
+export const OFFER_DECK = 2;
 
 /**
  * World.takeUpgrade 在「没有待选 / choice 越界」时的返回码。
@@ -51,9 +65,9 @@ export const UPGRADE_NO_OFFER = -1;
  * 卡片、渲染层、checksum 读的都是它,而时停期间甲板不会变,故快照与现算永远一致。
  */
 export interface UpgradeOption {
-  /** OFFER_*(塔类 / 支援)。只有这两档,别处不许出现第三种 */
+  /** OFFER_*(塔类 / 支援 / 甲板拼块)。法令仍留给 M2。 */
   kind: number;
-  /** 按 kind 解释:塔类 = TOWER_*(TOWERS 下标),支援 = SUP_*(SUPPORTS 下标)。两套编号互不相干 */
+  /** 按 kind 解释为 TOWERS / SUPPORTS / DECK_PIECES 的下标；三套编号互不相干。 */
   type: number;
   /**
    * 甲板上该型塔的**最高等级**,0 = 尚未拥有;**支援恒 0**(设施不叠级,每次都是新建一格)。
@@ -84,7 +98,9 @@ const typePool: number[] = [];
  * 不可能分家(高亮 = 规则,03 号立下的口径)。
  */
 export function optionContent(opt: UpgradeOption): number {
-  return opt.kind === OFFER_TOWER ? CELL_WEAPON : CELL_SUPPORT;
+  if (opt.kind === OFFER_TOWER) return CELL_WEAPON;
+  if (opt.kind === OFFER_SUPPORT) return CELL_SUPPORT;
+  return CELL_EMPTY;
 }
 
 /**
@@ -112,7 +128,8 @@ export function optionSupportType(opt: UpgradeOption): number {
  */
 export function optionLabel(opt: UpgradeOption): string {
   if (opt.kind === OFFER_TOWER) return TOWERS[opt.type]?.name ?? `未知塔型(${opt.type})`;
-  return SUPPORTS[opt.type]?.name ?? `未知设施(${opt.type})`;
+  if (opt.kind === OFFER_SUPPORT) return SUPPORTS[opt.type]?.name ?? `未知设施(${opt.type})`;
+  return DECK_PIECES[opt.type]?.name ?? `未知甲板拼块(${opt.type})`;
 }
 
 /**
@@ -126,6 +143,7 @@ export function optionLabel(opt: UpgradeOption): string {
  */
 export function optionLegalCells(deck: Deck, opt: UpgradeOption, out: number[]): number {
   out.length = 0; // 复用调用方的缓冲:清长度,不新建数组
+  if (opt.kind === OFFER_DECK) return 0; // 拼块落在船体外的逻辑格，走 canWeldPiece 而非既有 cell 下标
   const content = optionContent(opt);
   const towerType = optionTowerType(opt);
   const supportType = optionSupportType(opt);
@@ -137,6 +155,13 @@ export function optionLegalCells(deck: Deck, opt: UpgradeOption, out: number[]):
     }
   }
   return out.length;
+}
+
+/** 任意类别的统一“至少有一个落点”判据；拼块走船体外锚点，其余走既有格下标。 */
+export function optionHasLegalPlacement(deck: Deck, opt: UpgradeOption): boolean {
+  return opt.kind === OFFER_DECK
+    ? hasWeldPlacement(deck, opt.type)
+    : optionLegalCells(deck, opt, legalScratch) > 0;
 }
 
 /**
@@ -156,15 +181,15 @@ function maxTowerLevel(deck: Deck, towerType: number): number {
 }
 
 /**
- * 这一型现在有没有地方放。**就是 optionLegalCells > 0**(不另写判据,理由见文件头)。
- * 每问一次要扫一遍 12 格,一次抽卡至多问 (6 塔 + 4 设施) × 2 = 20 次 ——
- * 而抽卡每局只发生十几次,不在任何热循环上,买的是"规则只有一份"。
+ * 这一型现在有没有地方放。统一走 optionHasLegalPlacement(不另写判据,理由见文件头)。
+ * 塔/设施每问一次扫当前 backing rectangle，拼块则扫船体外一圈锚点；抽卡每局只发生十几次，
+ * 不在任何热循环上，买的是"规则只有一份"。
  */
 function offerLegal(deck: Deck, kind: number, type: number): boolean {
   probe.kind = kind;
   probe.type = type;
   probe.level = 0;
-  return optionLegalCells(deck, probe, legalScratch) > 0;
+  return optionHasLegalPlacement(deck, probe);
 }
 
 /** 本次已经抽中过这一型了吗(同 kind 同 type = 同一张卡)。三张一样的卡等于没得选 */
@@ -182,7 +207,12 @@ function alreadyOffered(out: UpgradeOption[], count: number, kind: number, type:
  */
 function collectTypes(deck: Deck, kind: number, out: UpgradeOption[], count: number): number {
   typePool.length = 0;
-  const kindCount = kind === OFFER_TOWER ? TOWER_KIND_COUNT : SUPPORT_KIND_COUNT;
+  const kindCount =
+    kind === OFFER_TOWER
+      ? TOWER_KIND_COUNT
+      : kind === OFFER_SUPPORT
+        ? SUPPORT_KIND_COUNT
+        : DECK_PIECE_KIND_COUNT;
   for (let type = 0; type < kindCount; type++) {
     if (alreadyOffered(out, count, kind, type)) continue;
     if (!offerLegal(deck, kind, type)) continue;
@@ -192,19 +222,22 @@ function collectTypes(deck: Deck, kind: number, out: UpgradeOption[], count: num
 }
 
 /**
- * 把一个已经掷出来的 [0,1) 解释成类别(塔类 / 支援)。
+ * 把一个已经掷出来的 [0,1) 解释成类别(塔类 / 支援 / 甲板拼块)。
  * **只解释、不掷** —— 掷在 rollUpgradeOffer 里,且无论权重如何都恰好一次:
- * 于是改 data/economy 的 65/35 不会移动整条随机序列(见文件头的 rng 消耗口径)。
- * 两个权重都被填成 0(或负数)时回落成塔类:总不能弹一张空气卡,而塔是卡池的主体。
+ * 于是改 data/economy 的 45/25/15 不会移动整条随机序列(见文件头的 rng 消耗口径)。
+ * 三个权重都被填成 0(或负数)时回落成塔类:总不能弹一张空气卡,而塔是卡池的主体。
  */
 function pickKind(roll: number): number {
   // 数据表是手改的,负权重会让轮盘转反 —— 与 World.stressPickKind 同一手夹取
   const wTower = Math.max(0, OFFER_WEIGHT_TOWER);
   const wSupport = Math.max(0, OFFER_WEIGHT_SUPPORT);
-  const total = wTower + wSupport;
+  const wDeck = Math.max(0, OFFER_WEIGHT_DECK);
+  const total = wTower + wSupport + wDeck;
   if (total <= 0) return OFFER_TOWER;
-  // 按两者之和归一化 ⇒ 权重不必凑 100(data/economy 那段写了这条口径)
-  return roll * total < wTower ? OFFER_TOWER : OFFER_SUPPORT;
+  const t = roll * total;
+  if (t < wTower) return OFFER_TOWER;
+  if (t < wTower + wSupport) return OFFER_SUPPORT;
+  return OFFER_DECK;
 }
 
 /**
@@ -212,15 +245,15 @@ function pickKind(roll: number): number {
  * @param out World.offer(调用方持有、跨局复用);出门时 `out.length` 恒 = 返回值 ——
  *   ui 照 length 摆卡、World 拿 `length === 0` 当"没有待选",两处读的必须是同一个真相,
  *   故这里宁可把多余的对象丢掉,也不留一截长度对不上的尾巴。
- * @returns 0 = **甲板彻底没得放**(每一格都占着、且所有同型塔都满级了)。
+ * @returns 0 = 三类都没有合法项(通常只会是数值表/拼块表被整体裁空)。
  *   这一档由调用方兜底(World 当场按跳过结算,不响回调、不时停),本函数不认识"流程"这回事 ——
  *   返回一张空的候选表让 World 去弹,才是每帧重弹一张空卡的死循环。
  *
  * 算法定死(改它就是改确定性口径):
  *   UPGRADE_CHOICE_COUNT 个候选位,每位**先无条件掷两次 rng**(类别 → 下标),再去看甲板;
  *   可选表 = 该类别里合法(offerLegal)且本次未抽中(alreadyOffered)的型号;
- *   掷中的类别没得选就退到另一类别,**复用同一个下标随机数**,一次都不额外掷;
- *   两类都没得选,这一位就空着(照样已经消耗了 2 次)。
+ *   掷中的类别没得选就按固定次序退到另两类,**复用同一个下标随机数**,一次都不额外掷;
+ *   三类都没得选,这一位就空着(照样已经消耗了 2 次)。
  */
 export function rollUpgradeOffer(deck: Deck, rng: Rng, out: UpgradeOption[]): number {
   let count = 0;
@@ -233,12 +266,13 @@ export function rollUpgradeOffer(deck: Deck, rng: Rng, out: UpgradeOption[]): nu
     let kind = pickKind(kindRoll);
     let pool = collectTypes(deck, kind, out, count);
     if (pool === 0) {
-      // 掷中的类别没得选(比如甲板只剩内部格:塔一座都放不下)→ 退到另一类别。
-      // 这就是 todos/10 那条"甲板已满时的兜底":能出的只剩叠级/设施时,卡池自己就收敛过去了
-      kind = kind === OFFER_TOWER ? OFFER_SUPPORT : OFFER_TOWER;
-      pool = collectTypes(deck, kind, out, count);
+      // 类别没得选就按固定顺序轮到另两类，复用同一个 indexRoll、不额外消耗 rng。
+      for (let offset = 1; offset < 3 && pool === 0; offset++) {
+        kind = (kind + 1) % 3;
+        pool = collectTypes(deck, kind, out, count);
+      }
     }
-    if (pool === 0) continue; // 两类都没得放:这一位空着(rng 照样消耗过了)
+    if (pool === 0) continue;
 
     // Math.min 那一手是防 roll 取到 1(Rng.next 恒 < 1,但下标越界的代价是一张 undefined 的卡)
     const type = typePool[Math.min(pool - 1, Math.floor(indexRoll * pool))]!;

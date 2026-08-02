@@ -20,6 +20,7 @@
  * shipCoreScale 的 0.72 是占位待调的数,平衡一动,断言里那些算得清的整数就全没了。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { DECK_PIECE_L } from '../data/deckPieces';
 import {
   SUP_AMMO_BAY,
   SUP_ARMOR_BAY,
@@ -44,6 +45,7 @@ import {
 import {
   CELL_SUPPORT,
   cellAt,
+  cellLocalPos,
   createDeck,
   DECK_COLS,
   DECK_ROWS,
@@ -55,6 +57,8 @@ import {
   EDGE_STARBOARD,
   EDGE_STERN,
   isEdgeExposed,
+  WELD_OK,
+  weldPiece,
 } from './deck';
 import { createShip, DEG2RAD, type Ship, type Vec2 } from './ship';
 
@@ -215,6 +219,19 @@ describe('hullCoreHalfExtents / deckHalfExtents(判定体与甲板轮廓的分�
 });
 
 describe('classifyHit(核心区 / 甲板轮廓 / 没碰上)', () => {
+  it('异形扩建按真实占用格擦碰:拼块出火花，L 形凹口的空气仍是 HIT_NONE', () => {
+    const deck = createDeck();
+    const ship = shipAt(0, 0, 0);
+    expect(weldPiece(deck, DECK_PIECE_L, 0, -2, 1)).toBe(WELD_OK);
+
+    const welded = cellLocalPos(deck, -2, 2, v());
+    expect(classifyHit(ship, deck, welded.x, welded.y, 0)).toBe(HIT_GRAZE);
+
+    const notch = cellLocalPos(deck, -1, 2, v());
+    expect(classifyHit(ship, deck, notch.x, notch.y, 0)).toBe(HIT_NONE);
+    expect(classifyHit(ship, deck, 0, 0, 0)).toBe(HIT_CORE);
+  });
+
   it('三层各归各:船心 = 核心,核心外的甲板 = 擦碰,甲板外 = 没碰上', () => {
     const deck = createDeck();
     const ship = shipAt(0, 0, 0);

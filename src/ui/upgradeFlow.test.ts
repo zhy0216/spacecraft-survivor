@@ -22,6 +22,7 @@
  * 注意 ui 只 import type 渲染层,所以这里不会把 pixi 拖进 Node。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { UPGRADE_SKIP_REFUND } from '../data/economy';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS, towerRange } from '../data/towers';
@@ -42,9 +43,12 @@ import {
   PLACE_OK,
   PLACE_TAKEN,
   PLACE_UPGRADE,
+  WELD_DETACHED,
+  WELD_OK,
+  WELD_OVERLAP,
 } from '../sim/deck';
 import type { Vec2 } from '../sim/ship';
-import { OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_DECK, OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import type { World } from '../sim/world';
 import {
   cardDesc,
@@ -66,6 +70,9 @@ function towerOpt(type: number, level = 0): UpgradeOption {
 function supportOpt(type: number): UpgradeOption {
   return { kind: OFFER_SUPPORT, type, level: 0 };
 }
+function deckOpt(type: number): UpgradeOption {
+  return { kind: OFFER_DECK, type, level: 0 };
+}
 
 const DENY_CODES = [
   PLACE_NO_CELL,
@@ -75,6 +82,8 @@ const DENY_CODES = [
   PLACE_MAX_LEVEL,
   PLACE_BAD_TOWER,
   PLACE_BAD_SUPPORT,
+  WELD_OVERLAP,
+  WELD_DETACHED,
   UPGRADE_NO_OFFER,
 ];
 
@@ -156,11 +165,13 @@ describe('placedMessage', () => {
 });
 
 describe('cardTitle', () => {
-  it('标题 = 数值表里的名字(经 optionLabel),六塔四设施一个不重', () => {
+  it('标题 = 数值表里的名字(经 optionLabel),塔/设施/拼块均不串台', () => {
     const towers = TOWERS.map((def) => cardTitle(towerOpt(def.type)));
     expect(towers).toEqual(TOWERS.map((def) => def.name));
     const supports = SUPPORTS.map((def) => cardTitle(supportOpt(def.type)));
     expect(supports).toEqual(SUPPORTS.map((def) => def.name));
+    const pieces = DECK_PIECES.map((def) => cardTitle(deckOpt(def.type)));
+    expect(pieces).toEqual(DECK_PIECES.map((def) => def.name));
     // 塔与设施同名 = 玩家分不出这张卡是一座炮还是一块砖
     expect(new Set([...towers, ...supports]).size).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT);
   });
@@ -175,11 +186,12 @@ describe('cardTitle', () => {
 });
 
 describe('cardIcon', () => {
-  it('六塔四设施都有明确且互不串台的内建图标', () => {
+  it('塔/设施/拼块都有明确且互不串台的内建图标', () => {
     const towerIcons = TOWERS.map((def) => cardIcon(towerOpt(def.type)));
     const supportIcons = SUPPORTS.map((def) => cardIcon(supportOpt(def.type)));
-    const icons = [...towerIcons, ...supportIcons];
-    expect(icons.length).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT);
+    const pieceIcons = DECK_PIECES.map((def) => cardIcon(deckOpt(def.type)));
+    const icons = [...towerIcons, ...supportIcons, ...pieceIcons];
+    expect(icons.length).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT + DECK_PIECES.length);
     for (const icon of icons) {
       expect(icon.length).toBeGreaterThan(0);
       expect(icon).not.toBe('?');
@@ -193,10 +205,20 @@ describe('cardIcon', () => {
   it('未知型号显式报 ?,不冒充数值表第 0 型', () => {
     expect(cardIcon(towerOpt(99))).toBe('?');
     expect(cardIcon(supportOpt(99))).toBe('?');
+    expect(cardIcon(deckOpt(99))).toBe('?');
   });
 });
 
 describe('cardDesc', () => {
+  it('甲板拼块卡报格数、旋转、外边缘与逐格转向代价', () => {
+    for (const def of DECK_PIECES) {
+      const desc = cardDesc(deckOpt(def.type));
+      expect(desc).toContain(String(def.cells.length / 2));
+      expect(desc).toContain('旋转');
+      expect(desc).toContain('外边缘');
+      expect(desc).toContain('°/s');
+    }
+  });
   it('塔卡报射界 / 射程 / 节流系三样,六座各不相同', () => {
     const descs = TOWERS.map((def) => cardDesc(towerOpt(def.type)));
     for (const d of descs) {
@@ -262,6 +284,10 @@ describe('cardDesc', () => {
 });
 
 describe('cardLevelText', () => {
+  it('拼块明确说明确认即焊死、局内不可拆挪', () => {
+    expect(cardLevelText(deckOpt(DECK_PIECE_SQUARE))).toContain('焊死');
+    expect(cardLevelText(deckOpt(DECK_PIECE_SQUARE))).toContain('不可');
+  });
   it('三档各说各的话:未装备 / 当前 LvN / 满级只能新建', () => {
     expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, 0))).toBe('未装备');
     for (let lv = 1; lv < TOWER_MAX_LEVEL; lv++) {
@@ -367,6 +393,7 @@ interface StubDom {
   /** 画布上的一次左键点击 / 右键(clientX/Y = 画布像素,见下面 getBoundingClientRect) */
   click(x: number, y: number): void;
   rightClick(x: number, y: number): void;
+  move(x: number, y: number): void;
   /** 一次按键(只用得到 code) */
   key(code: string): void;
   restore(): void;
@@ -379,6 +406,7 @@ function installDom(): StubDom {
   const prevHtmlElement = g.HTMLElement;
   const canvasEl = createStubEl();
   const keyHandlers: Array<(e: StubEvent) => void> = [];
+  const moveHandlers: Array<(e: StubEvent) => void> = [];
   let nextTimer = 1;
 
   const dom: StubDom = {
@@ -395,6 +423,10 @@ function installDom(): StubDom {
     rightClick(x: number, y: number): void {
       fire(canvasEl, 'contextmenu', { clientX: x, clientY: y });
     },
+    move(x: number, y: number): void {
+      const ev: StubEvent = { clientX: x, clientY: y, preventDefault: () => {} };
+      for (const fn of moveHandlers) fn(ev);
+    },
     key(code: string): void {
       const ev: StubEvent = { code, repeat: false, preventDefault: () => {} };
       for (const fn of keyHandlers) fn(ev);
@@ -410,6 +442,7 @@ function installDom(): StubDom {
     addEventListener(type: string, fn: (e: StubEvent) => void): void {
       dom.windowListeners++;
       if (type === 'keydown') keyHandlers.push(fn);
+      if (type === 'mousemove') moveHandlers.push(fn);
     },
     setTimeout(fn: () => void): number {
       const id = nextTimer++;
@@ -441,12 +474,13 @@ interface StubWorld {
   scrap: number;
   upgradeCost: number;
   /** 每次 takeUpgrade 的入参:[choice, col, row] */
-  takeCalls: Array<[number, number, number]>;
+  takeCalls: number[][];
   skipCalls: number;
   /** takeUpgrade 的返回码,由用例现填 */
   takeCode: number;
+  turnRate: number;
   skipOk: boolean;
-  takeUpgrade(choice: number, col: number, row: number): number;
+  takeUpgrade(choice: number, col: number, row: number, rotation?: number): number;
   skipUpgrade(): boolean;
 }
 
@@ -459,9 +493,10 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     takeCalls: [],
     skipCalls: 0,
     takeCode: PLACE_OK,
+    turnRate: 100,
     skipOk: true,
-    takeUpgrade(choice: number, col: number, row: number): number {
-      w.takeCalls.push([choice, col, row]);
+    takeUpgrade(choice: number, col: number, row: number, rotation?: number): number {
+      w.takeCalls.push(rotation === undefined ? [choice, col, row] : [choice, col, row, rotation]);
       return w.takeCode;
     },
     skipUpgrade(): boolean {
@@ -490,6 +525,7 @@ const panelOf = (dom: StubDom): StubEl => dom.ui.children[0]!;
 const cardsOf = (dom: StubDom): StubEl => panelOf(dom).children[1]!;
 const skipBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[0]!;
 const backBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[1]!;
+const rotateBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[2]!;
 const toastOf = (dom: StubDom): StubEl => dom.ui.children[1]!;
 
 describe('createUpgradeFlow 两阶段状态机', () => {
@@ -564,6 +600,45 @@ describe('createUpgradeFlow 两阶段状态机', () => {
     expect(resolved).toBe(1);
     expect(flow.active).toBe(false);
     expect(panelOf(dom).style.display).toBe('none');
+  });
+
+  it('拼块卡进入焊接模式:可在甲板外拾取稳定逻辑格，R/按钮旋转后原样交给 World', () => {
+    world = createStubWorld([deckOpt(DECK_PIECE_SQUARE)]);
+    const flow = setup();
+    fire(cardsOf(dom).children[0]!, 'click');
+    expect(flow.weldPieceType).toBe(DECK_PIECE_SQUARE);
+    expect(flow.weldRotation).toBe(0);
+    expect(rotateBtnOf(dom).style.display).toBe('block');
+
+    dom.key('KeyR');
+    expect(flow.weldRotation).toBe(1);
+    fire(rotateBtnOf(dom), 'click');
+    expect(flow.weldRotation).toBe(2);
+
+    world.takeCode = WELD_OK;
+    world.turnRate = 96;
+    const p = cellPoint(world.deck, -2, 1);
+    dom.click(p.x, p.y);
+    expect(world.takeCalls).toEqual([[0, -2, 1, 2]]);
+    expect(resolved).toBe(1);
+    expect(toastOf(dom).textContent).toContain('96');
+  });
+
+  it('拼块悬空/重叠被拒时保持时停与焊接态，并让 ghost 红闪', () => {
+    world = createStubWorld([deckOpt(DECK_PIECE_SQUARE)]);
+    const flow = setup();
+    fire(cardsOf(dom).children[0]!, 'click');
+    world.takeCode = WELD_OVERLAP;
+    dom.click(0, 0);
+    expect(resolved).toBe(0);
+    expect(flow.active).toBe(true);
+    expect(flow.weldDenied).toBe(true);
+    expect(toastOf(dom).textContent).toBe(denyMessage(WELD_OVERLAP));
+
+    // 红闪只属于刚拒绝的锚点；移到另一格后应重新展示该格的实时合法性。
+    const next = cellPoint(world.deck, -2, 1);
+    dom.move(next.x, next.y);
+    expect(flow.weldDenied).toBe(false);
   });
 
   it('叠级的回执留在屏幕上,不随面板一起消失', () => {
