@@ -120,15 +120,25 @@ export type { Bullet } from './bullet';
 const IDLE: ShipCommand = { desiredHeading: null };
 
 /**
- * 战场边界半径(逻辑坐标,原点为场心)—— 它是**交战范围,不是地图墙**:
- * 只夹船,防止玩家一路开出怪潮之外把这一局拖成散步;敌人一概不受它夹取。
- * 正式出怪环(data/waves.ts 的 SPAWN_RADIUS)以**船**为心,故船贴边时它有一大半落在这个圈之外 ——
- * 那是对的,不必也不该把敌人拉回来:被拉回来的怪会在边界上排成一道墙,主压方向当场糊掉。
+ * 地图是**无限的**:没有边界圈、没有对船的贴边夹取(原 WORLD_RADIUS 已删)。
+ * 船开到哪,交战就在哪 —— 出怪环(data/waves.ts 的 SPAWN_RADIUS)本就以船为心,
+ * 空间哈希按 cell 坐标散列(core/spatialHash),坐标多大都装得下。
+ *
+ * 原边界的真正职责("防止玩家一路开出怪潮之外把这一局拖成散步")由下面这对常量接手:
+ * 被甩开超过 ENEMY_FALLBEHIND_RADIUS 的敌人**沿船心镜像重投**到 ENEMY_REJOIN_RADIUS ——
+ * 即"落在身后追不上的怪,悄悄挪到你正开过去的那一侧屏幕外"(VS 同款的屏外重定位)。
+ * 镜像而不是原地拉近:拉近的怪永远吊在船尾追不上,压力等于零;镜像则让逃跑本身把压力
+ * 转到航向前方,"跑"仍然有代价。**一次 rng 都不掷**(方向 = 旧方位取反,距离定死),
+ * 于是同 seed 同输入的确定性回放照旧成立,重定位也不会扰动出怪序列。
  */
-export const WORLD_RADIUS = 1200;
+/** 触发重投的距离(> 出怪环外沿 SPAWN_RADIUS + BAND = 1300,新生的怪绝不会被当场误判) */
+export const ENEMY_FALLBEHIND_RADIUS = SPAWN_RADIUS + SPAWN_RADIUS_BAND * 2;
+/** 重投落点半径 = 出怪环内沿:与新刷的怪同一档距离,进屏节奏一致,玩家分不出谁是挪过来的 */
+export const ENEMY_REJOIN_RADIUS = SPAWN_RADIUS;
 
-/** 压测出怪环的内半径:别把敌人直接生在船脸上。**只服务于 stressSyncCounts 那条 debug 路径** */
+/** 压测出怪环的内/外半径:别把敌人直接生在船脸上。**只服务于 stressSyncCounts 那条 debug 路径** */
 const SPAWN_MIN_RADIUS = 300;
+const SPAWN_MAX_RADIUS = 1200;
 
 /**
  * 敌人期望速度的暂存。模块级复用而不是每只现造:1000 敌 × 60Hz 下,
@@ -483,11 +493,12 @@ export class World {
    * @param cmd 本逻辑帧的输入(纯数据)。只读不缓存引用,调用方可以整局复用同一个对象;
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
-   * 顺序定死(单测按此钉):**甲板派生量(邻接 buff + HP 上限)** → 船 → 贴边夹取 → 出怪 →
+   * 顺序定死(单测按此钉):**甲板派生量(邻接 buff + HP 上限)** → 船 → 出怪 →
    * 重建空间哈希 → 清 contacts / 清 broadside / edgePenalty 逐帧减 dt →
-   * 敌人(积分 + hitCd 递减 + 粗筛入 contacts)→
+   * 敌人(镜像重投(在 px/py 存档之前,防插值拖影)→ 积分 + hitCd 递减 + 粗筛入 contacts)→
    * 炮管(含节流与开火)→ 子弹 → 残骸(磁吸与收取)→ 船体受击结算 →
    * 可视化事件老化 → 回收死者(含掉落)→ 局终判定 → 升级候选结算。
+   * (地图无限,原"贴边夹取"一步已删,见 ENEMY_FALLBEHIND_RADIUS 那段。)
    * 甲板派生量排在**最前**(见下面那两句):这一帧的塔按最新的邻接加成开火、这一帧的撞击按最新的
    * 上限结算 —— 12 号拆掉一格甲板(setOccupied 清 supportType)后,加成与上限当帧就回落,
    * 而不是靠下一次放置才想起来重刷(06 号验收第三条"拆除即时移除"的落点就在这两句)。
@@ -534,28 +545,14 @@ export class World {
     this.ship.maxHp = hullMaxHp(this.deck);
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
 
-    // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后
+    // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后。
+    // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_FALLBEHIND_RADIUS 那段)
     const ship = this.ship;
     stepShip(ship, cmd.desiredHeading, SIM_DT, this.turnRate);
 
-    // 战场是有边界的,但它**只夹船**(WORLD_RADIUS 是交战范围不是地图墙,理由见常量注释):
-    // 超出就沿径向贴回边上,并清掉速度的外向分量 —— 否则贴边时推力仍在往外积速,一转头就会弹射出去
-    const shipDist = Math.hypot(ship.x, ship.y);
-    if (shipDist > WORLD_RADIUS) {
-      const nx = ship.x / shipDist;
-      const ny = ship.y / shipDist;
-      ship.x = nx * WORLD_RADIUS;
-      ship.y = ny * WORLD_RADIUS;
-      const radial = ship.vx * nx + ship.vy * ny;
-      if (radial > 0) {
-        ship.vx -= radial * nx;
-        ship.vy -= radial * ny;
-      }
-    }
-
     // 出怪。正式路径是波次脚本的运行器(sim/waves.ts):它一个字都不认识世界,只说"朝这个方向
     // 出一只这型的怪",落点由 waveSink → spawnFromWave 补完。
-    // **位置不许挪**:排在贴边夹取**之后**,于是出怪环是以船**本帧**的位置为心的
+    // **位置不许挪**:排在船积分**之后**,于是出怪环是以船**本帧**的位置为心的
     //(晚一帧的话高速航行时整个环会拖在船身后,主压方向当场歪掉);
     // 又排在建哈希**之前**,于是新生的敌人当帧就参与分离、当帧就动(铁律 2 的 px/py 停在出生点)。
     //
@@ -597,6 +594,30 @@ export class World {
 
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i]!;
+
+      // 无限地图的防风筝(理由全文见 ENEMY_FALLBEHIND_RADIUS):被甩开的敌人沿船心镜像重投。
+      // 排在 px/py 存档**之前**,于是插值的两端都在新位置上 —— 不会有一帧横跨整张屏的拖影
+      // (它本就在屏外,但 144Hz 插值的中间采样点可能扫进屏里)。
+      // 只有 BH_SEEK/接近段的怪才可能落到这么远(驻留/冲锋的活动半径 ≤ 560),状态机不必复位。
+      {
+        const fdx = e.x - tx;
+        const fdy = e.y - ty;
+        const fd2 = fdx * fdx + fdy * fdy;
+        if (fd2 > ENEMY_FALLBEHIND_RADIUS * ENEMY_FALLBEHIND_RADIUS) {
+          const fd = Math.sqrt(fd2);
+          const k = -ENEMY_REJOIN_RADIUS / fd;
+          e.x = tx + fdx * k;
+          e.y = ty + fdy * k;
+          // 重投也是一次"压力从这个方向来"的既成事实,照出怪那样喂给威胁罗盘(方向 = 新落点方位
+          // = 旧方位取反)。不喂的话,玩家背对主压方向持续逃跑时,慢速主压流全部被镜像到航向
+          // 正前方,罗盘却仍指着身后的脚本方位 —— HUD 读数与实际来向长期相反。
+          // 只喂方向不喂 threatRate:强度读数的语义是"出怪速率",重投没有新增一只怪。
+          // 与出怪样本同款零分配、零 rng,且威胁统计不进 checksum,确定性不受影响
+          this.threatDirX += (-fdx / fd) * THREAT_SPAWN_IMPULSE;
+          this.threatDirY += (-fdy / fd) * THREAT_SPAWN_IMPULSE;
+        }
+      }
+
       e.px = e.x;
       e.py = e.y;
       const def = ENEMIES[e.kind]!;
@@ -1017,7 +1038,9 @@ export class World {
   }
 
   /**
-   * 压测出一只怪(debug 路径,见 stressSyncCounts):以**场心**为心的整圈上随机撒,与波次一个字都不沾。
+   * 压测出一只怪(debug 路径,见 stressSyncCounts):以**船**为心的整圈上随机撒,与波次一个字都不沾。
+   * 以船为心而不是场心:地图无限之后没有"场心"这回事 —— 船开出去多远,压测的虫堆都得跟着,
+   * 否则拖着面板跑两屏就把 1000 敌全甩没了,压测测的就成了空场。
    * rng 消耗顺序**定死为 kind → angle → radius → side**,且与 kind 无关:
    * 改某一型的行为、甚至改出怪占比,都不会移动整条随机序列(位置序列照旧,只是型号变了),
    * 确定性回放才不会因为一次平衡调整而全废。
@@ -1025,10 +1048,17 @@ export class World {
   private spawnStressEnemy(): void {
     const kind = this.stressPickKind();
     const a = this.rng.angle();
-    const r = SPAWN_MIN_RADIUS + this.rng.next() * (WORLD_RADIUS - SPAWN_MIN_RADIUS);
+    const r = SPAWN_MIN_RADIUS + this.rng.next() * (SPAWN_MAX_RADIUS - SPAWN_MIN_RADIUS);
     const e = this.enemies.spawn();
     // HP 时间缩放只在出生时算一次(GDD §14):在场的敌人不会因为时间流逝而回血变硬
-    initEnemy(e, kind, Math.cos(a) * r, Math.sin(a) * r, this.elapsed, this.rng);
+    initEnemy(
+      e,
+      kind,
+      this.ship.x + Math.cos(a) * r,
+      this.ship.y + Math.sin(a) * r,
+      this.elapsed,
+      this.rng,
+    );
   }
 
   /**

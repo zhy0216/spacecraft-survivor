@@ -20,7 +20,7 @@ import { SIM_DT } from '../core/loop';
 import { Pool } from '../core/pool';
 import { tuning } from './config';
 import { createDeck } from './deck';
-import { createDrop, type Drop, magnetRadius, resetDrop, stepDrops } from './drop';
+import { createDrop, type Drop, DROP_CULL_RADIUS, magnetRadius, resetDrop, stepDrops } from './drop';
 
 /**
  * 基线旋钮:下面所有算术("每帧走 5px""170 起吸")都从这三个数推,不在断言里另写死一份。
@@ -341,5 +341,33 @@ describe('对象池与零分配(铁律 2 / 铁律 3)', () => {
     const h = harness();
     expect(h.step(10)).toBe(0);
     expect(h.drops.size).toBe(0);
+  });
+});
+
+describe('离场剔除(无限地图:被甩在身后的残骸不许白占池位)', () => {
+  it('离船超过 DROP_CULL_RADIUS 的未锁定残骸当帧回池,且一分钱不进账', () => {
+    const h = harness();
+    dropAt(h, DROP_CULL_RADIUS + 1, 0, { value: 4 });
+    expect(h.step()).toBe(0);
+    expect(h.drops.size).toBe(0);
+  });
+
+  it('恰好压在剔除圆上的还留着(> 才剔:与起吸"含边界算吸"相反侧的同一条口径)', () => {
+    const h = harness();
+    dropAt(h, DROP_CULL_RADIUS, 0);
+    expect(h.step(10)).toBe(0);
+    expect(h.drops.size).toBe(1);
+  });
+
+  it('已锁定的绝不剔除:那是一笔已承诺的进账,船跑到天边它也照追', () => {
+    const h = harness();
+    const d = dropAt(h, tuning.dropMagnetRadius, 0); // 恰在起吸圆上,当帧锁定
+    h.step();
+    expect(d.magnet).toBe(true);
+
+    h.ship.x = DROP_CULL_RADIUS * 2; // 船瞬移出圈:未锁定的话这颗当帧就该没了
+    h.step(5);
+    expect(h.drops.size).toBe(1);
+    expect(d.vx).toBeGreaterThan(0); // 还在朝船追
   });
 });

@@ -1,0 +1,99 @@
+{
+  "endpoint": "fal-ai/flux-2-pro",
+  "unit_cost": 0.03,
+  "image_size": "square",
+  "output_format": "png",
+  "jobs": [
+    {
+      "id": "enemy-swarm-leech-01",
+      "category": "enemies",
+      "seed": 42101,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down enemy sprite candidate for a PC survivors game. One original alien swarm leech, a slow compact organism that attacks in huge numbers: round low body, six uneven fleshy lobes, central circular rasping mouth visible from above, no ordinary eyes, almost directionless but with a subtle forward notch. Strict orthographic top-down view, one full creature centered, strong round silhouette readable at 64 pixels. Dark crimson magenta and violet tissue with tiny warm orange bioluminescent pores. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, no gradient, no texture, no floor, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth animal anatomy."
+    },
+    {
+      "id": "enemy-side-raider-01",
+      "category": "enemies",
+      "seed": 42102,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down enemy sprite candidate for a PC survivors game. One original alien side-raider adapted for fast lateral attack: razor crescent body like an asymmetrical boomerang, two long swept shell blades, four small gripping limbs tucked underneath, clear pointed head at one end and a side-facing attack silhouette. Strict orthographic top-down view, one full creature centered, strong crescent silhouette readable at 64 pixels. Dark crimson magenta and violet chitin with tiny warm orange glowing organs. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, gradient, texture, floor, or motion blur, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, wings, or Earth animal anatomy."
+    },
+    {
+      "id": "enemy-tail-maggot-01",
+      "category": "enemies",
+      "seed": 42103,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down enemy sprite candidate for a PC survivors game. One original alien tail-following maggot designed to chase a spaceship from behind: long segmented hook-shaped soft body, compact biting head at the forward end, tapering tail curved into a clear J shape, sparse tiny gripping legs, unmistakable forward direction. Strict orthographic top-down view, one full creature centered, strong elongated hooked silhouette readable at 64 pixels. Dark crimson magenta and violet flesh with tiny warm orange glowing organs. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, gradient, texture, floor, or motion blur, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth caterpillar anatomy."
+    },
+    {
+      "id": "tower-autocannon-01",
+      "category": "towers",
+      "seed": 42201,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One squat improvised automatic cannon for a scavenger spaceship deck: twin medium barrels pointing straight upward in the image, chunky rotating base, visible side ammunition box and feed belt, asymmetrical welded patch plates and exposed rivets. Strict orthographic top-down view, one complete isolated turret centered, strong readable silhouette at 64 pixels. Deep steel blue, cyan accents and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, border, logo, watermark, spaceship hull, or extra weapon."
+    },
+    {
+      "id": "tower-laser-prism-01",
+      "category": "towers",
+      "seed": 42202,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One improvised laser-prism turret for a scavenger spaceship deck: a large cyan faceted crystal prism held in a rotating metal yoke, narrow emitter aperture pointing straight upward in the image, heat-scored welded base, asymmetrical cables and patch plates. Strict orthographic top-down view, one complete isolated turret centered, strong narrow silhouette readable at 64 pixels. Deep steel blue, cyan glow and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, border, logo, watermark, hull, beam, or extra weapon."
+    },
+    {
+      "id": "tower-arc-coil-01",
+      "category": "towers",
+      "seed": 42203,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One improvised arc-electric turret for a scavenger spaceship deck: three forked Tesla electrodes arranged in a broad fan pointing upward in the image, central insulated coil, squat rotating base, exposed copper-like cold-metal wiring and welded repair plates. Strict orthographic top-down view, one complete isolated turret centered, wide readable silhouette at 64 pixels. Deep steel blue, bright cyan electricity accents and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, logo, watermark, lightning outside the device, hull, or extra weapon."
+    },
+    {
+      "id": "tower-railgun-01",
+      "category": "towers",
+      "seed": 42204,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One improvised magnetic railgun turret for a scavenger spaceship deck: extremely long narrow twin rails pointing straight upward in the image, heavy rectangular breech, two side capacitor cylinders, small reinforced rotating base, asymmetrical welded patch plates. Strict orthographic top-down view, one complete isolated turret centered, very narrow axial silhouette readable at 64 pixels. Deep steel blue, cyan accents and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, logo, watermark, projectile, hull, or extra weapon."
+    },
+    {
+      "id": "tower-point-defense-01",
+      "category": "towers",
+      "seed": 42205,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One improvised point-defense turret for a scavenger spaceship deck: compact radial cluster of six short rapid-fire barrels, broad circular tracking base, two small sensor dishes, visible ammunition drum, welded cage and repair plates. Strict orthographic top-down view, one complete isolated turret centered, broad defensive silhouette readable at 64 pixels. Deep steel blue, cyan sensor accents and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, logo, watermark, bullets, hull, or extra weapon."
+    },
+    {
+      "id": "tower-plasma-mortar-01",
+      "category": "towers",
+      "seed": 42206,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down weapon-tower sprite candidate for a PC survivors game. One improvised plasma mortar turret for a scavenger spaceship deck: one huge short recessed bowl-shaped barrel pointing upward in the image, chunky charge chamber behind it, reinforced squat rotating base, asymmetric coolant pipes and welded patch plates. Strict orthographic top-down view, one complete isolated turret centered, heavy compact silhouette readable at 64 pixels. Deep steel blue, cyan plasma glow and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the turret. No text, logo, watermark, projectile, hull, or extra weapon."
+    },
+    {
+      "id": "support-ammo-bay-01",
+      "category": "supports",
+      "seed": 42301,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down support-module sprite candidate for a PC survivors game. One improvised ammunition bay for a scavenger spaceship deck: rectangular armored module packed with two ammunition drums, visible feed belts and shell racks under a welded safety cage, asymmetrical patch plates and exposed rivets, explicitly not a gun. Strict orthographic top-down view, one complete isolated module centered, strong readable silhouette at 64 pixels. Deep steel blue, muted teal and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the module. No text, logo, watermark, barrel, hull, or extra object."
+    },
+    {
+      "id": "support-radiator-01",
+      "category": "supports",
+      "seed": 42302,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down support-module sprite candidate for a PC survivors game. One improvised heat radiator for a scavenger spaceship deck: rectangular central coolant manifold with four broad fin stacks, visible pipes, heat-scored welded frame, asymmetrical repair plates, explicitly not a weapon. Strict orthographic top-down view, one complete isolated module centered, strong finned silhouette readable at 64 pixels. Deep steel blue, cyan coolant accents and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the module. No text, logo, watermark, barrel, hull, or extra object."
+    },
+    {
+      "id": "support-capacitor-bank-01",
+      "category": "supports",
+      "seed": 42303,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down support-module sprite candidate for a PC survivors game. One improvised capacitor bank for a scavenger spaceship deck: three large parallel energy cylinders connected by thick bus bars and insulated cables, rectangular welded cradle, asymmetrical repair plates, explicitly not a weapon. Strict orthographic top-down view, one complete isolated module centered, strong three-cell silhouette readable at 64 pixels. Deep steel blue, violet-blue and bright cyan energy accents with cold white metal and tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the module. No text, logo, watermark, barrel, hull, or extra object."
+    },
+    {
+      "id": "support-armor-bay-01",
+      "category": "supports",
+      "seed": 42304,
+      "key_color": "#ff00ff",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down support-module sprite candidate for a PC survivors game. One improvised armor bay for a scavenger spaceship deck: very thick layered shield plates over a compact reinforced compartment, external braces, impact dents, welded replacement panels and exposed rivets, explicitly not a weapon. Strict orthographic top-down view, one complete isolated module centered, strong heavy shield silhouette readable at 64 pixels. Desaturated steel blue, slate gray and cold white metal with tiny amber indicators, premium graphic game sprite rendering, crisp edges. Perfectly flat solid #ff00ff chroma-key background, no shadow, gradient, texture, floor, or deck, generous padding. Do not use magenta, red, or green in the module. No text, logo, watermark, barrel, hull, or extra object."
+    }
+  ]
+}

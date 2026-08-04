@@ -71,7 +71,14 @@ import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { waveDirAt } from './waves';
-import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN, WORLD_RADIUS, World } from './world';
+import {
+  ENEMY_FALLBEHIND_RADIUS,
+  ENEMY_REJOIN_RADIUS,
+  RESULT_LOSE,
+  RESULT_RUNNING,
+  RESULT_WIN,
+  World,
+} from './world';
 
 // 测试用小规模(压测数量是浏览器场景的事,这里只验证逻辑正确性)。
 // 与 ship.test.ts 同口径:有用例会拖数量/占比/分离半径,跑完必须还原,否则污染同文件后续用例。
@@ -988,10 +995,10 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
     }
   });
 
-  it('出怪环以**船**为心而不是场心,且允许生在战场边界之外(那道半径只夹船,不是地图墙)', () => {
+  it('出怪环以**船**为心而不是原点(地图无限,船开到哪出怪环跟到哪)', () => {
     useScript(segment({ streams: [{ kind: KIND_SWARM, rate0: 305, rate1: 305, spreadDeg: 0 }] }));
     const w = new World(42);
-    // 摆到场边(离场心 806 < WORLD_RADIUS,贴边夹取不会碰它);没有输入 → 它一步也不会挪
+    // 摆到离原点 806 的地方;没有输入 → 它一步也不会挪(无限地图:更没有任何边界会碰它)
     w.ship.x = 700;
     w.ship.y = -400;
     const spawns = watchSpawns(w);
@@ -1003,16 +1010,50 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
     for (const s of spawns) {
       expect(ringDist(s)).toBeGreaterThanOrEqual(SPAWN_RADIUS);
       expect(ringDist(s)).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
-      // 以场心算的话落点会在原点周围的环上:主压方向 0° + 船在 +X 700,离场心远得多
+      // 以原点算的话落点会在原点周围的环上:主压方向 0° + 船在 +X 700,离原点远得多
       const fromCenter = Math.hypot(s.dx + w.ship.x, s.dy + w.ship.y);
       expect(fromCenter).toBeGreaterThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
-      expect(fromCenter).toBeGreaterThan(WORLD_RADIUS);
     }
 
-    // 再跑一会儿:敌人一直待在圈外也没被拉回来 —— 被拉回来的怪会在边界上排成一道墙,主压方向当场糊掉
+    // 再跑一会儿:没有任何"边界"把敌人往里拉 —— 被拉回来的怪会排成一道墙,主压方向当场糊掉
     for (let i = 0; i < 30; i++) w.step();
-    const far = w.enemies.items.filter((e) => Math.hypot(e.x, e.y) > WORLD_RADIUS);
+    const far = w.enemies.items.filter((e) => Math.hypot(e.x, e.y) > 1200);
     expect(far.length).toBeGreaterThan(0);
+  });
+
+  it('被甩开的敌人沿船心镜像重投到出怪环上(无限地图的防风筝),插值两端都在新位置', () => {
+    tuning.stressSpawn = true;
+    tuning.stressEnemies = 1;
+    onlyKind(KIND_SWARM);
+    const w = new World(44);
+    w.step();
+    const e = w.enemies.items[0]!;
+
+    // 手动把它甩到船(0,0)正后方、越过触发线一段。清掉出生时的杂向速度:
+    // 这条用例钉的是"重投落点在 +X 轴上",不该让上一帧的惯性把 y 抹出一小截
+    e.x = -(ENEMY_FALLBEHIND_RADIUS + 200);
+    e.y = 0;
+    e.vx = 0;
+    e.vy = 0;
+    w.step();
+
+    // 镜像:从 -X 翻到 +X,半径回到出怪环内沿(这一帧它还会按惯性/转向挪一小步,容差按一帧位移给)
+    const stepLen = (ENEMIES[KIND_SWARM]!.speed * tuning.enemySpeedScale) / 60 + 1;
+    expect(e.x).toBeGreaterThan(0);
+    expect(Math.abs(e.y)).toBeLessThan(1e-6);
+    const d = Math.hypot(e.x - w.ship.x, e.y - w.ship.y);
+    expect(d).toBeGreaterThan(ENEMY_REJOIN_RADIUS - stepLen);
+    expect(d).toBeLessThan(ENEMY_REJOIN_RADIUS + stepLen);
+    // px/py 也落在重投点上:渲染插值不会画出一条横跨全屏的拖影
+    expect(Math.hypot(e.px - w.ship.x, e.py - w.ship.y)).toBeCloseTo(ENEMY_REJOIN_RADIUS, 6);
+
+    // 压着触发线内侧的绝不误伤:只挪正常的一步,不会被重投回 1150 的环上
+    e.x = ENEMY_FALLBEHIND_RADIUS - 10;
+    e.y = 0;
+    e.vx = 0;
+    e.vy = 0;
+    w.step();
+    expect(Math.hypot(e.x, e.y)).toBeGreaterThan(ENEMY_FALLBEHIND_RADIUS - 10 - stepLen);
   });
 
   it('onEnemySpawn 与 onEnemyDeath 对称:每成功出一只当场响一次,回调里拿到的是填好的那只', () => {
@@ -1891,8 +1932,13 @@ describe('船体 HP 与受击结算(09 号 T1/T2)', () => {
     const w = hullWorld(52);
     const e = w.enemies.items[0]!;
     const def = ENEMIES[KIND_SWARM]!;
-    // 核心区之外、甲板轮廓之内。位置由 classifyHit 当场自证,不靠断言里手抄的数
-    park(e, 70, 0);
+    // 核心区之外、甲板轮廓之内 —— 位置从 sim 自己的两个半长**推**出来,不手抄 px
+    // (船体尺寸是 tuning 的旋钮,写死一个数,改一次船型这里就红一次):
+    // 核心带 = core.x + radius,轮廓带 = hull.x + radius,取两者中点必落在擦碰带里。
+    // 位置最终仍由 classifyHit 当场自证
+    const core = hullCoreHalfExtents(halfOut).x;
+    const hull = deckHalfExtents(w.deck, halfOut).x;
+    park(e, (core + hull) / 2 + def.radius, 0);
     const full = w.ship.hp;
 
     w.step();
@@ -1902,8 +1948,9 @@ describe('船体 HP 与受击结算(09 号 T1/T2)', () => {
     expect(fxKinds(w)).not.toContain(FXV_HULL_HIT);
     expect(w.edgePenalty).toEqual([0, 0, 0, 0]); // 没结算就不闪红:擦碰不是"挨打"
 
-    // 再挪到甲板轮廓之外:粗筛名单里还有它(超集),但一层都没碰上 → 连火花都不出
-    park(e, 90, 0);
+    // 再挪到甲板轮廓之外:粗筛名单里还有它(超集),但一层都没碰上 → 连火花都不出。
+    // 位置同样推出来:轮廓带之外一点点,又没出粗筛圆(deckOuterRadius + radius×√2)
+    park(e, hull + def.radius + 4, 0);
     e.hitCd = 0;
     w.step();
     expect(classifyHit(w.ship, w.deck, e.x, e.y, def.radius)).toBe(HIT_NONE);
@@ -2354,11 +2401,12 @@ describe('残骸掉落接线(10 号 T1:死了掉残骸,磁吸收进 scrap)', () 
     tuning.stressEnemies = 2;
     const w = new World(36);
     w.step();
-    // 手工把池灌满(靠真打死 1200 只怪去凑是几万帧的事);摆在起吸半径之外,免得被顺手收走
+    // 手工把池灌满(靠真打死 1200 只怪去凑是几万帧的事);摆在起吸半径之外,免得被顺手收走 ——
+    // 但得在离场剔除半径(DROP_CULL_RADIUS)之内,不然这一池"占位残骸"当帧就被清光了
     for (let i = 0; i < DROP_MAX_ALIVE; i++) {
       const d = w.drops.spawn();
-      d.x = d.px = 5000 + i;
-      d.y = d.py = 5000;
+      d.x = d.px = 500 + (i % 97);
+      d.y = d.py = 500;
       d.value = 1;
     }
 

@@ -11,7 +11,8 @@
  * 容器每帧只吃插值后的 position/rotation —— 于是"甲板与船体一同旋转"是结构上必然成立的,
  * 而不是靠两处变换算得一样。逐格用 cellWorldPos 摆 12 个 Graphics 也能画出同一幅画面,
  * 但那等于每帧重做一遍船体变换,格与格之间还会各自吃到浮点误差而抖动。
- * 11 号起甲板分两档:战斗远景只留按型色块、朝向与开火闪光；Tab / 时停放大再补射界、连线与节流细节。
+ * 甲板分两档:战斗态船与敌人同尺度,只留船壳图、模块贴图、船头标识与开火/受击反馈;
+ * 升级时停或按住 Tab 才进甲板视图(按外接圆放大到占屏 ~60%),补上格子、射界、连线与节流细节。
  *
  * 射界叠加层(04 号 issue,按住 Tab):同样挂在 deckG 里、同样只画局部几何,
  * 于是"扇形随船实时旋转"与"甲板随船旋转"是同一件事,不可能差一帧。
@@ -57,12 +58,12 @@
  * 而被吸住的残骸每秒跑 300px(比船的巡航还快一倍),不插值在 144Hz 屏上就是一串跳点,
  * 偏偏"残骸飞进船里"是玩家每隔几秒就要看一次的正反馈(铁律 2)。
  *
- * 时停放大(GDD §11 / 10 号 issue T4:三选一 → 时停 → 甲板放大 30% + 合法格高亮):
- * setDeckZoom **只动 deckG.scale,绝不动镜头** —— 镜头一缩放,虫潮与场地边界圈会跟着变大,
- * 玩家会以为世界也变了;而放大 deckG,挂在它下面的合法格高亮与射界扇形天然一起放大,
- * 那正是这一刻唯一要看清的东西。于是拾格子也必须改走 screenToDeckLocal(deckG.toLocal):
- * 老的 screenToWorld + cellIndexAtWorld 那条路的公式里没有这一档缩放,ui 层想自己补上
- * 就等于又抄一份镜头/缩放公式 —— 两处必然走散,而走散的样子恰恰是"看到的高亮框与
+ * 甲板视图(升级时停 / 按住 Tab):setDeckZoom 只立"要不要视图"的意图,倍数按甲板外接圆
+ * 现算(deckViewZoom),缩放**乘进镜头 scale(worldLayer)整体拉近** —— 只放大 deckG 的话,
+ * 射界扇形/弹道/光效仍按未放大的世界坐标画,"可视化 = 可命中区域"(04 号口径)当场破掉;
+ * 镜头整体拉近则甲板与世界共用同一个变换,几何关系永远诚实。
+ * 拾格子一律走 screenToDeckLocal(deckG.toLocal):镜头/缩放公式只在渲染层存一份,
+ * ui 层自己补一份就是两处必然走散的真相 —— 走散的样子恰恰是"看到的高亮框与
  * 点下去的格差一截":玩家只会觉得这游戏点不准,而不会觉得是缩放算错了。
  */
 import {
@@ -72,6 +73,7 @@ import {
   Particle,
   ParticleContainer,
   Rectangle,
+  Sprite,
   type Texture,
 } from 'pixi.js';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
@@ -96,7 +98,7 @@ import {
 } from '../data/towers';
 import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
-import { hullCoreHalfExtents } from '../sim/damage';
+import { deckOuterRadius, hullCoreHalfExtents } from '../sim/damage';
 import {
   canPlace,
   canWeldPiece,
@@ -134,8 +136,9 @@ import { lerpAngle, type Vec2 } from '../sim/ship';
 import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
 import type { Bullet, Enemy, World } from '../sim/world';
-import { WORLD_RADIUS } from '../sim/world';
+import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
+import { Starfield } from './starfield';
 
 /** 未使用粒子的"停车位":粒子只增不删,多余的挪出视野(避免运行期增删 GPU 缓冲) */
 const OFFSCREEN = 1e6;
@@ -163,22 +166,38 @@ const DROP_EDGE_WIDTH = 1.2;
  */
 const DROP_RADIUS = 5;
 
+// —— 甲板局部几何的尺度基准 ——
+// 船缩到与敌人同档(tuning.shipLength 48,格边长 12)之后,甲板上的线宽/间距/读数
+// 一律**按格边长等比**,不再写死绝对 px:同一套比例在战斗态(整船几十 px)与甲板视图
+// (放大 7~9 倍)下都成立 —— 写死 px 的话,视图里 3.5px 的弹夹条会被放大成一根 30px 的杠。
+// tuning.shipLength 本就不热调(见 config 注释:渲染器构造时一次性读取),模块加载时算一次即可。
+const CELL = deckCellSize();
+
 // —— 甲板配色:我方一律冷色域(GDD §12),三种格状态靠明度 + 蓝↔青的色相分开 ——
 // 空格沿用船体本色:空格就是"还没装东西的船体",不该比装了东西的格更抢眼。
 const DECK_EMPTY_FILL = SHIP_FILL;
 const DECK_WEAPON_FILL = 0x3d78b8; // 武器塔:更亮的冷蓝
 const DECK_SUPPORT_FILL = 0x2c7f76; // 支援设施:冷青,与武器塔同为冷色但色相分得开
 const DECK_GRID_COLOR = 0x4d7ea8; // 格线:压在填充与轮廓之间的中间调,只交代"这里是分格的"
-const DECK_GRID_WIDTH = 1.5;
+const DECK_GRID_WIDTH = CELL * 0.04;
+/** 底色保留类型色，但让下面的舰壳铆钉与装甲分区透出来，不再像十二块纯色方砖。 */
+const DECK_CELL_FILL_ALPHA = 0.62;
 /** 离线格(见 sim/deck 的 online 口径:武器塔失去全部暴露边)一律去色 + 压暗,一眼看出它是死的 */
 const DECK_OFFLINE_FILL = 0x3a4048;
 const DECK_OFFLINE_ALPHA = 0.35;
 /** 格与格之间留缝:不留缝时相邻格的描边会叠成一条粗线,3×4 看上去就成了一整块 */
-const DECK_CELL_GAP = 2;
-const DECK_HULL_WIDTH = 2.5;
+const DECK_CELL_GAP = CELL * 0.055;
+/** 生成模块图在格内占据的最长边(× 格边长);留下格线和节流读数的呼吸空间。 */
+const DECK_MODULE_SIZE = 0.88;
+/** fal.ai 候选图的正面朝纹理上方(-Y),而甲板局部 0 弧度朝船头(+X),两者相差 90°。 */
+const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
+/** 舰壳比初始 3×4 甲板略大一圈，露出装甲侧裙、推进器和舰艏。 */
+const SHIP_HULL_LENGTH_PAD = 0.72;
+const SHIP_HULL_WIDTH_PAD = 0.45;
+const DECK_HULL_WIDTH = CELL * 0.067;
 /** 船头亮边 + 艏尖:快速转向时头尾必须一眼分得清(T3 验收口径),故给最亮的一档冷白 */
 const DECK_BOW_COLOR = 0xdff2ff;
-const DECK_BOW_WIDTH = 4;
+const DECK_BOW_WIDTH = CELL * 0.107;
 /**
  * 艏尖三角的长与半宽(× 格边长)。它是**纯装饰**,故意伸出甲板前沿一点点 ——
  * 甲板本身已经占满 tuning 声明的包围盒(deckCellSize 取两轴较小值),想让尖头露在外面只能超出去。
@@ -192,32 +211,43 @@ const DECK_PROW_HALF_W = 0.42;
 const DECK_HILITE_OK = 0x9adcff;
 const DECK_HILITE_DENY = 0xff7a6b;
 /** 高亮矩形相对格边的内缩:留出底板格线,免得高亮把格子边界糊掉 */
-const DECK_HILITE_PAD = 4;
+const DECK_HILITE_PAD = CELL * 0.107;
 const DECK_HILITE_FILL_ALPHA = 0.16; // 薄薄一层:合法格要看得出"能放",但不能盖掉格子本身的状态色
-const DECK_HILITE_WIDTH = 2;
-const DECK_HOVER_WIDTH = 3; // 悬停格比其它合法格粗一档:光标在哪一格必须无歧义
+const DECK_HILITE_WIDTH = CELL * 0.055;
+const DECK_HOVER_WIDTH = CELL * 0.08; // 悬停格比其它合法格粗一档:光标在哪一格必须无歧义
 const DECK_DENY_FILL_ALPHA = 0.22;
 
-// —— 时停放大(GDD §11 / 10 号 issue T4)——三选一弹卡的那几秒里,甲板是玩家唯一要看的东西 ——
+// —— 甲板视图(升级时停 / 按住 Tab)——战斗中船与敌人同档大小,甲板细节根本看不清也不该看:
+// 格子、读数、射界只在这两个场景里放大展示,平时画面上就是一艘小船在虫潮里打(用户口径:
+// "只有升级或主动打开甲板设置时才展示甲板")。
 /**
- * 放大档位:1.3 = GDD §11 明写的"甲板放大 30%"。只作用在 deckG 上(见 setDeckZoom):
- * 格子、合法格高亮、射界扇形、节流读数全挂在它下面,一并放大 —— 而虫潮、场地边界圈、
- * DOM HUD 一个都不跟着变,于是"世界停住了、镜头没动,只有我这块甲板凑到眼前来"这句话
- * 在画面上是自明的。
+ * 甲板视图里,甲板外接圆**直径**占屏幕短边的比例。放大倍数不再是写死的档位,
+ * 而是每帧按 deckOuterRadius 现算(见 deckViewZoom):12 号焊出更大的船,视图自动缩一点,
+ * 整船永远完整落在屏幕里 —— 写死倍数的话,扩建三次之后甲板就伸出屏幕外了。
+ * 缩放乘进镜头 scale(worldLayer)整体拉近(理由见文件头与 sync):甲板、敌人、弹道、
+ * 射界共用同一个变换,视图里的几何关系永远诚实;DOM HUD 不在 worldLayer,照旧不动。
  */
-const DECK_ZOOM = 1.3;
+const DECK_VIEW_FRACTION = 0.6;
 /**
  * 缩放的指数缓动时间常数(秒)。**短促**是要点:它是"世界停了,轮到你摆甲板"的一记转场,
  * 不是一段动画 —— 拖长了玩家每次升级都得先干等它放完(一局要等十几次)。
- * 缓动只改 deckG.scale;拾格子一律走 deckG.toLocal(见 screenToDeckLocal),
+ * 缓动只改镜头 scale;拾格子一律走 deckG.toLocal(见 screenToDeckLocal),
  * 于是缓动走到一半点下去,"看到的高亮框"与"点中的格"仍然是同一格:两者读的是同一个变换本身。
  */
-const DECK_ZOOM_TAU = 0.06;
+const DECK_ZOOM_TAU = 0.08;
 /**
  * 与目标差到这一档以内就直接吸附。指数缓动永远只是逼近,不吸附就等于往后每一帧都在
- * 给 scale 写一个肉眼看不出差别的新值(而 deckG 的变换一改,它下面七层子层的世界变换全要重算)。
+ * 给镜头 scale 写一个肉眼看不出差别的新值(worldLayer 的变换一改,底下全部子层都要重算)。
  */
 const DECK_ZOOM_EPS = 0.002;
+
+// —— 屏幕空间远景 —— 背景不进 worldLayer，否则会跟战场等比缩放，星云看起来贴在虫群脚下。
+/** 多留一圈画面给缓慢视差位移，任何窗口比例下都不露底。 */
+const BACKGROUND_OVERSCAN = 1.12;
+/** 视差只占屏幕很小一档：交代航行感，但不能让静态远景抢走战斗运动。 */
+const BACKGROUND_PARALLAX = 0.025;
+const BACKGROUND_PARALLAX_FREQ = 0.0007;
+const BACKGROUND_ALPHA = 0.9;
 
 // —— 射界叠加层(04 号 issue,按住 Tab):我方冷色域(GDD §12),与弹道/合法格同一支蓝 ——
 // 扇形是"这一片我打得到"的读数而不是实体,故填充压到极淡的一层、边界靠描边交代:
@@ -225,10 +255,10 @@ const DECK_ZOOM_EPS = 0.002;
 const DECK_ARC_COLOR = 0x9adcff;
 const DECK_ARC_FILL_ALPHA = 0.1;
 const DECK_ARC_STROKE_ALPHA = 0.45;
-const DECK_ARC_WIDTH = 1.5;
+const DECK_ARC_WIDTH = CELL * 0.04;
 /** 炮口线取比扇形更亮一档的冷白(与船头标识同色):它是"炮管归位"在画面上唯一看得见的东西 */
 const DECK_MUZZLE_COLOR = 0xdff2ff;
-const DECK_MUZZLE_WIDTH = 3;
+const DECK_MUZZLE_WIDTH = CELL * 0.08;
 /** 炮口线长度(× 格边长):够伸出格外半格,不至于整条埋在格子自己的填充色里 */
 const DECK_MUZZLE_LEN = 1;
 
@@ -240,7 +270,7 @@ const DECK_MUZZLE_LEN = 1;
 // 色相取该设施自己的 tint(与它的格填充同色,见 deckCellFill)⇒ "这条线是哪种设施给的"不用猜;
 // **逐对 stroke** 而不是把全部配对攒成一条 path:两条半透明的线叠在一起会更亮,
 // 那正是"两座弹药库夹一门机炮 = 加成连乘"的读数;攒成一条 path 只会平铺成一个 alpha,叠加当场看不见。
-const DECK_LINK_WIDTH = 2;
+const DECK_LINK_WIDTH = CELL * 0.055;
 /**
  * 不给满 1:连线是**叠在**甲板上的一层读数,压过格子本身的状态色就喧宾夺主了;
  * 半透明同时是"多来源叠加"那条读数的载体(见上),给满就再也叠不出亮度差。
@@ -248,7 +278,7 @@ const DECK_LINK_WIDTH = 2;
 const DECK_LINK_ALPHA = 0.6;
 /** 受益塔那一端的小实心圆:线有两个端点,没有它就读不出加成是**从哪一格流向哪一格**。
  *  只点在塔这一头 —— 支援格那一头本来就长着设施自己的整块色 */
-const DECK_LINK_DOT_R = 3;
+const DECK_LINK_DOT_R = CELL * 0.08;
 
 // —— 装甲舱:它不作用于相邻塔,故**一条连线都不画**(画了就是误导),改用两条自己的读数 ——
 //   ① 格内一个盾形图标 = "这一格在给船体加 HP",判据是 def.hullHp > 0 —— 与 sim/damage 的
@@ -260,7 +290,7 @@ const DECK_LINK_DOT_R = 3;
 // 舷线与 09 号的被撞舷闪红长在**同一批边**上,靠色域(冷 vs 暖红)与线宽两条通道分开:
 // 前者是"这一舷有护甲"的常驻读数,后者是"这一舷刚挨了一下"的半秒回执 ——
 // 闪红更宽、又压在更上层,挨打那半秒理应由它说话:那一刻要读的是伤害,不是护甲。
-const DECK_ARMOR_EDGE_WIDTH = 3.5;
+const DECK_ARMOR_EDGE_WIDTH = CELL * 0.094;
 const DECK_ARMOR_EDGE_ALPHA = 0.9;
 /**
  * 舷线从格边**往里缩**这么多(世界 px),而不是正压在边上。
@@ -269,14 +299,14 @@ const DECK_ARMOR_EDGE_ALPHA = 0.9;
  * 而"头尾一眼分得清"是 03 号立下的验收口径,不该被 06 号的一条读数换掉。
  * 缩进去之后它读成"沿这一舷内壁铆的一层甲",三条线(轮廓 / 装甲 / 闪红)各在各的位置上共存。
  */
-const DECK_ARMOR_EDGE_INSET = 3;
+const DECK_ARMOR_EDGE_INSET = CELL * 0.08;
 // 舷线的颜色见下方的 DECK_ARMOR_EDGE_COLOR(它取冷白 FX_CORE_COLOR,得等那个常量先声明)
 /** 盾形图标的半长(沿船长)/半宽(沿舷宽),× 格边长 */
 const DECK_SHIELD_HALF_H = 0.22;
 const DECK_SHIELD_HALF_W = 0.17;
 /** 盾尖那一段的收腰位置(× 半长):肩到腰是直的,腰到尖才收 —— 少了它盾就退化成一个三角形 */
 const DECK_SHIELD_WAIST = 0.25;
-const DECK_SHIELD_WIDTH = 1.8;
+const DECK_SHIELD_WIDTH = CELL * 0.048;
 /** 盾用冷白描边 + 极淡填充:格填充已经是这块设施自己的 tint(见 deckCellFill),
  *  图标再用同色就等于画在自己身上 —— 只有比它亮一档才认得出这是个图标 */
 const DECK_SHIELD_FILL_ALPHA = 0.18;
@@ -292,8 +322,8 @@ const DECK_SHIELD_FILL_ALPHA = 0.18;
 // 三个锚点在画面上的样子,一眼分不出三件事,06 号就没法让玩家看出自己加成到了哪一套。
 // 整层画在**甲板局部空间**(与格子同一套坐标),跟着船转:读数长在它所属的那一格上,不会飘。
 /** 读数与格边的间距:留出底板格线,免得读数糊在格子边界上(与 DECK_HILITE_PAD 同一条取舍) */
-const THR_PAD = 4.5;
-const THR_BAR_THICK = 3.5;
+const THR_PAD = CELL * 0.12;
+const THR_BAR_THICK = CELL * 0.094;
 /** 槽底:比任何格填充都暗一档 —— 空槽也要看得出"这里有一条读数",否则弹药打空 = 读数消失 */
 const THR_TRACK_COLOR = 0x0a1626;
 const THR_TRACK_ALPHA = 0.55;
@@ -305,13 +335,13 @@ const THR_RELOAD_ALPHA = 0.5;
  */
 const THR_OVERHEAT_BLINK_HZ = 6;
 const THR_RING_RADIUS = 0.3; // 充能环半径(× 格边长)
-const THR_RING_WIDTH = 3;
+const THR_RING_WIDTH = CELL * 0.08;
 const THR_RING_TRACK_ALPHA = 0.5;
 /** 满充的芯线:"可以放了"必须与"快满了"一眼分开,否则充能塔看上去永远在原地转圈 */
-const THR_RING_FULL_WIDTH = 1.5;
+const THR_RING_FULL_WIDTH = CELL * 0.04;
 /** 等级点(GDD §5.4 的 Lv1→Lv5):半径与间距,5 个点排下来仍在一格之内 */
-const THR_LEVEL_DOT_R = 1.7;
-const THR_LEVEL_DOT_GAP = 4.6;
+const THR_LEVEL_DOT_R = CELL * 0.046;
+const THR_LEVEL_DOT_GAP = CELL * 0.123;
 
 // —— 开火表现(05 号 issue T5)——四类瞬时表现的可辨识度靠**各绑一条形变通道**,而不只是换个颜色:
 // 色相已经被"哪座塔打的"占用了(一律取 def.tint,于是弹与光效同源、玩家认得出是哪门炮),
@@ -373,11 +403,11 @@ const FX_MUZZLE_CORE_RADIUS = 2.3;
  */
 const HULL_HIT_COLOR = 0xff5a48;
 /** 闪红的线宽比船体轮廓(DECK_HULL_WIDTH)粗一档:它要盖住那条冷色轮廓线,而不是并排画在旁边 */
-const HULL_HIT_WIDTH = 5;
+const HULL_HIT_WIDTH = CELL * 0.134;
 /** 惩罚满格时的不透明度。不给满 1:闪红是"叠在船体上的一层伤",不该把那一舷的轮廓整条替换掉 */
 const HULL_HIT_ALPHA = 0.85;
 /** 判定体轮廓(按住 Tab):细线 + 半透明 —— 它是叠在甲板上的调试读数,不许压过格子本身的状态色 */
-const HULL_CORE_WIDTH = 2;
+const HULL_CORE_WIDTH = CELL * 0.055;
 const HULL_CORE_ALPHA = 0.7;
 
 /**
@@ -534,6 +564,24 @@ function buildEnemyShape(def: EnemyDef): Graphics {
 }
 
 /**
+ * 生成敌图已经裁成同尺寸方图，这里只决定四型在世界里的最长视觉边。
+ * 比碰撞直径略大是有意的：原灰盒的箭头/胶囊本来也伸出碰撞圆，细节图若严格缩到 2r，
+ * 在当前“船占屏高 20%”的战斗镜头下会糊成一个有颜色却没轮廓的小点。
+ */
+function generatedEnemySpan(def: EnemyDef): number {
+  switch (def.shape) {
+    case 'circle':
+      return def.radius * 2.4;
+    case 'arrow':
+      return def.radius * 3;
+    case 'capsule':
+      return def.radius * 3.4;
+    case 'hex':
+      return def.radius * 2.8;
+  }
+}
+
+/**
  * 按塔型生成子弹剪影。**一律取圆对称的轮廓**,不用拉长的弹丸 ——
  * 粒子的 rotation 是静态属性(取舍见构造函数里那段:每帧为 500 颗重传旋转,买的只是一个小块的朝向),
  * 拉长的形状于是会在除 +X 外的任何飞行方向上指错,反倒骗人。朝向信息本来就由弹道自己交代(它在动),
@@ -614,11 +662,19 @@ function deckCellFill(cell: DeckCell): number {
 export class Renderer {
   readonly app: Application;
   private world: World;
+  /** 屏幕空间远景：覆盖画布并做极轻视差，不参与战场镜头缩放。加载失败则只留 app 底色。 */
+  private backgroundSprite: Sprite | null;
   private worldLayer = new Container();
   /** 下标 === EnemyKind(与 ENEMIES 同序);每型一个容器,理由见构造函数里的取舍说明 */
   private enemyPcs: ParticleContainer[] = [];
   private enemyParticles: Particle[][] = [];
   private enemyTextures: Texture[] = [];
+  /** 生成图自带暖色时取白色；程序化灰阶兜底仍取 enemyTint。全部只在建粒子时上传一次。 */
+  private enemyTextureTints: number[] = [];
+  /** 生成图是 128 方图，按各型的世界视觉尺寸静态缩放；程序化纹理恒为 1。 */
+  private enemyTextureScales: number[] = [];
+  /** 生成图的正面朝 -Y，程序化箭头朝 +X；逐型记偏移，热路径不再分支查纹理来源。 */
+  private enemyRotationOffsets: number[] = [];
   /** 每帧复用的分桶数组:清空只用 length=0,绝不新建(运行期零分配,铁律 3) */
   private enemyBuckets: Enemy[][] = [];
   /**
@@ -654,7 +710,16 @@ export class Renderer {
   private telegraphG: Graphics;
   /** 甲板容器:子层几何全在船体局部空间,它自己每帧只吃插值位姿(见文件头) */
   private deckG = new Container();
+  /** 固定核心舰壳图：只承载装甲侧裙/推进器；真正可扩建的轮廓仍由 deckBaseG 按 occupied 绘制。 */
+  private deckHullArtG = new Container();
+  /** 舰壳图是否加载成功:战斗态底板据此决定要不要为(全部/扩建)格补船体底色(见 drawDeckBase) */
+  private hasHullArt = false;
   private deckBaseG = new Graphics();
+  /** 生成的塔/设施图层：随 deck.revision 重建，塔身旋转每帧只改已有 Sprite。 */
+  private deckModuleG = new Container();
+  private deckTurretSprites: { sprite: Sprite; cell: DeckCell }[] = [];
+  private towerTextures: readonly (Texture | null)[];
+  private supportTextures: readonly (Texture | null)[];
   /** 放置高亮:压在底板之上,否则合法格的半透明色块会被格子填充盖掉 */
   private deckHiliteG = new Graphics();
   /**
@@ -703,13 +768,19 @@ export class Renderer {
   private hiliteDrawn = false;
   /**
    * 甲板缩放的**当前值**与**目标档位**(10 号 issue T4 的时停放大)。分成两个数是为了缓动:
-   * setDeckZoom 只立目标(它是流程事件,一次性),sync 每渲染帧把当前值朝目标推一段(见 stepDeckZoom)。
-   * 两个都从 1 起步 —— 战斗中甲板就是原尺寸,放大只在弹卡的那几秒里存在。
+   * 目标由 sync 每帧按"要不要甲板视图"现算(见 deckViewZoom),当前值朝它缓动(见 stepDeckZoom)。
+   * 两个都从 1 起步 —— 战斗中甲板就是原尺寸,放大只在升级时停 / 按住 Tab 的那几秒里存在。
    * 计时/相位全在渲染层自持,与 broadside 那一组同一条理由:它纯是表现,
    * 进了 sim 就等于让确定性回放为一次镜头动画负责(铁律 1 的边界画在这儿)。
    */
   private deckZoom = 1;
   private deckZoomTarget = 1;
+  /** 流程侧(main 的升级时停)是否要求甲板视图。与按住 Tab 的 arcOverlay 在 sync 里取或 */
+  private deckViewRequested = false;
+  /** 底板当前画的是哪一档(战斗简化版 / 甲板视图详细版):模式翻转也要触发底板重建 */
+  private deckBaseDetailed = false;
+  /** 程序化星野(无限地图的方位参照,接替旧的场地边界圈)。变换由 sync 与镜头同步 */
+  private readonly starfield = new Starfield();
   /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab'),放置态会在 sync 内并入同一 detailed 状态 */
   private arcOverlay = false;
   /** 详细射界上一帧是否画过:退出 Tab/放置时 clear 一次即可(照 hiliteDrawn 的写法) */
@@ -750,20 +821,37 @@ export class Renderer {
       resolution: 1, // 压测口径:1x 分辨率(GDD §13 中端核显预算)
       preference: 'webgl',
     });
+    const generatedArt = await loadGeneratedArt();
     document.getElementById('game')!.appendChild(app.canvas);
-    return new Renderer(app, world);
+    return new Renderer(app, world, generatedArt);
   }
 
-  private constructor(app: Application, world: World) {
+  private constructor(app: Application, world: World, generatedArt: GeneratedArtTextures) {
     this.app = app;
     this.world = world;
+    this.backgroundSprite = generatedArt.background ? new Sprite(generatedArt.background) : null;
+    this.towerTextures = generatedArt.towers;
+    this.supportTextures = generatedArt.supports;
 
-    const bounds = new Rectangle(
-      -WORLD_RADIUS * 2,
-      -WORLD_RADIUS * 2,
-      WORLD_RADIUS * 4,
-      WORLD_RADIUS * 4,
-    );
+    if (this.backgroundSprite) {
+      this.backgroundSprite.anchor.set(0.5);
+      this.backgroundSprite.alpha = BACKGROUND_ALPHA;
+    }
+
+    this.hasHullArt = !!generatedArt.shipHull;
+    if (generatedArt.shipHull) {
+      const hull = new Sprite(generatedArt.shipHull);
+      const size = deckCellSize();
+      hull.anchor.set(0.5);
+      hull.width = tuning.shipLength + size * SHIP_HULL_LENGTH_PAD;
+      hull.height = tuning.shipWidth + size * SHIP_HULL_WIDTH_PAD;
+      this.deckHullArtG.addChild(hull);
+    }
+
+    // 地图无限,粒子容器的 boundsArea 给一个"永远罩住镜头"的巨矩形:它只是让 Pixi 免算
+    // 逐粒子包围盒,不参与任何逐粒子裁剪 —— 以前按 WORLD_RADIUS 取的话,船开出两个场半径
+    // 之外整个容器会被判在屏幕外,千只虫子一帧集体消失。
+    const bounds = new Rectangle(-1e8, -1e8, 2e8, 2e8);
     const dyn = { position: true, rotation: false, color: false };
 
     // —— 关键取舍:四型 = 四个 ParticleContainer,而不是塞进同一个容器按型换色/换形 ——
@@ -776,16 +864,29 @@ export class Renderer {
     // 是动态的,每帧只重传位置,tint 与纹理都退化成建粒子时上传一次的静态属性。
     for (let k = 0; k < ENEMIES.length; k++) {
       const def = ENEMIES[k]!;
-      // 2x 分辨率 + 抗锯齿:纹理只生成一次,拿一点显存换灰盒剪影的边缘可读性
-      const tex = app.renderer.generateTexture({
-        target: buildEnemyShape(def),
-        resolution: 2,
-        antialias: true,
-      });
+      const generatedTexture = generatedArt.enemies[k] ?? null;
+      // 单张加载失败时回到原有程序化剪影；回退是逐型的，不会因为一张坏图把四型一起撤掉。
+      const tex =
+        generatedTexture ??
+        app.renderer.generateTexture({
+          target: buildEnemyShape(def),
+          resolution: 2,
+          antialias: true,
+        });
       this.enemyTextures.push(tex);
+      this.enemyTextureTints.push(generatedTexture ? 0xffffff : enemyTint(def.kind));
+      this.enemyTextureScales.push(
+        generatedTexture ? generatedEnemySpan(def) / Math.max(tex.width, tex.height) : 1,
+      );
+      this.enemyRotationOffsets.push(generatedTexture ? GENERATED_ART_FORWARD_OFFSET : 0);
       // 显式把纹理绑在容器上(而不是听任它取第一个粒子的):让"一容器一纹理"这条约束写在明面上
       this.enemyPcs.push(
-        new ParticleContainer({ dynamicProperties: dyn, boundsArea: bounds, texture: tex }),
+        new ParticleContainer({
+          // 蜂群蛭数量最多且轮廓近圆，不为它上传看不出来的逐帧旋转；其余三型按真实速度转向。
+          dynamicProperties: { ...dyn, rotation: def.shape !== 'circle' },
+          boundsArea: bounds,
+          texture: tex,
+        }),
       );
       this.enemyParticles.push([]);
       this.enemyBuckets.push([]);
@@ -830,14 +931,12 @@ export class Renderer {
       texture: this.dropTexture,
     });
 
-    // 方位参照:镜头跟船后画面里没有不动的东西,靠场地边界圈才知道自己漂到哪了
-    const ring = new Graphics().circle(0, 0, WORLD_RADIUS).stroke({ width: 3, color: 0x1c2740 });
-
-    // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变),故与静态的边界圈分开
+    // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变)
     this.telegraphG = new Graphics();
 
-    // 灰盒船体 = 甲板本身:七个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
-    // 子层序:射界扇形(底衬)→ 底板 → 邻接连线(06 号:线要跨过格心,压在底板之下会被填充啃断)
+    // 船体 = 甲板本身:八个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 子层序:射界扇形(底衬)→ 底板 → 生成模块图 → 邻接连线
+    // (06 号:线要跨过格心,压在底板之下会被填充啃断)
     // → 被撞舷闪红(压住底板那条冷色轮廓线,否则等于没画)
     // → 炮口线(炮管长在甲板上,理应压住底板)
     // → 节流读数(压住炮口线:按住 Tab 时那条线正好横穿格心,把读数划掉就白画了)
@@ -847,7 +946,9 @@ export class Renderer {
     // 这里不建几何 —— 格子内容要等 sync() 的脏标记在首帧补上(deckRevision = -1)。
     this.deckG.addChild(
       this.deckArcG,
+      this.deckHullArtG,
       this.deckBaseG,
+      this.deckModuleG,
       this.deckLinkG,
       this.deckHitG,
       this.deckMuzzleG,
@@ -856,7 +957,7 @@ export class Renderer {
     );
     this.deckLinkG.visible = false;
 
-    // 层序:边界圈 → 前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
+    // 层序:前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
     // 不会被蜂群蛭糊掉)→ 残骸 → 弹 → 开火光效 → 甲板 → 炮口闪。
     // 指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
     // 光效排在弹之后、甲板之前:它是"这一发打出去了"的读数,压住敌人才看得见命中在谁身上,
@@ -867,14 +968,17 @@ export class Renderer {
     // 而"残骸正往船上飞"是这一局经济在转的唯一读数;压在弹与光效之上又会让自己的火力
     // 被一串小菱形点花 —— 它终究只是地上的材料,抢不过"我打中了谁"。
     // 一颗才 5px,盖在敌人剪影上也不至于让威胁读数打折。
-    this.worldLayer.addChild(ring, this.telegraphG);
+    this.worldLayer.addChild(this.telegraphG);
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
     this.worldLayer.addChild(this.dropPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     this.worldLayer.addChild(this.fxG, this.deckG, this.muzzleFxG);
     // 闪光片挂在 stage 最上层(屏幕空间),不进 worldLayer —— 理由见 flashG 的字段注释
     this.flashG.visible = false;
-    app.stage.addChild(this.worldLayer, this.flashG);
+    if (this.backgroundSprite) app.stage.addChild(this.backgroundSprite);
+    // 星野压在静态远景之上、世界层之下:它是世界锚定的方位参照(接替旧边界圈),
+    // 但终究是背景 —— 不许盖住任何实体
+    app.stage.addChild(...this.starfield.views, this.worldLayer, this.flashG);
   }
 
   /**
@@ -893,25 +997,46 @@ export class Renderer {
     // 朝向必须沿最短弧插值:线性插值一旦跨过 ±π 边界,船头会反向甩一整圈
     const sh = lerpAngle(ship.pheading, ship.heading, alpha);
 
-    // 镜头(GDD §3.3):缩放由"船占屏高 20%"反推,固定不变 ——
+    this.syncBackground(screen.width, screen.height, sx, sy);
+
+    // 甲板视图开关:流程侧的升级时停(setDeckZoom)或按住 Tab,二者任一都进同一套详细态 ——
+    // 缩放目标、底板详细档、连线/读数/射界的显隐全读这一个布尔,不会出现半套状态。
+    const wantDeckView = this.deckViewRequested || this.arcOverlay;
+
+    // 镜头(GDD §3.3):战斗态缩放由"船占屏高比例"反推,固定不变 ——
     // 随速度变焦会让"船身长度"这个唯一的距离参照失效,射界判断也就没了标尺。
-    const scale = (screen.height * tuning.cameraShipHeightFraction) / tuning.shipLength;
-    // 屏高比例换算回世界单位,于是 look-ahead 的实际观感与窗口大小无关
+    const baseScale = (screen.height * tuning.cameraShipHeightFraction) / tuning.shipLength;
+    // 甲板视图的放大倍数按当前甲板外接圆现算:扩建后的船也永远完整落在屏幕里
+    this.deckZoomTarget = wantDeckView ? this.deckViewZoom(baseScale) : 1;
+    // dt 取渲染帧的实际间隔(不是 SIM_DT):broadside 与缩放两条缓动都在渲染层自持,与逻辑帧率无关
+    const dt = Math.min(this.app.ticker.deltaMS / 1000, BROADSIDE_MAX_DT);
+    this.stepDeckZoom(dt);
+    // 甲板视图 = **整个 worldLayer 的镜头拉近**,不是只放大 deckG:
+    // 只放大甲板的话,射界扇形/弹道/光效仍按未放大的世界坐标画,扇形看着能罩住的敌人
+    // 实际距离是射程的好几倍 —— 04 号"可视化 = 可命中区域"的口径当场破掉。
+    // 镜头整体拉近则甲板、敌人、弹道、扇形共用同一个变换,几何关系永远诚实;
+    // 视图里虫潮跟着变大也是对的:那就是"凑近看自己的船",时停里它们本就冻结。
+    const scale = baseScale * this.deckZoom;
+    // 屏高比例换算回世界单位,于是 look-ahead 的实际观感与窗口大小无关。
+    // scale 已含视图缩放 ⇒ 拉近时镜头前推那一截(世界单位)自动同步归零,
+    // 放大后的甲板不会偏在屏幕后半区、上缘也不会伸出屏幕外
     const lookAhead = (screen.height * tuning.cameraLookAhead) / scale;
     this.worldLayer.scale.set(scale);
     // pivot 落在船前方 → 船被推到屏幕后半区,腾出的视野正是要转过去的方向
-    this.worldLayer.pivot.set(sx + Math.cos(sh) * lookAhead, sy + Math.sin(sh) * lookAhead);
+    const pivotX = sx + Math.cos(sh) * lookAhead;
+    const pivotY = sy + Math.sin(sh) * lookAhead;
+    this.worldLayer.pivot.set(pivotX, pivotY);
 
     // broadside 顿挫直接加在镜头的屏幕位置上:worldLayer 无旋转,故世界系的方向向量
     // 与屏幕系一一对应,不必再换算一次。screenToWorld 走的是 worldLayer.toLocal,
     // 于是抖动期间"光标底下是哪一格"依然算得对(那句注释里预留的"将来加震屏"就是这里)。
-    // dt 取渲染帧的实际间隔(不是 SIM_DT):这条计时器在渲染层自持,与逻辑帧率无关。
-    const dt = Math.min(this.app.ticker.deltaMS / 1000, BROADSIDE_MAX_DT);
     const kick = this.stepBroadside(dt, sh);
-    this.worldLayer.position.set(
-      screen.width / 2 + this.broadsideDirX * kick,
-      screen.height / 2 + this.broadsideDirY * kick,
-    );
+    const posX = screen.width / 2 + this.broadsideDirX * kick;
+    const posY = screen.height / 2 + this.broadsideDirY * kick;
+    this.worldLayer.position.set(posX, posY);
+
+    // 星野与镜头同一帧同一组变换(含顿挫):它是世界锚定的背景,镜头动它就得动
+    this.starfield.sync(scale, pivotX, pivotY, posX, posY, screen.width, screen.height);
 
     // 按型分桶:每帧单趟遍历,桶是复用数组(length=0 而不是新建),运行期零分配
     const buckets = this.enemyBuckets;
@@ -929,7 +1054,9 @@ export class Renderer {
       const bucket = buckets[k]!;
       this.syncParticles(this.enemyParticles[k]!, this.enemyPcs[k]!, bucket, {
         texture: this.enemyTextures[k]!,
-        tint: enemyTint(def.kind),
+        tint: this.enemyTextureTints[k]!,
+        scale: this.enemyTextureScales[k]!,
+        rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
         alpha,
       });
       this.drawTelegraph(bucket, def, alpha, TELEGRAPH_MAX_PER_KIND);
@@ -964,32 +1091,34 @@ export class Renderer {
     // 开火光效:瞬时判定的四类全在这一层。**不插值**(见 drawFx)
     this.drawFx();
 
-    // 甲板:底板只在 deck.revision 变了才重建,高亮层每帧现算(它跟着鼠标走)。
+    // 甲板:底板只在 deck.revision 变了或战斗/视图两档翻转时才重建,高亮层每帧现算(它跟着鼠标走)。
     // 容器只吃插值位姿,格子几何一律是局部坐标 —— 甲板与船体一同旋转由此成立(见文件头)
     const deck = this.world.deck;
-    if (deck.revision !== this.deckRevision) {
+    if (deck.revision !== this.deckRevision || wantDeckView !== this.deckBaseDetailed) {
       this.deckRevision = deck.revision;
-      this.drawDeckBase(deck);
+      this.deckBaseDetailed = wantDeckView;
+      this.drawDeckBase(deck, wantDeckView);
+      this.drawDeckModules(deck);
       // 邻接连线与底板同一个脏标记:两者都只在放置那一下变(见 deckLinkG 的字段注释)
       this.drawDeckLinks(deck);
     }
     this.deckG.position.set(sx, sy);
     this.deckG.rotation = sh;
-    // 时停放大(10 号 T4):缩放与位姿一起落到同一个容器上。dt 取的是上面那个渲染帧间隔 ——
+    // 甲板视图的缩放缓动在帧首、镜头 scale 落地之前就推完了(见上面的 stepDeckZoom 调用):
     // 时停期间 loop 不再推进(alpha 恒 0、世界一动不动),但 ticker 与 sync 照跑,
-    // 于是这段缓动仍然动得起来;它本就该是纯表现,与 sim 的时间无关
-    this.stepDeckZoom(dt);
+    // 于是这段缓动仍然动得起来;它本就该是纯表现,与 sim 的时间无关。
     // 甲板交互必须卡在**变换已落地、高亮还没画**的这一点重算:放在 main 的 sync 之前会读上一帧变换,
     // 放在 sync 之后又会让这一帧的框晚一帧。回调由 main 灌入,render 不反向 import ui。
     beforeDeckDraw?.();
-    // 战斗态只保留色块、炮口朝向与开火闪光；Tab 或放置态才恢复邻接、装甲、节流与射界。
-    // 所有详细子层读同一个布尔值，避免出现“松了 Tab 但装甲图标还挂着”的半套状态。
-    const deckDetailed = this.arcOverlay || this.deckZoomTarget > 1;
+    // 战斗态只留船壳、模块贴图、船头标识与开火/受击反馈;甲板视图才恢复格子、邻接、装甲、
+    // 节流与射界 —— 所有详细子层读同一个 wantDeckView,不会出现"松了 Tab 但装甲图标还挂着"。
+    const deckDetailed = wantDeckView;
     this.deckLinkG.visible = deckDetailed;
     this.drawDeckHit(deck);
     this.drawDeckHilite(deck);
     this.drawDeckThrottle(deck, deckDetailed);
     this.drawDeckArcs(deck, deckDetailed);
+    this.syncDeckModuleRotations();
 
   }
 
@@ -1027,8 +1156,8 @@ export class Renderer {
    * 是同一套坐标)。10 号 issue 的放置流一律走这一条拾格子。
    *
    * 为什么不接着用 screenToWorld + cellIndexAtWorld:那条路要在 ui 侧把"镜头缩放 → 船位姿"
-   * 这串变换重走一遍,而时停放大之后中间还多了一档 deckG.scale —— ui 层补上它就等于
-   * 又抄了一份镜头/缩放公式,两处迟早走散,而走散的样子恰好是**看到的高亮框与点中的格差一截**
+   * 这串变换重走一遍(甲板视图的拉近也在里面)—— ui 层自己抄一份镜头/缩放公式,
+   * 两处迟早走散,而走散的样子恰好是**看到的高亮框与点中的格差一截**
    * (那还是玩家花了残骸、正要把塔放下去的那一刻)。
    * 这里走 deckG.toLocal:镜头怎么变(缩放、broadside 震屏)、甲板放没放大、放大缓动走到哪一帧、
    * 船此刻转到什么角度 —— 全部由容器**当前的**世界变换自己交代,本方法与调用方一个字都不用改。
@@ -1042,17 +1171,31 @@ export class Renderer {
   }
 
   /**
-   * 时停放大开关(GDD §11 / 10 号 issue T4:三选一 → **时停** → 甲板放大 30% + 合法格高亮)。
-   * 只立一个目标档位,真正的缩放由 sync 每渲染帧缓动过去(见 stepDeckZoom)——
+   * 时停放大开关(GDD §11 / 10 号 issue T4:三选一 → **时停** → 甲板视图 + 合法格高亮)。
+   * 只立"要不要视图"这一个意图,倍数与缓动由 sync 每渲染帧现算(见 deckViewZoom / stepDeckZoom)——
    * 于是调用方(main.ts 的弹卡/结算那两句)不必关心动画,也绝不会在 UI 事件里直接写 scale。
    * 与 setPlacement / setArcOverlay 同一条依赖方向:流程状态由 main/ui 灌进来,
    * 渲染层不认识"时停"这件事,也不去碰 loop —— 冻结世界是 main + loop.halt 的活。
    */
   setDeckZoom(on: boolean): void {
-    this.deckZoomTarget = on ? DECK_ZOOM : 1;
-    // 开火事件的坐标属于开火那一刻的世界空间；时停后它的 life 不再衰减，而甲板还会继续放大。
-    // 进入放置详细态就立即清掉这层，避免一枚冻结闪光脱离塔身、永久压在选格界面上。
+    this.deckViewRequested = on;
+    // 开火事件的坐标属于开火那一刻的世界空间；时停后它的 life 不再衰减,而甲板还会继续放大。
+    // 进入放置详细态就立即清掉这层,避免一枚冻结闪光脱离塔身、永久压在选格界面上。
     if (on) this.muzzleFxG.clear();
+  }
+
+  /**
+   * 甲板视图的放大倍数:让甲板外接圆直径占屏幕短边的 DECK_VIEW_FRACTION。
+   * 每帧现算而不是进入视图时算一次:放置流程里就能焊拼块(甲板当场变大)、窗口也随时会变尺寸,
+   * 两者都该让倍数当帧跟上 —— deckOuterRadius 是十几格的一遍 hypot,热路径付得起。
+   * 下限夹在 1:空甲板(理论上不存在)或极端小屏也绝不会把甲板"缩小"进视图。
+   */
+  private deckViewZoom(scale: number): number {
+    const r = deckOuterRadius(this.world.deck);
+    if (r <= 0) return 1;
+    const screen = this.app.screen;
+    const fit = (Math.min(screen.width, screen.height) * DECK_VIEW_FRACTION) / (2 * r * scale);
+    return fit > 1 ? fit : 1;
   }
 
   /**
@@ -1084,11 +1227,11 @@ export class Renderer {
     this.flashG.visible = false;
     // 时停放大是**上一局那张卡片**留下的表现状态,新局一律从战斗态起步:
     // 调参面板的重开按钮在时停期间照样点得动(它不认识"正在弹卡"),不复位的话新船会带着
-    // 上一局的 1.3 倍甲板开出去,而那一局再也没有一次 setDeckZoom(false) 来关它。
+    // 上一局的甲板视图开出去,而那一局再也没有一次 setDeckZoom(false) 来关它。
     // **当场吸附、不缓动**:重开是"换一艘船",不是一次转场 —— 缩回去的那段动画属于上一局
+    this.deckViewRequested = false;
     this.deckZoom = 1;
     this.deckZoomTarget = 1;
-    this.deckG.scale.set(1);
   }
 
   /**
@@ -1119,10 +1262,12 @@ export class Renderer {
     ];
     try {
       for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = false;
-      // 2x + 抗锯齿:与敌人/子弹纹理同一条取舍 —— 静态图只生成一次,拿点显存换边缘可读性
+      // 8x + 抗锯齿:船缩到 48×36 世界 px 后,deckG 的 local bounds 只有 ~60×48 ——
+      // 还按 2x 烤,结算卡片上的"最终船形"就是一张 ~120px 的糊图。8x 出 ~480px,
+      // 够结算界面按 CSS 封顶缩着放;一局只截一次,显存代价可忽略(铁律 3 管的是热路径)
       const canvas = this.app.renderer.extract.canvas({
         target: this.deckG,
-        resolution: 2,
+        resolution: 8,
         antialias: true,
       });
       // toDataURL 在 ICanvas 上是**可选**方法(某些离屏 canvas 实现没有它):没有就当作抓不到
@@ -1157,9 +1302,14 @@ export class Renderer {
    * 轮廓照 sim 推导出的 exposed 位掩码逐边画,而不是照 3×4 的矩形写死 ——
    * 12 号扩建出非矩形甲板时,这段一个字都不用改(也顺手把"哪几条边算暴露"画给玩家看,
    * 而暴露边正是 04 号射界与"武器塔只能上边缘格"的依据)。
-   * 只在 deck.revision 变化时调用,故这里可以放心多跑几趟循环。
+   * 只在 deck.revision 或战斗/视图两档变化时调用,故这里可以放心多跑几趟循环。
+   *
+   * @param detailed 甲板视图才画格子填充与格线;战斗态的船与敌人同档大小,几十 px 里塞一张
+   *   3×4 网格只会糊成噪点 —— 战斗态只留船壳图、模块贴图、轮廓与船头标识,
+   *   "甲板"作为一套 build 界面只在升级时停 / Tab 里存在(用户口径,亦即 GDD §3.3
+   *   "细节留给船坞放大视图"的彻底版)。
    */
-  private drawDeckBase(deck: Deck): void {
+  private drawDeckBase(deck: Deck, detailed: boolean): void {
     const g = this.deckBaseG;
     g.clear();
     const size = deckCellSize();
@@ -1167,16 +1317,37 @@ export class Renderer {
     const inset = DECK_CELL_GAP / 2;
     const cells = deck.cells;
 
-    // 一、格子本体:按 content 上色,离线格灰显
-    for (let i = 0; i < cells.length; i++) {
-      const c = cells[i]!;
-      if (!c.occupied) continue; // 不属于船体的格不画:12 号扩建前恒为 true
-      const p = cellLocalPos(deck, c.col, c.row, localPos);
-      const fill = deckCellFill(c);
-      const a = c.online ? 1 : DECK_OFFLINE_ALPHA;
-      g.rect(p.x - half + inset, p.y - half + inset, size - DECK_CELL_GAP, size - DECK_CELL_GAP)
-        .fill({ color: fill, alpha: a })
-        .stroke({ width: DECK_GRID_WIDTH, color: DECK_GRID_COLOR, alpha: a });
+    // 一、格子本体:按 content 上色,离线格灰显。只在甲板视图里画(见方法注释)
+    if (detailed) {
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i]!;
+        if (!c.occupied) continue; // 不属于船体的格不画:12 号扩建前恒为 true
+        const p = cellLocalPos(deck, c.col, c.row, localPos);
+        const fill = deckCellFill(c);
+        const a = c.online ? 1 : DECK_OFFLINE_ALPHA;
+        g.rect(p.x - half + inset, p.y - half + inset, size - DECK_CELL_GAP, size - DECK_CELL_GAP)
+          .fill({ color: fill, alpha: a * DECK_CELL_FILL_ALPHA })
+          .stroke({ width: DECK_GRID_WIDTH, color: DECK_GRID_COLOR, alpha: a });
+      }
+    } else {
+      // 战斗态不画格子,但船必须仍有"身体":舰壳图的尺寸定死在初始 3×4 包围盒上,
+      // 12 号焊出去的扩建格在它覆盖范围之外 —— 不补底色的话,焊上去的甲板在战斗里只剩
+      // 一条发丝级轮廓,P3"船形即成长"在战斗画面上就消失了;舰壳图整张加载失败时,
+      // 整艘船同样靠这层底色兜住(generatedAssets 的兜底契约)。
+      // 不留格缝、不描格线:它是船身剪影的一部分,不是"甲板网格"——格子只属于甲板视图。
+      const halfLen = tuning.shipLength / 2;
+      const halfWid = tuning.shipWidth / 2;
+      let filled = 0;
+      for (let i = 0; i < cells.length; i++) {
+        const c = cells[i]!;
+        if (!c.occupied) continue;
+        const p = cellLocalPos(deck, c.col, c.row, localPos);
+        if (this.hasHullArt && Math.abs(p.x) < halfLen && Math.abs(p.y) < halfWid) continue;
+        g.rect(p.x - half, p.y - half, size, size);
+        filled++;
+      }
+      // 攒成一条 path 一次填充:同色同 alpha 的船身底色,不需要逐格表现
+      if (filled > 0) g.fill(SHIP_FILL);
     }
 
     // 二、船体轮廓 = 所有暴露边(船头那条除外,它归下面单独描)。攒成一条 path 只 stroke 一次
@@ -1231,6 +1402,67 @@ export class Renderer {
         bowX,
         bowY + w,
       ]).fill(DECK_BOW_COLOR);
+    }
+  }
+
+  /**
+   * 把生成的塔/设施图放进甲板格。只随 deck.revision 重建：放置、升级、焊接时才分配 Sprite；
+   * 平常战斗帧只由 syncDeckModuleRotations 改现有塔图的 rotation，设施图完全静态。
+   * 某一型贴图没加载到时,在同一层画一块按型色块兜底(generatedAssets 的契约:坏一张图
+   * 不该让那一格在画面上消失)—— 战斗态底板已不再画格子,这一层是该契约唯一的落点。
+   */
+  private drawDeckModules(deck: Deck): void {
+    const old = this.deckModuleG.removeChildren();
+    for (let i = 0; i < old.length; i++) old[i]!.destroy();
+    this.deckTurretSprites.length = 0;
+
+    const maxSize = deckCellSize() * DECK_MODULE_SIZE;
+    const cells = deck.cells;
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i]!;
+      if (!cell.occupied) continue;
+
+      let texture: Texture | null | undefined;
+      if (cell.content === CELL_WEAPON) texture = this.towerTextures[cell.towerType];
+      else if (cell.content === CELL_SUPPORT) texture = this.supportTextures[cell.supportType];
+      else continue;
+
+      const p = cellLocalPos(deck, cell.col, cell.row, localPos);
+      if (!texture) {
+        // 兜底色块:取该格的类型色(离线自动灰),尺寸与贴图同档 —— 只在放置/焊接那一下分配,
+        // 不进热路径(铁律 3 管的是逐帧)
+        const fb = new Graphics()
+          .rect(-maxSize / 2, -maxSize / 2, maxSize, maxSize)
+          .fill(deckCellFill(cell));
+        fb.position.set(p.x, p.y);
+        fb.alpha = cell.online ? 1 : DECK_OFFLINE_ALPHA;
+        this.deckModuleG.addChild(fb);
+        continue;
+      }
+      const sprite = new Sprite(texture);
+      sprite.anchor.set(0.5);
+      sprite.position.set(p.x, p.y);
+      sprite.scale.set(maxSize / Math.max(texture.width, texture.height));
+      sprite.rotation = GENERATED_ART_FORWARD_OFFSET;
+      sprite.alpha = cell.online ? 1 : DECK_OFFLINE_ALPHA;
+      if (!cell.online) sprite.tint = 0x8a929b;
+      this.deckModuleG.addChild(sprite);
+
+      if (cell.content === CELL_WEAPON) this.deckTurretSprites.push({ sprite, cell });
+    }
+  }
+
+  /**
+   * 塔图正面跟随 sim 的真实局部炮口角；世界朝向仍由 deckG.rotation 统一叠加。
+   * 只遍历已存在的塔 Sprite（满甲板也只是十几项），不创建临时对象、不重算格心。
+   */
+  private syncDeckModuleRotations(): void {
+    for (let i = 0; i < this.deckTurretSprites.length; i++) {
+      const binding = this.deckTurretSprites[i]!;
+      const cell = binding.cell;
+      const def = TOWERS[cell.towerType];
+      if (!def || !cellArc(cell, 0, towerArcDeg(def, cell.level), arcTmp)) continue;
+      binding.sprite.rotation = arcTmp.center + cell.turretOffset + GENERATED_ART_FORWARD_OFFSET;
     }
   }
 
@@ -1525,7 +1757,8 @@ export class Renderer {
       for (let col = deck.minCol - pad; col < deck.minCol + deck.cols + pad; col++) {
         if (canWeldPiece(deck, st.weldPieceType, st.weldRotation, col, row) !== WELD_OK) continue;
         const p = cellLocalPos(deck, col, row, localPos);
-        g.circle(p.x, p.y, Math.max(2, size * 0.08));
+        // 下限只兜零/负,不再写死 2px:焊接只发生在甲板视图里,锚点随格边长等比即可
+        g.circle(p.x, p.y, Math.max(0.5, size * 0.08));
         anchors++;
       }
     }
@@ -1838,9 +2071,11 @@ export class Renderer {
     g.clear();
     const muzzleG = this.muzzleFxG;
     muzzleG.clear();
-    // 放置时停会冻结 FxEvent 寿命，同时让甲板独自放大；恢复时 target 会先回 1、实际缩放还在缓动。
-    // 因此必须等实际甲板也回到战斗档才重新显示，不能让暂停前的旧闪光在缩小途中短暂复活错位。
-    const showMuzzle = this.deckZoomTarget <= 1 && this.deckZoom <= 1.001;
+    // 放置时停会冻结 FxEvent 寿命;甲板视图里也不该有一枚寿命冻结的闪光常亮在炮口上。
+    // 恢复时 target 先回 1、镜头缩放还在缓动:阈值取 1.05 而不是贴死 1 ——
+    // 指数缓动的尾巴(1.05 → 1.002)还要拖 ~0.25s,而 1.05 档的缩放差在闪光半径(7 世界 px)
+    // 面前只有约 2px,肉眼分不出;贴死 1 的话松开 Tab 后塔照常开火、闪光却整段哑火。
+    const showMuzzle = this.deckZoomTarget <= 1 && this.deckZoom <= 1.05;
     const items = this.world.fx.items;
     for (let i = 0; i < items.length; i++) {
       const e = items[i]!;
@@ -2033,14 +2268,31 @@ export class Renderer {
   }
 
   /**
+   * 远景按 cover 方式铺满屏幕，并留 12% 超扫给视差。位移用平滑周期函数而不是取模：
+   * 船飞得再远也不会在某一帧把背景从右边瞬移回左边。
+   */
+  private syncBackground(width: number, height: number, shipX: number, shipY: number): void {
+    const bg = this.backgroundSprite;
+    if (!bg) return;
+    const tex = bg.texture;
+    const cover = Math.max(width / tex.width, height / tex.height) * BACKGROUND_OVERSCAN;
+    bg.scale.set(cover);
+    bg.position.set(
+      width / 2 - Math.sin(shipX * BACKGROUND_PARALLAX_FREQ) * width * BACKGROUND_PARALLAX,
+      height / 2 - Math.sin(shipY * BACKGROUND_PARALLAX_FREQ) * height * BACKGROUND_PARALLAX,
+    );
+  }
+
+  /**
    * 甲板缩放的缓动(10 号 issue T4 的时停放大)。目标由 setDeckZoom 立,这里每渲染帧推一段。
    *
    * 指数逼近而不是"每帧加固定一档":后者的时长会随帧率漂移(144Hz 屏上放完只要 30Hz 屏的
    * 五分之一时间),而 1 - e^(-dt/τ) 这一式对任意 dt 都给出同一条时间曲线 ——
    * 掉帧那一帧 dt 大,它就一次多走一段,总时长不变(与 stepBroadside "按已走过的比例推进相位"
    * 是同一条口径:观感不随帧率漂移)。
-   * 到位后**吸附并停手**:差值小于 DECK_ZOOM_EPS 就写死目标值,此后每帧只比一个数就返回 ——
-   * 缩放一变,deckG 下面七层子层的世界变换全要重算,而战斗中的每一帧目标都恒等于 1。
+   * 到位后**吸附并停手**:差值小于 DECK_ZOOM_EPS 就写死目标值,此后每帧只比一个数就返回。
+   * 本方法只推数值,不碰任何容器 —— 缩放由 sync 乘进镜头 scale(worldLayer),
+   * 于是甲板、敌人、弹道、射界共用同一个变换,视图里的几何关系永远诚实(理由见 sync)。
    */
   private stepDeckZoom(dt: number): void {
     const target = this.deckZoomTarget;
@@ -2050,7 +2302,6 @@ export class Renderer {
     let z = this.deckZoom + (target - this.deckZoom) * k;
     if (Math.abs(target - z) <= DECK_ZOOM_EPS) z = target;
     this.deckZoom = z;
-    this.deckG.scale.set(z);
   }
 
   /**
@@ -2097,7 +2348,13 @@ export class Renderer {
     particles: Particle[],
     pc: ParticleContainer,
     entities: readonly (Enemy | Bullet | Drop)[],
-    opts: { texture: Texture; tint: number; alpha: number },
+    opts: {
+      texture: Texture;
+      tint: number;
+      alpha: number;
+      scale?: number;
+      rotationOffset?: number;
+    },
   ): void {
     // 扩容:tint/texture 是静态属性,增粒子后需 pc.update() 重传。
     // 粒子只增不删 —— 面板改出怪占比后,各型各自留着自己的历史峰值"停车位"不回落,
@@ -2110,6 +2367,8 @@ export class Renderer {
           y: OFFSCREEN,
           anchorX: 0.5,
           anchorY: 0.5,
+          scaleX: opts.scale ?? 1,
+          scaleY: opts.scale ?? 1,
           tint: opts.tint,
         });
         pc.addParticle(p);
@@ -2121,10 +2380,21 @@ export class Renderer {
     const a = opts.alpha;
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i]!;
-      const e = entities[i] as Interpolatable | undefined;
+      const entity = entities[i];
+      const e = entity as Interpolatable | undefined;
       if (e) {
         p.x = e.px + (e.x - e.px) * a;
         p.y = e.py + (e.y - e.py) * a;
+        if (entity && opts.rotationOffset !== undefined) {
+          let vx = entity.vx;
+          let vy = entity.vy;
+          // 冲锋前摇会刹停，但朝向已经锁死；用锁定向量，避免候选图在预警环里停在上一方向。
+          if ('state' in entity && entity.state === ST_WINDUP) {
+            vx = entity.lockX;
+            vy = entity.lockY;
+          }
+          if (vx * vx + vy * vy > 1e-6) p.rotation = Math.atan2(vy, vx) + opts.rotationOffset;
+        }
       } else {
         p.x = OFFSCREEN;
         p.y = OFFSCREEN;

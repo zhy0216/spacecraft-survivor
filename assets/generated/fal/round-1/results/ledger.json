@@ -1,0 +1,31 @@
+{
+  "date": "2026-08-02",
+  "currency": "USD",
+  "hard_cap": 25,
+  "estimated_spend": 0.73,
+  "recorded_spend": 0.73,
+  "remaining_budget": 24.27,
+  "jobs": [
+    {"id": "probe-01", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.04, "status": "completed"},
+    {"id": "probe-02", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.04, "status": "completed"},
+    {"id": "probe-03", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.04, "status": "completed"},
+    {"id": "probe-04", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "beetle-style-01", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.04, "status": "completed"},
+    {"id": "beetle-style-02", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.04, "status": "completed"},
+    {"id": "beetle-style-03", "endpoint": "fal-ai/recraft/v3/text-to-image", "cost": 0.08, "status": "completed"},
+    {"id": "beetle-style-04", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "enemy-swarm-leech-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "enemy-side-raider-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "enemy-tail-maggot-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-autocannon-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-laser-prism-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-arc-coil-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-railgun-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-point-defense-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "tower-plasma-mortar-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "support-ammo-bay-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "support-radiator-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "support-capacitor-bank-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"},
+    {"id": "support-armor-bay-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed"}
+  ]
+}

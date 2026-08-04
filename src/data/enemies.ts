@@ -127,7 +127,10 @@ export const ENEMIES: EnemyDef[] = [
     radius: 8, // 占位待调
     behavior: BH_STRAFE, // 只驻留不冲锋:惩罚火力死角舷
     strafeOffsetDeg: 180, // 占位待调(船尾正后方)
-    strafeRadius: 90, // 占位待调(贴得近才叫"咬尾")
+    // 占位待调(贴得近才叫"咬尾")。35 是按 48×36 的船身算的:船尾轮廓接触带 = 半长 24 + 体型 8
+    // = 32,驻留 35 只差 3px —— 它不冲锋,驻留半径就是它唯一够得到船的机制,
+    // 必须压着轮廓摆,否则这一型(惩罚船尾死角)在几何上整个失效。改船体尺寸要连着它一起调
+    strafeRadius: 35,
     chargeRange: 0,
     chargeWindup: 0,
     chargeSpeed: 0,

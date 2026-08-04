@@ -1,0 +1,20 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/recraft/v3/text-to-image",
+  "request_id": "019fc343-a9fc-7a70-9860-8e1253c8f246",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa4be26/771IvxsoWT6N_-QMD4Xbv_jN8UlsOS.png",
+        "content_type": "image/png",
+        "file_name": "771IvxsoWT6N_-QMD4Xbv_jN8UlsOS.png",
+        "file_size": null
+      }
+    ]
+  },
+  "gallery": {
+    "session_id": "b7272207d6dd",
+    "path": "/Users/yang/.genmedia/gallery/sessions/b7272207d6dd/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/b7272207d6dd/index.html"
+  }
+}

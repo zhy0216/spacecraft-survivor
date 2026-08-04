@@ -97,6 +97,17 @@ export function magnetRadius(deck: Deck): number {
 }
 
 /**
+ * 残骸的离场半径(px):离船超过这一档的**未锁定**残骸直接回池。
+ * 地图无限之后,被玩家开过去不捡的残骸会永远躺在身后 —— DROP_MAX_ALIVE(data/economy)
+ * 那道保险丝挡得住内存,挡不住"老残骸占满池、新掉落全被丢弃"的经济死账:
+ * 打了怪却什么都不掉,玩家只会觉得掉落坏了。
+ * 取 2000 ≳ 出怪环外沿(1300)+ 一整屏(~970):只要还看得见、或掉头一屏内能回去捡的都留着,
+ * 真正被甩掉的才清 —— 与敌人的 ENEMY_FALLBEHIND_RADIUS 是同一类"身后的东西不白占内存"口径。
+ * 已锁定(magnet)的一概不清:它正在飞向船,清了等于当面抢走一笔已经承诺的进账。
+ */
+export const DROP_CULL_RADIUS = 2000;
+
+/**
  * 推进全场残骸一逻辑帧:起吸判定 → 积分 → 收取。
  * @param shipX @param shipY 船心世界坐标(调用方传本帧**积分之后**的位置:残骸追的是船现在在哪,
  *   晚一帧的话高速航行时整串残骸会恒定拖在船身后)
@@ -137,6 +148,12 @@ export function stepDrops(
     const dx = shipX - d.x;
     const dy = shipY - d.y;
     const d2 = dx * dx + dy * dy;
+    // 被甩在身后的未锁定残骸出局(无限地图的内存/池位账,见 DROP_CULL_RADIUS)。
+    // 排在起吸判定之前 —— 反正两个半径差一个数量级,谁先谁后不会改变任何一颗的归属
+    if (!d.magnet && d2 > DROP_CULL_RADIUS * DROP_CULL_RADIUS) {
+      drops.despawnAt(i);
+      continue;
+    }
     // 起吸判据含边界(恰好落在起吸圆上算吸,与 arc.findArcTarget 的射程圆、bullet 的命中圆同口径)。
     // 只判"还没锁定的那些":锁定是单向的,判过一次就再也不问距离了
     if (!d.magnet && d2 <= magnetR2) d.magnet = true;

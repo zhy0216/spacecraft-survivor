@@ -219,18 +219,19 @@ export const WAVE_MAX_STREAMS = WAVE_SEGMENTS.reduce(
 );
 
 /**
- * 出怪半径:以**船**为心(不是场心),世界 px。
+ * 出怪半径:以**船**为心(地图无限,没有场心这回事),世界 px。
  * 必须**大于镜头视野半径**,否则敌人会当着玩家的面凭空出现。21:9 3440×1440(市面最宽的一档)下的推导:
- *   scale      = 屏高 × tuning.cameraShipHeightFraction ÷ tuning.shipLength = 1440 × 0.2 ÷ 150 = 1.92
+ *   scale      = 屏高 × tuning.cameraShipHeightFraction ÷ tuning.shipLength = 1440 × 0.064 ÷ 48 = 1.92
  *   视野半对角 = hypot(屏宽, 屏高) ÷ 2 ÷ scale = 3729.2 ÷ 2 ÷ 1.92 ≈ 971
  *   lookAhead  = 屏高 × tuning.cameraLookAhead ÷ scale = 1440 × 0.15 ÷ 1.92 = 112.5(镜头前推的那一截也要算进去)
  *   合计 ≈ 1083 → 取 1150,留 ~67px 余量
+ *  (船缩小与占屏比例调低是一对连动 —— 见 tuning.cameraShipHeightFraction 的注释,scale 恒 1.92 不变)
  * sim 不知道屏幕多大(铁律 1:sim 永不认识 DOM/画布),所以这个数就是渲染层与 sim 之间**唯一的约定**:
  * 换更宽的屏、或把 cameraShipHeightFraction 调小(= 镜头拉远),都得回来把它加大 —— 单测钉着这条不等式。
  * 上界也有:出得太远,最慢的敌型要走好几秒才进屏,密度曲线与实际压力就对不上了(单测一并钉住)。
  *
- * 以船为心的副作用:船贴着战场边界(sim/world.ts 的 WORLD_RADIUS = 1200)跑时,出怪环有一大半落在圈外。
- * 这是**对的** —— 那道半径是船的交战范围(防止玩家开出怪潮之外),不是地图墙,敌人不受它夹取。
+ * 它同时是 sim/world.ts 那对防风筝常量的基准:被甩开(> SPAWN_RADIUS + 2×BAND)的敌人
+ * 镜像重投回这个半径上 —— 出怪与重投共用同一档进屏距离,玩家分不出谁是挪过来的。
  */
 export const SPAWN_RADIUS = 1150;
 

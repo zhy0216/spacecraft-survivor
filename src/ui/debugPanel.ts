@@ -242,8 +242,11 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   // >1 = 全塔射得更快(实际 fireInterval = 表里的值 ÷ 它);充能系不受它影响(那类塔的节奏在 chargeTime)
   tower.addBinding(tuning, 'towerFireRateScale', { label: '射速倍率', min: 0.1, max: 5, step: 0.1 });
 
-  // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效
+  // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效。
+  // 范围必须罩得住默认值 0.064(船与敌人同尺度那次改的,见 config.ts):Tweakpane 对带
+  // min/max 的绑定**写入时就夹取**,min 高于默认值的话,一碰滑杆值就被永久顶到 min 上、
+  // 再也拖不回来;step 也得让 0.064 落在网格上(0.002 × 32),否则同样回不去
   const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });
-  camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.1, max: 0.4, step: 0.01 });
+  camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.03, max: 0.3, step: 0.002 });
   camera.addBinding(tuning, 'cameraLookAhead', { label: '前视偏移', min: 0, max: 0.4, step: 0.01 });
 }

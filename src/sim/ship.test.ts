@@ -17,7 +17,7 @@ import {
   type Vec2,
   wrapAngle,
 } from './ship';
-import { WORLD_RADIUS, World } from './world';
+import { World } from './world';
 
 const BASE = { shipTurnRate: 100, shipCruiseSpeed: 130, shipAccel: 260, shipDamping: 1.2 };
 Object.assign(tuning, BASE);
@@ -294,16 +294,15 @@ describe('World 接线', () => {
     expect(meanDistToShip(w)).toBeLessThan(200);
   });
 
-  it('船被夹在场地内,贴边后不再向外积速', () => {
+  it('地图无限:船一直开就一直远,没有任何边界把它夹回来', () => {
     const w = new World(5);
     const cmd: ShipCommand = { desiredHeading: { x: 1, y: 0 } };
-    for (let i = 0; i < 20 * 60; i++) w.step(cmd); // 130 px/s 跑 20s,远超场地半径
+    for (let i = 0; i < 20 * 60; i++) w.step(cmd); // 130 px/s 跑 20s ≈ 2600px,远超旧场地半径 1200
 
-    const d = Math.hypot(w.ship.x, w.ship.y);
-    expect(d).toBeLessThanOrEqual(WORLD_RADIUS + 1e-6);
-    expect(d).toBeCloseTo(WORLD_RADIUS, 6); // 确实贴在边上,而不是被别的逻辑拉回场心
-    // 速度只剩切向:径向外向分量每帧被清掉,松开推力也不会弹射出去
-    expect((w.ship.vx * w.ship.x + w.ship.vy * w.ship.y) / d).toBeLessThanOrEqual(1e-9);
+    // 起步半秒加速 + 之后满巡航:20s 至少该跑出两千多 px —— 旧边界(1200)若还在,这里过不去
+    expect(w.ship.x).toBeGreaterThan(2000);
+    // 巡航速度也没被任何贴边逻辑啃掉径向分量
+    expect(Math.hypot(w.ship.vx, w.ship.vy)).toBeCloseTo(130, 0);
   });
 });
 
