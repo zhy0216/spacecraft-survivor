@@ -193,6 +193,9 @@ async function boot(): Promise<void> {
         segment: world.wave.segment,
         // 总段数从数据表现读:数据表里加/删一段,结算界面上的 "n/4" 自动跟上(改数据即可调节奏)
         segmentCount: WAVE_SEGMENTS.length,
+        // Boss 击杀时刻(15 号):world.bossKilledAt = 击杀那一帧的 elapsed 秒,未击杀保持 0;
+        // 只有胜利局会印它(见 gameOver.summaryText),但照常传 —— 口径与 kills 同一处
+        bossKilledAtSec: world.bossKilledAt,
         // 剪影是**可选项**:抓不到就是 null,结算界面照常弹(见 renderer.captureShipSilhouette)。
         // 在这里截而不是在渲染层自己判断时机:一局只截一次,而"哪一刻算一局的最终船形"是流程的事
         silhouette: renderer.captureShipSilhouette(),
@@ -321,8 +324,13 @@ async function boot(): Promise<void> {
     stats.fps = Math.round(renderer.app.ticker.FPS);
     stats.enemies = world.enemies.size;
     // 背景底噪:存活敌人数 ÷ WAVE_MAX_ALIVE(同屏保险丝上限)→ 0..1 密度比。
+    // Boss 战(15 号):Boss 在场时怪可能很少,底噪却该最沉 —— 取密度比与 0.35 的较大者,
+    // 用既有 setAmbience 通道做"Boss 战变奏"(13 音频的 Boss 主题暂缺,先以底噪压沉代替)。
     // setAmbience 每帧只写一条 gain 缓动(setTargetAtTime),便宜到可以每帧灌
-    audioBus.setAmbience(Math.min(1, Math.max(0, world.enemies.size / WAVE_MAX_ALIVE)));
+    const bossRumble = world.bossPhase === 1 ? 0.35 : 0;
+    audioBus.setAmbience(
+      Math.min(1, Math.max(0, world.enemies.size / WAVE_MAX_ALIVE, bossRumble)),
+    );
     stats.bullets = world.bullets.size;
     // 拖巡航滑杆时盯这个数爬到新上限,才算证实了"改参数无需重启"(02 号 issue 验收标准)
     stats.speed = Math.hypot(world.ship.vx, world.ship.vy);

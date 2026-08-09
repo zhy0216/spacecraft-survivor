@@ -18,8 +18,10 @@ import {
   BH_SEEK_CHARGE,
   BH_STRAFE,
   BH_STRAFE_CHARGE,
+  BOSS,
   ENEMIES,
   type EnemyDef,
+  KIND_BOSS,
   ZONE_HP_MULT,
 } from '../data/enemies';
 import { tuning } from './config';
@@ -236,6 +238,9 @@ export function hasAffix(e: Enemy, affixId: number): boolean {
  * ELITE.scale 是数据表里的占位(affixes.ts),改平衡只改那里。
  */
 export function enemyRadius(e: Enemy): number {
+  // Boss(15 号)不进 ENEMIES 表:判定体走底座 radius × BOSS.scale,与 boss.ts 的
+  // bossRadius() 同一条口径(子弹命中/受击判定统一走这里,Boss 才能被弹道塔打到)。
+  if (e.kind === KIND_BOSS) return ENEMIES[BOSS.baseKind]!.radius * BOSS.scale;
   const r = ENEMIES[e.kind]!.radius;
   return e.affixes !== 0 ? r * ELITE.scale : r;
 }

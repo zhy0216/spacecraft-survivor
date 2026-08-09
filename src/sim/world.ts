@@ -52,7 +52,7 @@ import {
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
-import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY } from '../data/supports';
 import {
   FX_LIFE_BEAM,
@@ -89,6 +89,13 @@ import {
   placeAt,
   weldPiece,
 } from './deck';
+import {
+  bossContactDamage,
+  bossRadius,
+  initBoss,
+  initSummon,
+  stepBossBehavior,
+} from './boss';
 import { createDrop, type Drop, resetDrop, stepDrops } from './drop';
 import {
   affixMask,
@@ -224,7 +231,10 @@ function fxLife(kind: number): number {
  * 三个值互斥、不是位标志:一局只可能落在其中一个上(先到的那个把这一局定死)。
  */
 export const RESULT_RUNNING = 0;
-/** 胜利:波次脚本走完(wave.done)—— 这一局活到了最后一段的尽头 */
+/**
+ * 胜利:波次脚本走完(wave.done)**且 Boss 已击杀**(15 号)—— 第 4 段走完只是进入
+ * Boss 战的时机,活过 Boss 才算这一局赢了
+ */
 export const RESULT_WIN = 1;
 /** 失败:船体 HP 归零(shipDead)。**优先于胜利**,同一帧两样都成立时算失败(见 settleOutcome) */
 export const RESULT_LOSE = 2;
@@ -310,7 +320,8 @@ export class World {
 
   /**
    * 本局的结果码(RESULT_*),由 step() 帧尾的 settleOutcome 置位,**置位后永不再变**。
-   * 它是 shipDead 与 wave.done 的**派生量**(settleOutcome 只读这两样,没有第三条来路),
+   * 它是 shipDead / wave.done / bossPhase 的**派生量**(settleOutcome 只读这三样,没有第三条来路;
+   * bossPhase 本身进 checksum,故 result 仍没有独立信息),
    * 故**不进 checksum** —— 与 maxHp / shipDead / wave 的 dirRad 同一条口径。
    */
   result = RESULT_RUNNING;
@@ -346,6 +357,34 @@ export class World {
 
   /** 累计击杀。面板改数量导致的清场不计入 —— 那不是打死的 */
   kills = 0;
+
+  /**
+   * Boss 阶段(15 号 T1)的状态机位:0 = 未进入(脚本没走完);1 = 战斗中;
+   * 2 = 已击杀。进入 = 脚本走完那一帧(enterBossPhase 生成 Boss 一只,与敌人同池);
+   * 击杀 = reap 里 Boss 尸体落账那一帧翻成 2 —— 胜利判定只认这一位(见 settleOutcome)。
+   * 逐帧演化的真状态,进 checksum:它决定"召唤还跑不跑",而召唤消费 rng。
+   */
+  bossPhase = 0;
+
+  /**
+   * 已完成的召唤次数 —— "到点即消费"的游标,照 wave.eliteNext 先例进 checksum:
+   * 它差一,本局的召唤就整批错位,而召唤的错位要等若干帧后反哺到小怪位置才露馅。
+   */
+  bossSummonN = 0;
+
+  /**
+   * 距下次召唤的剩余秒数。真状态、逐帧演化,×100 进 checksum(与 edgePenalty 同口径);
+   * 渲染层读它做召唤预告:它 < BOSS.summonWarnTime 时 Boss 就要开始召唤了
+   * (与精英预警共用提示通道,见 todos/15 验收"召唤有预告")。
+   */
+  bossSummonCooldown = 0;
+
+  /**
+   * Boss 被击杀的时刻(elapsed,与 kills 同一条"回收那一帧记账"的口径)—— 一次性记录,
+   * 结算界面(胜利时间/本局统计)读它。与 kills 同一条派生量口径:
+   * 击杀本身在敌人池与 bossPhase 里可见,故**不进 checksum**。
+   */
+  bossKilledAt = 0;
 
   /**
    * 已收集、未花掉的残骸(GDD §7:全程唯一成长资源),**恒整数** ——
@@ -652,6 +691,17 @@ export class World {
       }
     }
 
+    // Boss 阶段(15 号 T1):脚本走完(第 4 段结束)的那一帧进入 —— 世界侧状态机,
+    // 不做第 5 段、不改 wave.done 语义(wave.done 仍是"脚本走完"的派生量,sim/waves.ts
+    // 原样保留;压测路旁路 stepWaves,done 恒 false,这里天然进不来)。
+    // 进入 = 生成 Boss 一只(零 rng);此后每帧推进召唤计时(召唤消费 rng,排在这里与
+    // 出怪同一条"帧首"顺序,先出怪后召唤的顺序定死,同 seed 才逐位可复现)。
+    // 船已沉就不再登场:失败优先口径,出场与否由 shipDead 决定,确定性不受影响。
+    // 进入的那一帧不扣召唤计时 —— 与 enemy 状态机"刚进入某状态的那一帧不扣计时"同口径,
+    // "Boss 登场后整 summonInterval 秒才首召"这条承诺才钉得住
+    if (this.wave.done && this.bossPhase === 0 && !this.shipDead) this.enterBossPhase();
+    else if (this.bossPhase === 1) this.stepBossSummon();
+
     // 重建空间哈希
     const enemies = this.enemies.items;
     this.grid.clear();
@@ -743,15 +793,19 @@ export class World {
 
       e.px = e.x;
       e.py = e.y;
-      const def = ENEMIES[e.kind]!;
+      const isBoss = e.kind === KIND_BOSS;
 
       // 无敌帧逐帧减 dt、夹 0(与 edgePenalty 同口径)。**每只敌人各自一份**:
       // 全船一个冷却的话,蜂群贴脸时只有最先判到的那一只咬得动,"一百只压上来"与"一只压上来"
-      // 的掉血速率会一模一样(见 Enemy.hitCd 的字段注释)
+      // 的掉血速率会一模一样(见 Enemy.hitCd 的字段注释)。Boss 与普通怪同一条冷却。
       if (e.hitCd > 0) e.hitCd = Math.max(0, e.hitCd - SIM_DT);
 
-      // 行为只给"期望速度 + 追随系数",位置由这里积分(sim/enemy 不碰位置)
-      const follow = stepEnemyBehavior(e, ship, SIM_DT, desired);
+      // 行为只给"期望速度 + 追随系数",位置由这里积分(sim/enemy 不碰位置)。
+      // Boss 走自己的状态机(sim/boss.ts,寻路原语与普通怪同源:seek/lockCharge),
+      // 契约与 stepEnemyBehavior 完全一致 —— 下面的积分一行都不分叉。
+      const follow = isBoss
+        ? stepBossBehavior(e, ship, SIM_DT, desired)
+        : stepEnemyBehavior(e, ship, SIM_DT, desired);
       let dvx = desired.x;
       let dvy = desired.y;
 
@@ -759,7 +813,9 @@ export class World {
       // 直线冲锋就不再是直线 —— 前摇预警画出的那条线会变成谎言(07 验收标准第二条)。
       // 分离半径用全局 tuning.enemySeparation 而不做成 per-kind:它是人群的物理常量,
       // 且必须守住"查询半径 ≤ 一个 cell"的性能口径(GDD §13)。
+      // Boss 的 state 恒 ≠ ST_APPROACH,走不到这里 —— 巨型个体不被虫群推挤。
       if (sep > 0 && e.state === ST_APPROACH) {
+        const def = ENEMIES[e.kind]!;
         const speed = def.speed * speedScale;
         this.grid.query(e.x, e.y, sep, this.scratch);
         for (let j = 0; j < this.scratch.length; j++) {
@@ -805,8 +861,10 @@ export class World {
       // 代价只是一次乘法 —— 逐只现算精确外接半径要一次开方,那才是 1000 敌热循环里付不起的钱
       const cdx = e.x - tx;
       const cdy = e.y - ty;
-      // 体型那一项走 enemyRadius(精英 ×ELITE.scale):粗筛圆的半径口径全仓只有它一份
-      const cr = contactR + enemyRadius(e) * Math.SQRT2;
+      // 体型那一项走 enemyRadius(精英 ×ELITE.scale);Boss 走 bossRadius()(15 号:
+      // 它不进 ENEMIES 表,判定体单独一份口径,与 sim/boss.ts 的 bossRadius 同源)。
+      // 粗筛圆的半径口径全仓只有这两份来源,别处不许另抄
+      const cr = contactR + (isBoss ? bossRadius() : enemyRadius(e)) * Math.SQRT2;
       if (cdx * cdx + cdy * cdy < cr * cr) this.contacts.push(e);
     }
 
@@ -841,8 +899,9 @@ export class World {
 
     this.reap();
 
-    // 局终判定收尾:这一帧的三样判据(shipDead 在受击结算里置、wave.done 在帧首的出怪那一步置、
-    // kills 在 reap 里才加完)到这里才全部就位。判完世界也不停 —— 停不停是 main.ts 的事
+    // 局终判定收尾:这一帧的判据(shipDead 在受击结算里置、wave.done 在帧首的出怪那一步置、
+    // bossPhase 与 kills 在 reap 里才落账)到这里才全部就位。判完世界也不停 ——
+    // 停不停是 main.ts 的事
     this.settleOutcome();
 
     // 同一帧若沉船/通关，结算优先，不能在结算面板下面再弹一层整备。
@@ -860,13 +919,16 @@ export class World {
   }
 
   /**
-   * 局终判定(08 号 T3)—— 一局最多落一次结论,**判完就此定死**。
+   * 局终判定(08 号 T3 + 15 号 Boss)—— 一局最多落一次结论,**判完就此定死**。
    * 放在 step() 的最末而不是判据产生的那几处:shipDead 在帧中的受击结算里置位、
-   * wave.done 在帧首的出怪那一步置位,只有帧尾这一个点上两条路都已就位、本帧的击杀也已入账,
+   * wave.done 在帧首的出怪那一步置位、bossPhase 在帧尾的 reap 里翻(击杀那一帧才落账),
+   * 只有帧尾这一个点上三条路都已就位、本帧的击杀也已入账,
    * 回调里读到的存活时间与击杀数才是完整的一帧(结算界面读的就是这两个数)。
    *
    * **失败优先于胜利**:同一帧既沉船又走完脚本算失败 —— 船都没了,最后那一段脚本走没走完不重要,
    * 反过来会让"终点线前一秒被撞沉"变成一次莫名其妙的胜利。
+   * **胜利 = 脚本走完 且 Boss 已击杀**(15 号):第 4 段走完只是进入 Boss 战的时机,
+   * Boss 未击杀前 wave.done 什么都不给。
    * 两者互斥、且各只触发一次,全靠首句那一个提前返回。
    *
    * World **不自己暂停、不重开、不动 loop**:有了结论之后 step() 照常可以继续调用
@@ -877,7 +939,7 @@ export class World {
     //(与 damageShip 那句 shipDead 早返回、applyDamage 的"同帧重复致命只算一次"是同一条口径)
     if (this.result !== RESULT_RUNNING) return;
     if (this.shipDead) this.result = RESULT_LOSE;
-    else if (this.wave.done) this.result = RESULT_WIN;
+    else if (this.wave.done && this.bossPhase === 2) this.result = RESULT_WIN;
     else return; // 还在跑:一个字段都不动,更不响回调
     this.onGameOver?.(this.result);
   }
@@ -942,13 +1004,28 @@ export class World {
       this.kills++;
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
-      // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum
-      this.sink.fx(FXV_KILL, e.x, e.y, e.x, e.y, enemyRadius(e), e.kind);
+      // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum。
+      // Boss 的爆点半径走 bossRadius()(它不进 ENEMIES 表,enemyTint 对越界 kind 有兜底)
+      this.sink.fx(
+        FXV_KILL,
+        e.x,
+        e.y,
+        e.x,
+        e.y,
+        e.kind === KIND_BOSS ? bossRadius() : enemyRadius(e),
+        e.kind,
+      );
       // 掉落排在公开挂钩**之前**:先把世界自己的账落地(残骸是这一局的成长资源,不是一段表现),
       // 再把这具尸体递给外面 —— 于是挂钩接不接、接的人在回调里做了什么,都影响不到掉落。
       // onEnemyDeath 的既有语义一个字没变:仍是回池前、每只恰好一次(见它的字段注释)
       this.spawnDrop(e);
       this.onEnemyDeath?.(e);
+      // Boss 击杀(15 号):记时刻、翻阶段 —— 掉落与挂钩已经走完,这里只落世界自己的账;
+      // 胜利结论由帧尾 settleOutcome 读 bossPhase 落定(与 kills 同一条"回收那一帧记账"的口径)
+      if (e.kind === KIND_BOSS) {
+        this.bossPhase = 2;
+        this.bossKilledAt = this.elapsed;
+      }
       // 裂变(14 号):死亡当场分裂成 splitCount 只 —— **复用敌人池**、不带词缀、普通血量,
       // 一次 rng 都不掷(side 继承父体,见 initSplit):精英结算扰动不到出怪随机序列。
       // 排在掉落/挂钩之后(分裂体是"新出生的敌人",与父体的账互不相干);
@@ -982,11 +1059,17 @@ export class World {
    * DROP_MAX_ALIVE 是保险丝不是旋钮,理由全文见 data/economy.ts。
    */
   private spawnDrop(e: Enemy): void {
-    const value = ENEMIES[e.kind]!.scrap;
+    // Boss(15 号)= 大额残骸:底座 scrap × BOSS.scrapMul,固定整数倍率、不掷随机
+    // (照 14 号精英 ELITE.scrapMul 的口径;16 号星币落地前就是它)。
+    // 底座值取 data/enemies.ts 的 BOSS.baseKind —— 改底座/改倍率只动那张表
+    const value =
+      e.kind === KIND_BOSS
+        ? ENEMIES[BOSS.baseKind]!.scrap * BOSS.scrapMul
+        : ENEMIES[e.kind]!.scrap;
     if (value <= 0 || this.drops.size >= DROP_MAX_ALIVE) return;
     // 精英(14 号)= 固定倍率的高级掉落(ELITE.scrapMul = 3× 残骸):不掷随机、按型定死,
     // 掉的就是"这一只"的 —— 同一颗残骸,面额 × 倍率,不会被普通怪掉落顶替;
-    // 16 号星币落地前先按它给(todos/14 口径)
+    // 16 号星币落地前先按它给(todos/14 口径)。Boss 的 affixes 恒为 0,这里恒 1
     const mul = e.affixes !== 0 ? ELITE.scrapMul : 1;
     const d = this.drops.spawn();
     d.x = d.px = e.x;
@@ -1017,16 +1100,22 @@ export class World {
       const e = this.contacts[i]!;
       // 本帧刚被塔打死的敌人不许再咬一口 —— 这一句之所以有意义,全靠结算排在子弹之后
       if (e.dead) continue;
-      const def = ENEMIES[e.kind]!;
-      // 体型走 enemyRadius(精英 ×ELITE.scale):与粗筛、子弹命中同一份口径
-      const hit = classifyHit(ship, deck, e.x, e.y, enemyRadius(e));
+      const isBoss = e.kind === KIND_BOSS;
+      // 体型与伤害口径:Boss 走 sim/boss.ts 的 bossRadius / bossContactDamage
+      //(大质量撞击伤害更高 = 数值换倍率,判定几何仍是 09 号那一套,不新开机制);
+      // 普通怪照旧走 enemyRadius(精英 ×ELITE.scale)与 ENEMIES 表的 contactDamage
+      const hit = classifyHit(ship, deck, e.x, e.y, isBoss ? bossRadius() : enemyRadius(e));
       // 粗筛名单是超集,一层都没碰上的直接放过;冷却没走完的连火花都不出(免得"没伤害的擦碰"
       // 每帧刷一个事件,把 fx 池当烟花放)
       if (hit === HIT_NONE || e.hitCd > 0) continue;
       e.hitCd = tuning.enemyHitInterval;
 
       if (hit === HIT_CORE) {
-        this.damageShip(def.contactDamage * scale, e.x, e.y);
+        this.damageShip(
+          (isBoss ? bossContactDamage() : ENEMIES[e.kind]!.contactDamage) * scale,
+          e.x,
+          e.y,
+        );
         this.pushHitFx(FXV_HULL_HIT, e.x, e.y);
       } else {
         // 蹭到核心区之外的甲板:**只出火花,一分血都不结算**(GDD §4.4)。
@@ -1256,6 +1345,79 @@ export class World {
   }
 
   /**
+   * 进入 Boss 战(15 号 T1):脚本走完(第 4 段结束)那一帧调用一次。
+   * Boss 与敌人**同池**(铁律 3:池对象,不 new 常量对象),kind = KIND_BOSS 作专用标记;
+   * 生成**零 rng** —— 出生方向 = 脚本最后一帧保留的主压方向(wave.dirRad 在段走完后
+   * 由 refreshDerived 留在最后一帧的值),半径 = 出怪环中点,side 由 initBoss 定死 0。
+   * 于是"Boss 什么时候来、从哪来"都是确定性事实,不扰动召唤与出怪的随机序列。
+   */
+  private enterBossPhase(): void {
+    this.bossPhase = 1;
+    this.bossSummonN = 0;
+    this.bossSummonCooldown = BOSS.summonInterval;
+    const a = this.wave.dirRad;
+    const r = SPAWN_RADIUS + SPAWN_RADIUS_BAND / 2;
+    const e = this.enemies.spawn();
+    initBoss(e, this.ship.x + Math.cos(a) * r, this.ship.y + Math.sin(a) * r, this.elapsed);
+    // 与 spawnFromWave 同口径:只在真正进池并初始化后记样本 + 响挂钩。
+    // 罗盘指向 = 主压方向(最后一帧),于是"威胁来了"的读数与 Boss 实际来向一致
+    this.threatRate += THREAT_SPAWN_IMPULSE;
+    this.threatDirX += Math.cos(a) * THREAT_SPAWN_IMPULSE;
+    this.threatDirY += Math.sin(a) * THREAT_SPAWN_IMPULSE;
+    this.onEnemySpawn?.(e);
+  }
+
+  /**
+   * 推进 Boss 战的召唤侧(15 号):每帧减召唤计时,到点触发一次召唤事件。
+   *
+   * rng 口径定死:**每只召唤怪恰好一次 rng.angle()**(出生角),型号/数量直给
+   * (BOSS.summonCounts,与 waves 的"每成功出一只恰一次 rng、型号/数量不掷随机"
+   * 同一条纪律 —— 改召唤构成不会移动整条随机序列)。
+   * 召唤怪在 Boss 身边一圈出生(BOSS.summonRingRadius,以 Boss 为心)、
+   * 共享 WAVE_MAX_ALIVE 在场上限:触顶丢弃、**不留账**(与 spawnFromWave 一字同源,
+   * 且丢弃发生在掷角度之前 —— 触顶帧一次 rng 都不消耗)。
+   * 游标 bossSummonN 照 eliteNext 的"到点即消费"口径:事件触发即 +1、计时重置,
+   * 即使一只都没落地 —— 上限是保险丝不是配额。
+   * Boss 已击杀时由 bossPhase 挡在门外,这里再兜一道(尸体回池后池里就没有它了)。
+   */
+  private stepBossSummon(): void {
+    let boss: Enemy | null = null;
+    for (let i = 0; i < this.enemies.items.length; i++) {
+      const e = this.enemies.items[i]!;
+      if (e.kind === KIND_BOSS) {
+        boss = e;
+        break;
+      }
+    }
+    if (!boss) return;
+    this.bossSummonCooldown -= SIM_DT;
+    if (this.bossSummonCooldown > 0) return;
+    this.bossSummonN++;
+    this.bossSummonCooldown = BOSS.summonInterval;
+    const counts = BOSS.summonCounts;
+    for (let k = 0; k < counts.length; k++) {
+      const n = counts[k]!;
+      for (let j = 0; j < n; j++) {
+        if (this.enemies.size >= WAVE_MAX_ALIVE) return; // 保险丝:触顶丢弃,不留账
+        const a = this.rng.angle(); // 每只召唤怪恰一次(与出怪的"每只恰一次"同口径)
+        const x = boss.x + Math.cos(a) * BOSS.summonRingRadius;
+        const y = boss.y + Math.sin(a) * BOSS.summonRingRadius;
+        const e = this.enemies.spawn();
+        // side 由 initSummon 按下标交替直给:左右舷都有,且一次 rng 都不额外掷
+        initSummon(e, k, x, y, this.elapsed, j);
+        // 罗盘样本照 spawnFromWave 同口径:每成功落地一只记一次,方向 = 召唤怪落点方位
+        this.threatRate += THREAT_SPAWN_IMPULSE;
+        const dx = e.x - this.ship.x;
+        const dy = e.y - this.ship.y;
+        const d = Math.hypot(dx, dy) || 1;
+        this.threatDirX += (dx / d) * THREAT_SPAWN_IMPULSE;
+        this.threatDirY += (dy / d) * THREAT_SPAWN_IMPULSE;
+        this.onEnemySpawn?.(e);
+      }
+    }
+  }
+
+  /**
    * **debug 压测路径,不是正式出怪器** —— 正式的在 step() 里走 stepWaves + spawnFromWave。
    * 只有 tuning.stressSpawn = true 时才被调用,而 tuning.stressEnemies 与四条 enemyMix*
    * 也只在这条路上生效:它维持"场上恒定 N 只"这种压测才要的定数(01 号验收:1000 敌同屏 60fps),
@@ -1338,7 +1500,8 @@ export class World {
     // **maxHp / shipDead / result 都不进**,它们是派生量:
     //   maxHp = damage.hullMaxHp(deck),而甲板本身下面逐格哈过了 —— 哈它就是把同一件事哈两遍;
     //   shipDead 除了"hp 归零那一刻置位"没有第二条来路,hp 已经进来了,它就没有独立信息;
-    //   result 又是 shipDead 与 wave.done 的纯函数(settleOutcome 只读这两样),同理没有独立信息。
+    //   result 又是 shipDead / wave.done / bossPhase 的纯函数(settleOutcome 只读这三样;
+    //   bossPhase 在下面单独哈过),同理没有独立信息。
     acc(this.ship.hp);
     // 甲板紧跟着船:build 也是世界状态,少了它,"塔放错格"或"扩建没同步"这类回归会从确定性口径下漏掉。
     // 顺序 = deck.cells 的下标顺序(row-major,见 sim/deck),与渲染遍历同一条,永不改;
@@ -1400,6 +1563,16 @@ export class World {
     acc(this.wave.burstNext);
     acc(this.wave.eliteNext);
     for (let i = 0; i < this.wave.debt.length; i++) acc(this.wave.debt[i]! * 100);
+    // Boss 阶段(15 号)紧跟着波次进度:phase 与召唤游标/计时是逐帧演化的真状态 ——
+    // 召唤消费 rng(每只召唤怪一次角度),漏了它们,"同 seed 两局召唤时刻/数量错位"
+    // 就会从确定性口径下漏掉(照 eliteNext 先例);bossKilledAt 是击杀时刻的一次性记录
+    // (与 kills 同一条派生量口径,击杀本身在敌人池与 bossPhase 里可见),不进哈希;
+    // Boss 本体在敌人池里,下面逐只哈过了。
+    // × 100 的理由与波次那批秒数字段一字同源:acc 内部量化到 1/8,不放大的话召唤计时的
+    // 分辨率只有 0.125s(整整七帧半),差一两帧根本看不出来
+    acc(this.bossPhase);
+    acc(this.bossSummonN);
+    acc(this.bossSummonCooldown * 100);
     for (const e of this.enemies.items) {
       acc(e.x);
       acc(e.y);

@@ -6,6 +6,7 @@
  * 布局只占屏幕上沿、屏下缘与威胁所在的边缘,中央战场完全留空。升级时停与结算期间由 setPaused
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
+import { BOSS, KIND_BOSS } from '../data/enemies';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
 import type { Enemy, World } from '../sim/world';
@@ -54,6 +55,19 @@ const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
 const ELITE_CSS =
   `${PANEL_CSS}position:absolute;left:50%;bottom:48px;width:min(340px,60vw);` +
   'transform:translateX(-50%);display:none;';
+
+/**
+ * Boss 血条(15 号):屏下缘、精英血条正上方(Boss 战期间两者可能同时在场上)。
+ * 与精英条同一套 PANEL/TRACK/FILL 样式,但**钉 Boss 本体、常驻直到击杀**:
+ * 精英条是"亮一只随时被顶替"(affixes ≠ 0 的池序第一只),Boss 条是这一战唯一的
+ * 中心读数 —— 两者并列但绝不复用同一根条(Boss 的 affixes 恒为 0,扫精英也扫不到它)。
+ * 默认 display:none,场上有 Boss 才亮;击杀(Boss 出池)当帧隐藏。
+ */
+const BOSS_CSS =
+  `${PANEL_CSS}position:absolute;left:50%;bottom:98px;width:min(520px,76vw);` +
+  'transform:translateX(-50%);display:none;';
+/** 底座甲虫(tint 0xff1f4b)同系更深的红:与精英条(威胁红 #ff5f77)一眼分得开 */
+const BOSS_HP_COLOR = '#ff1f4b';
 
 /**
  * 静音开关:左下角小按钮,与四周 48px 罗盘通道同一套边距。
@@ -275,7 +289,12 @@ export function createHud(opts: { world: World }): HudUi {
   elite.style.cssText = ELITE_CSS;
   const eliteBar = createBar(elite, '精英', THREAT_COLOR);
 
-  root.append(top, threat, warn, muteBtn, elite);
+  // Boss 血条:常驻版(15 号),叠在精英条正上方;标签直取 BOSS.name(改数值表跟着走)
+  const boss = document.createElement('div');
+  boss.style.cssText = BOSS_CSS;
+  const bossBar = createBar(boss, BOSS.name, BOSS_HP_COLOR);
+
+  root.append(top, threat, warn, muteBtn, elite, boss);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -331,17 +350,16 @@ export function createHud(opts: { world: World }): HudUi {
       warn.style.display = 'none';
     }
 
-    // 精英血条:扫在场池找词缀 ≠ 0 的敌人(精英 = affixes 非 0,见 sim/enemy.ts)。
-    // 多只精英时钉**池序第一只** —— swap-remove 让池序本身没有稳定性可言,但目标是
-    // "场上任何时候有精英,血条都亮着一只",钉住哪只并不影响这个目标;真要选"最危险"
-    // 还得定义危险度(剩余血?贴船距离?)并多写一个比较,收益不成比例。
+    // 精英血条 + Boss 血条(14/15 号)共用一趟池扫描:前者"亮一只随时被顶替",
+    // 后者钉 Boss 本体常驻 —— 两根条并列不复用(Boss 的 affixes 恒为 0,扫精英扫不到它)。
     let eliteTarget: Enemy | null = null;
+    let bossTarget: Enemy | null = null;
     const enemies = world.enemies.items;
     for (let i = 0; i < enemies.length; i++) {
-      if (enemies[i]!.affixes !== 0) {
-        eliteTarget = enemies[i]!;
-        break;
-      }
+      const e = enemies[i]!;
+      if (eliteTarget === null && e.affixes !== 0) eliteTarget = e;
+      if (bossTarget === null && e.kind === KIND_BOSS) bossTarget = e;
+      if (eliteTarget !== null && bossTarget !== null) break;
     }
     if (eliteTarget !== null) {
       const eMax = finiteOrZero(eliteTarget.maxHp);
@@ -351,6 +369,18 @@ export function createHud(opts: { world: World }): HudUi {
       eliteBar.fill.style.width = `${hudRatio(eNow, eMax) * 100}%`;
     } else {
       elite.style.display = 'none';
+    }
+
+    // Boss 血条:显示条件 = 场上有 Boss(bossPhase 1 期间恒在,击杀出池当帧隐藏)。
+    // 比例每帧 sync 读 Boss 本体的 hp/maxHp —— 钉的就是它,不是任何替代物
+    if (bossTarget !== null) {
+      const bMax = finiteOrZero(bossTarget.maxHp);
+      const bNow = finiteOrZero(bossTarget.hp);
+      boss.style.display = 'block';
+      bossBar.value.textContent = `${Math.max(0, Math.round(bNow))} / ${Math.max(0, Math.round(bMax))}`;
+      bossBar.fill.style.width = `${hudRatio(bNow, bMax) * 100}%`;
+    } else {
+      boss.style.display = 'none';
     }
   }
 

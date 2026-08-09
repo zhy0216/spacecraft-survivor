@@ -21,6 +21,81 @@ export const KIND_BEETLE = 3; // 冲撞甲虫
 export const ENEMY_KIND_COUNT = 4;
 export type EnemyKind = 0 | 1 | 2 | 3;
 
+/**
+ * Boss 的专用 kind 标记(15 号 T1)。**刻意不进 ENEMIES 表、不占 ENEMY_KIND_COUNT**:
+ * 表长被"侧压 counts 长度 = ENEMY_KIND_COUNT"与"ENEMIES.length = ENEMY_KIND_COUNT"
+ * 两条表级不变量钉死(waves.test.ts / enemies.test.ts),Boss 用独立常量 + 独立数值块
+ * (下面那个 BOSS)承载,本表一行都不用动。
+ * 塔/子弹/渲染对越界 kind 的兜底("kind 越界只是不打这一只")就是它的安全网:
+ * 瞬时判定塔(激光/电弧)照常伤害它,弹道塔在渲染侧跟进前对它的越界兜底是"穿过去"。
+ * **绝不用 affixes 位**:affixes ≠ 0 是 14 号精英的血条扫描与 ELITE 缩放的判据,
+ * 撞上去 Boss 会被当成精英放大、还挂进精英血条。
+ */
+export const KIND_BOSS = 4;
+
+/** Boss 数值块(15 号 T1):Boss = **放大的四型之一**,底座见 baseKind,所有数字都是
+ * 底座值的倍率或直接给秒数 —— 改平衡只改这里,sim/boss.ts 一行都不动。
+ * "大质量撞击伤害更高"就是 contactDamageMul(接触伤害乘倍率),不新开机制。 */
+export interface BossDef {
+  /** 底座敌型(Boss 是它的大号版):体型/HP/接触伤害/冲锋参数从它的数值乘倍率 */
+  baseKind: EnemyKind;
+  /** 只给人看(结算界面/调试面板),逻辑不读 */
+  name: string;
+  /** 体型放大倍率:碰撞半径 = 底座 radius × 它(bossRadius() 的唯一来源) */
+  scale: number;
+  /** Boss HP = 底座 hp × 它,再乘 GDD §14 的时间缩放(出生时一次) */
+  hpMul: number;
+  /** 接触伤害 = 底座 contactDamage × 它(大质量撞击伤害更高,09 号模型只换数值) */
+  contactDamageMul: number;
+  /** 接近段速度 = 底座 speed × 它(大而慢,才压得出"巨型个体"的压迫感) */
+  speedMul: number;
+  /** 追随系数 = 底座 accel × 它(转向迟钝,绕开有解) */
+  accelMul: number;
+  /** 冲锋起手距离 = 底座 chargeRange × 它 */
+  chargeRangeMul: number;
+  /** 前摇时长 s:比底座长 —— 巨型个体的冲锋更要"看得懂、来得及躲" */
+  chargeWindup: number;
+  /** 冲刺速 = 底座 chargeSpeed × 它 */
+  chargeSpeedMul: number;
+  chargeDuration: number;
+  /** 冲完的硬直 s(反打窗口) */
+  chargeRecover: number;
+  /** 召唤周期 s:每过这么久召唤一批蜂群(Boss 活着才计时) */
+  summonInterval: number;
+  /** 召唤预告窗口 s:World.bossSummonCooldown < 它时渲染层应提前预警(与精英预警共用提示通道) */
+  summonWarnTime: number;
+  /** 召唤怪出生环半径 px,以 Boss 为心 */
+  summonRingRadius: number;
+  /**
+   * 一次召唤的逐型只数,**下标 = KIND_***、长度 = ENEMY_KIND_COUNT(与 WaveBurst.counts 同口径)。
+   * 型号/数量直给、不掷随机 —— 只有每只召唤怪的出生角掷一次(见 sim/world 的召唤)。
+   */
+  summonCounts: number[];
+  /** 掉落倍率:Boss 必掉 底座 scrap × 它,固定整数倍率、不掷随机(16 号星币落地前就是它) */
+  scrapMul: number;
+}
+
+/** Boss = 放大的冲撞甲虫(四型里唯一"直线蓄力冲锋"的,收尾高潮要的就是这一型的身位压力) */
+export const BOSS: BossDef = {
+  baseKind: KIND_BEETLE,
+  name: '合围巨兽',
+  scale: 2.5, // 底座半径 14 → 35:比精英(14 × 1.5 = 21)还大一圈
+  hpMul: 12, // 底座 40 → 480(8 分钟时间缩放后 ≈ 826)
+  contactDamageMul: 2, // 底座 18 → 36:大质量撞击
+  speedMul: 0.8, // 底座 70 → 56:大而慢
+  accelMul: 0.5, // 底座 4 → 2:转向迟钝
+  chargeRangeMul: 1.5, // 底座 420 → 630:大个子起手圈跟着大
+  chargeWindup: 1.2, // 底座 0.9 → 1.2:更长前摇,预告更早
+  chargeSpeedMul: 1, // 底座 380 → 380
+  chargeDuration: 1.2, // 占位待调
+  chargeRecover: 1.8, // 占位待调(冲完长硬直 = 反打窗口)
+  summonInterval: 9, // 占位待调:每 9 秒召唤一批
+  summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
+  summonRingRadius: 120, // 占位待调
+  summonCounts: [6, 2, 0, 0], // 6 蜂群蛭 + 2 侧掠者,型号/数量直给
+  scrapMul: 4, // 底座 4 → 16:大额残骸,16 星币落地前就是它
+};
+
 // 行为 = 接近原语 + 是否带冲锋;四型全部由三原语(seek/strafe/charge)组合而成 ——
 // 每多一型就多一个 class 的做法在这里会退化成一堆只差两个数的子类。
 export const BH_SEEK = 0; // 直线追船

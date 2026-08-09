@@ -23,7 +23,14 @@ import {
 } from '../data/affixes';
 import { DROP_MAX_ALIVE } from '../data/economy';
 import { DECK_PIECE_SQUARE } from '../data/deckPieces';
-import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import {
+  ENEMIES,
+  KIND_BEETLE,
+  KIND_BOSS,
+  KIND_STRAFER,
+  KIND_SWARM,
+  KIND_TRAILER,
+} from '../data/enemies';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   FX_LIFE_BEAM,
@@ -1267,8 +1274,9 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
 });
 
 /**
- * 局终判定(08 号 T3)。World **只做到"判"为止** —— 结论落成 result 与一次 onGameOver,
- * 暂停/重开/结算界面全在 main.ts,故这里钉的只有四件事:判得对不对(胜/负/失败优先)、
+ * 局终判定(08 号 T3 + 15 号 Boss)。World **只做到"判"为止** —— 结论落成 result 与一次 onGameOver,
+ * 暂停/重开/结算界面全在 main.ts,故这里钉的只有四件事:判得对不对
+ * (胜利 = 脚本走完且 Boss 已击杀 / 失败 / 失败优先)、
  * 响几次(各一次、判完不改口)、判完还能不能接着 step(能,世界不认识"游戏流程")、
  * 以及船沉之后受击结算是不是真的整段停手(连火花都不再推)。
  *
@@ -1320,7 +1328,7 @@ describe('局终判定(08 号 T3:胜负结论,World 只判不停)', () => {
     expect(n).toBe(0);
   });
 
-  it('脚本走完 = 胜利:走完那一帧才置 RESULT_WIN,onGameOver 恰好响一次', () => {
+  it('脚本走完不算赢:击杀 Boss 的那一帧才落 RESULT_WIN,onGameOver 恰好响一次', () => {
     useShortScript(DUR);
     const w = new World(61);
     const seen: number[] = [];
@@ -1334,6 +1342,22 @@ describe('局终判定(08 号 T3:胜负结论,World 只判不停)', () => {
 
     w.step();
     expect(w.wave.done).toBe(true);
+    // 脚本走完只是进入 Boss 战(15 号):没杀掉 Boss 就不算赢
+    expect(w.bossPhase).toBe(1);
+    expect(w.result).toBe(RESULT_RUNNING);
+    expect(seen).toEqual([]);
+
+    // 再空跑一秒:波次已闭嘴、Boss 还在场上,依然不算赢
+    for (let i = 0; i < SIM_HZ; i++) w.step();
+    expect(w.result).toBe(RESULT_RUNNING);
+    const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS)!;
+    expect(boss).toBeDefined();
+    expect(boss.dead).toBe(false);
+
+    // 击杀 Boss:帧尾 reap 翻阶段,同一帧 settleOutcome 落结论
+    expect(w.damageEnemy(boss, 9999)).toBe(true);
+    w.step();
+    expect(w.bossPhase).toBe(2);
     expect(w.result).toBe(RESULT_WIN);
     expect(seen).toEqual([RESULT_WIN]);
 
@@ -1406,6 +1430,11 @@ describe('局终判定(08 号 T3:胜负结论,World 只判不停)', () => {
     w.onGameOver = (r) => seen.push(r);
 
     for (let i = 0; i < CROSS; i++) w.step();
+    expect(w.wave.done).toBe(true);
+    expect(w.bossPhase).toBe(1); // 脚本走完 = Boss 登场,胜负未分
+    const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS)!;
+    expect(w.damageEnemy(boss, 9999)).toBe(true);
+    w.step();
     expect(w.result).toBe(RESULT_WIN);
 
     expect(w.damageShip(w.ship.maxHp, 100, 0)).toBe(true);
@@ -1415,10 +1444,45 @@ describe('局终判定(08 号 T3:胜负结论,World 只判不停)', () => {
     expect(seen).toEqual([RESULT_WIN]);
   });
 
+  it('Boss 阶段状态进 checksum:phase / 召唤游标 / 召唤计时各自单独分叉又合流', () => {
+    useShortScript(DUR);
+    const a = new World(69);
+    const b = new World(69);
+    for (let i = 0; i < CROSS; i++) {
+      a.step();
+      b.step();
+    }
+    expect(a.checksum()).toBe(b.checksum());
+    expect(a.bossPhase).toBe(1); // 非空过:Boss 真的登场了
+
+    // 三项真状态逐个分叉 → 补上同一下又合流:每一项都是**单独**进的哈希
+    const mutations: ((w: World) => void)[] = [
+      (w) => (w.bossPhase = 2),
+      (w) => (w.bossSummonN += 1),
+      (w) => (w.bossSummonCooldown += 0.5),
+    ];
+    for (const mutate of mutations) {
+      mutate(a);
+      expect(a.checksum()).not.toBe(b.checksum());
+      mutate(b);
+      expect(a.checksum()).toBe(b.checksum());
+    }
+
+    // bossKilledAt 是击杀时刻的一次性记录(与 kills 同口径,派生量):不进哈希
+    const before = a.checksum();
+    a.bossKilledAt += 3.3;
+    expect(a.checksum()).toBe(before);
+  });
+
   it('World 判完不自己停手:step() 照常推进 tick/elapsed(暂停是 main.ts 的事)', () => {
     useShortScript(DUR, 60);
     const w = new World(66);
     for (let i = 0; i < CROSS; i++) w.step();
+    expect(w.wave.done).toBe(true);
+    // 脚本走完只是进入 Boss 战:杀掉 Boss 才算赢,然后才开始量"判完不停手"
+    const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS)!;
+    expect(w.damageEnemy(boss, 9999)).toBe(true);
+    w.step();
     expect(w.result).toBe(RESULT_WIN);
     const tick = w.tick;
     const alive = w.enemies.size;

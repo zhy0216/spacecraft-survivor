@@ -20,7 +20,7 @@
  */
 import type { Pool } from '../core/pool';
 import { ELITE } from '../data/affixes';
-import { ENEMIES, ENEMY_RADIUS_MAX } from '../data/enemies';
+import { ENEMIES, ENEMY_RADIUS_MAX, KIND_BOSS } from '../data/enemies';
 import { type Enemy, enemyRadius } from './enemy';
 import { type FireSink, FXV_BLAST } from './fx';
 
@@ -187,7 +187,7 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
     const e = scratch[i]!;
     if (e.dead) continue; // 本帧已被别人打死:尸体整帧都还在场上,但不该再吃一发(否则 10 号的掉落会重复给)
     const def = ENEMIES[e.kind];
-    if (!def) continue; // kind 越界只是不打这一只,不炸掉整局(与渲染层同一条兜底口径)
+    if (!def && e.kind !== KIND_BOSS) continue; // kind 越界只是不打这一只,不炸掉整局;Boss 是表外的合法目标(15 号)
     const dx = e.x - b.x;
     const dy = e.y - b.y;
     const d2 = dx * dx + dy * dy;
@@ -259,7 +259,7 @@ function blast(b: Bullet, sink: FireSink): void {
     const e = scratch[i]!;
     if (e.dead) continue;
     const def = ENEMIES[e.kind];
-    if (!def) continue;
+    if (!def && e.kind !== KIND_BOSS) continue; // 同直射弹兜底:Boss 是表外的合法目标
     const dx = e.x - b.x;
     const dy = e.y - b.y;
     const r = b.aoeRadius + enemyRadius(e);

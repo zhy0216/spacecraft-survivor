@@ -141,6 +141,7 @@ function installDom(): StubDom {
 }
 
 interface StubEnemy {
+  kind?: number;
   affixes: number;
   hp: number;
   maxHp: number;
@@ -199,8 +200,8 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
-    // 与屏下缘精英血条,没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(5);
+    // 与屏下缘两根血条(精英 + Boss),没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(6);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -271,6 +272,46 @@ describe('createHud', () => {
     );
     expect(findText(root, '45 / 100')).toBeDefined();
     expect(findText(root, '10 / 100')).toBeUndefined();
+  });
+
+  it('Boss 血条:常驻直到击杀 —— 无 Boss 隐藏,有 Boss 亮出并反映 hp/maxHp,出池当帧隐藏', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const boss = root.children[5]!;
+    expect(boss.style.display).toBe('none');
+
+    // Boss(kind 4,affixes 恒 0)进场:血条亮出,比例钉 Boss 本体的 hp/maxHp
+    hud.setWorld(
+      stubWorld({ enemies: { items: [{ kind: 4, affixes: 0, hp: 240, maxHp: 480 }] } }) as unknown as World,
+    );
+    expect(boss.style.display).toBe('block');
+    expect(findText(root, '240 / 480')).toBeDefined();
+    const fill = boss.children[1]!.children[0]!;
+    expect(fill.style.width).toBe('50%');
+
+    // 击杀(Boss 出池)当帧隐藏
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(boss.style.display).toBe('none');
+  });
+
+  it('Boss 血条与精英血条互不复用:场上有 Boss 又有精英时两根条各亮各的', () => {
+    createHud({
+      world: stubWorld({
+        enemies: {
+          items: [
+            { affixes: 0b001, hp: 30, maxHp: 200 },
+            { kind: 4, affixes: 0, hp: 240, maxHp: 480 },
+          ],
+        },
+      }) as unknown as World,
+    });
+    const root = dom.ui.children[0]!;
+    const elite = root.children[4]!;
+    const boss = root.children[5]!;
+    expect(elite.style.display).toBe('block');
+    expect(boss.style.display).toBe('block');
+    expect(findText(root, '30 / 200')).toBeDefined();
+    expect(findText(root, '240 / 480')).toBeDefined();
   });
 
   it('时停淡出;重开只换 World 引用,不重复 append DOM', () => {

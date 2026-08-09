@@ -71,6 +71,12 @@ describe('resultTitle / resultNote', () => {
     }
   });
 
+  it('胜利文案挂 Boss(15 号):不再是"航段全通"那句 —— 胜利的唯一来路是 Boss 已击杀', () => {
+    expect(resultTitle(RESULT_WIN)).toContain('Boss');
+    expect(resultTitle(RESULT_WIN)).not.toContain('航段全通');
+    expect(resultNote(RESULT_WIN)).toContain('Boss');
+  });
+
   it('未知码把码印出来,**不静默兜底成胜利** —— 那样一条判定写反了都没人看得见', () => {
     // RESULT_RUNNING 弹出结算本身就是个 bug(局还没完),界面得当场把它喊出来
     expect(resultTitle(RESULT_RUNNING)).toContain(String(RESULT_RUNNING));
@@ -87,18 +93,34 @@ function summary(over: Partial<RunSummary> = {}): RunSummary {
     kills: 1234,
     segment: 4,
     segmentCount: 4,
+    bossKilledAtSec: 0,
     silhouette: null,
     ...over,
   };
 }
 
 describe('summaryText', () => {
-  it('三行:存活时间 / 击杀数 / 航段进度,一行都不许少', () => {
-    const lines = summaryText(summary({ survivedSec: 125, kills: 7, segment: 1 })).split('\n');
+  it('失败局三行:存活时间 / 击杀数 / 航段进度,一行都不许少,也不带 Boss 行', () => {
+    const lines = summaryText(
+      summary({ result: RESULT_LOSE, survivedSec: 125, kills: 7, segment: 1 }),
+    ).split('\n');
     expect(lines.length).toBe(3);
     expect(lines[0]).toContain('2:05');
     expect(lines[1]).toContain('7');
     expect(lines[2]).toContain('2/4');
+    expect(lines.join('\n')).not.toContain('Boss 击杀');
+  });
+
+  it('胜利局多一行 Boss 击杀时间(15 号),格式与存活时间同款 m:ss', () => {
+    const lines = summaryText(
+      summary({ result: RESULT_WIN, survivedSec: 550, kills: 1234, bossKilledAtSec: 550 }),
+    ).split('\n');
+    expect(lines.length).toBe(4);
+    expect(lines[3]).toContain('Boss 击杀');
+    expect(lines[3]).toContain('9:10');
+    // 未击杀(0)也不印成负数/乱码:照 formatDuration 的夹 0 口径显示 0:00
+    const zero = summaryText(summary({ result: RESULT_WIN, bossKilledAtSec: 0 })).split('\n');
+    expect(zero[3]).toContain('0:00');
   });
 
   it('击杀数取整(将来有人往里塞加权分也不会印出小数)', () => {

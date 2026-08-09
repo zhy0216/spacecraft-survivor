@@ -70,7 +70,7 @@ export interface WaveState {
   dirRad: number;
   /** 脚本计划强度 = 本段各 stream 当前速率之和(只/秒);供调试与脚本测试，不冒充实际生成。**派生量** */
   intensity: number;
-  /** segment >= WAVE_SEGMENTS.length 的**派生量**;World 据此判胜利 */
+  /** segment >= WAVE_SEGMENTS.length 的**派生量**;World 据此进入 Boss 战(15 号),胜利还要 Boss 已击杀(见 world.settleOutcome) */
   done: boolean;
 }
 

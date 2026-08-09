@@ -5,6 +5,7 @@
  */
 import { afterEach, expect, it } from 'vitest';
 import { SIM_HZ } from '../core/loop';
+import { KIND_BOSS } from '../data/enemies';
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import { tuning } from './config';
 import { canWeldPiece, isPlaceSuccess, WELD_OK } from './deck';
@@ -68,6 +69,17 @@ function settleRefit(w: World): void {
   expect(w.completeRefit()).toBe(true);
 }
 
+/**
+ * 真脚本走完 = 进入 Boss 战(15 号)。塔的伤害管线对 KIND_BOSS 的越界兜底是
+ * "不打这一只"(弹道塔的 kind 越界跳过,todos/15 渲染/弹道侧跟进前),
+ * 故机器人直接击杀 Boss —— 与精英击杀同一条口径,两局在同一帧做同一件事,
+ * 经济账与最终 checksum 仍逐位可比。
+ */
+function killBoss(w: World): void {
+  const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS);
+  if (boss) w.damageEnemy(boss, 9999);
+}
+
 it(
   '真脚本一局自然完成 12–15 次升级,同 seed 的经济与最终 checksum 逐位一致',
   () => {
@@ -78,7 +90,8 @@ it(
     applyStartingLoadout(a.deck);
     applyStartingLoadout(b.deck);
 
-    // 多留 1 秒兜住逐帧浮点跨段边界;正常会在 WAVE_TOTAL_TIME 左右落成 RESULT_WIN 后提前退出。
+    // 多留 1 秒兜住逐帧浮点跨段边界;正常会在 WAVE_TOTAL_TIME 左右进入 Boss 战、
+    // 击杀 Boss 后落成 RESULT_WIN 再提前退出。
     const maxFrames = (WAVE_TOTAL_TIME + 1) * SIM_HZ;
     for (let frame = 0; frame < maxFrames; frame++) {
       a.step();
@@ -87,6 +100,8 @@ it(
       settleRefit(b);
       settleOffer(a);
       settleOffer(b);
+      killBoss(a);
+      killBoss(b);
       if (a.result === RESULT_WIN && b.result === RESULT_WIN) break;
     }
 

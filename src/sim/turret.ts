@@ -25,7 +25,7 @@
  *     而光束与链电本就没有"飞行"这回事,给它们造弹丸只会凭空多一套要维护的状态。
  */
 import type { SpatialHash } from '../core/spatialHash';
-import { ENEMIES } from '../data/enemies';
+import { ENEMIES, KIND_BOSS } from '../data/enemies';
 import {
   FX_BEAM,
   FX_BULLET,
@@ -420,7 +420,7 @@ function fireLance(
     const e = candidates[i]!;
     if (e.dead) continue;
     const edef = ENEMIES[e.kind];
-    if (!edef) continue; // kind 越界只是不打这一只,不炸掉整局(与渲染层同一条兜底口径)
+    if (!edef && e.kind !== KIND_BOSS) continue; // kind 越界只是不打这一只,不炸掉整局;Boss 是表外的合法目标(15 号)
     const dx = e.x - muzzle.x;
     const dy = e.y - muzzle.y;
     const along = dx * ux + dy * uy;

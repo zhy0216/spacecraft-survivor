@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { BOSS } from '../data/enemies';
 import type { ElitePeek } from '../sim/waves';
-import { ELITE_WARN_LEAD, eliteWarnActive, eliteWarnKey } from './renderer';
+import {
+  bossSummonWarnActive,
+  bossSummonWarnFraction,
+  bossWarnOnEnter,
+  ELITE_WARN_LEAD,
+  eliteWarnActive,
+  eliteWarnKey,
+} from './renderer';
 
 /**
  * 精英出场预警的判定/去重是纯函数(见 renderer.ts 的导出),在这里钉 14 号的两条口径:
@@ -43,5 +51,40 @@ describe('eliteWarnKey(发声去重键)', () => {
     expect(eliteWarnKey(0, 0)).toBe(0);
     expect(eliteWarnKey(0, 0)).not.toBe(-1);
     expect(eliteWarnKey(0, 0)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('bossSummonWarnActive(召唤预告窗口,15 号)', () => {
+  it('只有 Boss 战中(bossPhase === 1)才亮;未进场 / 已击杀都不提示', () => {
+    expect(bossSummonWarnActive(1, 0)).toBe(false);
+    expect(bossSummonWarnActive(1, 2)).toBe(false);
+    expect(bossSummonWarnActive(1, 1)).toBe(true);
+  });
+
+  it('冷却超出预警窗不亮;进窗(≤ BOSS.summonWarnTime)才亮;到 0(已触发,sim 当场重置)不亮', () => {
+    expect(bossSummonWarnActive(BOSS.summonWarnTime + 0.01, 1)).toBe(false);
+    expect(bossSummonWarnActive(BOSS.summonWarnTime, 1)).toBe(true);
+    expect(bossSummonWarnActive(BOSS.summonWarnTime / 2, 1)).toBe(true);
+    expect(bossSummonWarnActive(0, 1)).toBe(false);
+  });
+});
+
+describe('bossSummonWarnFraction(倒计时环弧长)', () => {
+  it('刚进窗满弧(1),触发前一刻收没(→0),坏分母回落 0', () => {
+    expect(bossSummonWarnFraction(BOSS.summonWarnTime)).toBe(1);
+    expect(bossSummonWarnFraction(BOSS.summonWarnTime / 2)).toBeCloseTo(0.5);
+    expect(bossSummonWarnFraction(0)).toBe(0);
+    expect(bossSummonWarnFraction(Number.NaN)).toBe(0);
+  });
+});
+
+describe('bossWarnOnEnter(出场音帧判定)', () => {
+  it('只有 bossPhase 翻进 1 的那一帧该响 —— 停留 / 击杀 / 首帧 0 都不响', () => {
+    expect(bossWarnOnEnter(0, 1)).toBe(true);
+    expect(bossWarnOnEnter(-1, 1)).toBe(true);
+    expect(bossWarnOnEnter(0, 0)).toBe(false);
+    expect(bossWarnOnEnter(1, 1)).toBe(false);
+    expect(bossWarnOnEnter(1, 2)).toBe(false);
+    expect(bossWarnOnEnter(-1, 0)).toBe(false);
   });
 });

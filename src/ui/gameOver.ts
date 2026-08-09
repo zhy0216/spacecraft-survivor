@@ -72,6 +72,8 @@ export interface RunSummary {
   segment: number;
   /** WAVE_SEGMENTS.length;由调用方传而不是本文件去 import 数据表 —— 短脚本单测才好摆 */
   segmentCount: number;
+  /** Boss 被击杀的时刻(elapsed 秒)= world.bossKilledAt;未击杀 = 0。只有胜利局会印它 */
+  bossKilledAtSec: number;
   /** 船形剪影 dataURL;渲染层抓不到就是 null,此时那一格整个不显示 */
   silhouette: string | null;
 }
@@ -110,12 +112,14 @@ export function segmentLabel(segment: number, count: number): string {
 /**
  * 结果标题。**未知码不许静默兜底成胜利**(与 ui/upgradeFlow.ts 的 denyMessage 同一条口径):
  * RESULT_RUNNING 或将来新加的结果码漏配文案时,得当场把码印出来 ——
- * 悄悄显示"航段全通"的话,一条判定写反了都没人看得见。
+ * 悄悄显示"Boss 击破"的话,一条判定写反了都没人看得见。
+ * 胜利文案挂 Boss(15 号):胜利的唯一来路是 Boss 已击杀(world.ts 的 settleOutcome),
+ * 不再有"脚本走完即赢"这回事,标题跟着判定口径走。
  */
 export function resultTitle(result: number): string {
   switch (result) {
     case RESULT_WIN:
-      return '航段全通';
+      return 'Boss 击破';
     case RESULT_LOSE:
       return '船体解体';
     default:
@@ -127,7 +131,7 @@ export function resultTitle(result: number): string {
 export function resultNote(result: number): string {
   switch (result) {
     case RESULT_WIN:
-      return '脚本走完 —— 这艘船活着开出了怪潮';
+      return '封锁线 Boss 已被击破 —— 这艘船活着开出了怪潮';
     case RESULT_LOSE:
       return '船体 HP 归零 —— 这一局的账都记在甲板上';
     default:
@@ -140,13 +144,20 @@ export function resultNote(result: number): string {
  * "结算到底显示了什么"于是能在 Node 里数出来 —— 少一行、把击杀数印成小数、
  * 胜利时航段印成 5/4,全都是要等真人打完一整局(8–10 分钟)才看得见的错。
  * 击杀数取整:kills 本来就是整数,这一句防的是将来有人往里塞个加权分。
+ * 胜利时追加一行 Boss 击杀时刻。失败局**一律不显示这一行**(简单口径):
+ * 这一行是"赢了这场仗"的记功,不是统计数字 —— 失败局就算真杀了 Boss
+ * (Boss 死后被虫群淹了),读它也只是在伤口上撒盐。
  */
 export function summaryText(s: RunSummary): string {
-  return [
+  const lines = [
     `存活时间  ${formatDuration(s.survivedSec)}`,
     `击杀数量  ${Math.round(s.kills)}`,
     `航段进度  ${segmentLabel(s.segment, s.segmentCount)}`,
-  ].join('\n');
+  ];
+  if (s.result === RESULT_WIN) {
+    lines.push(`Boss 击杀  ${formatDuration(s.bossKilledAtSec)}`);
+  }
+  return lines.join('\n');
 }
 
 /**
