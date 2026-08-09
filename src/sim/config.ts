@@ -10,11 +10,14 @@ import { ENEMY_RADIUS_MAX } from '../data/enemies';
 
 export const tuning = {
   // —— 船(GDD §3.2)——
-  // 以下四项由 sim/ship.ts 的 stepShip 每逻辑帧现读:现读才有"面板拖一下立刻能体感对比",
+  // 以下五项由 sim/ship.ts 的 stepShip 每逻辑帧现读:现读才有"面板拖一下立刻能体感对比",
   // 缓存进局部变量就得重启才生效(02 号 issue 验收标准)。
   shipCruiseSpeed: 130, // px/s
   shipAccel: 260, // px/s²
   shipTurnRate: 100, // °/s,全游戏最重要的手感参数
+  // 转舵时每秒消掉多少比例的横向滑移。0 = 纯惯性漂移,越大则航迹越快跟上船头。
+  // 4/s 保留一小段可读的侧滑,但不再出现"船头已转完、船还在横着冲"。
+  shipSteeringGrip: 4, // 1/s
   shipDamping: 1.2, // 松手 ~1.2s 内停
   // 船体尺寸:渲染器构造时一次性读取(灰盒多边形只建一次),故不进调参面板 ——
   // 运行期改不会重建几何,只会让镜头缩放与船体实际大小口径错位。

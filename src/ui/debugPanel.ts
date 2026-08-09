@@ -155,9 +155,10 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   // 同样只作用于新生成的敌人:HP 在生成那一刻按世界已过时间定死(GDD §14)
   enemy.addBinding(tuning, 'enemyHpScalePerMinute', { label: 'HP/分钟', min: 0, max: 0.5, step: 0.01 });
 
-  // 默认展开:M0 门就是靠这四根滑杆边玩边调出来的,不该让人先点开一层
+  // 默认展开:M0 门就是靠这批滑杆边玩边调出来的,不该让人先点开一层
   const ship = pane.addFolder({ title: '船体手感', expanded: true });
   ship.addBinding(tuning, 'shipTurnRate', { label: '转向 °/s', min: 20, max: 300, step: 5 });
+  ship.addBinding(tuning, 'shipSteeringGrip', { label: '转向抓力 /s', min: 0, max: 12, step: 0.5 });
   ship.addBinding(tuning, 'shipCruiseSpeed', { label: '巡航 px/s', min: 40, max: 400, step: 5 });
   ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
   ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });

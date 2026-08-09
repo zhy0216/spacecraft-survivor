@@ -19,7 +19,13 @@ import {
 } from './ship';
 import { World } from './world';
 
-const BASE = { shipTurnRate: 100, shipCruiseSpeed: 130, shipAccel: 260, shipDamping: 1.2 };
+const BASE = {
+  shipTurnRate: 100,
+  shipSteeringGrip: 4,
+  shipCruiseSpeed: 130,
+  shipAccel: 260,
+  shipDamping: 1.2,
+};
 Object.assign(tuning, BASE);
 // 有用例会拖参数来验证"每帧现读",跑完必须还原,否则污染同文件后续用例
 afterEach(() => Object.assign(tuning, BASE));
@@ -154,6 +160,36 @@ describe('stepShip 推进', () => {
     tuning.shipCruiseSpeed = 40;
     stepShip(ship, UP, SIM_DT);
     expect(speed(ship)).toBeCloseTo(40, 6);
+  });
+
+  it('高速转舵会柔和收掉横向旧速度,航迹跟上船头但仍保留可读侧滑', () => {
+    const ship = createShip();
+    run(ship, UP, 120); // 先朝上跑到满巡航
+    run(ship, RIGHT, 54); // 100°/s 转 90° 需要 0.9s,此时船头刚好朝右
+
+    const velocityHeading = Math.atan2(ship.vy, ship.vx);
+    const lag = Math.abs(wrapAngle(ship.heading - velocityHeading));
+    // 旧实现会落后约 43°:船头已经朝右,船仍明显朝右上方横滑。
+    expect(lag).toBeLessThan(25 * DEG2RAD);
+    // 不直接把速度吸到船头上:保留少量太空惯性,转弯才不像贴轨道。
+    expect(lag).toBeGreaterThan(5 * DEG2RAD);
+    expect(speed(ship)).toBeCloseTo(tuning.shipCruiseSpeed, 6);
+  });
+
+  it('shipSteeringGrip 每帧现读:0 = 纯漂移,高抓力让航向更快追上船头', () => {
+    const loose = createShip();
+    const grippy = createShip();
+    run(loose, UP, 120);
+    run(grippy, UP, 120);
+
+    tuning.shipSteeringGrip = 0;
+    run(loose, RIGHT, 54);
+    tuning.shipSteeringGrip = 8;
+    run(grippy, RIGHT, 54);
+
+    const looseLag = Math.abs(wrapAngle(loose.heading - Math.atan2(loose.vy, loose.vx)));
+    const grippyLag = Math.abs(wrapAngle(grippy.heading - Math.atan2(grippy.vy, grippy.vx)));
+    expect(grippyLag).toBeLessThan(looseLag * 0.5);
   });
 });
 

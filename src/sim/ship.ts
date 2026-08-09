@@ -79,8 +79,9 @@ export function createShip(): Ship {
 
 /**
  * 推进一逻辑帧。顺序不可改(单测按此钉住):
- * 存上一帧 → 转向(有上限)→ 沿船头推力 → 夹巡航速度 / 或纯阻尼 → 积分位置。
- * 四个 tuning 参数一律每帧现读 —— 这就是"面板拖动即时改变手感、无需重启"的唯一实现机制。
+ * 存上一帧 → 转向(有上限)→ 沿船头推力 → 柔化横向旧速度 → 夹巡航速度 /
+ * 或纯阻尼 → 积分位置。五个 tuning 参数一律每帧现读 —— 这就是"面板拖动即时改变手感、
+ * 无需重启"的唯一实现机制。
  */
 export function stepShip(
   ship: Ship,
@@ -103,8 +104,22 @@ export function stepShip(
     ship.heading = wrapAngle(ship.heading + Math.max(-maxTurn, Math.min(maxTurn, diff)));
 
     // 推力沿船头方向、而不是沿期望航向:这才产生"先转船、再找射界"的手感(GDD §3.1 走位 = 火控)
-    ship.vx += Math.cos(ship.heading) * tuning.shipAccel * dt;
-    ship.vy += Math.sin(ship.heading) * tuning.shipAccel * dt;
+    const hx = Math.cos(ship.heading);
+    const hy = Math.sin(ship.heading);
+    ship.vx += hx * tuning.shipAccel * dt;
+    ship.vy += hy * tuning.shipAccel * dt;
+
+    // 当前速度不会随船头自动旋转:若只叠前向推力,高速转 90° 后航向会落后船头四十多度,
+    // 镜头已经朝新方向前视,船却还横着冲,观感就像转向被旧速度拖住。这里把速度拆成沿船头/
+    // 横向两路,只指数衰减横向分量:船头方向的惯性与巡航速度都不被偷改,侧滑也不会被一帧吸死。
+    const sideX = -hy;
+    const sideY = hx;
+    const forwardSpeed = ship.vx * hx + ship.vy * hy;
+    const lateralSpeed = ship.vx * sideX + ship.vy * sideY;
+    const grip = Math.exp(-Math.max(0, tuning.shipSteeringGrip) * dt);
+    const grippedLateralSpeed = lateralSpeed * grip;
+    ship.vx = hx * forwardSpeed + sideX * grippedLateralSpeed;
+    ship.vy = hy * forwardSpeed + sideY * grippedLateralSpeed;
 
     const sp = Math.hypot(ship.vx, ship.vy);
     if (sp > tuning.shipCruiseSpeed) {
