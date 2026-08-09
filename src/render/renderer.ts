@@ -208,6 +208,11 @@ const DECK_CELL_GAP = CELL * 0.055;
 const DECK_MODULE_SIZE = 0.88;
 /** fal.ai 候选图的正面朝纹理上方(-Y),而甲板局部 0 弧度朝船头(+X),两者相差 90°。 */
 const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
+/**
+ * 甲板视图(升级三选一 / 整备)里船体的固定朝向:局部 +X = 船头,转到屏幕正上方要 -90°。
+ * build 界面展示的是"这艘船"而不是战场 —— 船头该指哪不归进入页面那一刻的航向管。
+ */
+const DECK_VIEW_UP_FACING = -Math.PI / 2;
 /** 舰壳比初始 3×4 甲板略大一圈，露出装甲侧裙、推进器和舰艏。 */
 const SHIP_HULL_LENGTH_PAD = 0.72;
 const SHIP_HULL_WIDTH_PAD = 0.45;
@@ -1231,8 +1236,10 @@ export class Renderer {
     const scale = baseScale * this.deckZoom;
     // 屏高比例换算回世界单位,于是 look-ahead 的实际观感与窗口大小无关。
     // scale 已含视图缩放 ⇒ 拉近时镜头前推那一截(世界单位)自动同步归零,
-    // 放大后的甲板不会偏在屏幕后半区、上缘也不会伸出屏幕外
-    const lookAhead = this.assemblyView ? 0 : (screen.height * tuning.cameraLookAhead) / scale;
+    // 放大后的甲板不会偏在屏幕后半区、上缘也不会伸出屏幕外。
+    // 甲板视图(升级/整备)一律不推:船体已固定朝上,再沿真实航向看前就失去了"看船本身"的意义
+    const lookAhead =
+      this.assemblyView || this.deckViewRequested ? 0 : (screen.height * tuning.cameraLookAhead) / scale;
     this.worldLayer.scale.set(scale);
     // pivot 落在船前方 → 船被推到屏幕后半区,腾出的视野正是要转过去的方向
     const pivotX = sx + Math.cos(sh) * lookAhead;
@@ -1369,7 +1376,9 @@ export class Renderer {
       this.drawDeckLinks(deck);
     }
     this.deckG.position.set(sx, sy);
-    this.deckG.rotation = sh;
+    // 甲板视图(升级/整备)里船体固定朝上,不跟当前航向转 —— build 界面的可读性
+    // 优先于"船头此刻指哪";战斗态(Tab 射界叠加除外)才让甲板随航向旋转
+    this.deckG.rotation = this.deckViewRequested ? DECK_VIEW_UP_FACING : sh;
     // 甲板视图的缩放缓动在帧首、镜头 scale 落地之前就推完了(见上面的 stepDeckZoom 调用):
     // 时停期间 loop 不再推进(alpha 恒 0、世界一动不动),但 ticker 与 sync 照跑,
     // 于是这段缓动仍然动得起来;它本就该是纯表现,与 sim 的时间无关。
@@ -1775,8 +1784,11 @@ export class Renderer {
   /**
    * 塔图正面跟随 sim 的真实局部炮口角；世界朝向仍由 deckG.rotation 统一叠加。
    * 只遍历已存在的塔 Sprite（满甲板也只是十几项），不创建临时对象、不重算格心。
+   * 甲板视图(升级/整备)里跳过:模块一律朝上(与船体同向),不跟随射界方向
+   * —— build 界面展示的是船的整体构型,炮口角是战斗读数,不在这里掺和。
    */
   private syncDeckModuleRotations(): void {
+    if (this.deckViewRequested) return;
     for (let i = 0; i < this.deckTurretSprites.length; i++) {
       const binding = this.deckTurretSprites[i]!;
       const cell = binding.cell;
