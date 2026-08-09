@@ -50,6 +50,7 @@ import {
 } from '../data/affixes';
 import {
   DROP_MAX_ALIVE,
+  REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   skipRefundFor,
   upgradeCost as economyUpgradeCost,
@@ -128,6 +129,7 @@ import {
 import {
   createFxEvent,
   FX_LIFE_HULL_HIT,
+  FX_LIFE_IMPACT,
   FX_LIFE_KILL,
   FX_LIFE_SPARK,
   type FireSink,
@@ -135,6 +137,7 @@ import {
   FXV_BLAST,
   FXV_CHAIN,
   FXV_HULL_HIT,
+  FXV_IMPACT,
   FXV_KILL,
   FXV_LANCE,
   FXV_SPARK,
@@ -235,6 +238,8 @@ function fxLife(kind: number): number {
       return FX_LIFE_HULL_HIT;
     case FXV_KILL:
       return FX_LIFE_KILL;
+    case FXV_IMPACT:
+      return FX_LIFE_IMPACT;
     default:
       return FX_LIFE_BEAM;
   }
@@ -1401,6 +1406,12 @@ export class World {
     if (!this.refitPending) return false;
     this.refitPending = false;
     this.refitWelded = false;
+    // GDD §9 的船坞回血:整局唯一修复点。整备天然两分钟一次,与"重排"共用同一段休整时刻;
+    // 回血是确定性算术(不掷 rng),hp 本就在 checksum 里,同 seed 回放逐位不变。
+    this.ship.hp = Math.min(
+      this.ship.maxHp,
+      this.ship.hp + Math.ceil(this.ship.maxHp * REFIT_HEAL_FRACTION),
+    );
     this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
     return true;
   }

@@ -29,7 +29,7 @@ import {
   stepBullets,
 } from './bullet';
 import { applyDamage, createEnemy, type Enemy } from './enemy';
-import { type FireSink, FXV_BLAST } from './fx';
+import { type FireSink, FXV_BLAST, FXV_IMPACT } from './fx';
 
 /** 蜂群蛭体型 7:下面所有"合并半径 = 3 + 7 = 10"的算术都从这里来,不写死 */
 const R_SWARM = ENEMIES[KIND_SWARM]!.radius;
@@ -168,6 +168,7 @@ describe('直射弹命中(每帧最多一只 = 最近的那一只)', () => {
     expect(h.damages.length).toBe(1); // 不是"扫过一条线打一片" —— 那等于白送一次 AoE
     expect(h.damages[0]!.e).toBe(near);
     expect(h.damages[0]!.amount).toBe(6); // 伤害 = 发射那一刻定死的 b.damage,不回查塔
+    expect(h.fxs.map((fx) => fx.kind)).toEqual([FXV_IMPACT]);
     expect(far.hp).toBe(far.maxHp);
     expect(side.hp).toBe(side.maxHp);
     expect(h.bullets.size).toBe(0); // 不穿透 → 命中即回收

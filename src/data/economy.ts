@@ -119,6 +119,15 @@ export function skipRefundFor(cost: number): number {
 export const REROLL_PRICE = 10;
 
 /**
+ * 每轮整备结束(completeRefit)修复的船体比例(GDD §9:船坞 = 免费重排 + 回 30% HP)。
+ * 整局无回血是全仓最深的挫败源(任何碰撞都是永久债务,后期一次失误直接判死),
+ * 船坞是唯一合理的回血点 —— 它天然两分钟一次,且与"重排"共用同一段休整时刻。
+ * 取整用 ceil:maxHp 的 30% 不至于因为舍入变成"回了个寂寞"。HP 已在 World.checksum 里,
+ * 回血走确定性算术、不掷 rng,同 seed 回放逐位不变。
+ */
+export const REFIT_HEAL_FRACTION = 0.3;
+
+/**
  * 两次弹卡之间的最小间隔(秒)。settleUpgrade 原本每帧尾只判 scrap >= cost:
  * 一波混战攒出跨档余额时,恢复战斗的下一帧会立刻再次时停弹卡,战斗高潮被连环打断。
  * 5 秒只挡"背靠背",比平均升级间隔(约 40s)低一个量级,不挡正常节奏;

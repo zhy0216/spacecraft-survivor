@@ -33,6 +33,7 @@ export const FXV_HULL_HIT = 6; // 撞进核心区:真掉血
 // 最大缺口。单开一个 kind 而不是复用 FXV_BLAST:那是我方炸到敌人的 AoE 承诺(实心盘摊在
 // 真实 aoeRadius 上),这只是"一只怪没了"的短促句号,画法与色域(敌方红紫)都不同。
 export const FXV_KILL = 7; // 敌人死亡爆点:radius = 敌半径,towerType 借放敌型下标(取 enemyTint 配色)
+export const FXV_IMPACT = 8; // 直射弹命中火花:确认子弹确实打在敌人身上
 
 /**
  * 上面这两种的存续秒数。**刻意不进 data/towers 的 FX_LIFE_* 那一组** ——
@@ -47,6 +48,7 @@ export const FX_LIFE_HULL_HIT = 0.22; // 占位待调 —— 比火花长:真掉
 // 击杀爆点比受击那两种都长一点:它是玩家的正反馈,值得多留几帧;但仍远短于开火那组的
 // FX_LIFE_BLAST 之外的量级 —— 终局约 8 杀/秒,0.25s 存续让在场爆点稳定在个位数,远低于 500 弹预算
 export const FX_LIFE_KILL = 0.25; // 占位待调
+export const FX_LIFE_IMPACT = 0.1;
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),
@@ -71,11 +73,25 @@ export interface FxEvent {
   towerType: number;
   /** 剩余存续秒。初值取 data/towers 的 FX_LIFE_*,由 World 每帧扣 dt */
   life: number;
+  /** 渲染层一次性消费锁，避免高刷新率或时停期间重复播放表现。 */
+  audioPlayed: boolean;
+  juicePlayed: boolean;
 }
 
 /** 池的 factory:字段一次性声明齐,运行期绝不新增 */
 export function createFxEvent(): FxEvent {
-  return { kind: 0, x0: 0, y0: 0, x1: 0, y1: 0, radius: 0, towerType: 0, life: 0 };
+  return {
+    kind: 0,
+    x0: 0,
+    y0: 0,
+    x1: 0,
+    y1: 0,
+    radius: 0,
+    towerType: 0,
+    life: 0,
+    audioPlayed: false,
+    juicePlayed: false,
+  };
 }
 
 /**
@@ -91,6 +107,8 @@ export function resetFxEvent(e: FxEvent): void {
   e.radius = 0;
   e.towerType = 0;
   e.life = 0;
+  e.audioPlayed = false;
+  e.juicePlayed = false;
 }
 
 /**

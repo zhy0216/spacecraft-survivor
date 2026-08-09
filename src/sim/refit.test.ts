@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { DECK_PIECE_BAR } from '../data/deckPieces';
+import { REFIT_HEAL_FRACTION } from '../data/economy';
 import { KIND_SWARM } from '../data/enemies';
 import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_GATLING, TOWER_MAX_LEVEL } from '../data/towers';
@@ -92,6 +93,37 @@ describe('两分钟波次整备', () => {
     expect(w.wave.segTime).toBeCloseTo(heldTime + SIM_DT, 12);
     expect(w.enemies.size).toBe(1);
     expect(w.offer).toEqual([]); // 完成整备后有冷却，不会下一帧背靠背弹普通升级
+  });
+
+  it('整备结束修复船体(GDD §9:船坞 = 免费重排 + 回 30% HP);满血不溢出,未在整备不生效', () => {
+    const w = new World(83);
+    const full = w.ship.maxHp;
+    w.ship.hp = Math.floor(full * 0.4);
+
+    expect(w.completeRefit()).toBe(false); // 未进入整备:一个字段都不动
+    expect(w.ship.hp).toBe(Math.floor(full * 0.4));
+
+    w.refitPending = true;
+    expect(w.completeRefit()).toBe(true);
+    // ceil:回血后 = 40% + 30% → 70%;若舍入用 floor,小 maxHp 下 30% 可能被吞成 0
+    expect(w.ship.hp).toBe(Math.floor(full * 0.4) + Math.ceil(full * REFIT_HEAL_FRACTION));
+
+    // 满血完成整备:回血夹在 maxHp 上,一分不溢出
+    w.refitPending = true;
+    expect(w.completeRefit()).toBe(true);
+    expect(w.ship.hp).toBe(full);
+
+    // 回血是确定性算术:同 seed 双世界、同操作序列,hp 与 checksum 逐位一致
+    const a = new World(84);
+    const b = new World(84);
+    a.ship.hp = b.ship.hp = Math.floor(full * 0.4);
+    a.refitPending = true;
+    b.refitPending = true;
+    expect(a.checksum()).toBe(b.checksum());
+    expect(a.completeRefit()).toBe(true);
+    expect(b.completeRefit()).toBe(true);
+    expect(a.ship.hp).toBe(b.ship.hp);
+    expect(a.checksum()).toBe(b.checksum());
   });
 
   it('甲板每轮最多焊一块；模块只能在整备期移动并保留等级', () => {

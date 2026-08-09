@@ -22,7 +22,7 @@ import type { Pool } from '../core/pool';
 import { ELITE } from '../data/affixes';
 import { ENEMIES, ENEMY_RADIUS_MAX, KIND_BOSS } from '../data/enemies';
 import { type Enemy, enemyRadius } from './enemy';
-import { type FireSink, FXV_BLAST } from './fx';
+import { type FireSink, FXV_BLAST, FXV_IMPACT } from './fx';
 
 /** 直射弹:飞行途中逐帧碰撞,穿透次数用光即回收 */
 export const BK_DIRECT = 0;
@@ -203,6 +203,7 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
 
   // 带节流系进伤害结算:词缀抗性(装甲/相位)在 World.damageEnemy 那一处按它判定
   sink.damage(best, b.damage, b.throttle);
+  sink.fx(FXV_IMPACT, b.x, b.y, b.x, b.y, 0, b.towerType);
   if (b.pierce <= 0) return false;
   b.pierce--;
   return pushPast(b, best, b.radius + bestRadius);

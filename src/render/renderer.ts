@@ -133,12 +133,14 @@ import { enemyRadius, ST_WINDUP } from '../sim/enemy';
 import { BOSS_WINDUP, bossRadius } from '../sim/boss';
 import {
   FX_LIFE_HULL_HIT,
+  FX_LIFE_IMPACT,
   FX_LIFE_KILL,
   FX_LIFE_SPARK,
   FXV_BEAM,
   FXV_BLAST,
   FXV_CHAIN,
   FXV_HULL_HIT,
+  FXV_IMPACT,
   FXV_KILL,
   FXV_LANCE,
   FXV_MUZZLE,
@@ -462,6 +464,9 @@ const FX_SPARK_DIRS = [0.707, 0.707, -0.707, 0.707, -0.707, -0.707, 0.707, -0.70
 const FX_HULL_HIT_R0 = 5;
 const FX_HULL_HIT_R1 = 17;
 const FX_HULL_HIT_WIDTH = 2.5;
+const FX_IMPACT_COLOR = 0xc8f4ff;
+const FX_IMPACT_LEN = 6;
+const FX_IMPACT_WIDTH = 1.4;
 
 /**
  * 击杀爆点 FXV_KILL(畅玩性调整):敌人死亡处一个从敌半径向外扩的短促圆环 + 四条放射短线。
@@ -490,6 +495,10 @@ const BROADSIDE_CYCLES = 1.5;
 const BROADSIDE_FLASH_ALPHA = 0.18;
 /** 渲染帧 dt 的上限(秒):切后台回来时 deltaMS 会是好几秒,不夹住就等于把反馈一口气跳完 */
 const BROADSIDE_MAX_DT = 0.1;
+const SHAKE_MAX_TRAUMA = 1;
+const SHAKE_DECAY_TAU = 0.12;
+const SHAKE_FREQUENCY = 48;
+const SHAKE_PIXEL_SCALE = 4.5;
 
 /**
  * 前摇指示器每帧重建几何(Graphics 不像粒子那样能只改位置),故设硬上限:超配额的本帧不画。
@@ -949,6 +958,10 @@ export class Renderer {
   /** 顿挫方向(世界系单位向量,= 开火那一舷法线的反向 = 后坐)。触发时定死,衰减期间不再跟船转 */
   private broadsideDirX = 0;
   private broadsideDirY = 0;
+  private shakeTrauma = 0;
+  private shakePhase = 0;
+  private shakeX = 0;
+  private shakeY = 0;
   /**
    * 齐射闪光:一张铺满屏幕的冷白薄片,挂在 **stage** 上而不是 worldLayer 里 ——
    * 闪光只能是"加"(叠一层亮色),而 Container.tint 是"乘",乘白色等于不变,压根闪不起来;
@@ -1229,11 +1242,17 @@ export class Renderer {
     // broadside 顿挫直接加在镜头的屏幕位置上:worldLayer 无旋转,故世界系的方向向量
     // 与屏幕系一一对应,不必再换算一次。screenToWorld 走的是 worldLayer.toLocal,
     // 于是抖动期间"光标底下是哪一格"依然算得对(那句注释里预留的"将来加震屏"就是这里)。
-    const kick = this.assemblyView ? 0 : this.stepBroadside(dt, sh);
+    const broadsideKick = this.assemblyView ? 0 : this.stepBroadside(dt, sh);
+    if (this.assemblyView) {
+      this.shakeX = 0;
+      this.shakeY = 0;
+    } else {
+      this.stepShake(dt);
+    }
     if (this.assemblyView && this.flashG.visible) this.flashG.visible = false;
     const viewportWidth = Math.max(1, screen.width - this.deckViewRightInset);
-    const posX = viewportWidth / 2 + this.broadsideDirX * kick;
-    const posY = screen.height / 2 + this.broadsideDirY * kick;
+    const posX = viewportWidth / 2 + this.broadsideDirX * broadsideKick + this.shakeX;
+    const posY = screen.height / 2 + this.broadsideDirY * broadsideKick + this.shakeY;
     this.worldLayer.position.set(posX, posY);
 
     // 星野与镜头同一帧同一组变换(含顿挫):它是世界锚定的背景,镜头动它就得动
@@ -2548,8 +2567,10 @@ export class Renderer {
       const def = TOWERS[e.towerType];
       // 开火音:开火事件是"这一帧发生了什么"的表现层读数,音频照同一批事件发声 ——
       // 节流值从甲板反查(事件不带 throttle),音频引擎自带同族限流,蜂群贴脸不糊成一片
+      const playAudio = !e.audioPlayed;
+      if (playAudio) e.audioPlayed = true;
       const family = this.shootFamily(e.kind);
-      if (family) audioBus.playShoot(family, def ? this.shootThrottle(e.towerType, def) : 1);
+      if (playAudio && family) audioBus.playShoot(family, def ? this.shootThrottle(e.towerType, def) : 1);
       const color = def ? def.tint : FX_TINT_FALLBACK;
       switch (e.kind) {
         case FXV_BEAM: {
@@ -2622,7 +2643,7 @@ export class Renderer {
           }
           // 四条射线共用一次 stroke:同一个事件同一个 alpha,拆开画只是白跑三趟
           g.stroke({ width: FX_SPARK_WIDTH, color: FX_SPARK_COLOR, alpha: t });
-          audioBus.playHurt('spark'); // 蹭甲板:细金属刮音,与真掉血的"撞击"同口径分家
+          if (playAudio) audioBus.playHurt('spark');
           break;
         }
         case FXV_HULL_HIT: {
@@ -2636,14 +2657,23 @@ export class Renderer {
             color: HULL_HIT_COLOR,
             alpha: t,
           });
-          audioBus.playHurt('hull'); // 真伤害:低频撞击,全仓最沉的反馈之一
+          if (playAudio) audioBus.playHurt('hull');
+          break;
+        }
+        case FXV_IMPACT: {
+          const t = fxFade(e.life, FX_LIFE_IMPACT);
+          const len = FX_IMPACT_LEN * t;
+          g.moveTo(e.x0 - len, e.y0).lineTo(e.x0 + len, e.y0);
+          g.moveTo(e.x0, e.y0 - len).lineTo(e.x0, e.y0 + len);
+          g.stroke({ width: FX_IMPACT_WIDTH, color: FX_IMPACT_COLOR, alpha: t });
+          if (playAudio) audioBus.playHurt('spark');
           break;
         }
         case FXV_KILL: {
           // 击杀爆点:towerType 一格借放的是**敌型下标**(见 sim/fx.ts),配色走 enemyTint ——
           // 上面按塔型取的 color 对这一种 kind 不适用,当场覆盖。radius = 敌半径(sim 填的),
           // 环从本体半径向外扩、射线向外缩,全部随 life 淡出:短促的一记"这只没了"的句号
-          audioBus.playKill(); // 短促爆点,与画面同拍 —— 爽感的正反馈一半在这里
+          if (playAudio) audioBus.playKill();
           const t = fxFade(e.life, FX_LIFE_KILL);
           const tint = enemyTint(e.towerType);
           const r = e.radius * (1 + (FX_KILL_EXPAND - 1) * (1 - t));
@@ -2756,6 +2786,26 @@ export class Renderer {
 
     // cos 起手 = 1:触发那一帧立刻给出最大位移(先 sin 的话第一帧纹丝不动,"顿挫"就没了)
     return Math.cos((1 - k) * BROADSIDE_CYCLES * Math.PI * 2) * k * BROADSIDE_SHAKE_PX;
+  }
+
+  private stepShake(dt: number): void {
+    const items = this.world.fx.items;
+    for (let i = 0; i < items.length; i++) {
+      const e = items[i]!;
+      if (e.juicePlayed) continue;
+      e.juicePlayed = true;
+      if (e.kind === FXV_HULL_HIT) this.shakeTrauma += 0.85;
+      else if (e.kind === FXV_IMPACT) this.shakeTrauma += 0.08;
+      else if (e.kind === FXV_KILL) this.shakeTrauma += 0.035;
+    }
+    this.shakeTrauma = Math.min(
+      SHAKE_MAX_TRAUMA,
+      this.shakeTrauma * Math.exp(-Math.max(0, dt) / SHAKE_DECAY_TAU),
+    );
+    this.shakePhase += Math.max(0, dt) * SHAKE_FREQUENCY;
+    const amplitude = this.shakeTrauma * this.shakeTrauma * SHAKE_PIXEL_SCALE;
+    this.shakeX = Math.sin(this.shakePhase * 1.7) * amplitude;
+    this.shakeY = Math.cos(this.shakePhase * 1.3) * amplitude;
   }
 
   /**
