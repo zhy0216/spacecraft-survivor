@@ -24,6 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { REROLL_PRICE, UPGRADE_CHOICE_COUNT, UPGRADE_SKIP_FEE } from '../data/economy';
+import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
 import {
@@ -187,11 +188,14 @@ describe('cardTitle', () => {
 
 describe('cardIcon', () => {
   it('塔/设施/拼块都有明确且互不串台的内建图标', () => {
-    const towerIcons = TOWERS.map((def) => cardIcon(towerOpt(def.type)));
+    // 17 号:进化塔只从配方来,升级卡池永远出不了它们(cardIcon 只会被可出卡的型号打到) ——
+    // 图标断言跟着卡池口径走,不要求给永远出不了卡的型号画图标
+    const offerableTowers = TOWERS.filter((def) => !isEvolutionTower(def.type));
+    const towerIcons = offerableTowers.map((def) => cardIcon(towerOpt(def.type)));
     const supportIcons = SUPPORTS.map((def) => cardIcon(supportOpt(def.type)));
     const pieceIcons = DECK_PIECES.map((def) => cardIcon(deckOpt(def.type)));
     const icons = [...towerIcons, ...supportIcons, ...pieceIcons];
-    expect(icons.length).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT + DECK_PIECES.length);
+    expect(icons.length).toBe(offerableTowers.length + SUPPORT_KIND_COUNT + DECK_PIECES.length);
     for (const icon of icons) {
       expect(icon.length).toBeGreaterThan(0);
       expect(icon).not.toBe('?');
@@ -220,13 +224,15 @@ describe('cardDesc', () => {
     }
   });
   it('塔卡报射界 / 射程 / 节流系三样,六座各不相同', () => {
-    const descs = TOWERS.map((def) => cardDesc(towerOpt(def.type)));
+    // 与 cardIcon 同一条口径:只枚举升级卡池里真出得了的塔(进化塔只从配方来)
+    const offerableTowers = TOWERS.filter((def) => !isEvolutionTower(def.type));
+    const descs = offerableTowers.map((def) => cardDesc(towerOpt(def.type)));
     for (const d of descs) {
       expect(d).toContain('射界');
       expect(d).toContain('射程');
     }
-    // 六座塔的描述撞车 = 三选一时根本比不出该选谁
-    expect(new Set(descs).size).toBe(TOWER_KIND_COUNT);
+    // 塔的描述撞车 = 三选一时根本比不出该选谁
+    expect(new Set(descs).size).toBe(offerableTowers.length);
     // 三种节流机制是 GDD §5.1 的分水岭,也是三种支援设施的作用锚点:卡片上必须报出来
     const throttles = ['弹药系', '过热系', '充能系'];
     for (const d of descs) expect(throttles.some((t) => d.includes(t))).toBe(true);

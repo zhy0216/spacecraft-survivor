@@ -31,12 +31,18 @@ import {
   THR_HEAT,
   TOWER_ARC,
   TOWER_AUTOCANNON,
+  TOWER_FIRESTORM,
+  TOWER_GATLING,
   TOWER_KIND_COUNT,
   TOWER_LASER,
   TOWER_MAX_LEVEL,
   TOWER_MORTAR,
+  TOWER_PARTICLE,
   TOWER_PD,
+  TOWER_PHASE,
   TOWER_RAILGUN,
+  TOWER_TESLA,
+  TOWER_THORN,
   towerAoeDamage,
   towerArcDeg,
   towerBurst,
@@ -79,7 +85,7 @@ const ACCESSORS: Array<[string, (def: TowerDef, level: number) => number]> = [
 describe('武器塔数值表', () => {
   it('下标 === type:sim 靠 TOWERS[cell.towerType] 直取,错一位就全塔串味', () => {
     expect(TOWERS.length).toBe(TOWER_KIND_COUNT);
-    expect(TOWER_KIND_COUNT).toBe(6); // GDD §5.2 的 MVP 六塔
+    expect(TOWER_KIND_COUNT).toBe(12); // GDD §5.2 的 MVP 六塔 + 17 号进化六塔
     TOWERS.forEach((def, i) => expect(def.type).toBe(i));
     expect(TOWERS[TOWER_AUTOCANNON]!.name).toBe('自动机炮');
     expect(TOWERS[TOWER_LASER]!.name).toBe('激光棱镜');
@@ -87,6 +93,12 @@ describe('武器塔数值表', () => {
     expect(TOWERS[TOWER_RAILGUN]!.name).toBe('磁轨炮');
     expect(TOWERS[TOWER_PD]!.name).toBe('点防阵列');
     expect(TOWERS[TOWER_MORTAR]!.name).toBe('等离子迫击炮');
+    expect(TOWERS[TOWER_GATLING]!.name).toBe('加特林要塞');
+    expect(TOWERS[TOWER_PHASE]!.name).toBe('相位切割者');
+    expect(TOWERS[TOWER_PARTICLE]!.name).toBe('粒子长矛');
+    expect(TOWERS[TOWER_TESLA]!.name).toBe('特斯拉冠冕');
+    expect(TOWERS[TOWER_FIRESTORM]!.name).toBe('轨道火雨');
+    expect(TOWERS[TOWER_THORN]!.name).toBe('荆棘壁垒');
   });
 
   it('自动机炮 = GDD §14 锚点五数,不会被"顺手调平衡"改掉', () => {
@@ -106,13 +118,21 @@ describe('武器塔数值表', () => {
     expect(towerMagazine(gun, 1)).toBe(20);
   });
 
-  it('六塔弧度与 GDD §5.2 一致,且一律取自 data/arcs 的档位(不许写裸数字)', () => {
+  it('十二塔弧度:六塔与 GDD §5.2 一致,进化塔沿袭基塔档位,一律取自 data/arcs(不许写裸数字)', () => {
     expect(TOWERS[TOWER_AUTOCANNON]!.arcDeg).toBe(ARC_MEDIUM_DEG); // 100°
     expect(TOWERS[TOWER_LASER]!.arcDeg).toBe(ARC_NARROW_DEG); // 60°
     expect(TOWERS[TOWER_ARC]!.arcDeg).toBe(ARC_WIDE_DEG); // 150°
     expect(TOWERS[TOWER_RAILGUN]!.arcDeg).toBe(ARC_VERY_NARROW_DEG); // 30°
     expect(TOWERS[TOWER_PD]!.arcDeg).toBe(ARC_WIDE_DEG); // 150°
     expect(TOWERS[TOWER_MORTAR]!.arcDeg).toBe(ARC_NARROW_DEG); // 60°
+
+    // 进化塔沿袭基塔的档位(签名在别处);加特林是唯一改弧度的:100° + 50° = 150°
+    expect(TOWERS[TOWER_GATLING]!.arcDeg).toBe(ARC_WIDE_DEG);
+    expect(TOWERS[TOWER_PHASE]!.arcDeg).toBe(ARC_NARROW_DEG);
+    expect(TOWERS[TOWER_PARTICLE]!.arcDeg).toBe(ARC_VERY_NARROW_DEG);
+    expect(TOWERS[TOWER_TESLA]!.arcDeg).toBe(ARC_WIDE_DEG);
+    expect(TOWERS[TOWER_FIRESTORM]!.arcDeg).toBe(ARC_NARROW_DEG);
+    expect(TOWERS[TOWER_THORN]!.arcDeg).toBe(ARC_WIDE_DEG);
 
     // 落在有序档位表里 = 没人偷偷写了个 137°,也没人给 MVP 塔挂上全向档
     // (ARC_OMNI_DEG 是绕开整套射界机制的例外,不在 ARC_TIERS_DEG 里)
@@ -124,32 +144,43 @@ describe('武器塔数值表', () => {
     }
   });
 
-  it('三种节流各两塔,机制字段与 throttle 自洽(06 号支援设施的三个作用锚点)', () => {
+  it('三种节流各四塔,机制字段与 throttle 自洽(06 号支援设施的三个作用锚点)', () => {
     const count = (thr: number): number => TOWERS.filter((d) => d.throttle === thr).length;
-    expect(count(THR_AMMO)).toBe(2); // 机炮 + 点防
-    expect(count(THR_HEAT)).toBe(2); // 激光 + 电弧
-    expect(count(THR_CHARGE)).toBe(2); // 磁轨 + 迫击炮
+    expect(count(THR_AMMO)).toBe(4); // 机炮/点防 + 加特林/荆棘
+    expect(count(THR_HEAT)).toBe(4); // 激光/电弧 + 相位/特斯拉
+    expect(count(THR_CHARGE)).toBe(4); // 磁轨/迫击炮 + 粒子/火雨
     expect(TOWERS[TOWER_AUTOCANNON]!.throttle).toBe(THR_AMMO);
     expect(TOWERS[TOWER_PD]!.throttle).toBe(THR_AMMO);
     expect(TOWERS[TOWER_LASER]!.throttle).toBe(THR_HEAT);
     expect(TOWERS[TOWER_ARC]!.throttle).toBe(THR_HEAT);
     expect(TOWERS[TOWER_RAILGUN]!.throttle).toBe(THR_CHARGE);
     expect(TOWERS[TOWER_MORTAR]!.throttle).toBe(THR_CHARGE);
+    // 进化塔继承基塔的节流系:进化后继续吃同系支援的邻接(17 号口径)
+    expect(TOWERS[TOWER_GATLING]!.throttle).toBe(THR_AMMO);
+    expect(TOWERS[TOWER_PHASE]!.throttle).toBe(THR_HEAT);
+    expect(TOWERS[TOWER_PARTICLE]!.throttle).toBe(THR_CHARGE);
+    expect(TOWERS[TOWER_TESLA]!.throttle).toBe(THR_HEAT);
+    expect(TOWERS[TOWER_FIRESTORM]!.throttle).toBe(THR_CHARGE);
+    expect(TOWERS[TOWER_THORN]!.throttle).toBe(THR_AMMO);
 
     for (const def of TOWERS) {
       const ammo = def.throttle === THR_AMMO;
       const heat = def.throttle === THR_HEAT;
       const charge = def.throttle === THR_CHARGE;
+      // 17 号两座"把代价买断"的签名塔:加特林 reload 0(不再装填)、相位切割者整段热量 0(无过热) ——
+      // 它们是"那套机制被配方买断了"而不是"没用上那套机制",从齐全性断言里除名,签名在进化段单钉
+      const noReload = def.type === TOWER_GATLING;
+      const noHeat = def.type === TOWER_PHASE;
 
       // 弹药系:弹夹与装填齐全,才有"突发满速后必然停火一段"这个特征
       expect(def.magazine > 0).toBe(ammo);
-      expect(def.reload > 0).toBe(ammo);
+      expect(def.reload > 0).toBe(ammo && !noReload);
 
       // 过热系:四个数缺一不可 —— 少了 coolPerSec 就永不降温,少了 overheatLock 就没有惩罚
-      expect(def.heatPerShot > 0).toBe(heat);
-      expect(def.heatMax > 0).toBe(heat);
-      expect(def.coolPerSec > 0).toBe(heat);
-      expect(def.overheatLock > 0).toBe(heat);
+      expect(def.heatPerShot > 0).toBe(heat && !noHeat);
+      expect(def.heatMax > 0).toBe(heat && !noHeat);
+      expect(def.coolPerSec > 0).toBe(heat && !noHeat);
+      expect(def.overheatLock > 0).toBe(heat && !noHeat);
 
       // 充能系:蓄力周期给节奏,**fireInterval 必须恒 0** —— 再压一层冷却就是两个旋钮打架
       expect(def.chargeTime > 0).toBe(charge);
@@ -159,7 +190,7 @@ describe('武器塔数值表', () => {
 
   it('过热系"点射就不停火":冷却速率追得上半速射击,追不上满速(与弹药系的分水岭)', () => {
     for (const def of TOWERS) {
-      if (def.throttle !== THR_HEAT) continue;
+      if (def.throttle !== THR_HEAT || def.heatPerShot <= 0) continue; // 相位切割者无过热,无收支可谈
       const gainPerSec = def.heatPerShot / def.fireInterval;
       // 满速连射必然过热,否则这座塔根本没有节流,过热机制名存实亡
       expect(gainPerSec).toBeGreaterThan(def.coolPerSec);
@@ -184,7 +215,8 @@ describe('武器塔数值表', () => {
         expect(def.chainRange).toBeLessThanOrEqual(def.range); // 跳得比射程还远就绕开了射界规则
       }
 
-      expect(def.lanceWidth > 0).toBe(def.fx === FX_LANCE);
+      expect(def.lanceWidth > 0).toBe(def.fx === FX_LANCE || (def.fx === FX_BEAM && def.pierce > 0));
+      // 穿透光束(相位切割者)复用线宽字段当线半宽:凡 fx=BEAM 且 pierce>0 的塔,这一档就得开着
 
       const blasts = def.fx === FX_MORTAR;
       expect(def.aoeRadius > 0).toBe(blasts);
@@ -196,9 +228,14 @@ describe('武器塔数值表', () => {
     expect(TOWERS[TOWER_LASER]!.fx).toBe(FX_BEAM);
     expect(TOWERS[TOWER_ARC]!.fx).toBe(FX_CHAIN);
     expect(TOWERS[TOWER_RAILGUN]!.fx).toBe(FX_LANCE);
-    // 点防的"击落弹幕"接口预留:MVP 四敌无弹幕,这面旗子先立着(GDD §5.2)
+    expect(TOWERS[TOWER_PHASE]!.fx).toBe(FX_BEAM);
+    expect(TOWERS[TOWER_TESLA]!.fx).toBe(FX_CHAIN);
+    expect(TOWERS[TOWER_PARTICLE]!.fx).toBe(FX_LANCE);
+    expect(TOWERS[TOWER_FIRESTORM]!.fx).toBe(FX_MORTAR);
+    // 点防 / 荆棘的"击落弹幕"接口预留:MVP 四敌无弹幕,这面旗子先立着(GDD §5.2 / 17 号)
     expect(TOWERS[TOWER_PD]!.interceptsProjectiles).toBe(true);
-    expect(TOWERS.filter((d) => d.interceptsProjectiles).length).toBe(1);
+    expect(TOWERS[TOWER_THORN]!.interceptsProjectiles).toBe(true);
+    expect(TOWERS.filter((d) => d.interceptsProjectiles).length).toBe(2);
   });
 
   it('等级成长真的单调:Lv1→Lv5 每一档都朝同一个方向走(GDD §5.4)', () => {
@@ -224,7 +261,8 @@ describe('武器塔数值表', () => {
         if (def.throttle === THR_AMMO) {
           expect(towerMagazine(def, lv + 1)).toBeGreaterThan(towerMagazine(def, lv));
         }
-        if (def.throttle === THR_HEAT) {
+        if (def.throttle === THR_HEAT && def.heatMax > 0) {
+          // 相位切割者热上限恒 0(无过热签名):没有可成长的余量,从单调断言里除名
           expect(towerHeatMax(def, lv + 1)).toBeGreaterThan(towerHeatMax(def, lv));
         }
         if (def.throttle === THR_CHARGE) {
@@ -250,11 +288,17 @@ describe('武器塔数值表', () => {
     expect(LEVELS.map((lv) => towerBurst(gun, lv))).toEqual([1, 1, 2, 2, 2]);
     expect(LEVELS.map((lv) => towerPierce(gun, lv))).toEqual([0, 0, 0, 0, 1]);
 
-    // 其余五塔本轮没有跳变:恒 1 发、恒不穿透。留着非 0 的 burstAtLv3
+    // 其余塔本轮没有跳变:恒 1 发、恒不穿透。留着非 0 的 burstAtLv3
     // 会让一座光束塔在 Lv3 那一帧突然打两下,而它压根不发射弹丸
     for (const def of TOWERS) {
       if (def.type === TOWER_AUTOCANNON) continue;
       expect(LEVELS.map((lv) => towerBurst(def, lv))).toEqual([1, 1, 1, 1, 1]);
+      // 相位切割者的 pierce 是恒发签名(光束穿透 = 塔的本性),不是 Lv5 跳变 ——
+      // 它的 towerPierce 在每一级都该吐 1,而不是 [0,0,0,0,0]
+      if (def.type === TOWER_PHASE) {
+        expect(LEVELS.map((lv) => towerPierce(def, lv))).toEqual([1, 1, 1, 1, 1]);
+        continue;
+      }
       expect(LEVELS.map((lv) => towerPierce(def, lv))).toEqual([0, 0, 0, 0, 0]);
     }
   });
@@ -325,5 +369,55 @@ describe('武器塔数值表', () => {
     gun.damage = 99;
     expect(towerDamage(gun, 1)).toBe(99);
     expect(towerDamage(gun, 2)).toBe(99 * gun.growth.damage);
+  });
+});
+
+describe('进化塔(17 号)—— 数值占位,但"变化可测"钉死:签名改动一眼读得出来', () => {
+  it('加特林要塞:弧度比机炮大 50%(100° → 150°),且 reload 0 = 不再装填', () => {
+    const gun = TOWERS[TOWER_AUTOCANNON]!;
+    const gat = TOWERS[TOWER_GATLING]!;
+    expect(gat.arcDeg).toBe(gun.arcDeg + 50); // +50° 与 +50% 同数(100 的一半恰是 50)
+    expect(gat.arcDeg).toBe(ARC_WIDE_DEG);
+    expect(gat.reload).toBe(0); // 弹药系唯一例外:打空当场满弹,硬停顿整条消失
+    expect(gat.throttle).toBe(THR_AMMO); // 继承机炮:弹药库邻接仍生效
+  });
+
+  it('相位切割者:光束穿透(pierce 旗子)且无过热(heatPerShot 0),散热器仍认它', () => {
+    const phase = TOWERS[TOWER_PHASE]!;
+    expect(phase.fx).toBe(FX_BEAM);
+    expect(phase.pierce).toBeGreaterThan(0); // sim/turret.ts 的 fireBeam 穿透判据
+    expect(phase.heatPerShot).toBe(0);
+    expect(phase.heatMax).toBe(0); // 整段填 0,不是只把每发热量抹掉
+    expect(phase.throttle).toBe(THR_HEAT); // 继承激光:散热器邻接仍生效
+  });
+
+  it('粒子长矛:充能时间比磁轨显著缩短(数值近似"击杀刷新充能"),射程更远(全屏贯穿)', () => {
+    const particle = TOWERS[TOWER_PARTICLE]!;
+    expect(particle.chargeTime).toBeLessThan(TOWERS[TOWER_RAILGUN]!.chargeTime / 2); // 2.4 → 1.2
+    expect(particle.range).toBeGreaterThan(TOWERS[TOWER_RAILGUN]!.range);
+    expect(particle.fx).toBe(FX_LANCE);
+    expect(particle.throttle).toBe(THR_CHARGE);
+  });
+
+  it('特斯拉冠冕:链数翻倍(电弧 3 → 6),节流继承 THR_HEAT(链系节流挂得上)', () => {
+    const tesla = TOWERS[TOWER_TESLA]!;
+    expect(tesla.chainCount).toBe(TOWERS[TOWER_ARC]!.chainCount * 2);
+    expect(tesla.fx).toBe(FX_CHAIN);
+    expect(tesla.throttle).toBe(THR_HEAT);
+  });
+
+  it('轨道火雨:三连发(burst 3),节流继承充能系', () => {
+    const rain = TOWERS[TOWER_FIRESTORM]!;
+    expect(rain.burst).toBe(3); // sim/turret.ts 的 fireMortar 恒发数判据
+    expect(rain.fx).toBe(FX_MORTAR);
+    expect(rain.throttle).toBe(THR_CHARGE);
+    expect(rain.damage).toBe(0); // 直击不结算,伤害全在落点(同迫击炮)
+  });
+
+  it('荆棘壁垒:拦截旗子立着(弹幕减伤的数值近似,反弹特效留 M3)', () => {
+    const thorn = TOWERS[TOWER_THORN]!;
+    expect(thorn.interceptsProjectiles).toBe(true);
+    expect(thorn.throttle).toBe(THR_AMMO);
+    expect(TOWERS.filter((d) => d.interceptsProjectiles).length).toBe(2); // 点防 + 荆棘
   });
 });

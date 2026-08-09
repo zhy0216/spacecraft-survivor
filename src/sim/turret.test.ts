@@ -27,8 +27,10 @@ import { ENEMIES, KIND_SWARM } from '../data/enemies';
 import {
   TOWER_ARC,
   TOWER_AUTOCANNON,
+  TOWER_FIRESTORM,
   TOWER_LASER,
   TOWER_MORTAR,
+  TOWER_PHASE,
   TOWER_RAILGUN,
   type TowerDef,
   towerMagazine,
@@ -718,6 +720,53 @@ describe('stepTurrets:五种开火表现', () => {
     expect(fx.radius).toBe(0);
     expect(fx.towerType).toBe(TOWER_LASER);
     expect(cell.heat).toBe(def.heatPerShot); // 代价记在过热那一套上
+  });
+
+  it('轨道火雨(进化):burst=3 一次蓄力泄三发迫击弹,绕炮口确定性扇开,代价只记一次', () => {
+    // 充能时间调成一帧:这条验的是"一次开火真的出三颗弹",不必空跑蓄力
+    const { deck, ship, cell } = bowTurret(TOWER_FIRESTORM, { chargeTime: SIM_DT });
+    const def = TOWERS[TOWER_FIRESTORM]!;
+    const log = fireLog();
+
+    run(1, deck, ship, gridOf([foeAt(BOW_MUZZLE_X, BOW_MUZZLE_Y, 0, 150)]), log.sink);
+
+    expect(log.bullets.size).toBe(3); // 三连发:同一发蓄力泄三颗弹
+    const degs = [] as number[];
+    for (const b of log.bullets.items) {
+      expect(b.kind).toBe(BK_MORTAR);
+      expect(b.damage).toBe(0); // 抛射直击不结算,伤害全在落点
+      expect(b.aoeDamage).toBe(effectiveAoeDamage(def, 1));
+      expect(b.throttle).toBe(def.throttle);
+      degs.push(headingDeg(b));
+    }
+    // 绕炮口确定性扇开:正中 + 左右各一,夹角 = 瞄准容差(与直射弹 Lv3 双管同一口径)
+    // headingDeg 返回的是角度,期望值也按角度算(±aimTolDeg/2)
+    const stepDeg = def.aimTolDeg / 2;
+    expect(new Set(degs.map((d) => Number(d.toFixed(9))))).toEqual(
+      new Set([0, -stepDeg, stepDeg].map((d) => Number(d.toFixed(9)))),
+    );
+    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_MUZZLE]); // 一次开火一次炮口闪
+    expect(log.fired).toEqual([cell]); // broadside 只记一次
+    expect(cell.charge).toBe(0); // 充能系一次泄放
+  });
+
+  it('相位切割者(进化):pierce>0 光束沿射线切到射程尽头,线上全员吃满不衰减', () => {
+    const { deck, ship, cell } = bowTurret(TOWER_PHASE);
+    const def = TOWERS[TOWER_PHASE]!;
+    const near = foe(120, 0); // 线上,离炮口 60
+    const far = foe(220, 0); // 线上,离炮口 160 ≤ 射程(GUN 的 200)
+    const log = fireLog();
+
+    run(1, deck, ship, gridOf([near, far]), log.sink);
+
+    expect(log.bullets.size).toBe(0); // 光束不走弹丸
+    expect(new Set(log.damages.map((d) => d.e))).toEqual(new Set([near, far])); // 穿透:两只都吃
+    for (const d of log.damages) expect(d.amount).toBe(effectiveDamage(def, 1)); // 不衰减
+    expect(log.fxs.map((f) => f.kind)).toEqual([FXV_BEAM, FXV_MUZZLE]);
+    const fx = log.fxs.find((f) => f.kind === FXV_BEAM)!;
+    expect(fx.x1).toBeCloseTo(BOW_MUZZLE_X + 200, 9); // 光柱画到射程尽头 = 作用范围
+    expect(fx.y1).toBeCloseTo(BOW_MUZZLE_Y, 9);
+    expect(cell.heat).toBe(0); // 无过热:相位切割者的配方签名
   });
 
   it('链电(电弧):逐跳跳给最近的未命中活人,伤害逐跳衰减,每跳一条 FXV_CHAIN', () => {

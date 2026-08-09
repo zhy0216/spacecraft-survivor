@@ -26,7 +26,18 @@ export const TOWER_ARC = 2; // 电弧塔
 export const TOWER_RAILGUN = 3; // 磁轨炮
 export const TOWER_PD = 4; // 点防阵列
 export const TOWER_MORTAR = 5; // 等离子迫击炮
-export const TOWER_KIND_COUNT = 6;
+
+// —— 空间进化塔(17 号 issue,GDD §5.5):满级塔 + 正交相邻支援 → 船坞进化。
+// 编号 6..11 与 evolutions.ts 的配方顺序**一一对应**(下标错位 = 配方张冠李戴,evolutions.test 钉着这条)。
+// 每个进化的"签名"(配方给的那一条机制)写在对应塔的字段注释里,其余数值全部占位待调 ——
+// 进化的判据与触发流程住在船坞侧(refitFlow,后续 issue),本表只负责"变成什么"。 ——
+export const TOWER_GATLING = 6; // 机炮 + 弹药库 → 加特林要塞(弧度 +50°、不再装填)
+export const TOWER_PHASE = 7; // 激光 + 散热器 → 相位切割者(光束穿透、无过热)
+export const TOWER_PARTICLE = 8; // 磁轨 + 电容组 → 粒子长矛(全屏贯穿、充能更快)
+export const TOWER_TESLA = 9; // 电弧 + 散热器 → 特斯拉冠冕(链数翻倍)※ GDD 原表是反应堆,17 号口径方案 A 挂散热器
+export const TOWER_FIRESTORM = 10; // 迫击炮 + 弹药库 → 轨道火雨(三连发)
+export const TOWER_THORN = 11; // 点防 + 装甲舱 → 荆棘壁垒(击落弹幕拦截旗子)
+export const TOWER_KIND_COUNT = 12;
 
 /** 同名叠级上限(GDD §5.4:Lv1→Lv5,原格生效不占新格) */
 export const TOWER_MAX_LEVEL = 5;
@@ -132,6 +143,12 @@ export interface TowerDef {
   aoeDamage: number;
   /** 点防 true —— MVP 四敌均无弹幕(GDD §6),这就是那条"拦截弹幕接口预留" */
   interceptsProjectiles: boolean;
+  /**
+   * 每次开火**恒发几发**(进化塔签名:轨道火雨三连发 = 3);**0 = 恒 1 发**。
+   * 与 burstAtLv3 正交:那是 Lv≥3 才出现的等级小跳变,这是"这塔天生一次打几发"
+   * (17 号进化的轨道火雨,sim/turret.ts 的 fireMortar 读它)。
+   */
+  burst: number;
   /** Lv≥3 起每次开火发数(机炮双管 = 2);**0 = 无跳变,恒 1 发**(GDD §5.4) */
   burstAtLv3: number;
   /** Lv≥5 起额外穿透数(机炮曳光弹 = 1);0 = 无跳变(GDD §5.4) */
@@ -141,7 +158,10 @@ export interface TowerDef {
   growth: TowerGrowth;
 }
 
-/** 下标 === type,顺序 机炮/激光/电弧/磁轨/点防/迫击炮;sim 靠 TOWERS[cell.towerType] 直取 */
+/**
+ * 下标 === type,顺序 机炮/激光/电弧/磁轨/点防/迫击炮 + 17 号六座进化塔(6..11,与 evolutions.ts
+ * 配方顺序一一对应);sim 靠 TOWERS[cell.towerType] 直取
+ */
 export const TOWERS: TowerDef[] = [
   {
     type: TOWER_AUTOCANNON,
@@ -171,6 +191,7 @@ export const TOWERS: TowerDef[] = [
     aoeRadius: 0,
     aoeDamage: 0, // 无 AoE
     interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
     burstAtLv3: 2, // GDD §5.4 举的例子:Lv3 双管
     pierceAtLv5: 1, // GDD §5.4 举的例子:Lv5 曳光弹
     tint: 0x66c2ff, // 占位待调(天蓝 = 最"标准"的一档冷色,主力塔占它)
@@ -214,6 +235,7 @@ export const TOWERS: TowerDef[] = [
     aoeRadius: 0,
     aoeDamage: 0,
     interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
     burstAtLv3: 0,
     pierceAtLv5: 0, // 无 Lv3/Lv5 跳变(GDD §5.5 把"光束穿透"留给了相位切割者进化)
     tint: 0x3ff0e0, // 占位待调(高饱和青)
@@ -257,6 +279,7 @@ export const TOWERS: TowerDef[] = [
     aoeRadius: 0,
     aoeDamage: 0,
     interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
     burstAtLv3: 0,
     pierceAtLv5: 0,
     tint: 0x8ae8ff, // 占位待调(最亮的一档电白蓝)
@@ -299,6 +322,7 @@ export const TOWERS: TowerDef[] = [
     aoeRadius: 0,
     aoeDamage: 0,
     interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
     burstAtLv3: 0,
     pierceAtLv5: 0,
     tint: 0x6c7cff, // 占位待调(最深的一档靛蓝)
@@ -342,6 +366,7 @@ export const TOWERS: TowerDef[] = [
     // GDD §5.2 的"击落弹幕":MVP 四敌均无弹幕(GDD §6 的孢子炮手在 1.0 才进池),
     // 所以这里只是一面**立起来的旗子** —— 弹幕实体出现的那天,拦截逻辑照这个字段筛塔,不必回头改表结构
     interceptsProjectiles: true,
+    burst: 0, // 非恒发塔
     burstAtLv3: 0,
     pierceAtLv5: 0,
     tint: 0x5ce8b4, // 占位待调(最偏绿的一档冷色,与其余五塔一眼分开)
@@ -385,6 +410,7 @@ export const TOWERS: TowerDef[] = [
     aoeRadius: 90, // 占位待调
     aoeDamage: 34, // 占位待调(落点全员吃满;等级成长走 towerAoeDamage,与 towerDamage 同口径)
     interceptsProjectiles: false,
+    burst: 0, // 非恒发塔(恒发签名在进化塔轨道火雨上)
     burstAtLv3: 0,
     pierceAtLv5: 0, // 无跳变(GDD §5.5 把"三连发"留给了轨道火雨进化)
     tint: 0x3d8ad6, // 占位待调(最暗的一档钢蓝)
@@ -395,6 +421,271 @@ export const TOWERS: TowerDef[] = [
       heatMax: 1,
       chargeRate: 1.12, // 占位待调
       magazine: 0,
+      chain: 0,
+    },
+  },
+  // —— 17 号空间进化塔(GDD §5.5):满级塔 + 正交相邻支援 → 船坞进化。
+  // 六座一律"继承基塔的节流系"(进化后继续吃同系支援的邻接),签名是配方给的那一条;
+  // 不做 Lv3/Lv5 等级小跳变(那档成长属于基塔)。数值全部占位待调 ——
+  {
+    type: TOWER_GATLING,
+    name: '加特林要塞',
+    arcDeg: ARC_WIDE_DEG, // 机炮 100° + 50°(= 大 50%,两种读法同数)= 150°,恰好落在广角档
+    range: 380, // 占位待调(= 机炮)
+    damage: 6, // 占位待调
+    fireInterval: 0.4, // 占位待调(= 机炮)
+    turnRate: 360, // 占位待调
+    aimTolDeg: 6, // 占位待调
+    throttle: THR_AMMO, // 继承机炮的弹药系:弹药库邻接仍生效(进化后继续吃邻接,17 号口径)
+    magazine: 20, // 占位待调(= 机炮)
+    // **不再装填**(配方签名):打空当场满弹(sim/tower.ts 对 reload ≤ 0 的兜底),硬停顿整条消失 ——
+    // 弹药系四塔里唯一的 reload 0,towers.test.ts 与 tower.test.ts 都钉着这个例外
+    reload: 0,
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0,
+    chargeTime: 0,
+    fx: FX_BULLET,
+    bulletSpeed: 420, // 占位待调
+    bulletRadius: 3, // 占位待调
+    pierce: 0,
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0,
+    lanceWidth: 0,
+    aoeRadius: 0,
+    aoeDamage: 0,
+    interceptsProjectiles: false,
+    burst: 0, // 恒发签名不在这座塔上
+    burstAtLv3: 0, // 进化塔不做等级小跳变:签名是配方给的那一条,不叠基塔的双管
+    pierceAtLv5: 0, // 也不叠基塔的曳光弹
+    tint: 0x7cc8ff, // 占位待调(亮天蓝:机炮系的最亮档)
+    growth: {
+      damage: 1.25, // 占位待调(= 机炮)
+      fireRate: 1.1, // 占位待调
+      range: 1.05, // 占位待调
+      heatMax: 1,
+      chargeRate: 1,
+      magazine: 5, // 占位待调
+      chain: 0,
+    },
+  },
+  {
+    type: TOWER_PHASE,
+    name: '相位切割者',
+    arcDeg: ARC_NARROW_DEG, // 窄 60°(= 激光)
+    range: 360, // 占位待调(比激光略远)
+    damage: 3, // 占位待调(每 tick)
+    fireInterval: 0.1, // 占位待调(10Hz 离散化口径同激光)
+    turnRate: 240, // 占位待调
+    aimTolDeg: 3, // 占位待调
+    throttle: THR_HEAT, // 继承激光的过热系:散热器邻接仍生效
+    magazine: 0,
+    reload: 0,
+    // **无过热**(配方签名):热量根本不累积,过热系四个数整段填 0 ——
+    // 散热器抬的是上限,而上限对一座热量恒 0 的塔没有意义;tower.test.ts 钉着这个例外
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0,
+    chargeTime: 0,
+    fx: FX_BEAM,
+    bulletSpeed: 0,
+    bulletRadius: 0,
+    // **光束穿透**签名:sim/turret.ts 的 fireBeam 以 pierce > 0 进穿透路径(基塔激光那一行
+    // 早就把这一档留给本进化了,见 TOWER_LASER 的 pierceAtLv5 注释)
+    pierce: 1,
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0,
+    lanceWidth: 4, // 穿透光束的线半宽:复用磁轨那一条线宽字段,穿透判定照它量
+    aoeRadius: 0,
+    aoeDamage: 0,
+    interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
+    burstAtLv3: 0,
+    pierceAtLv5: 0, // 穿透是塔的本性,不是 Lv5 跳变
+    tint: 0x2fe8d8, // 占位待调(亮青:激光系的最亮档)
+    growth: {
+      damage: 1.28, // 占位待调(= 激光)
+      fireRate: 1, // 恒 1:0.1s 是离散化口径,不是射速旋钮
+      range: 1.06, // 占位待调
+      heatMax: 1, // 热上限恒 0,这一档也填 1(无过热 = 无热成长可谈)
+      chargeRate: 1,
+      magazine: 0,
+      chain: 0,
+    },
+  },
+  {
+    type: TOWER_PARTICLE,
+    name: '粒子长矛',
+    arcDeg: ARC_VERY_NARROW_DEG, // 极窄 30°(= 磁轨,轴线艺术不变)
+    range: 900, // 占位待调("全屏贯穿":比磁轨 700 再远一截,射程本身就是贯穿的数值化)
+    damage: 50, // 占位待调(比磁轨略高)
+    fireInterval: 0, // 充能系恒 0
+    turnRate: 120, // 占位待调(= 磁轨)
+    aimTolDeg: 2, // 占位待调
+    throttle: THR_CHARGE, // 继承磁轨的充能系:电容组邻接仍生效
+    magazine: 0,
+    reload: 0,
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0,
+    // 磁轨 2.4s 减半以上 = "充能时间显著缩短",数值近似"击杀刷新充能"(机制特效留 M3 打磨)
+    chargeTime: 1.0, // 占位待调
+    fx: FX_LANCE, // 磁轨本就是线上全员命中的瞬时线段,穿透是继承来的,不另开门
+    bulletSpeed: 0,
+    bulletRadius: 0,
+    pierce: 0, // 线段判定不走弹丸穿透计数
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0,
+    lanceWidth: 7, // 占位待调(比磁轨 6 略宽)
+    aoeRadius: 0,
+    aoeDamage: 0,
+    interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
+    burstAtLv3: 0,
+    pierceAtLv5: 0,
+    tint: 0x8a96ff, // 占位待调(亮靛:磁轨系的最亮档)
+    growth: {
+      damage: 1.3, // 占位待调(= 磁轨)
+      fireRate: 1, // 恒 1:充能系的成长全给 chargeRate
+      range: 1.06, // 占位待调
+      heatMax: 1,
+      chargeRate: 1.12, // 占位待调
+      magazine: 0,
+      chain: 0,
+    },
+  },
+  {
+    type: TOWER_TESLA,
+    name: '特斯拉冠冕',
+    arcDeg: ARC_WIDE_DEG, // 广 150°(= 电弧)
+    range: 260, // 占位待调(= 电弧)
+    damage: 7, // 占位待调(首跳伤害)
+    fireInterval: 0.55, // 占位待调(= 电弧)
+    turnRate: 300, // 占位待调
+    aimTolDeg: 12, // 占位待调
+    throttle: THR_HEAT, // **继承电弧的过热系**(17 号口径:链系节流要挂得上):散热器邻接仍生效
+    magazine: 0,
+    reload: 0,
+    heatPerShot: 3, // 占位待调(= 电弧)
+    heatMax: 12, // 占位待调
+    coolPerSec: 4, // 占位待调
+    overheatLock: 1.6, // 占位待调("过热时环船放电"特效留 M3,过热读数先继承电弧)
+    chargeTime: 0,
+    fx: FX_CHAIN,
+    bulletSpeed: 0,
+    bulletRadius: 0,
+    pierce: 0,
+    chainCount: 6, // **链数翻倍**(配方签名:电弧 3 → 6)
+    chainRange: 130, // 占位待调(= 电弧)
+    chainFalloff: 0.7, // 占位待调
+    lanceWidth: 0,
+    aoeRadius: 0,
+    aoeDamage: 0,
+    interceptsProjectiles: false,
+    burst: 0, // 非恒发塔
+    burstAtLv3: 0,
+    pierceAtLv5: 0,
+    // ※ GDD 原表配方是反应堆(未实装),按 17 号口径方案 A 挂散热器,行为同构
+    tint: 0x8ce8ff, // 占位待调(电白蓝的最亮档)
+    growth: {
+      damage: 1.2, // 占位待调(= 电弧)
+      fireRate: 1.08, // 占位待调
+      range: 1.05, // 占位待调
+      heatMax: 1.15, // 占位待调
+      chargeRate: 1,
+      magazine: 0,
+      chain: 1, // 占位待调(每级 +1 跳,同电弧)
+    },
+  },
+  {
+    type: TOWER_FIRESTORM,
+    name: '轨道火雨',
+    arcDeg: ARC_NARROW_DEG, // 窄 60°(= 迫击炮)
+    range: 520, // 占位待调(= 迫击炮)
+    damage: 0, // 直击不结算:伤害全在落点(同迫击炮口径)
+    fireInterval: 0, // 充能系恒 0
+    turnRate: 90, // 占位待调(= 迫击炮)
+    aimTolDeg: 8, // 占位待调
+    throttle: THR_CHARGE, // 继承迫击炮的充能系:电容组邻接仍生效
+    magazine: 0,
+    reload: 0,
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0,
+    chargeTime: 3, // 占位待调(= 迫击炮:一次泄放 = 三发)
+    fx: FX_MORTAR,
+    bulletSpeed: 260, // 占位待调
+    bulletRadius: 4, // 占位待调
+    pierce: 0,
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0,
+    lanceWidth: 0,
+    aoeRadius: 100, // 占位待调(比迫击炮 90 略大;"燃烧地面"特效留 M3 打磨)
+    aoeDamage: 34, // 占位待调(= 迫击炮)
+    interceptsProjectiles: false,
+    burst: 3, // **三连发**(配方签名):一次充能泄放三颗落点弹(sim/turret.ts 的 fireMortar 读它)
+    burstAtLv3: 0,
+    pierceAtLv5: 0,
+    tint: 0x6aa5e8, // 占位待调(钢蓝亮档)
+    growth: {
+      damage: 1.26, // 占位待调:伤害全在 AoE,这一档喂的是 towerAoeDamage
+      fireRate: 1,
+      range: 1.06, // 占位待调
+      heatMax: 1,
+      chargeRate: 1.12, // 占位待调
+      magazine: 0,
+      chain: 0,
+    },
+  },
+  {
+    type: TOWER_THORN,
+    name: '荆棘壁垒',
+    arcDeg: ARC_WIDE_DEG, // 广 150°(= 点防)
+    range: 210, // 占位待调(= 点防)
+    damage: 3, // 占位待调
+    fireInterval: 0.12, // 占位待调(= 点防)
+    turnRate: 540, // 占位待调(= 点防)
+    aimTolDeg: 10, // 占位待调
+    throttle: THR_AMMO, // 继承点防的弹药系:弹药库邻接仍生效
+    magazine: 40, // 占位待调(= 点防)
+    reload: 1.8, // 占位待调(= 点防)
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0,
+    chargeTime: 0,
+    fx: FX_BULLET,
+    bulletSpeed: 560, // 占位待调(= 点防)
+    bulletRadius: 2, // 占位待调
+    pierce: 0,
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0,
+    lanceWidth: 0,
+    aoeRadius: 0,
+    aoeDamage: 0,
+    // **拦截旗子**(配方签名):"击落弹幕"的数值近似 = 弹幕减伤,反弹特效留 M3 ——
+    // 弹幕实体出现的那天,拦截逻辑照这面旗子筛塔,荆棘与点防同筛
+    interceptsProjectiles: true,
+    burst: 0, // 非恒发塔
+    burstAtLv3: 0,
+    pierceAtLv5: 0,
+    tint: 0x7fdfc8, // 占位待调(青绿亮档:点防系的最亮档)
+    growth: {
+      damage: 1.22, // 占位待调(= 点防)
+      fireRate: 1.1, // 占位待调
+      range: 1.04, // 占位待调(近防的射程刻意不怎么长)
+      heatMax: 1,
+      chargeRate: 1,
+      magazine: 10, // 占位待调
       chain: 0,
     },
   },

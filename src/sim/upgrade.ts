@@ -31,6 +31,7 @@ import {
   UPGRADE_CHOICE_COUNT,
 } from '../data/economy';
 import { DECK_PIECE_KIND_COUNT, DECK_PIECES } from '../data/deckPieces';
+import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
 import {
@@ -244,6 +245,9 @@ function collectTypes(deck: Deck, kind: number, out: UpgradeOption[], count: num
         : DECK_PIECE_KIND_COUNT;
   for (let type = 0; type < kindCount; type++) {
     if (alreadyOffered(out, count, kind, type)) continue;
+    // 17 号:进化塔只能从配方来(船坞里满级塔 + 相邻支援),不是"数值表里多出来的可买型号" ——
+    // 能在三选一里买到就违背了 GDD §5.5"进化只在船坞"的闸门,塔型池直接跳过
+    if (kind === OFFER_TOWER && isEvolutionTower(type)) continue;
     if (!offerLegal(deck, kind, type)) continue;
     typePool.push(type);
   }

@@ -46,6 +46,11 @@
  * (它护的舷)。舷线与下面那条被撞舷闪红长在**同一批边**上,靠色域(冷 vs 暖红)与线宽分开;
  * 内部格的装甲舱没有暴露边 ⇒ 只有盾、没有舷线,"只加 HP、不护舷"于是画的就是它本来的样子。
  *
+ * 进化金光(17 号):同一层 deckLinkG 里多画一路 —— 整备阶段(refitPending)配对存在时,
+ * 满级塔 → 被吞支援之间一条金线,配对表一律问 sim 的 findEvolutionPairs(与 supportLinks
+ * 同一条"渲染不写规则"的口径);整备阶段外一个分支都不进,金线一行都不画。
+ * 与"可进化"按钮(UI 层,别的任务)各自独立:渲染只管画线,按钮照自己那套来。
+ *
  * 节流读数(05 号 issue T5):deckThrottleG 逐帧把每座在线塔的节流状态画在它自己那一格上 ——
  * 弹夹条 + 装填进度 / 热量条 + 过热闪红 / 充能环,外加一排等级点。三套机制**各绑一种几何形状**
  * (沿 Y 的条 / 沿 X 的条 / 一个圆),而不是三条一样的条换个颜色:颜色这条通道已经被"哪座塔"
@@ -139,6 +144,7 @@ import {
   FXV_MUZZLE,
   FXV_SPARK,
 } from '../sim/fx';
+import { findEvolutionPairs } from '../sim/evolve';
 import { lerpAngle, type Vec2 } from '../sim/ship';
 import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
@@ -293,6 +299,17 @@ const DECK_LINK_ALPHA = 0.6;
 /** 受益塔那一端的小实心圆:线有两个端点,没有它就读不出加成是**从哪一格流向哪一格**。
  *  只点在塔这一头 —— 支援格那一头本来就长着设施自己的整块色 */
 const DECK_LINK_DOT_R = CELL * 0.08;
+
+// —— 进化金光(17 号 issue)—— 与邻接连线共用 deckLinkG 与同一条画线方式,只换色相与强度 ——
+// 金色是"配方满足、可以合成"的**行动读数**:支援连线取设施自己的 tint(冷色),金线靠色相
+// 与它一眼分家;与整备期拖模块的琥珀来源框(DECK_HILITE_SOURCE)同属船坞界面的暖色豁免
+// (GDD §4.6,同过热闪红那条),但明度再高一档、且叠一层宽光晕 ——
+// 提示必须先于任何常驻读数被看见,它是"下一步可以做什么"的入口。
+const DECK_EVOLVE_GLOW_WIDTH = CELL * 0.13;
+const DECK_EVOLVE_GLOW_ALPHA = 0.3;
+const DECK_EVOLVE_CORE_WIDTH = CELL * 0.07;
+const DECK_EVOLVE_CORE_ALPHA = 0.95;
+const DECK_EVOLVE_COLOR = 0xffd35c;
 
 // —— 装甲舱:它不作用于相邻塔,故**一条连线都不画**(画了就是误导),改用两条自己的读数 ——
 //   ① 格内一个盾形图标 = "这一格在给船体加 HP",判据是 def.hullHp > 0 —— 与 sim/damage 的
@@ -835,11 +852,12 @@ export class Renderer {
   /** 放置高亮:压在底板之上,否则合法格的半透明色块会被格子填充盖掉 */
   private deckHiliteG = new Graphics();
   /**
-   * 邻接连线 + 装甲舱读数(06 号 T3)。**压在底板之上**:连线要从一格心画到另一格心,
-   * 画在底板之下会被两头的格子填充啃掉两截,中间那段悬空的线读不出是从哪儿连到哪儿。
+   * 邻接连线 + 装甲舱读数(06 号 T3)+ 进化金光(17 号)。**压在底板之上**:连线要从一格心画到
+   * 另一格心,画在底板之下会被两头的格子填充啃掉两截,中间那段悬空的线读不出是从哪儿连到哪儿。
    * 与底板**共用 deck.revision 脏标记**(见 deckRevision):配对只在放置时变
    * (supportLinks 只读 occupied/content/supportType/towerType/online,这几样一变 revision 就 +1),
-   * 每帧重画等于让一局里只变几次的几何陪着 60Hz 空转 —— 与底板同一条取舍,故干脆同一个标记。
+   * 每帧重画等于让一局里只变几次的几何陪着 60Hz 空转 —— 与底板同一条取舍,故干脆同一个标记;
+   * 进化金光额外多认一个 refitSeen 闸门(整备起止不碰 revision,见该字段)。
    */
   private deckLinkG = new Graphics();
   /** 射界扇形(04 号):压在底板之下 —— 它是底衬,不许糊住格子本身的状态色 */
@@ -869,11 +887,22 @@ export class Renderer {
    */
   private deckRevision = -1;
   /**
+   * 整备阶段闸门(world.refitPending)的上次可见值(17 号)。进化金光随它翻转而重建:
+   * 进整备 = 金线进场、整备结束 = 金线清空,而这两个时点甲板 revision 一个字都不变 ——
+   * 不记这一档的话,金线会挂到下一次放置/焊接才出现/消失(与 deckRevision 同一条脏标记纪律)。
+   */
+  private refitSeen = false;
+  /**
    * 邻接配对表的复用缓冲(扁平二元组:out[2k] = 支援格下标、out[2k+1] = 受益塔格下标)。
    * 挂在实例上而不是每次现造:重建虽然只发生在放置那一下,但铁律 3 的口径是运行期零新增分配 ——
    * sim 的 supportLinks 收 out 参数,正是为了让调用方能把这块缓冲整局用到底。
    */
   private linkPairs: number[] = [];
+  /**
+   * 进化配对的复用缓冲(扁平二元组:out[2k] = 满级塔格下标、out[2k+1] = 被吞支援格下标)。
+   * 与 linkPairs 同一条口径:sim 的 findEvolutionPairs 收 out,整局复用这一块(铁律 3)。
+   */
+  private evolvePairs: number[] = [];
   /** 放置模式状态:由 ui 层塞进来,渲染层只读(见 PlacementUiState) */
   private placement: PlacementUiState | null = null;
   /** 高亮层上一帧是否画过东西:退出放置模式时只需 clear 一次,而不是每帧空转 */
@@ -1304,9 +1333,17 @@ export class Renderer {
     // 甲板:底板只在 deck.revision 变了或战斗/视图两档翻转时才重建,高亮层每帧现算(它跟着鼠标走)。
     // 容器只吃插值位姿,格子几何一律是局部坐标 —— 甲板与船体一同旋转由此成立(见文件头)
     const deck = this.world.deck;
-    if (deck.revision !== this.deckRevision || wantDeckView !== this.deckBaseDetailed) {
+    // 进化金光多认一个闸门:refitPending 起止不碰 deck.revision(进整备/整备结束都不改甲板),
+    // 不记 refitSeen 的话金线会挂到下一次放置才出现/消失(17 号:整备阶段外不画)
+    const refitActive = this.world.refitPending;
+    if (
+      deck.revision !== this.deckRevision ||
+      wantDeckView !== this.deckBaseDetailed ||
+      refitActive !== this.refitSeen
+    ) {
       this.deckRevision = deck.revision;
       this.deckBaseDetailed = wantDeckView;
+      this.refitSeen = refitActive;
       this.drawDeckBase(deck, wantDeckView);
       this.drawDeckModules(deck);
       // 邻接连线与底板同一个脏标记:两者都只在放置那一下变(见 deckLinkG 的字段注释)
@@ -1468,6 +1505,7 @@ export class Renderer {
   setWorld(world: World): void {
     this.world = world;
     this.deckRevision = -1;
+    this.refitSeen = false;
     this.broadsideTick = -1;
     this.broadsideLeft = 0;
     this.broadsideDirX = 0;
@@ -1767,9 +1805,64 @@ export class Renderer {
       g.circle(b.x, b.y, DECK_LINK_DOT_R).fill(def.tint);
     }
 
+    // 进化金光(17 号):配方满足时满级塔 → 被吞支援之间的金线,画在 buff 连线之上 ——
+    // 它是"可以合成"的行动提示,必须比常驻的加成读数先被看见
+    this.drawEvolutionLinks(deck);
+
     // 装甲舱那一路:它对任何塔都不匹配 ⇒ supportLinks 永远不会给出它的配对,上面这个循环
     // 天然一条线都画不到它头上(这正是"不作用于相邻塔就不该有连线"落在结构上、而不是靠一句特判)
     this.drawDeckArmor(deck);
+  }
+
+  /**
+   * 进化金光提示(17 号 issue T1,渲染侧)—— 配方满足时,满级塔格心 → 被吞支援格心的一条金线。
+   *
+   * 配对表**一律问 sim 的 findEvolutionPairs**(满级 + 正交相邻 + 型号匹配三条判据全在那一份里,
+   * 连同"进化塔在配方里不再是 base"的不可逆性),渲染层一行规则都不自己写 —— 与 supportLinks
+   * 完全同一条口径,也正因为如此:支援换成别的型号、或塔已经被升走,金线**自己就消失**,
+   * 不需要这里再补一个"不满足就擦"的分支(06 号验收那条"连线只画真实生效的配对"在此原样成立)。
+   *
+   * 画法照抄邻接连线:逐对 moveTo/lineTo + stroke(不攒 path —— 多条金线不该被平铺成一个 alpha),
+   * 只是色相换成金色、再叠一层宽光晕:"金光"是提示,要比常驻的 buff 连线先被看见。
+   * 端点小圆落在**塔端**(配对的第一个下标):线是无向的,没有它就分不出哪一格是进化的主角、
+   * 哪一格是会被吞噬的燃料。
+   *
+   * 闸门 = world.refitPending(与 sim/world 的 evolveRefitTower 同一个开关):整备阶段外金线
+   * 一行都不画 —— "配方满足"只是必要条件,"正在船坞里"才是时机(17 号口径:进化只发生在船坞)。
+   * 渲染层不 import ui(依赖方向 ui → render),读世界状态正是它唯一的位置。
+   */
+  private drawEvolutionLinks(deck: Deck): void {
+    if (!this.world.refitPending) return;
+    const g = this.deckLinkG;
+    const cells = deck.cells;
+    const pairs = findEvolutionPairs(deck, this.evolvePairs);
+    for (let k = 0; k + 1 < pairs.length; k += 2) {
+      // 下标越界只是不画这一对,不炸掉整层(与 supportLinks 同一条兜底口径;
+      // noUncheckedIndexedAccess 也逼着判)
+      const tower = cells[pairs[k]!];
+      const support = cells[pairs[k + 1]!];
+      if (!tower || !support) continue;
+      // 两个端点必须落在两个不同的暂存上,理由见 linkPos 的注释
+      const a = cellLocalPos(deck, tower.col, tower.row, localPos);
+      const b = cellLocalPos(deck, support.col, support.row, linkPos);
+      // 光晕 + 芯线两次 stroke:一次是"这片金光存在",一次是"它连到哪一格"。
+      // 芯线线宽压在邻接线上(DECK_LINK_WIDTH 0.055×格边)之上,提示不会被 buff 线盖没
+      g.moveTo(a.x, a.y)
+        .lineTo(b.x, b.y)
+        .stroke({
+          width: DECK_EVOLVE_GLOW_WIDTH,
+          color: DECK_EVOLVE_COLOR,
+          alpha: DECK_EVOLVE_GLOW_ALPHA,
+        });
+      g.moveTo(a.x, a.y)
+        .lineTo(b.x, b.y)
+        .stroke({
+          width: DECK_EVOLVE_CORE_WIDTH,
+          color: DECK_EVOLVE_COLOR,
+          alpha: DECK_EVOLVE_CORE_ALPHA,
+        });
+      g.circle(a.x, a.y, DECK_LINK_DOT_R).fill(DECK_EVOLVE_COLOR);
+    }
   }
 
   /**

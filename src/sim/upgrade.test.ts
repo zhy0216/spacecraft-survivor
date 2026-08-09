@@ -13,6 +13,7 @@ import {
   UPGRADE_CHOICE_COUNT,
 } from '../data/economy';
 import { DECK_PIECES } from '../data/deckPieces';
+import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_CAPACITOR, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   TOWER_AUTOCANNON,
@@ -200,6 +201,16 @@ describe('rollUpgradeOffer', () => {
         if (opt.kind === OFFER_TOWER) expect(opt.type).toBeLessThan(TOWER_KIND_COUNT);
         else if (opt.kind === OFFER_SUPPORT) expect(opt.type).toBeLessThan(SUPPORTS.length);
         else expect(opt.type).toBeLessThan(DECK_PIECES.length);
+      }
+    }
+  });
+
+  it('卡池闸门:进化塔(6..11)绝不出现在三选一里(GDD §5.5 闸门,漏了这条就是能买进化塔)', () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const out: UpgradeOption[] = [];
+      rollUpgradeOffer(createDeck(), new Rng(seed), out);
+      for (const opt of out) {
+        if (opt.kind === OFFER_TOWER) expect(isEvolutionTower(opt.type)).toBe(false);
       }
     }
   });

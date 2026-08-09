@@ -5,8 +5,9 @@
  */
 import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
 import { ENEMIES } from '../data/enemies';
+import { evolutionOf } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
-import { TOWER_AUTOCANNON, TOWERS } from '../data/towers';
+import { TOWER_AUTOCANNON, TOWER_MAX_LEVEL, TOWERS } from '../data/towers';
 import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import type { PlacementUiState } from '../render/renderer';
 import {
@@ -16,6 +17,11 @@ import {
   cellIndexAtLocal,
   deckGridAtLocal,
   DECK_ROTATIONS,
+  EVOLVE_BAD_SUPPORT,
+  EVOLVE_BAD_TARGET,
+  EVOLVE_NOT_MAX_LEVEL,
+  EVOLVE_NO_RECIPE,
+  EVOLVE_OK,
   hasWeldPlacement,
   isWeldSuccess,
   MOVE_NO_SOURCE,
@@ -29,6 +35,7 @@ import {
   WELD_DETACHED,
   WELD_OVERLAP,
 } from '../sim/deck';
+import { findEvolutionPairs } from '../sim/evolve';
 import type { Vec2 } from '../sim/ship';
 import { audioBus } from '../render/audio';
 import { REFIT_ALREADY_WELDED, REFIT_NOT_ACTIVE, type World } from '../sim/world';
@@ -90,6 +97,18 @@ const TOAST_CSS =
   'position:fixed;left:28px;bottom:108px;z-index:22;display:none;padding:8px 12px;border-radius:6px;' +
   `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.82);` +
   'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;pointer-events:none;white-space:pre-line;';
+const EVOLVE_COLOR = '#ffd76a';
+const EVOLVE_LINE_COLOR = '#c9a04a';
+const EVOLVE_BANNER_CSS =
+  'position:absolute;left:28px;right:28px;bottom:116px;align-items:center;' +
+  'justify-content:space-between;gap:14px;padding:10px 14px;border-radius:8px;' +
+  `border:1px solid ${EVOLVE_LINE_COLOR};background:rgba(36,29,9,.82);` +
+  'box-shadow:0 0 18px rgba(255,215,106,.14);white-space:pre-line;';
+const EVOLVE_TEXT_CSS = `color:${EVOLVE_COLOR};`;
+const EVOLVE_BTN_CSS =
+  BTN_CSS +
+  `width:auto;white-space:nowrap;pointer-events:auto;border-color:${EVOLVE_LINE_COLOR};` +
+  `background:rgba(120,90,20,.32);color:${EVOLVE_COLOR};`;
 const FLASH_MS = 1500;
 
 /** 商店实际像素宽度；渲染器用同一个结果把飞船居中到左侧剩余区域。 */
@@ -182,6 +201,14 @@ export function refitDenyMessage(code: number): string {
       return '本轮整备已经焊过一块甲板';
     case REFIT_NOT_ACTIVE:
       return '整备已经结束';
+    case EVOLVE_BAD_TARGET:
+      return '进化目标格不是炮塔';
+    case EVOLVE_BAD_SUPPORT:
+      return '被吞噬的格不是支援设施';
+    case EVOLVE_NOT_MAX_LEVEL:
+      return `只有满级 Lv${TOWER_MAX_LEVEL} 的炮塔才能进化`;
+    case EVOLVE_NO_RECIPE:
+      return '这一对模块没有进化配方（进化不可逆）';
     default:
       return `整备操作被拒绝(理由码 ${code})`;
   }
@@ -264,7 +291,19 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   hintKeys.style.cssText = HINT_KEYS_CSS;
   hintKeys.textContent = '左键 确认  ·  右键 / Esc 取消  ·  R 旋转';
   workspaceHint.append(help, hintKeys);
-  workspace.append(workspaceHead, workspaceHint);
+
+  // 空间进化提示条(17 号 issue):重排阶段扫甲板,有配方配对时亮出"可进化"横幅与确认按钮。
+  // 整条横幅 pointer-events 随根节点为 none,只有确认按钮自己显式 pointer-events:auto ——
+  // 提示文字下方的甲板照样可以点,按钮才是唯一会吞点击的区域。
+  const evolveBanner = document.createElement('div');
+  evolveBanner.style.cssText = EVOLVE_BANNER_CSS;
+  const evolveText = document.createElement('div');
+  evolveText.style.cssText = EVOLVE_TEXT_CSS;
+  const evolveBtn = document.createElement('button');
+  evolveBtn.style.cssText = EVOLVE_BTN_CSS;
+  evolveBtn.textContent = '确认进化';
+  evolveBanner.append(evolveText, evolveBtn);
+  workspace.append(workspaceHead, workspaceHint, evolveBanner);
 
   const shop = document.createElement('div');
   shop.style.cssText = SHOP_CSS;
@@ -330,6 +369,61 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   let lastY = 0;
   let flashTimer = 0;
   let layoutActive = false;
+  /** 进化配对的复用缓冲:findEvolutionPairs 收 out 正是为了这里每帧整块重写不新建数组(铁律 3) */
+  const evoBuf: number[] = [];
+
+  /**
+   * 重扫进化配对并刷新提示条。挂在 syncPanel 顶部 —— 甲板的一切变更(焊/搬/进化/阶段切换)
+   * 都经过 syncPanel,于是配对随重排变化的那一步天然在这里:刚吃完一对,当场扫出下一对。
+   * 配对表只在前 [0] 塔格 / [1] 支援格那对可触发,其余对先只报个数(吃一对重扫一次,下一对自动顶上)。
+   */
+  function syncEvolve(): void {
+    findEvolutionPairs(world.deck, evoBuf);
+    const has = phase === PHASE_ARRANGE && evoBuf.length >= 2;
+    evolveBtn.disabled = !has;
+    evolveBtn.style.cursor = has ? 'pointer' : 'not-allowed';
+    evolveBanner.style.display = has ? 'flex' : 'none';
+    if (!has) return;
+    const towerCell = world.deck.cells[evoBuf[0]!];
+    const supportCell = world.deck.cells[evoBuf[1]!];
+    if (!towerCell || !supportCell) return;
+    const result = evolutionOf(towerCell.towerType, supportCell.supportType);
+    const resultName = result >= 0 ? TOWERS[result]?.name ?? '未知进化塔' : '未知进化塔';
+    let text =
+      `可进化：${TOWERS[towerCell.towerType]?.name ?? '未知炮塔'} Lv${towerCell.level} ＋ ` +
+      `${SUPPORTS[supportCell.supportType]?.name ?? '未知支援'} → ${resultName}\n` +
+      '确认后支援格释放、塔替换为进化型（不可逆）';
+    if (evoBuf.length >= 4) text += `\n另有 ${(evoBuf.length - 2) / 2} 对可进化`;
+    evolveText.textContent = text;
+  }
+
+  /**
+   * 确认进化:吃配对表第一对(塔格 + 支援格),按返回码给反馈。
+   * 成功:世界当场改甲板(支援格清空、塔替换为进化型,revision bump 由 evolveAt 负责),
+   * 这里 syncPanel 重扫配对,被吃掉的一对立刻从提示里消失、下一对顶上。
+   * 失败:refitDenyMessage 说人话 + 塔格红闪,配对原样保留。
+   * 相位闸门 = 只认 PHASE_ARRANGE:焊接/选拼块阶段按钮本就隐藏,这层 if 是防桩的拦网。
+   */
+  function confirmEvolve(): void {
+    if (phase !== PHASE_ARRANGE || evoBuf.length < 2) return;
+    const towerCell = world.deck.cells[evoBuf[0]!];
+    const supportCell = world.deck.cells[evoBuf[1]!];
+    if (!towerCell || !supportCell) {
+      syncEvolve();
+      return;
+    }
+    const result = evolutionOf(towerCell.towerType, supportCell.supportType);
+    const resultName = result >= 0 ? TOWERS[result]?.name ?? '未知进化塔' : '未知进化塔';
+    const code = world.evolveRefitTower(towerCell.col, towerCell.row, supportCell.col, supportCell.row);
+    if (code === EVOLVE_OK) {
+      flash(`已进化：${resultName}（支援格已释放，不可逆）`, EVOLVE_COLOR);
+      syncPanel();
+      return;
+    }
+    state.denyIndex = evoBuf[0]!;
+    flash(refitDenyMessage(code), DENY_COLOR);
+    syncEvolve();
+  }
 
   function syncLayout(): void {
     const width = refitShopWidth(window.innerWidth);
@@ -389,6 +483,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   function syncPanel(): void {
+    syncEvolve();
     cards.style.display = 'grid';
     skipWeld.style.display = phase === PHASE_PICK ? 'block' : 'none';
     rotate.style.display = phase === PHASE_WELD ? 'block' : 'none';
@@ -578,6 +673,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     resetInteraction();
     root.style.display = 'none';
     ui.style.zIndex = '';
+    syncEvolve();
     if (layoutActive) {
       layoutActive = false;
       onLayout?.(0);
@@ -588,6 +684,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   back.addEventListener('click', backToPick);
   rotate.addEventListener('click', rotatePiece);
   finish.addEventListener('click', resolve);
+  evolveBtn.addEventListener('click', confirmEvolve);
   window.addEventListener('resize', syncLayout);
 
   window.addEventListener('mousemove', (event) => {

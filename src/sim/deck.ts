@@ -34,6 +34,7 @@
  */
 import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT } from '../data/supports';
 import { DECK_PIECES } from '../data/deckPieces';
+import { evolutionOf } from '../data/evolutions';
 import {
   TOWER_AUTOCANNON,
   TOWER_KIND_COUNT,
@@ -107,6 +108,23 @@ export const MOVE_NO_TARGET = 32;
 export const MOVE_TARGET_TAKEN = 33;
 export const MOVE_WEAPON_INTERIOR = 34;
 export const MOVE_SAME_CELL = 35;
+
+/**
+ * 空间进化(17 号 issue)结果码。与放置/焊接/搬运分开编号:进化不是往空格里插、不是动拓扑、
+ * 也不是把一块模块搬去别处 —— 它是"满级塔 + 相邻支援"在船坞里的合成,失败理由自成一套。
+ */
+export const EVOLVE_OK = 40;
+/** 塔格不存在、不属于船体,或不是一座武器塔 */
+export const EVOLVE_BAD_TARGET = 41;
+/** 支援格不存在、不属于船体,或不是一块支援设施(含"支援格就是塔自己"的同格情形) */
+export const EVOLVE_BAD_SUPPORT = 42;
+/** 塔未满级(GDD §5.4:只有 Lv5 才谈得上"这条路的终点"的质变) */
+export const EVOLVE_NOT_MAX_LEVEL = 43;
+/**
+ * 这一对 (塔型, 支援型) 没有配方 —— 含两种情形:**支援换成别的型号**、塔已是**进化型**
+ * (配方表只有 base → result 这条单向边,进化塔在任何配方里都不再是 base)。
+ */
+export const EVOLVE_NO_RECIPE = 44;
 
 /**
  * 放置成功的唯一判据。成功从此有**两种**(新塔 PLACE_OK / 升级 PLACE_UPGRADE),
@@ -802,6 +820,57 @@ export function moveModule(
   updateOnline(target);
   deck.revision++;
   return MOVE_OK;
+}
+
+/**
+ * 空间进化(17 号 issue,sim 侧)的原子写入 —— 判据与配对扫描在 sim/evolve.ts
+ * (findEvolutionPairs),本函数只做"确认触发"这一下:清支援格 + 塔格替换塔型 + 承接等级,
+ * 全部成功才 bump 一次 revision(仿 moveModule 的原子写法)。入参是 (塔格, 支援格) 两对坐标,
+ * 内部**现查配方表复核** —— 调用方拿 findEvolutionPairs 的结果透传即可,
+ * 自己手编一对坐标也骗不过这一层(单测直接钉)。
+ *
+ * 原子写三件事:
+ *   一、**支援格清空**(clearCellModule:内容/型号/等级/四个邻接倍率一次性复位,
+ *       occupied 与暴露边原样保留)—— 被吞噬的这块腾出一格,整备期可以再摆新模块
+ *       (GDD §5.5"吞噬支援块、腾出格子"= 空间系统的复利时刻);
+ *   二、**塔格 towerType 替换为配方结果塔型,level 承接**(满级 5 原样留下 ——
+ *       进化塔没有自己的等级曲线,它就是"这座塔的 Lv5 之后的形态");
+ *       **运行期节流状态一概不碰**(cooldown/ammo/reloadLeft/heat/coolLock/charge/turretOffset)——
+ *       与 moveModule 同一条口径:模块还是那个模块,只是换了型,不该凭空满弹/退热;
+ *   三、updateOnline(tower):内容没变、暴露边没变,online 算式照跑 —— 被 12 号围死的塔
+ *       进化后照样离线,进化的塔不是 03 号 online 状态机的例外。
+ *   四个邻接倍率是派生量,由调用方(World.evolveRefitTower)的 syncSupportBuffs 统一重算,
+ *   本函数不碰(与 placeAt 同一条口径)。
+ *
+ * **不可逆的结构保证**:配方表只有 base+support → result 这条单向边(evolutions.ts)——
+ * 结果塔型在任何配方里都不再是 base,于是同格再调本函数恒 EVOLVE_NO_RECIPE,
+ * placeAt 回原塔型也恒 PLACE_TAKEN(换塔型不是同名叠级),与"塔不可出售"同一条口径:
+ * 不靠任何一处 if 记得拦,而是"没有那个 API"(17 号验收:船坞里不能再拆回)。
+ *
+ * 失败一律原子拒绝:任何一个字段都不动、revision 不 bump —— 与 placeAt 的"拒绝不 bump"同款,
+ * 渲染层不会为一次被拒的进化白重建一遍几何。
+ */
+export function evolveAt(
+  deck: Deck,
+  towerCol: number,
+  towerRow: number,
+  supportCol: number,
+  supportRow: number,
+): number {
+  const tower = cellAt(deck, towerCol, towerRow);
+  if (!tower || !tower.occupied || tower.content !== CELL_WEAPON) return EVOLVE_BAD_TARGET;
+  const support = cellAt(deck, supportCol, supportRow);
+  if (!support || !support.occupied || support.content !== CELL_SUPPORT) return EVOLVE_BAD_SUPPORT;
+  if (tower.level !== TOWER_MAX_LEVEL) return EVOLVE_NOT_MAX_LEVEL;
+  const result = evolutionOf(tower.towerType, support.supportType);
+  if (result < 0) return EVOLVE_NO_RECIPE;
+
+  clearCellModule(support);
+  tower.towerType = result;
+  // 内容没变,这一句今天算出来与原来相同;仍然照算,让 online 永远只由 updateOnline 这一个算式产出
+  updateOnline(tower);
+  deck.revision++;
+  return EVOLVE_OK;
 }
 
 /** 格心的船体局部坐标(+X = 船头,+Y = 右舷),整块甲板对称于船心 */

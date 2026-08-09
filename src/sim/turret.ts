@@ -290,9 +290,12 @@ function fireBullets(
 }
 
 /**
- * 抛射弹(迫击炮):一发**途中不碰撞**的弹,飞到落点炸一片(GDD §5.2 的"越过前排")。
+ * 抛射弹(迫击炮、轨道火雨):每发**途中不碰撞**的弹,飞到落点炸一片(GDD §5.2 的"越过前排")。
  * 落点取目标**当前**位置、不做提前量:抛射的全部乐趣就是"看得见落点、来得及走开",
  * 加了提前量它就成了必中的追踪弹,那是另一种塔。
+ * 发数 = def.burst(轨道火雨三连发 = 3),0 = 恒 1 发 —— 与 fireBullets 同一条多发射击口径:
+ * 展开宽度 = 瞄准容差,不为恒发数新造一个旋钮;n = 1 时步长恒 0,与单发迫击炮逐位一致。
+ * 充能系"一次泄放"的代价照旧按一次记(onFired 只清空蓄力):三发是同一次蓄力的表现。
  */
 function fireMortar(
   cell: DeckCell,
@@ -304,37 +307,73 @@ function fireMortar(
 ): number {
   if (!(def.bulletSpeed > 0)) return 0; // 理由同 fireBullets:Infinity 的 life 是个不回收的弹
 
+  const n = def.burst > 0 ? def.burst : 1;
   const dx = target.x - muzzle.x;
   const dy = target.y - muzzle.y;
   // 夹在射程内是给浮点边界与将来的规则变动兜底(findArcTarget 已保证 ≤ range):
   // 落点绝不许跑到射界叠加层画出来的那个圆之外 —— 那条圆就是玩家读到的"这门炮够得到哪"
   const dist = Math.min(Math.hypot(dx, dy), range);
+  const damage = effectiveAoeDamage(def, cell.level);
+  const step = n > 1 ? (def.aimTolDeg * DEG2RAD) / (n - 1) : 0;
+  const base = -((n - 1) / 2) * step;
 
-  const b = sink.spawnBullet();
-  b.kind = BK_MORTAR;
-  b.x = b.px = muzzle.x;
-  b.y = b.py = muzzle.y;
-  b.vx = Math.cos(aim) * def.bulletSpeed;
-  b.vy = Math.sin(aim) * def.bulletSpeed;
-  b.damage = 0; // 直击不结算:伤害全在落点(见 data/towers 里迫击炮那一行)
-  b.life = dist / def.bulletSpeed;
-  b.radius = def.bulletRadius;
-  b.aoeRadius = def.aoeRadius;
-  b.aoeDamage = effectiveAoeDamage(def, cell.level);
-  b.towerType = def.type;
-  b.throttle = def.throttle; // 词缀抗性(14 号)的伤害系判据,发射那一刻定死
-  return 1;
+  for (let i = 0; i < n; i++) {
+    const a = aim + base + i * step;
+    const b = sink.spawnBullet();
+    b.kind = BK_MORTAR;
+    b.x = b.px = muzzle.x;
+    b.y = b.py = muzzle.y;
+    b.vx = Math.cos(a) * def.bulletSpeed;
+    b.vy = Math.sin(a) * def.bulletSpeed;
+    b.damage = 0; // 直击不结算:伤害全在落点(见 data/towers 里迫击炮那一行)
+    b.life = dist / def.bulletSpeed;
+    b.radius = def.bulletRadius;
+    b.aoeRadius = def.aoeRadius;
+    b.aoeDamage = damage;
+    b.towerType = def.type;
+    b.throttle = def.throttle; // 词缀抗性(14 号)的伤害系判据,发射那一刻定死
+  }
+  return n;
 }
 
 /**
- * 持续光束(激光):瞬时单体判定 + 一条每次开火续命的可视化。
+ * 持续光束(激光 / 相位切割者):瞬时判定 + 一条每次开火续命的可视化。
  * "持续"= fireInterval 0.1s 的伤害 tick,视觉连续、判定离散(见 data/towers 里激光那一行):
  * 真做成 dps × dt 的连续积分,伤害就会跟着帧长漂,确定性也没了。
+ *
+ * 穿透光束(相位切割者 = towerPierce > 0):光束不再停在首目标 —— 沿炮口→目标的射线一路切到
+ * 射程尽头,凡"身体与该线相交"的敌人全吃满(与磁轨的线段判定同一条几何,线半宽复用
+ * lanceWidth)。首目标必在线上,故不存在"打空了还要不要记代价"的分叉,代价口径与单体一致。
+ * 线画到射程尽头:画面上的那束光就是它的全部作用范围(画到哪儿就是打到哪儿)。
  */
 function fireBeam(cell: DeckCell, def: TowerDef, target: Enemy, sink: FireSink): number {
   // 节流系跟进去:词缀抗性(14 号:装甲/相位)在伤害结算处认 def.throttle
-  sink.damage(target, effectiveDamage(def, cell.level), def.throttle);
-  // 命中点取目标**当前**位置:瞬时判定,画到哪儿就是打到哪儿
+  const damage = effectiveDamage(def, cell.level);
+  const dx = target.x - muzzle.x;
+  const dy = target.y - muzzle.y;
+  const dist = Math.hypot(dx, dy);
+
+  if (towerPierce(def, cell.level) > 0 && dist > 0) {
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const range = towerRange(def, cell.level);
+    for (let i = 0; i < candidates.length; i++) {
+      const e = candidates[i]!;
+      if (e.dead) continue;
+      const ex = e.x - muzzle.x;
+      const ey = e.y - muzzle.y;
+      const along = ex * ux + ey * uy;
+      if (along < 0 || along > range) continue;
+      const perp = Math.abs(ex * uy - ey * ux);
+      if (perp > def.lanceWidth + enemyRadius(e)) continue;
+      sink.damage(e, damage, def.throttle);
+    }
+    sink.fx(FXV_BEAM, muzzle.x, muzzle.y, muzzle.x + ux * range, muzzle.y + uy * range, 0, def.type);
+    return 1;
+  }
+
+  // 单体光束(激光):命中点取目标**当前**位置,瞬时判定,画到哪儿就是打到哪儿
+  sink.damage(target, damage, def.throttle);
   sink.fx(FXV_BEAM, muzzle.x, muzzle.y, target.x, target.y, 0, def.type);
   return 1;
 }

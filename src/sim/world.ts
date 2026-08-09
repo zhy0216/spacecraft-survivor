@@ -84,6 +84,8 @@ import {
   type Deck,
   deckTurnRate,
   EDGE_COUNT,
+  evolveAt,
+  EVOLVE_OK,
   isEdgeExposed,
   isPlaceSuccess,
   isWeldSuccess,
@@ -1286,6 +1288,27 @@ export class World {
     if (!this.refitPending) return REFIT_NOT_ACTIVE;
     const code = moveModule(this.deck, fromCol, fromRow, toCol, toRow);
     if (code === MOVE_OK) {
+      syncSupportBuffs(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck);
+      if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    }
+    return code;
+  }
+
+  /**
+   * 整备期空间进化(17 号 issue):满级塔 + 正交相邻指定支援 → 吞噬支援格、塔替换为进化型。
+   * 判定与原子写入全在 sim/evolve + sim/deck,这里只做接线:
+   *   **refitPending 闸门**(与 weldRefitPiece / moveRefitModule 同一条:船坞是唯一重排时刻,
+   *     GDD §4.5 —— 战斗里没有"进化"这回事);
+   *   成功后当场同步两样甲板派生量(**邻接 buff**:被吞噬的支援格撤掉一条线,塔的加成可能回落;
+   *   **HP 上限**:装甲舱若被吞噬,船的规格当帧就变)—— 照 weldRefitPiece 的两步;
+   *   零 rng:进化不掷任何随机数,同 seed 同操作序列逐位不变(17 号验收,evolve.test 钉着)。
+   * 不可逆:配方表没有拆回这条边,placeAt 回原塔型恒 PLACE_TAKEN(deck.evolveAt 的注释有全文)。
+   */
+  evolveRefitTower(towerCol: number, towerRow: number, supportCol: number, supportRow: number): number {
+    if (!this.refitPending) return REFIT_NOT_ACTIVE;
+    const code = evolveAt(this.deck, towerCol, towerRow, supportCol, supportRow);
+    if (code === EVOLVE_OK) {
       syncSupportBuffs(this.deck);
       this.ship.maxHp = hullMaxHp(this.deck);
       if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;

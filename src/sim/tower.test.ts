@@ -30,10 +30,12 @@ import {
   THR_HEAT,
   TOWER_ARC,
   TOWER_AUTOCANNON,
+  TOWER_GATLING,
   TOWER_KIND_COUNT,
   TOWER_LASER,
   TOWER_MORTAR,
   TOWER_PD,
+  TOWER_PHASE,
   TOWER_RAILGUN,
   type TowerDef,
   towerChargeTime,
@@ -466,15 +468,24 @@ describe('三套机制机制上互不相同(06 号支援设施的三个作用锚
       [THR_HEAT]: ['coolLock', 'cooldown', 'heat'],
       [THR_CHARGE]: ['charge'],
     };
+    // 17 号进化塔里两座"把代价整条买断"的签名塔:加特林 reload 0(不再装填)→ reloadLeft 恒 0;
+    // 相位切割者 heatPerShot 0(无过热)→ heat / coolLock 恒 0。它们不是"没用上那套机制",
+    // 是那套机制的代价被配方买断了 —— 这两个字段从"该动"里除名,其余照旧必须动
+    const NO_COST: Record<number, readonly string[]> = {
+      [TOWER_GATLING]: ['reloadLeft'],
+      [TOWER_PHASE]: ['heat', 'coolLock'],
+    };
 
     for (let type = 0; type < TOWER_KIND_COUNT; type++) {
       const p = place(type);
       const own = OWNED[p.def.throttle]!;
+      const skip = NO_COST[p.def.type] ?? [];
       const touched = new Set<string>();
       // 1200 帧 = 20 秒:够每一套走完自己的整个循环(装填一轮、过热一轮、蓄放两轮)
       for (let f = 1; f <= 1200; f++) {
         tick(p, true);
         for (const k of FIELDS) {
+          if (skip.includes(k)) continue;
           if (p.cell[k] === 0) continue;
           expect(own, `${p.def.name} 第 ${f} 帧动了 ${k}`).toContain(k);
           touched.add(k);
@@ -482,7 +493,7 @@ describe('三套机制机制上互不相同(06 号支援设施的三个作用锚
       }
       // 反过来也要钉:自己那几个字段必须真的动起来过,
       // 否则"互不复用"可以靠"什么都不做"蒙混过关(比如一座压根开不了火的塔)
-      expect([...touched].sort(), p.def.name).toEqual([...own]);
+      expect([...touched].sort(), p.def.name).toEqual([...own].filter((k) => !skip.includes(k)));
     }
   });
 
