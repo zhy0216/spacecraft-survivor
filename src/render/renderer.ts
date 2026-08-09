@@ -198,6 +198,9 @@ const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
 /** 舰壳比初始 3×4 甲板略大一圈，露出装甲侧裙、推进器和舰艏。 */
 const SHIP_HULL_LENGTH_PAD = 0.72;
 const SHIP_HULL_WIDTH_PAD = 0.45;
+/** 四型都按战斗态飞船的视觉量级展示，并再放大一档；甲虫继续保留重甲型的体型读数。 */
+const ENEMY_VISUAL_SPAN = (tuning.shipLength + CELL * SHIP_HULL_LENGTH_PAD) * 1.15;
+const ENEMY_HEAVY_VISUAL_SCALE = 1.15;
 const DECK_HULL_WIDTH = CELL * 0.067;
 /** 船头亮边 + 艏尖:快速转向时头尾必须一眼分得清(T3 验收口径),故给最亮的一档冷白 */
 const DECK_BOW_COLOR = 0xdff2ff;
@@ -587,21 +590,11 @@ function buildEnemyShape(def: EnemyDef): Graphics {
 }
 
 /**
- * 生成敌图已经裁成同尺寸方图，这里只决定四型在世界里的最长视觉边。
- * 比碰撞直径略大是有意的：原灰盒的箭头/胶囊本来也伸出碰撞圆，细节图若严格缩到 2r，
- * 在当前“船占屏高 20%”的战斗镜头下会糊成一个有颜色却没轮廓的小点。
+ * 四型生成图都裁成同尺寸方图，这里把普通敌型的最长视觉边对齐战斗态舰壳长度；
+ * 重甲甲虫再大一档。碰撞仍读 def.radius，视觉尺寸不反向污染 sim 数值。
  */
 function generatedEnemySpan(def: EnemyDef): number {
-  switch (def.shape) {
-    case 'circle':
-      return def.radius * 2.4;
-    case 'arrow':
-      return def.radius * 3;
-    case 'capsule':
-      return def.radius * 3.4;
-    case 'hex':
-      return def.radius * 2.8;
-  }
+  return ENEMY_VISUAL_SPAN * (def.shape === 'hex' ? ENEMY_HEAVY_VISUAL_SCALE : 1);
 }
 
 /**
@@ -694,7 +687,7 @@ export class Renderer {
   private enemyTextures: Texture[] = [];
   /** 生成图自带暖色时取白色；程序化灰阶兜底仍取 enemyTint。全部只在建粒子时上传一次。 */
   private enemyTextureTints: number[] = [];
-  /** 生成图是 128 方图，按各型的世界视觉尺寸静态缩放；程序化纹理恒为 1。 */
+  /** 每型纹理静态缩放到与飞船同档的世界视觉尺寸。 */
   private enemyTextureScales: number[] = [];
   /** 生成图的正面朝 -Y，程序化箭头朝 +X；逐型记偏移，热路径不再分支查纹理来源。 */
   private enemyRotationOffsets: number[] = [];
@@ -902,9 +895,7 @@ export class Renderer {
         });
       this.enemyTextures.push(tex);
       this.enemyTextureTints.push(generatedTexture ? 0xffffff : enemyTint(def.kind));
-      this.enemyTextureScales.push(
-        generatedTexture ? generatedEnemySpan(def) / Math.max(tex.width, tex.height) : 1,
-      );
+      this.enemyTextureScales.push(generatedEnemySpan(def) / Math.max(tex.width, tex.height));
       this.enemyRotationOffsets.push(generatedTexture ? GENERATED_ART_FORWARD_OFFSET : 0);
       // 显式把纹理绑在容器上(而不是听任它取第一个粒子的):让"一容器一纹理"这条约束写在明面上
       this.enemyPcs.push(
@@ -1409,6 +1400,10 @@ export class Renderer {
       // 攒成一条 path 一次填充:同色同 alpha 的船身底色,不需要逐格表现
       if (filled > 0) g.fill(SHIP_FILL);
     }
+
+    // 舰壳贴图已经完整交代战斗态的船形与朝向；继续描甲板外缘只会在它外面套出一个
+    // 3×4 的矩形“格子”。建造轮廓只属于详细甲板视图，贴图缺失时才保留作兜底。
+    if (!detailed && this.hasHullArt) return;
 
     // 二、船体轮廓 = 所有暴露边(船头那条除外,它归下面单独描)。攒成一条 path 只 stroke 一次
     let hull = 0;
