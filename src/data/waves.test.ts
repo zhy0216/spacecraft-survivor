@@ -2,7 +2,8 @@
  * 波次脚本(08 号 issue T1)的表级不变量。
  * 与 data/towers.test.ts 同口径:钉的不是出怪逻辑(那在 sim/waves.ts 里),而是**脚本本身的口径** ——
  * 单局结构(4 段 × 120s、每两分钟一次敌群升级/玩家整备)、主压方向缓慢旋转且首尾相接不折回、
- * 侧压事件的时刻有序且落在段内、怪组合对得上敌人表、精英恒空、出怪环大于镜头视野。
+ * 侧压事件的时刻有序且落在段内、怪组合对得上敌人表、精英编排合法(教学段空 / at 升序 /
+ * kind 与词缀编号合法)、出怪环大于镜头视野。
  *
  * 后续调波次节奏时随便改数字是被鼓励的(那正是本表存在的理由),但改坏这几条就是改坏了机制本身:
  * 把 dirEndDeg 写成折回的角,主压方向就会在段内倒着急甩;
@@ -11,6 +12,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { tuning } from '../sim/config';
+import { AFFIX_COUNT } from './affixes';
 import { ENEMIES, ENEMY_KIND_COUNT, KIND_BEETLE, KIND_STRAFER, KIND_SWARM } from './enemies';
 import {
   SPAWN_RADIUS,
@@ -205,12 +207,55 @@ describe('波次脚本', () => {
     expect(last.streams.some((s) => s.kind === KIND_BEETLE)).toBe(true);
   });
 
-  it('精英恒空:接口预留但 MVP 不实装(todos/08),运行器一行都不读它', () => {
+  it('精英编排:教学段不塞,其余段各 1–2 个;at 升序且落段内;kind 与词缀编号合法', () => {
+    // 教学段(第一段)是"摆塔 + 认主压方向"的白给区,不塞精英(todos/14:教学段不塞)
+    expect(WAVE_SEGMENTS[0]!.elites).toEqual([]);
+    const all: { at: number; kind: number; count: number; affixes: number[] }[] = [];
     for (const seg of WAVE_SEGMENTS) {
-      expect(seg.elites, seg.name).toEqual([]);
+      // 中后段给力:每段 1–2 个,塞满整段就没有"突发时刻"的节奏可言
+      expect(seg.elites.length, `${seg.name} 的精英数`).toBeLessThanOrEqual(2);
+      let prevAt = -1;
+      for (const el of seg.elites) {
+        expect(el.at, seg.name).toBeGreaterThanOrEqual(0);
+        // 与 bursts 同一条游标口径:运行器只往前扫、不回头找,乱序写的事件会被整个跳过
+        expect(el.at, `${seg.name} 的精英必须按 at 升序`).toBeGreaterThan(prevAt);
+        // == duration 也不行:那一刻已经进了下一段,事件永远轮不到触发
+        expect(el.at, seg.name).toBeLessThan(seg.duration);
+        prevAt = el.at;
+
+        // 精英是普通敌型的放大版:kind 必须落在敌人表内(错一位就出成另一型)
+        expect(Number.isInteger(el.kind)).toBe(true);
+        expect(el.kind).toBeGreaterThanOrEqual(0);
+        expect(el.kind).toBeLessThan(ENEMY_KIND_COUNT);
+        expect(ENEMIES[el.kind]!.kind).toBe(el.kind);
+
+        expect(Number.isInteger(el.count)).toBe(true);
+        expect(el.count, seg.name).toBeGreaterThanOrEqual(1);
+
+        // 词缀 1–2 个(GDD §6.4);编号必须落在 data/affixes.ts 的合法区间内,
+        // 出界的编号在运行器里会静默透传、效果永远挂不上
+        expect(el.affixes.length, `${seg.name}@${el.at}s 的词缀数`).toBeGreaterThanOrEqual(1);
+        expect(el.affixes.length).toBeLessThanOrEqual(2);
+        for (const a of el.affixes) {
+          expect(Number.isInteger(a)).toBe(true);
+          expect(a).toBeGreaterThanOrEqual(0);
+          expect(a).toBeLessThan(AFFIX_COUNT);
+        }
+        all.push(el);
+      }
     }
-    // 字段本身必须在(类型 + 每段一个空数组):精英落地那天,脚本格式与运行器入口不必回头改结构
-    for (const seg of WAVE_SEGMENTS) expect(Array.isArray(seg.elites)).toBe(true);
+    // 后三段每段至少一只:教学段白给,整局不能只有开头有惊喜
+    for (let i = 1; i < WAVE_SEGMENTS.length; i++) {
+      expect(WAVE_SEGMENTS[i]!.elites.length, WAVE_SEGMENTS[i]!.name).toBeGreaterThanOrEqual(1);
+    }
+    // 五种词缀整局至少各出场一次(14 号验收:每种效果都要被玩家撞见并验证)
+    for (let a = 0; a < AFFIX_COUNT; a++) {
+      expect(all.some((el) => el.affixes.includes(a)), `词缀 ${a} 整局没出场`).toBe(true);
+    }
+    // 单帧上限是"数据写坏"的保险丝:任何一次精英事件都要能一帧出完(与 bursts 同一条原子口径)
+    let maxEliteEvent = 0;
+    for (const seg of WAVE_SEGMENTS) for (const el of seg.elites) maxEliteEvent = Math.max(maxEliteEvent, el.count);
+    expect(WAVE_MAX_SPAWN_PER_TICK).toBeGreaterThanOrEqual(maxEliteEvent);
   });
 
   it('出怪环大于镜头视野半径:小于它,敌人就当着玩家的面凭空出现', () => {

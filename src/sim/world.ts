@@ -38,6 +38,15 @@ import { Pool } from '../core/pool';
 import { Rng } from '../core/rng';
 import { SpatialHash } from '../core/spatialHash';
 import {
+  AFFIX_ARMORED,
+  AFFIX_FISSION,
+  AFFIX_FRENZY,
+  AFFIX_MAGNETIC,
+  AFFIX_PHASED,
+  AFFIXES,
+  ELITE,
+} from '../data/affixes';
+import {
   DROP_MAX_ALIVE,
   skipRefundFor,
   upgradeCost as economyUpgradeCost,
@@ -50,6 +59,9 @@ import {
   FX_LIFE_BLAST,
   FX_LIFE_CHAIN,
   FX_LIFE_LANCE,
+  THR_AMMO,
+  THR_CHARGE,
+  THR_HEAT,
   TOWER_AUTOCANNON,
 } from '../data/towers';
 import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
@@ -79,10 +91,14 @@ import {
 } from './deck';
 import { createDrop, type Drop, resetDrop, stepDrops } from './drop';
 import {
+  affixMask,
   applyDamage,
   createEnemy,
   type Enemy,
+  enemyRadius,
+  hasAffix,
   initEnemy,
+  initSplit,
   resetEnemy,
   ST_APPROACH,
   stepEnemyBehavior,
@@ -246,7 +262,7 @@ export class World {
    * **不提供 reset()**:重开 = 换整个 World(池 / rng / tick / 甲板全是新的才谈得上"同 seed 可复现"),
    * 单独把波次拨回去只会造出一个"敌人还在场、脚本却从头开始"的四不像。
    *
-   * 里头只有 segment / segTime / burstNext / debt 是真状态(进 checksum),
+   * 里头 segment / segTime / burstNext / eliteNext / debt 是真状态(全进 checksum,14 号起精英游标也哈),
    * dirRad / intensity / done 是它们与脚本的纯函数(派生量口径见 sim/waves.ts 的字段注释)。
    * **tuning.stressSpawn = true 时它整段旁路**:冻在初值、方向不转、永不 done。
    */
@@ -408,6 +424,14 @@ export class World {
 
   private scratch: Enemy[] = [];
 
+  /**
+   * 狂热光环(14 号)的半径内受害者暂存。帧首按在场光环携带者各查一次空间哈希、
+   * 收进这份数组(整帧复用、零分配),敌人循环里靠它判"这一只加不加速"。
+   * **可能含重复**:同一只被多只光环覆盖会进多次(倍率连乘 = 光环叠加),故不能当 Set 用。
+   * 与 scratch 分开:scratch 在敌人循环里被邻居分离反复清空,这份要活到整帧走完。
+   */
+  private auraVictims: Enemy[] = [];
+
   /** 本帧各舷的开火塔数,下标 = EDGE_*。整局复用同一个致密四元组(铁律 3:运行期零新增分配) */
   private readonly edgeFires: number[] = new Array<number>(EDGE_COUNT).fill(0);
 
@@ -422,7 +446,7 @@ export class World {
    */
   private readonly sink: FireSink = {
     spawnBullet: () => this.bullets.spawn(),
-    damage: (e, amount) => this.damageEnemy(e, amount),
+    damage: (e, amount, throttle) => this.damageEnemy(e, amount, throttle),
     fx: (kind, x0, y0, x1, y1, radius, towerType) => {
       const e = this.fx.spawn();
       e.kind = kind;
@@ -473,7 +497,7 @@ export class World {
    * 不在每帧的出怪路径上现造对象(铁律 3)。
    */
   private readonly waveSink: SpawnSink = {
-    spawn: (kind, angleRad) => this.spawnFromWave(kind, angleRad),
+    spawn: (kind, angleRad, affixes) => this.spawnFromWave(kind, angleRad, affixes),
   };
 
   constructor(seed: number) {
@@ -639,6 +663,39 @@ export class World {
     const ty = ship.y;
     const sep = tuning.enemySeparation;
     const speedScale = tuning.enemySpeedScale;
+    // 词缀表参数每帧现读(与 tuning 同口径:改 data/affixes.ts 即时生效,不必重开)
+    const frenzy = AFFIXES[AFFIX_FRENZY]!;
+    const frenzyR = frenzy.frenzyRadius;
+    const frenzyMul = frenzy.frenzySpeedMul;
+    const magnetPickupMul = AFFIXES[AFFIX_MAGNETIC]!.pickupMul;
+
+    // 帧首(哈希已重建、敌人循环之前):在场词缀的**全局效应**扫一遍(14 号)。
+    // 狂热光环:以每个光环携带者为心查空间哈希,把半径内的**其他**敌人收进 auraVictims ——
+    // 携带者自己恰好在半径内也不许自加速("半径内其他敌人加速"是词缀原话);
+    // 同一只被多只光环覆盖会进多次,倍率连乘 = 光环叠加。
+    // grid.query 只做 AABB 粗筛(spatialHash 契约:精确距离由调用方判定,
+    // 与邻居分离/爆炸命中同一口径),这里补一次平方距离复核,防角落格误加速。
+    // 磁力干扰:任一携带者在场,玩家拾取半径整体 ×pickupMul —— 修正挂在
+    // drop.magnetRadius 读的那一处(drop.ts),本帧扫描只负责把"干扰在场"翻成倍率。
+    this.auraVictims.length = 0;
+    let magnetMul = 1;
+    for (let i = 0; i < enemies.length; i++) {
+      const c = enemies[i]!;
+      if (c.affixes === 0) continue; // 普通怪(绝多数):一条分支都不进,热路径不白付
+      if (hasAffix(c, AFFIX_FRENZY)) {
+        const fr2 = frenzyR * frenzyR;
+        this.grid.query(c.x, c.y, frenzyR, this.scratch);
+        for (let k = 0; k < this.scratch.length; k++) {
+          const t = this.scratch[k]!;
+          if (t === c) continue;
+          const ox = t.x - c.x;
+          const oy = t.y - c.y;
+          if (ox * ox + oy * oy >= fr2) continue;
+          this.auraVictims.push(t);
+        }
+      }
+      if (hasAffix(c, AFFIX_MAGNETIC)) magnetMul = magnetPickupMul;
+    }
     // 粗筛半径 = 甲板外接圆(damage.ts 的唯一口径,随 12 号扩建一起长),体型那一项见下面 cr
     const contactR = deckOuterRadius(this.deck);
 
@@ -719,6 +776,19 @@ export class World {
         }
       }
 
+      // 狂热光环加成(14 号):只对接近段生效 —— 与邻居分离同一条口径,冲刺是锁定直线,
+      // 加速会让前摇预警画出的那条线变成谎言;前摇/硬直里期望速度本就归零,乘什么都还是零。
+      // 倍率读词缀表、每帧现乘进期望速度,再走下面同一阶追随(目标变远、追随系数不变)。
+      // auraVictims 是帧首按光环携带者查空间哈希攒出来的(可能含重复 = 多光环叠加连乘)
+      if (e.state === ST_APPROACH && this.auraVictims.length > 0) {
+        for (let j = 0; j < this.auraVictims.length; j++) {
+          if (this.auraVictims[j] === e) {
+            dvx *= frenzyMul;
+            dvy *= frenzyMul;
+          }
+        }
+      }
+
       e.vx += (dvx - e.vx) * follow;
       e.vy += (dvy - e.vy) * follow;
       e.x += e.vx * SIM_DT;
@@ -735,7 +805,8 @@ export class World {
       // 代价只是一次乘法 —— 逐只现算精确外接半径要一次开方,那才是 1000 敌热循环里付不起的钱
       const cdx = e.x - tx;
       const cdy = e.y - ty;
-      const cr = contactR + def.radius * Math.SQRT2;
+      // 体型那一项走 enemyRadius(精英 ×ELITE.scale):粗筛圆的半径口径全仓只有它一份
+      const cr = contactR + enemyRadius(e) * Math.SQRT2;
       if (cdx * cdx + cdy * cdy < cr * cr) this.contacts.push(e);
     }
 
@@ -752,8 +823,9 @@ export class World {
     // 船心传的是本帧**积分之后**的位置:残骸追的是船现在在哪 ——
     // 晚一帧的话,高速航行时整串残骸会恒定拖在船身后(与出怪环以船本帧位置为心同一条理由)。
     // 甲板也传进去:起吸半径是**甲板的派生量**(drop.magnetRadius),
-    // GDD §5.3 的磁力收集器届时只填那个函数体,本行一个字都不用改
-    this.scrap += stepDrops(this.drops, this.deck, ship.x, ship.y, SIM_DT);
+    // GDD §5.3 的磁力收集器届时只填那个函数体,本行一个字都不用改;
+    // magnetMul 是帧首扫出来的磁力干扰修正(14 号:携带者在场 → 拾取半径 ×pickupMul)
+    this.scrap += stepDrops(this.drops, this.deck, ship.x, ship.y, SIM_DT, magnetMul);
 
     // 船体受击结算:粗筛名单 → 三层判定 → 扣血/出火花(顺序理由见块注释与 settleHullDamage)
     this.settleHullDamage();
@@ -871,12 +943,25 @@ export class World {
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
       // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum
-      this.sink.fx(FXV_KILL, e.x, e.y, e.x, e.y, ENEMIES[e.kind]!.radius, e.kind);
+      this.sink.fx(FXV_KILL, e.x, e.y, e.x, e.y, enemyRadius(e), e.kind);
       // 掉落排在公开挂钩**之前**:先把世界自己的账落地(残骸是这一局的成长资源,不是一段表现),
       // 再把这具尸体递给外面 —— 于是挂钩接不接、接的人在回调里做了什么,都影响不到掉落。
       // onEnemyDeath 的既有语义一个字没变:仍是回池前、每只恰好一次(见它的字段注释)
       this.spawnDrop(e);
       this.onEnemyDeath?.(e);
+      // 裂变(14 号):死亡当场分裂成 splitCount 只 —— **复用敌人池**、不带词缀、普通血量,
+      // 一次 rng 都不掷(side 继承父体,见 initSplit):精英结算扰动不到出怪随机序列。
+      // 排在掉落/挂钩之后(分裂体是"新出生的敌人",与父体的账互不相干);
+      // 又排在 despawnAt **之前**:spawn() 会先对取出的对象跑一遍 reset(逐字段清零),
+      // 而池后进先出,第一只分裂体拿到的正是父体这个对象 —— 先回池再 initSplit,
+      // initSplit 读到的 parent.x/kind/side 就全是清零后的脏值了。
+      // spawn 只往数组尾 push,倒序回收的 reap 不会回头碰到它们
+      const split = e.affixes !== 0 && hasAffix(e, AFFIX_FISSION)
+        ? AFFIXES[AFFIX_FISSION]!.splitCount
+        : 0;
+      for (let j = 0; j < split && this.enemies.size < WAVE_MAX_ALIVE; j++) {
+        initSplit(this.enemies.spawn(), e, this.elapsed);
+      }
       this.enemies.despawnAt(i);
     }
   }
@@ -899,10 +984,14 @@ export class World {
   private spawnDrop(e: Enemy): void {
     const value = ENEMIES[e.kind]!.scrap;
     if (value <= 0 || this.drops.size >= DROP_MAX_ALIVE) return;
+    // 精英(14 号)= 固定倍率的高级掉落(ELITE.scrapMul = 3× 残骸):不掷随机、按型定死,
+    // 掉的就是"这一只"的 —— 同一颗残骸,面额 × 倍率,不会被普通怪掉落顶替;
+    // 16 号星币落地前先按它给(todos/14 口径)
+    const mul = e.affixes !== 0 ? ELITE.scrapMul : 1;
     const d = this.drops.spawn();
     d.x = d.px = e.x;
     d.y = d.py = e.y;
-    d.value = value;
+    d.value = value * mul;
   }
 
   /**
@@ -929,7 +1018,8 @@ export class World {
       // 本帧刚被塔打死的敌人不许再咬一口 —— 这一句之所以有意义,全靠结算排在子弹之后
       if (e.dead) continue;
       const def = ENEMIES[e.kind]!;
-      const hit = classifyHit(ship, deck, e.x, e.y, def.radius);
+      // 体型走 enemyRadius(精英 ×ELITE.scale):与粗筛、子弹命中同一份口径
+      const hit = classifyHit(ship, deck, e.x, e.y, enemyRadius(e));
       // 粗筛名单是超集,一层都没碰上的直接放过;冷却没走完的连火花都不出(免得"没伤害的擦碰"
       // 每帧刷一个事件,把 fx 池当烟花放)
       if (hit === HIT_NONE || e.hitCd > 0) continue;
@@ -996,9 +1086,21 @@ export class World {
    * 05 号 issue 的唯一伤害入口(塔/子弹都走这里)。
    * 只标记不回收:真正的出池与掉落在 step 末尾统一做,于是调用方不必知道对象在池里的下标,
    * 也不会在别人遍历到一半时把数组搅乱。
+   * @param throttle 开火塔的节流系(THR_*)。词缀抗性(14 号)在**这一处**按它判定:
+   *   装甲抗弹药系、相位抗能量系,倍率读 data/affixes.ts(ballisticMul/energyMul)。
+   *   不带 = 既有调用方语义,一律不抗(普通怪本来就是恒 1,无词缀时此参数完全无效)
    * @returns 本次是否致死(同帧重复致命只算一次,见 applyDamage)
    */
-  damageEnemy(e: Enemy, amount: number): boolean {
+  damageEnemy(e: Enemy, amount: number, throttle?: number): boolean {
+    // 抗性判定挂在伤害结算的唯一入口,与塔的节流(throttle)字段对齐 —— 不另造伤害类型体系
+    // (todos/14 口径:装甲 = 弹药系、相位 = 过热/充能系)。乘出来的仍是"这一发实际造成的伤害"
+    if (throttle !== undefined && e.affixes !== 0) {
+      if (throttle === THR_AMMO && hasAffix(e, AFFIX_ARMORED)) {
+        amount *= AFFIXES[AFFIX_ARMORED]!.ballisticMul;
+      } else if ((throttle === THR_HEAT || throttle === THR_CHARGE) && hasAffix(e, AFFIX_PHASED)) {
+        amount *= AFFIXES[AFFIX_PHASED]!.energyMul;
+      }
+    }
     return applyDamage(e, amount);
   }
 
@@ -1129,10 +1231,10 @@ export class World {
    * 上限是保险丝不是旋钮(见 WAVE_MAX_ALIVE),正常脚本下够不到,够到了这一局本就要输。
    *
    * rng 消耗顺序**定死为 角(运行器里)→ 半径(这里)→ initEnemy 的 side**,共三次、与型号无关
-   *(型号由脚本给死,不掷随机)—— 于是改一次平衡(改速率、改型号、改展宽)都不会移动整条随机序列,
-   * "同 seed 同波次"这条验收不会因为一次数值调整而全废。
+   *(型号与词缀由脚本给死,不掷随机)—— 于是改一次平衡(改速率、改型号、改展宽、改词缀)
+   * 都不会移动整条随机序列,"同 seed 同波次"这条验收不会因为一次数值调整而全废。
    */
-  private spawnFromWave(kind: number, angleRad: number): void {
+  private spawnFromWave(kind: number, angleRad: number, affixes?: readonly number[]): void {
     if (this.enemies.size >= WAVE_MAX_ALIVE) return;
     // 半径抖着来:不抖的话一股流出上百只之后会在屏外排成一道正圆弧,还会整排同时抵达 ——
     // "持续压力"当场被压成一下一下的脉冲(理由全文见 SPAWN_RADIUS_BAND)
@@ -1140,8 +1242,10 @@ export class World {
     const x = this.ship.x + Math.cos(angleRad) * r;
     const y = this.ship.y + Math.sin(angleRad) * r;
     const e = this.enemies.spawn();
-    // HP 时间缩放只在出生时算一次(GDD §14):在场的敌人不会因为时间流逝而回血变硬
-    initEnemy(e, kind, x, y, this.elapsed, this.rng);
+    // HP 时间缩放只在出生时算一次(GDD §14):在场的敌人不会因为时间流逝而回血变硬;
+    // 词缀位掩码在这里落地(affixMask 把 WaveElite.affixes 的编号数组换算成掩码,undefined = 普通怪),
+    // 精英的 HP ×ELITE.hpMul 在 initEnemy 里当场算好
+    initEnemy(e, kind, x, y, this.elapsed, this.rng, affixMask(affixes));
     // 只在敌人真正进池并完成初始化后记样本：burst 与普通流共用这一条入口；触顶丢弃在上面
     // 已经 return，故不会把“请求过但没生成”的怪算进罗盘强度。只记角度与一次固定脉冲，零分配。
     this.threatRate += THREAT_SPAWN_IMPULSE;
@@ -1281,7 +1385,10 @@ export class World {
     // 波次进度紧跟着四舷惩罚(08 号):它是这一局的推进进度,逐帧演化(段内计时 → 段推进 → 逐流的出怪账),
     // 不是任何东西的派生量 —— 漏了它,"某一段早换了一帧""某条流的账差了半只"这类分叉不会当场炸出来,
     // 只会在几十秒后以"怪莫名其妙多了一只"的形式浮上来,那时早已看不出是哪一帧走岔的。
-    // 顺序 = segment → segTime → burstNext → debt,与 WaveState 的字段顺序一致,永不改。
+    // 顺序 = segment → segTime → burstNext → eliteNext → debt,与 WaveState 的字段顺序一致,永不改。
+    // **eliteNext 也进**(14 号):精英事件是"到点即消费"的游标,它差一,本段的精英
+    // 就整只错位 —— 重放时"这只精英出没出过"是唯一从普通怪身上看不出差别的状态
+    // (词缀对普通怪的影响要等光环/抗性在若干帧后反哺到位置才露馅,游标是即时的那一面)。
     // × 100 的理由与冷却/装填/惩罚那批秒数字段一字同源:acc 内部量化到 1/8,不放大的话段内计时的
     // 分辨率只有 0.125s(整整七帧半),debt 那种 0..1 量级的账更是直接被抹平。
     //
@@ -1291,12 +1398,16 @@ export class World {
     acc(this.wave.segment);
     acc(this.wave.segTime * 100);
     acc(this.wave.burstNext);
+    acc(this.wave.eliteNext);
     for (let i = 0; i < this.wave.debt.length; i++) acc(this.wave.debt[i]! * 100);
     for (const e of this.enemies.items) {
       acc(e.x);
       acc(e.y);
       // 型号与血量也进哈希:否则"出怪混型错位"或"伤害算错"这两类回归会从确定性口径下漏掉
       acc(e.kind);
+      // 词缀位掩码也进(14 号):漏了它,"该带词缀的精英成了普通怪"这类回归从确定性口径下漏掉 ——
+      // 血量可能被 ELITE.hpMul 兜住,但狂热光环/磁力干扰的效果反哺的是**别人**的位置
+      acc(e.affixes);
       acc(e.hp);
       // 无敌帧剩余秒同理是逐帧演化的状态:它决定"这一口该不该咬",漏了它,
       // "结算间隔算错"就只会在血条上慢慢体现,而不会当场炸出一次确定性分叉。× 100 同上

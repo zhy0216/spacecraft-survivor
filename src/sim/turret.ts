@@ -43,7 +43,7 @@ import { type Arc, cellArc, findArcTarget, isTurretCell } from './arc';
 import { BK_DIRECT, BK_MORTAR } from './bullet';
 import { cellFireRateMul, deckOuterRadius } from './damage';
 import { cellWorldPos, type Deck, type DeckCell, deckCellSize } from './deck';
-import type { Enemy } from './enemy';
+import { type Enemy, enemyRadius } from './enemy';
 import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
 import {
@@ -282,6 +282,8 @@ function fireBullets(
     b.pierce = pierce;
     b.radius = def.bulletRadius;
     b.towerType = def.type;
+    // 节流系同 damage 一条口径定死:词缀抗性(14 号)在伤害结算处认它,飞行途中不回查塔
+    b.throttle = def.throttle;
     // aoeRadius / aoeDamage 保持 resetBullet 清出来的 0:直射弹没有落点 AoE
   }
   return n;
@@ -320,6 +322,7 @@ function fireMortar(
   b.aoeRadius = def.aoeRadius;
   b.aoeDamage = effectiveAoeDamage(def, cell.level);
   b.towerType = def.type;
+  b.throttle = def.throttle; // 词缀抗性(14 号)的伤害系判据,发射那一刻定死
   return 1;
 }
 
@@ -329,7 +332,8 @@ function fireMortar(
  * 真做成 dps × dt 的连续积分,伤害就会跟着帧长漂,确定性也没了。
  */
 function fireBeam(cell: DeckCell, def: TowerDef, target: Enemy, sink: FireSink): number {
-  sink.damage(target, effectiveDamage(def, cell.level));
+  // 节流系跟进去:词缀抗性(14 号:装甲/相位)在伤害结算处认 def.throttle
+  sink.damage(target, effectiveDamage(def, cell.level), def.throttle);
   // 命中点取目标**当前**位置:瞬时判定,画到哪儿就是打到哪儿
   sink.fx(FXV_BEAM, muzzle.x, muzzle.y, target.x, target.y, 0, def.type);
   return 1;
@@ -351,7 +355,7 @@ function fireChain(cell: DeckCell, def: TowerDef, target: Enemy, sink: FireSink)
 
   chained.length = 0;
   while (hop) {
-    sink.damage(hop, damage);
+    sink.damage(hop, damage, def.throttle); // 节流系跟进去:词缀抗性(14 号)在结算处认它
     sink.fx(FXV_CHAIN, fromX, fromY, hop.x, hop.y, 0, def.type);
     chained.push(hop);
     // 判在这里而不是循环头:chainCount 被改成 0/负数时,首目标照样吃这一下 ——
@@ -423,8 +427,8 @@ function fireLance(
     if (along < 0 || along > range) continue;
     // 叉积的绝对值 = 点到直线的距离(u 是单位向量),不必开方也不必再算一次投影
     const perp = Math.abs(dx * uy - dy * ux);
-    if (perp > def.lanceWidth + edef.radius) continue; // 含边界,与全仓其余命中判据同口径
-    sink.damage(e, damage);
+    if (perp > def.lanceWidth + enemyRadius(e)) continue; // 含边界,与全仓其余命中判据同口径
+    sink.damage(e, damage, def.throttle); // 节流系跟进去:词缀抗性(14 号)在结算处认它
   }
 
   // 无条件推一条光柱,哪怕一个人都没扫到:"打出去了但没打中"正是玩家判断这门沉炮该不该

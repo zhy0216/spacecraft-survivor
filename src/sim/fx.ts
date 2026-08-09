@@ -103,8 +103,13 @@ export function resetFxEvent(e: FxEvent): void {
 export interface FireSink {
   /** 从池里取一颗**已清零**的子弹,调用方当场把字段填满(池不认识弹道,填不满是调用方的错) */
   spawnBullet(): Bullet;
-  /** 唯一伤害入口 = World.damageEnemy。@returns 本次是否致死 */
-  damage(e: Enemy, amount: number): boolean;
+  /**
+   * 唯一伤害入口 = World.damageEnemy。@returns 本次是否致死
+   * @param throttle 开火塔的节流系(THR_*)。词缀抗性(14 号:装甲/相位)在伤害结算那一处
+   *   按它判定 —— 判定挂在 damage 结算处、与塔的节流字段对齐,不另造伤害类型体系。
+   *   不带 = 无抗性判定(既有调用方语义原样成立)
+   */
+  damage(e: Enemy, amount: number, throttle?: number): boolean;
   /** 记一次可视化事件(坐标一律世界坐标) */
   fx(
     kind: number,

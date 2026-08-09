@@ -76,6 +76,7 @@ import {
   Sprite,
   type Texture,
 } from 'pixi.js';
+import { ELITE } from '../data/affixes';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
 import { DECK_PIECES } from '../data/deckPieces';
 import { SUPPORTS } from '../data/supports';
@@ -96,6 +97,7 @@ import {
   towerMagazine,
   towerRange,
 } from '../data/towers';
+import { SPAWN_RADIUS } from '../data/waves';
 import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
 import { deckOuterRadius, hullCoreHalfExtents } from '../sim/damage';
@@ -122,7 +124,7 @@ import {
   WELD_OK,
 } from '../sim/deck';
 import type { Drop } from '../sim/drop';
-import { ST_WINDUP } from '../sim/enemy';
+import { enemyRadius, ST_WINDUP } from '../sim/enemy';
 import {
   FX_LIFE_HULL_HIT,
   FX_LIFE_KILL,
@@ -139,6 +141,7 @@ import {
 import { lerpAngle, type Vec2 } from '../sim/ship';
 import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
+import { peekNextElite, type ElitePeek } from '../sim/waves';
 import type { Bullet, Enemy, World } from '../sim/world';
 import { audioBus } from './audio';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
@@ -482,6 +485,37 @@ const TELEGRAPH_ALPHA = 0.5;
 const TELEGRAPH_RING_GROWTH = 2;
 const TELEGRAPH_WIDTH = 2;
 
+// —— 精英出场预警(14 号:出生前 ~2s 的视觉/音频提示)——屏幕空间,挂在 stage 上,不进 worldLayer ——
+/** 预警窗口(秒):eta 进窗才开始画/发声(todos/14 口径的 ~2s) */
+export const ELITE_WARN_LEAD = 2;
+/** 屏边箭头到屏幕边缘的留白(px):别让它顶进 HUD 角标底下 */
+const ELITE_WARN_EDGE_MARGIN = 28;
+/** 箭头底尺寸(px)与随接近生长的幅度:越近越大,读得出"快来了" */
+const ELITE_WARN_ARROW_BASE = 13;
+const ELITE_WARN_ARROW_GROW = 9;
+/** 闪烁频率(次/秒):渲染帧现算 sin,不依赖 CSS keyframes(与 HUD 的 burst 预警同一招) */
+const ELITE_WARN_BLINK_HZ = 3;
+/** 去重键的段基数:segment / eliteNext 都远小于它 ⇒ (segment, eliteNext) 单射进一个键 */
+const ELITE_WARN_KEY_STRIDE = 1 << 20;
+
+/**
+ * 精英出场预警的帧判定(纯函数,便于单测):当前帧是否处于预警窗口内
+ * —— 存在下一个未触发的精英(peekNextElite 的答复),且距出生 ≤ ELITE_WARN_LEAD 秒。
+ * 预警消失不在这里判定:精英实际出生(eliteNext 游标前移)或该段结束后,
+ * peek 要么换到下一只、要么返回 null,窗口自然熄灭。
+ */
+export function eliteWarnActive(peek: ElitePeek | null): boolean {
+  return peek !== null && peek.etaSeconds <= ELITE_WARN_LEAD;
+}
+
+/**
+ * 把 (segment, eliteNext) 游标压成一只精英的去重键:键变了 = 预警换到了另一只身上。
+ * 哨兵 -1 不与任何真键冲突(segment / eliteNext 都 ≥ 0)。
+ */
+export function eliteWarnKey(segment: number, eliteNext: number): number {
+  return segment * ELITE_WARN_KEY_STRIDE + eliteNext;
+}
+
 interface Interpolatable {
   x: number;
   y: number;
@@ -506,6 +540,9 @@ const coreTmp: Vec2 = { x: 0, y: 0 };
  */
 const linkPos: Vec2 = { x: 0, y: 0 };
 const weldCoord = { col: 0, row: 0 };
+/** 精英出生点的暂存(世界 → 屏幕换算,toGlobal 的 out 参数):热路径复用,零分配 */
+const eliteSpawnWorld: Vec2 = { x: 0, y: 0 };
+const eliteSpawnScreen: Vec2 = { x: 0, y: 0 };
 
 /**
  * 放置模式的 UI 状态。**接口定义在渲染层并导出**,依赖方向因此是单向的 ui → render:
@@ -695,6 +732,16 @@ export class Renderer {
   /** 每帧复用的分桶数组:清空只用 length=0,绝不新建(运行期零分配,铁律 3) */
   private enemyBuckets: Enemy[][] = [];
   /**
+   * 精英(affixes ≠ 0)各型独立容器。与普通型**同一张纹理、同一个 tint**,只是静态缩放
+   * 乘 ELITE.scale:体型差就是"这只不一样"的第一眼读数,而色相通道已经被"哪一型"占满。
+   * 分容器而不是把缩放做成逐粒子动态:后者 = 每帧为全部 1000 只重传顶点缓冲,
+   * 正是构造函数里那段放弃的取舍 —— 精英一局只有个位数,一只近乎永远为空的容器,
+   * 换来所有粒子保持"建粒子时上传一次"的静态预算。
+   */
+  private elitePcs: ParticleContainer[] = [];
+  private eliteParticles: Particle[][] = [];
+  private eliteBuckets: Enemy[][] = [];
+  /**
    * 子弹:一种"会产生子弹的塔型"一个容器,取舍与上面的敌人分型完全一致(见构造函数那段说明)。
    * 下标不是 towerType 而是 slot —— 六种塔里只有三种真的打出子弹(光束/链电/磁轨是瞬时判定),
    * 为另外三种留空容器等于白挂三个只会被遍历、永远为空的对象。towerType → slot 的换算走 bulletSlot。
@@ -833,6 +880,18 @@ export class Renderer {
    */
   private flashG = new Graphics().rect(0, 0, 1, 1).fill(FX_CORE_COLOR);
 
+  /**
+   * 精英出场预警的去重键(segment × ELITE_WARN_KEY_STRIDE + eliteNext;哨兵 -1 = 无预警)。
+   * 预警窗口持续 ELITE_WARN_LEAD 秒,同一只精英只该在**进窗那一帧**响一次 ——
+   * 键不变就绝不重复发声;精英出生(eliteNext 前移)或换段后键变,下一只进窗照常响
+   * (与 broadsideTick 按 world.tick 去重同一条口径)。
+   */
+  private eliteWarnKey = -1;
+  /** 预警层:挂在 stage(屏幕空间),不被镜头缩放/平移带着走 —— 它是 HUD 级的读数 */
+  private readonly eliteWarnG = new Graphics();
+  /** peekNextElite 的答复暂存:整局复用,渲染帧现读不新增分配(铁律 3) */
+  private readonly elitePeek: ElitePeek = { etaSeconds: 0, kind: 0, count: 0, affixes: [] };
+
   static async create(world: World): Promise<Renderer> {
     const app = new Application();
     await app.init({
@@ -909,6 +968,16 @@ export class Renderer {
       );
       this.enemyParticles.push([]);
       this.enemyBuckets.push([]);
+      // 精英容器与普通型同纹理同 dynamicProperties,唯一差别是 sync 时传进去的静态缩放
+      this.elitePcs.push(
+        new ParticleContainer({
+          dynamicProperties: { ...dyn, rotation: def.shape !== 'circle' },
+          boundsArea: bounds,
+          texture: tex,
+        }),
+      );
+      this.eliteParticles.push([]);
+      this.eliteBuckets.push([]);
     }
 
     // —— 子弹同样按型分容器,理由与上面那段一字不差(tint/纹理是静态属性,分容器才免得每帧重传)——
@@ -989,6 +1058,8 @@ export class Renderer {
     // 一颗才 5px,盖在敌人剪影上也不至于让威胁读数打折。
     this.worldLayer.addChild(this.telegraphG);
     for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
+    // 精英容器压在普通型之上:大个体不该被身后小个体的剪影啃掉边(与"甲虫排最后"同一条取舍)
+    for (let k = 0; k < this.elitePcs.length; k++) this.worldLayer.addChild(this.elitePcs[k]!);
     this.worldLayer.addChild(this.dropPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     this.worldLayer.addChild(this.fxG, this.deckG, this.muzzleFxG);
@@ -997,7 +1068,7 @@ export class Renderer {
     if (this.backgroundSprite) app.stage.addChild(this.backgroundSprite);
     // 星野压在静态远景之上、世界层之下:它是世界锚定的方位参照(接替旧边界圈),
     // 但终究是背景 —— 不许盖住任何实体
-    app.stage.addChild(...this.starfield.views, this.worldLayer, this.flashG);
+    app.stage.addChild(...this.starfield.views, this.worldLayer, this.eliteWarnG, this.flashG);
   }
 
   /**
@@ -1062,11 +1133,19 @@ export class Renderer {
     // 按型分桶:每帧单趟遍历,桶是复用数组(length=0 而不是新建),运行期零分配
     const buckets = this.enemyBuckets;
     for (let k = 0; k < buckets.length; k++) buckets[k]!.length = 0;
+    const eliteBuckets = this.eliteBuckets;
+    for (let k = 0; k < eliteBuckets.length; k++) eliteBuckets[k]!.length = 0;
     const enemies = this.world.enemies.items;
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i]!;
-      const bucket = buckets[e.kind];
-      if (bucket) bucket.push(e); // kind 越界只是不画这一只,不炸掉整局
+      // 精英(affixes ≠ 0)不进普通桶:它们走各自的精英容器(体型 ×ELITE.scale,见字段注释)
+      if (e.affixes !== 0) {
+        const eb = eliteBuckets[e.kind];
+        if (eb) eb.push(e); // kind 越界只是不画这一只,不炸掉整局
+      } else {
+        const bucket = buckets[e.kind];
+        if (bucket) bucket.push(e); // kind 越界只是不画这一只,不炸掉整局
+      }
     }
 
     this.telegraphG.clear();
@@ -1080,7 +1159,20 @@ export class Renderer {
         rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
         alpha,
       });
-      this.drawTelegraph(bucket, def, alpha, TELEGRAPH_MAX_PER_KIND);
+      // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
+      // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
+      const eliteBucket = this.eliteBuckets[k]!;
+      this.syncParticles(this.eliteParticles[k]!, this.elitePcs[k]!, eliteBucket, {
+        texture: this.enemyTextures[k]!,
+        tint: this.enemyTextureTints[k]!,
+        scale: this.enemyTextureScales[k]! * ELITE.scale,
+        rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
+        alpha,
+      });
+      // 前摇指示按型共享配额:精英与普通怪同型,合起来不能超过一型的预算
+      let budget = TELEGRAPH_MAX_PER_KIND;
+      budget = this.drawTelegraph(bucket, def, alpha, budget);
+      this.drawTelegraph(eliteBucket, def, alpha, budget);
     }
 
     // 子弹按 towerType 分桶,写法与上面的敌人分型一字不差(复用数组 + length = 0,零分配)。
@@ -1140,6 +1232,10 @@ export class Renderer {
     this.drawDeckThrottle(deck, deckDetailed);
     this.drawDeckArcs(deck, deckDetailed);
     this.syncDeckModuleRotations();
+
+    // 精英出场预警(出生前 ~2s):屏幕空间一层,读 wave 的只读游标 —— 零 rng、零状态改动,
+    // 只把脚本里早就写着的事提前念给玩家听。放在帧末:镜头/甲板变换都已落地。
+    this.syncEliteWarning(sx, sy);
 
   }
 
@@ -1215,6 +1311,7 @@ export class Renderer {
     const showBattle = !on;
     this.telegraphG.visible = showBattle;
     for (let i = 0; i < this.enemyPcs.length; i++) this.enemyPcs[i]!.visible = showBattle;
+    for (let i = 0; i < this.elitePcs.length; i++) this.elitePcs[i]!.visible = showBattle;
     this.dropPc.visible = showBattle;
     for (let i = 0; i < this.bulletPcs.length; i++) this.bulletPcs[i]!.visible = showBattle;
     this.fxG.visible = showBattle;
@@ -1275,6 +1372,9 @@ export class Renderer {
     this.broadsideDirX = 0;
     this.broadsideDirY = 0;
     this.flashG.visible = false;
+    // 预警去重键同理:新 World 的 segment/eliteNext 从 0 起,留着旧键会让新局第一只精英
+    // 被误判成"这一只已经响过"(与 broadsideTick 那一段同一条理由)
+    this.eliteWarnKey = -1;
     // 时停放大是**上一局那张卡片**留下的表现状态,新局一律从战斗态起步:
     // 调参面板的重开按钮在时停期间照样点得动(它不认识"正在弹卡"),不复位的话新船会带着
     // 上一局的甲板视图开出去,而那一局再也没有一次 setDeckZoom(false) 来关它。
@@ -2502,15 +2602,16 @@ export class Renderer {
    * 收缩环 = 剩余前摇时间,环收到贴住体型那一刻起冲,给出"还有多久"的读数。
    * 颜色取该型自己的 tint,与它的剪影同色 → 不用猜是哪一只要冲。
    * 同一型的所有指示攒进一条 path 只 stroke 一次,把每帧的几何指令数压到 ≤ 敌型数。
+   * @returns 剩余配额(精英/普通两只桶同型共享一个预算,见 sync)
    */
   private drawTelegraph(
     bucket: readonly Enemy[],
     def: EnemyDef,
     alpha: number,
     budget: number,
-  ): void {
+  ): number {
     // 数据驱动地跳过:没有前摇时长的型永远进不了 WINDUP(见 sim/enemy 状态机),不必逐个体检查
-    if (def.chargeWindup <= 0 || budget <= 0) return;
+    if (def.chargeWindup <= 0 || budget <= 0) return budget;
     const g = this.telegraphG;
     // 每帧现读敌速倍率:sim 侧的冲刺速度同样是 chargeSpeed × enemySpeedScale(见 sim/enemy),
     // 漏乘的话把倍率拖到 2 就只画出一半危险区 —— 而这条线是玩家横向挪开的唯一依据
@@ -2528,11 +2629,97 @@ export class Renderer {
       g.moveTo(x, y).lineTo(x + e.lockX * reach, y + e.lockY * reach);
       // 夹住 [0,1]:面板/单测改 chargeWindup 时正在前摇的那几只不至于画出巨环
       const t = Math.max(0, Math.min(1, e.timer / def.chargeWindup)); // 1 → 0
-      g.circle(x, y, def.radius * (1 + TELEGRAPH_RING_GROWTH * t));
+      // 环径走 enemyRadius:精英的判定体已被 sim 放大(×ELITE.scale),环必须收到
+      // **放大的**体型上才合得上"合拢即起冲"的承诺 —— 照 def.radius 画的话,
+      // 环会在精英的身体里合拢,冲撞甲虫型精英的前摇读数当场作废(14 号验收点名)
+      g.circle(x, y, enemyRadius(e) * (1 + TELEGRAPH_RING_GROWTH * t));
     }
     if (drawn > 0) {
       g.stroke({ width: TELEGRAPH_WIDTH, color: enemyTint(def.kind), alpha: TELEGRAPH_ALPHA });
     }
+    return budget;
+  }
+
+  /**
+   * 精英出场预警(14 号:出生前 ~2s 的视觉/音频提示,别让"突发"变"秒杀")。
+   *
+   * 数据源 = sim/waves 的 peekNextElite(world.wave 的只读游标):零 rng、零状态改动,
+   * 只把脚本里早就写着的事提前念给玩家听 —— 与 HUD 的 burst 预警(burstWarning)同一条口径。
+   * 预警消失不需要专门的判定:精英实际出生(eliteNext 游标前移)或该段结束之后,
+   * peek 要么换到下一只精英、要么返回 null,窗口自然熄灭。
+   *
+   * 视觉:屏幕边缘一支箭头指向出生点(色相 = 该型 tint,一眼知道来的是哪一型),
+   * 外加一圈随剩余 eta 收缩的倒计时环 —— 满环 = 刚进窗,合拢 = 出生。
+   * 出生点 = 船心 + 主压方向 × SPAWN_RADIUS,与 sim/world 的 spawnFromWave 同口径
+   * (不含 rng 抖动:±150px 的抖动在屏边箭头上读不出来,拿 0 抖动已经够诚实)。
+   *
+   * 音频:进窗那一帧响一次 —— 去重键 = (segment, eliteNext),窗口内键不变,
+   * 绝不会在 2 秒窗口里反复发声(audio.ts 的 'warn:elite' 限流窗口再兜一道)。
+   */
+  private syncEliteWarning(shipX: number, shipY: number): void {
+    const g = this.eliteWarnG;
+    g.clear();
+    if (this.assemblyView) return; // 装配界面是独立的固定界面,不叠战斗读数
+    const w = this.world;
+    // 没有下一个未触发的精英(段内放完 / 脚本走完)= 没有预警;压测旁路把 wave 冻在首段,
+    // 教学段 elites 恒空,peek 天然 false,都不必在这里特判
+    if (!peekNextElite(w.wave, this.elitePeek) || !eliteWarnActive(this.elitePeek)) {
+      this.eliteWarnKey = -1;
+      return;
+    }
+    const key = eliteWarnKey(w.wave.segment, w.wave.eliteNext);
+    if (key !== this.eliteWarnKey) {
+      this.eliteWarnKey = key;
+      audioBus.playEliteWarn(); // 专属低鸣(13 号音频联动):只在预警窗口开头响一次
+    }
+
+    const peek = this.elitePeek;
+    const dir = w.wave.dirRad;
+    eliteSpawnWorld.x = shipX + Math.cos(dir) * SPAWN_RADIUS;
+    eliteSpawnWorld.y = shipY + Math.sin(dir) * SPAWN_RADIUS;
+    this.worldLayer.toGlobal(eliteSpawnWorld, eliteSpawnScreen);
+    const screen = this.app.screen;
+    const cx = screen.width / 2;
+    const cy = screen.height / 2;
+    let dx = eliteSpawnScreen.x - cx;
+    let dy = eliteSpawnScreen.y - cy;
+    const len = Math.hypot(dx, dy);
+    // 船贴着出生点(理论上不可能:出生环恒在屏外)时退回主压方向,别让 |dx|/|dy| 除出 Infinity
+    if (len < 1e-6) {
+      dx = Math.cos(dir);
+      dy = Math.sin(dir);
+    } else {
+      dx /= len;
+      dy /= len;
+    }
+    // 把箭头压到屏幕边缘(出生点恒在屏外),同时兜住"点恰好落在屏内"的极端情形
+    const dist = Math.min(
+      len,
+      (screen.width / 2 - ELITE_WARN_EDGE_MARGIN) / Math.abs(dx),
+      (screen.height / 2 - ELITE_WARN_EDGE_MARGIN) / Math.abs(dy),
+    );
+    const px = cx + dx * dist;
+    const py = cy + dy * dist;
+    const ang = Math.atan2(dy, dx);
+    const eta = peek.etaSeconds;
+    const closeness = 1 - eta / ELITE_WARN_LEAD; // 0 → 1:越近越大越实
+    const blink = 0.55 + 0.45 * Math.abs(Math.sin(eta * Math.PI * ELITE_WARN_BLINK_HZ));
+    const tint = enemyTint(peek.kind);
+    const size = ELITE_WARN_ARROW_BASE + ELITE_WARN_ARROW_GROW * closeness;
+    // 箭头:尖朝出生方向。三角而非 HUD 预警的菱形 —— 两套预警一眼分得开
+    g.poly([
+      px + Math.cos(ang) * size,
+      py + Math.sin(ang) * size,
+      px + Math.cos(ang + 2.4) * size * 0.55,
+      py + Math.sin(ang + 2.4) * size * 0.55,
+      px + Math.cos(ang - 2.4) * size * 0.55,
+      py + Math.sin(ang - 2.4) * size * 0.55,
+    ]).fill({ color: tint, alpha: blink });
+    // 倒计时环:剩余 eta 的比例段,收到零 = 出生
+    const r = size * 1.7;
+    g.moveTo(px + r, py)
+      .arc(px, py, r, 0, (1 - closeness) * Math.PI * 2)
+      .stroke({ width: 2.5, color: tint, alpha: 0.85 * blink });
   }
 
   private syncParticles(

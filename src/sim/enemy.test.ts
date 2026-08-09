@@ -14,14 +14,25 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { Rng } from '../core/rng';
+import {
+  AFFIX_ARMORED,
+  AFFIX_FISSION,
+  AFFIX_FRENZY,
+  AFFIX_MAGNETIC,
+  ELITE,
+} from '../data/affixes';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { tuning } from './config';
 import {
+  affixMask,
   applyDamage,
   createEnemy,
   type Enemy,
+  enemyRadius,
+  hasAffix,
   hpScaleAt,
   initEnemy,
+  initSplit,
   resetEnemy,
   ST_APPROACH,
   ST_DASH,
@@ -188,6 +199,114 @@ describe('resetEnemy(池 reset)', () => {
     expect(e.lockX).toBe(0);
     expect(e.lockY).toBe(0);
     expect(e.timer).toBe(0);
+  });
+});
+
+describe('精英与词缀(14 号:HP/体型放大 + affixes 位掩码)', () => {
+  it('initEnemy 带词缀:HP = 基础 × 时间缩放 × ELITE.hpMul,affixes 落成位掩码', () => {
+    const def = ENEMIES[KIND_BEETLE]!;
+    const e = createEnemy();
+    initEnemy(
+      e,
+      KIND_BEETLE,
+      10,
+      -20,
+      300,
+      new Rng(1),
+      affixMask([AFFIX_FISSION, AFFIX_ARMORED]),
+    );
+
+    expect(e.affixes).toBe(affixMask([AFFIX_FISSION, AFFIX_ARMORED]));
+    expect(hasAffix(e, AFFIX_FISSION)).toBe(true);
+    expect(hasAffix(e, AFFIX_ARMORED)).toBe(true);
+    expect(hasAffix(e, AFFIX_FRENZY)).toBe(false);
+    expect(e.hp).toBeCloseTo(def.hp * hpScaleAt(300) * ELITE.hpMul, 9);
+    expect(e.maxHp).toBe(e.hp); // 满血出生:血条一出来就是满的
+    expect(e.hp).toBeGreaterThan(def.hp * hpScaleAt(300)); // 确实比同型普通怪硬
+  });
+
+  it('无词缀 = 普通怪:HP 不放大、affixes 为 0(普通流/压测路径的既有语义一字不变)', () => {
+    const def = ENEMIES[KIND_SWARM]!;
+    const e = createEnemy();
+    initEnemy(e, KIND_SWARM, 0, 0, 600, new Rng(1));
+    expect(e.affixes).toBe(0);
+    expect(hasAffix(e, AFFIX_ARMORED)).toBe(false);
+    expect(e.hp).toBeCloseTo(def.hp * hpScaleAt(600), 9);
+  });
+
+  it('enemyRadius:精英 = 基础半径 × ELITE.scale(体型放大),普通怪 = 基础半径', () => {
+    const plain = createEnemy();
+    initEnemy(plain, KIND_BEETLE, 0, 0, 0, new Rng(1));
+    expect(enemyRadius(plain)).toBe(ENEMIES[KIND_BEETLE]!.radius);
+
+    const elite = createEnemy();
+    initEnemy(elite, KIND_BEETLE, 0, 0, 0, new Rng(1), affixMask([AFFIX_FRENZY]));
+    expect(enemyRadius(elite)).toBeCloseTo(ENEMIES[KIND_BEETLE]!.radius * ELITE.scale, 9);
+    expect(enemyRadius(elite)).toBeGreaterThan(enemyRadius(plain));
+  });
+
+  it('resetEnemy 把 affixes 清回 0:池复用的精英不带词缀重生(上一条命的效果不继承)', () => {
+    const e = createEnemy();
+    initEnemy(e, KIND_STRAFER, 0, 0, 0, new Rng(1), affixMask([AFFIX_MAGNETIC]));
+    expect(e.affixes).not.toBe(0);
+    expect(e.hp).toBeGreaterThan(ENEMIES[KIND_STRAFER]!.hp); // 确实是精英血量
+
+    resetEnemy(e);
+    expect(e.affixes).toBe(0); // Object.keys 那条用例也兜着,这里显式钉一次
+    initEnemy(e, KIND_STRAFER, 0, 0, 0, new Rng(9));
+    expect(e.affixes).toBe(0);
+    expect(e.hp).toBeCloseTo(ENEMIES[KIND_STRAFER]!.hp, 9); // 也不带 3× 血量
+  });
+
+  it('initSplit:裂变分裂体 = 同型、无词缀、普通血量、继承父体 side,且一次 rng 都不掷', () => {
+    const parent = createEnemy();
+    initEnemy(parent, KIND_STRAFER, 100, 50, 300, new Rng(1), affixMask([AFFIX_FISSION]));
+    parent.side = -1;
+
+    const rng = new Rng(7);
+    const probe = new Rng(7);
+    const s = createEnemy();
+    initSplit(s, parent, 300);
+    expect(rng.next()).toBe(probe.next()); // 分裂不掷随机:side 继承父体,序列一步不挪
+
+    expect(s.x).toBe(100);
+    expect(s.y).toBe(50);
+    expect(s.kind).toBe(KIND_STRAFER);
+    expect(s.affixes).toBe(0); // 分裂体不带词缀:它们不是小精英
+    expect(s.side).toBe(-1);
+    expect(s.hp).toBeCloseTo(ENEMIES[KIND_STRAFER]!.hp * hpScaleAt(300), 9); // 普通血量,不 ×ELITE.hpMul
+    expect(s.maxHp).toBe(s.hp);
+    expect(s.state).toBe(ST_APPROACH);
+    expect(s.lockX).toBe(0);
+    expect(s.lockY).toBe(0);
+    expect(s.hitCd).toBe(0);
+    expect(s.dead).toBe(false);
+  });
+
+  it('精英冲撞甲虫:起手圈按体型放大(ELITE.scale),前摇仍是 chargeWindup/SIM_DT 帧 —— 放大体型下肉眼可读', () => {
+    const def = ENEMIES[KIND_BEETLE]!;
+    const ship = shipAt(0, 0);
+    const e = createEnemy();
+    // 出生在"普通起手圈之外、精英起手圈之内":普通甲虫在这段距离还不该起手
+    initEnemy(e, KIND_BEETLE, def.chargeRange * ELITE.scale + 100, 0, 0, new Rng(1), affixMask([AFFIX_ARMORED]));
+
+    let distAtWindup = -1;
+    for (let i = 1; i <= 30 * 60 && distAtWindup < 0; i++) {
+      stepOnce(e, ship);
+      if (e.state === ST_WINDUP) distAtWindup = Math.hypot(e.x - ship.x, e.y - ship.y);
+    }
+    expect(distAtWindup).toBeGreaterThan(0); // 真的起手了,不是空过 1800 帧
+    expect(distAtWindup).toBeGreaterThan(def.chargeRange); // 起手圈确实放大过(630 > 420)
+    expect(distAtWindup).toBeLessThanOrEqual(def.chargeRange * ELITE.scale + 1);
+
+    // 前摇时长与普通甲虫逐帧一致:体型放大不改状态机节拍,"看得懂、来得及躲"依然成立
+    let frames = 1; // 进入的那一帧就是第 1 帧前摇
+    for (let i = 0; i < 10000 && e.state === ST_WINDUP; i++) {
+      stepOnce(e, ship);
+      if (e.state === ST_WINDUP) frames++;
+    }
+    expect(frames).toBe(Math.round(def.chargeWindup / SIM_DT));
+    expect(e.state).toBe(ST_DASH); // 前摇完直接进冲刺,中间不空转一帧
   });
 });
 

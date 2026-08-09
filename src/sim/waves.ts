@@ -16,9 +16,10 @@
  * rng 消耗顺序是本模块最要紧的契约(08 验收:同 seed 两局出怪序列一致):
  * 每成功出一只 = 恰好一次 rng.next()(出生角的抖动),**与展宽是否为 0 无关**;
  * 型号由脚本直接给、不掷随机。于是调一次平衡(改速率、改占比、改展宽)都不会移动整条随机序列。
- *
- * data/waves.ts 里的 WaveElite 本文件**一行都不读**:精英只预留接口(类型 + 字段),
- * 不留一条"读了但什么也不做"的死代码路径(08 任务:MVP 不实装精英)。
+ * 精英(14 号实装 WaveElite)同一条口径:型号/词缀/数量全是脚本直给、不额外掷随机 ——
+ * 出现时刻只由 at 与 segTime 决定、与种子无关,每出一只恰好一次 rng.next()。
+ * 出场顺序 = 侧压 → 主压流 → 精英(帧末):精英排在帧末,触发帧内的普通怪
+ * 与无精英脚本逐只一致(帧间序列从下一帧起才整体顺延)。
  */
 import type { Rng } from '../core/rng';
 import {
@@ -36,12 +37,18 @@ import { DEG2RAD, wrapAngle } from './ship';
  * 实现方在回调里当场用掉 kind/angle 即可,本模块不跨帧持有任何东西。
  */
 export interface SpawnSink {
-  /** @param angleRad 世界系**绝对**角(0 = +X,顺时针为正);出生点 = 船心 + 该方向上的出怪半径 */
-  spawn(kind: number, angleRad: number): void;
+  /**
+   * @param angleRad 世界系**绝对**角(0 = +X,顺时针为正);出生点 = 船心 + 该方向上的出怪半径
+   * @param affixes 精英词缀编号(data/affixes.ts 的 AFFIX_*)。**undefined = 普通怪**;
+   *   精英恒带 ≥1 词缀(脚本口径),实现方按"affixes !== undefined 即精英"分流,
+   *   决定体型/HP 放大(ELITE.*)与词缀效果挂载 —— 本模块只透传,不认识词缀语义
+   */
+  spawn(kind: number, angleRad: number, affixes?: readonly number[]): void;
 }
 
 /**
- * 一局波次脚本的运行期状态。**只有前四个字段是真状态**(进 World.checksum),
+ * 一局波次脚本的运行期状态。**前五个字段是真状态**(segment / segTime / burstNext / eliteNext / debt),
+ * 全部进 World.checksum(14 号起 eliteNext 也由世界侧哈希,防止重放失配);
  * 后三个是 segment + segTime + 脚本的纯函数,随时可重算 —— 与 ship.maxHp / World.shipDead
  * 同一条派生量口径:哈它只是把同一件事哈两遍。
  */
@@ -52,6 +59,8 @@ export interface WaveState {
   segTime: number;
   /** 本段下一个待触发的 burst 下标(bursts 按 at 升序,故一个游标就够) */
   burstNext: number;
+  /** 本段下一个待触发的精英下标(elites 按 at 升序,与 burstNext 同一条游标口径) */
+  eliteNext: number;
   /**
    * 逐流累积的出怪账(下标 = 当前段 streams 的下标)。
    * 0.7 只/秒这种小数速率全靠它攒:每帧四舍五入的话,速率低于 60 只/秒的流会被抹成 0 或炸成满帧。
@@ -126,6 +135,37 @@ export function peekNextBurst(s: WaveState, out: BurstPeek): boolean {
   return true;
 }
 
+/** peekNextElite 的答复(调用方持有、跨帧复用,铁律 3:热路径零分配) */
+export interface ElitePeek {
+  /** 距触发还有几秒(>= 0;已到点未消费的帧上是 0) */
+  etaSeconds: number;
+  /** KIND_*(data/enemies.ts);精英是普通敌型的放大版,不另开一张表 */
+  kind: number;
+  count: number;
+  /** 词缀编号(data/affixes.ts 的 AFFIX_*);非空 = 精英 */
+  affixes: readonly number[];
+}
+
+/**
+ * 只读地看一眼**当前段**下一个未触发的精英(出场预警用,与 peekNextBurst 同一条口径):
+ * 精英是"突发时刻",~2s 前就得让玩家知道来的是谁 —— 别让突发变秒杀(todos/14)。
+ * 复用运行器自己的 eliteNext 有序游标(elites 按 at 升序),**零 rng、零状态改动**:
+ * 确定性与既有序列一个字都不碰。跨段不看 —— 下一段的精英要等换段才有确定的主压方向。
+ * @returns 是否有下一个精英;false 时 out 不动
+ */
+export function peekNextElite(s: WaveState, out: ElitePeek): boolean {
+  const seg = WAVE_SEGMENTS[s.segment];
+  if (seg === undefined) return false;
+  const el = seg.elites[s.eliteNext];
+  if (el === undefined) return false;
+  const eta = el.at - s.segTime;
+  out.etaSeconds = eta > 0 ? eta : 0;
+  out.kind = el.kind;
+  out.count = el.count;
+  out.affixes = el.affixes;
+  return true;
+}
+
 /**
  * 进入某一段时的复位:出怪账清零、侧压游标归零,并按新段的流数补齐 debt。
  * 补齐是运行期唯一可能的分配,且只发生在**换段那一帧**;热循环里一个字都不 push(铁律 3)。
@@ -133,6 +173,7 @@ export function peekNextBurst(s: WaveState, out: BurstPeek): boolean {
 function enterSegment(s: WaveState): void {
   for (let i = 0; i < s.debt.length; i++) s.debt[i] = 0;
   s.burstNext = 0;
+  s.eliteNext = 0;
   const seg = WAVE_SEGMENTS[s.segment];
   if (seg === undefined) return;
   // 正常脚本下 WAVE_MAX_STREAMS 已经预留够了,这里兜的是单测 splice 进来的长脚本
@@ -157,6 +198,7 @@ export function createWaveState(): WaveState {
     segment: 0,
     segTime: 0,
     burstNext: 0,
+    eliteNext: 0,
     // 预分配到全脚本的最大流数:正常换段时一个字节都不必再分配(铁律 3)
     debt: new Array<number>(WAVE_MAX_STREAMS).fill(0),
     dirRad: 0,
@@ -179,15 +221,15 @@ export function resetWaveState(s: WaveState): void {
   s.dirRad = 0;
   s.intensity = 0;
   s.done = WAVE_SEGMENTS.length === 0;
-  enterSegment(s); // burstNext 与 debt 都在里面
+  enterSegment(s); // burstNext / eliteNext 与 debt 都在里面
   refreshDerived(s);
 }
 
 /**
  * 推进波次一逻辑帧。**每一步的顺序都定死**(整条 rng 序列依赖它,单测按此钉):
  *   1 走完直接闭嘴 → 2 推时间 → 3 段推进(带余数进位)→ 4 重算方向/强度 →
- *   5 侧压事件 → 6 主压怪流。
- * 调换 5 与 6 或者把 2 挪到 4 之后,出怪序列会整条错位 —— 同 seed 复现当场作废。
+ *   5 侧压事件 → 6 主压怪流 → 7 精英插入(帧末)。
+ * 调换 5–7 中的任意两步或者把 2 挪到 4 之后,出怪序列会整条错位 —— 同 seed 复现当场作废。
  *
  * @param dt 逻辑帧步长(秒),固定时步下恒为 SIM_DT;做成参数是为了单测能一口气跑完一段
  */
@@ -272,5 +314,23 @@ export function stepWaves(
       sink.spawn(st.kind, s.dirRad + (rng.next() * 2 - 1) * spread);
     }
     s.debt[i] = debt; // 撞上限时余账原样留着,下一帧接着还
+  }
+
+  // 7. 精英插入(帧末)。与侧压同一条原子事件口径:按 at 升序游标一路向前、不被本帧上限截断;
+  // 型号/词缀/数量全是脚本直给,每出一只恰好消耗一次角度随机(与展宽无关的既有惯例)。
+  // 排在帧末出:触发帧内的普通怪(事件 + 流)与无精英脚本逐只一致,帧间序列才整体顺延。
+  const elites = seg.elites;
+  while (s.eliteNext < elites.length) {
+    const el = elites[s.eliteNext]!;
+    if (el.at > s.segTime) break;
+    s.eliteNext++;
+    for (let j = 0; j < el.count; j++) {
+      // 出生角 = 当时的主压方向,展宽恒 0(接口没有偏移字段:精英是主压流的"节点")。
+      // 展宽为 0 也照样掷这一次:消耗次数与展宽无关,改一次平衡才不会移动整条随机序列
+      rng.next();
+      // 计进 spawned,但**不被本帧上限截断**:与 bursts 同一条原子事件口径
+      spawned++;
+      sink.spawn(el.kind, s.dirRad, el.affixes);
+    }
   }
 }

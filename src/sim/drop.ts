@@ -119,6 +119,9 @@ export const DROP_CULL_REFUND = 0.5;
  * 推进全场残骸一逻辑帧:起吸判定 → 积分 → 收取。
  * @param shipX @param shipY 船心世界坐标(调用方传本帧**积分之后**的位置:残骸追的是船现在在哪,
  *   晚一帧的话高速航行时整串残骸会恒定拖在船身后)
+ * @param magnetMul 起吸半径的修正倍率(14 号的磁力干扰词缀,缺省 1 = 无干扰):
+ *   修正挂在**读 dropMagnetRadius 的这一处** —— 干扰携带者在场,玩家拾取半径整体 ×pickupMul,
+ *   翻译"谁在场"是 World 的事,本文件只认倍率。
  * @returns **本帧收到的残骸总量**(收下的 value 之和 + 离场残骸的折半回收,没收到就是 0)——
  *   调用方直接 `scrap += stepDrops(...)`。不由本函数去写 World 的字段:掉落这一层不认识"经济",
  *   正如 bullet.ts 不认识"击杀数"。
@@ -133,12 +136,15 @@ export function stepDrops(
   shipX: number,
   shipY: number,
   dt: number,
+  magnetMul = 1,
 ): number {
   const items = drops.items;
   // 三根旋钮**每帧现读一次**并 hoist 出循环(与 world.step 里 hoist enemySeparation 同口径):
   // 面板拖动照样即时生效,而一帧之内全场残骸必须用同一套数 —— 循环里逐颗现读的话,
   // 面板恰好在两颗残骸之间改了值,这一帧就会分裂成"前一半按旧半径、后一半按新半径"。
-  const magnetR = magnetRadius(deck);
+  // 磁力干扰(14 号)的倍率与旋钮同一个位置现乘:干扰携带者活着的那几帧,全场残骸
+  // 用的是同一套缩小后的半径,不存在"半场被干扰、半场没被"的割裂帧
+  const magnetR = magnetRadius(deck) * magnetMul;
   const magnetR2 = magnetR * magnetR;
   const speed = tuning.dropMagnetSpeed;
   const collectR = tuning.dropCollectRadius;

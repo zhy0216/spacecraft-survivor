@@ -62,15 +62,16 @@ function segment(p: Partial<WaveSegment> = {}): WaveSegment {
 }
 
 interface Rec extends SpawnSink {
-  list: { kind: number; angle: number }[];
+  list: { kind: number; angle: number; affixes?: readonly number[] }[];
 }
 /** 收怪的假 sink:运行器只认识这一份契约,单测里它就是一个数组(铁律 1 的一层验证) */
 function rec(): Rec {
-  const list: { kind: number; angle: number }[] = [];
+  const list: { kind: number; angle: number; affixes?: readonly number[] }[] = [];
   return {
     list,
-    spawn(kind: number, angle: number): void {
-      list.push({ kind, angle });
+    spawn(kind: number, angle: number, affixes?: readonly number[]): void {
+      // affixes 不落地成 undefined 字段:既有 toEqual 整条列表的断言不受影响
+      list.push(affixes === undefined ? { kind, angle } : { kind, angle, affixes });
     },
   };
 }
@@ -640,7 +641,7 @@ describe('确定性(08 验收:同 seed 两局出怪序列一致)', () => {
     // 一个具体数字都不断言(真脚本在 M0 会反复调,那些数字归 data/waves.test.ts 管)。
     // 28800 帧看着吓人,但这里没有世界、没有池,纯粹是脚本插值 + 一次随机
     const frames = Math.ceil(WAVE_TOTAL_TIME / SIM_DT) + SIM_HZ;
-    const playReal = (seed: number): { kind: number; angle: number }[] => {
+    const playReal = (seed: number): Rec['list'] => {
       const s = createWaveState();
       const r = rec();
       run(s, frames, SIM_DT, new Rng(seed), r);
@@ -652,17 +653,88 @@ describe('确定性(08 验收:同 seed 两局出怪序列一致)', () => {
     expect(a.length).toBeGreaterThan(100);
     expect(playReal(20260802)).toEqual(a);
   });
+});
 
-  it('elites 一行都不读:MVP 不实装精英,填了也不改变任何一帧的出怪', () => {
-    SCRIPT();
+describe('精英插入(14 号:实装 todos/08 预留的 WaveElite 接口)', () => {
+  const ELITE = { at: 0.2, kind: 3, count: 2, affixes: [0, 3] };
+  /** 同一份脚本,elites 二选一:无精英 vs 一只 at=0.2 的 2×3 号精英 */
+  const script = (withElite: boolean): void =>
+    useScript(
+      segment({
+        name: 'a',
+        duration: 2,
+        dirStartDeg: 0,
+        dirEndDeg: 60,
+        streams: [stream({ kind: 0, rate0: 10, rate1: 10, spreadDeg: 10 })], // dt=0.1 → 每帧整 1 只
+        bursts: [burst({ at: 0.1, offsetDeg: 90, spreadDeg: 5, counts: [1, 0, 0, 0] })],
+        elites: withElite ? [ELITE] : [],
+      }),
+    );
+
+  it('填了就出精英:按 at 触发、kind/count 出怪、affixes 透传、游标不重复、不扰动触发帧内的普通怪', () => {
+    script(false);
     const plain = rec();
-    run(createWaveState(), 2 * SIM_HZ, SIM_DT, new Rng(8), plain);
+    const plainRng = new CountingRng(8);
+    const ps = createWaveState();
+    run(ps, 2, 0.1, plainRng, plain);
 
-    SCRIPT();
-    for (const seg of WAVE_SEGMENTS) seg.elites = [{ at: 0.1, kind: 3, count: 4, affixes: [1, 2] }];
-    const withElites = rec();
-    run(createWaveState(), 2 * SIM_HZ, SIM_DT, new Rng(8), withElites);
-    expect(withElites.list).toEqual(plain.list);
+    script(true);
+    const r = rec();
+    const rng = new CountingRng(8);
+    const rs = createWaveState();
+    run(rs, 2, 0.1, rng, r);
+    // 精英排在帧末出:到点那一帧(segTime 0.2)里,普通怪(事件 + 流)与无精英脚本逐只一字不差(含出生角)
+    expect(r.list.slice(0, plain.list.length)).toEqual(plain.list);
+    expect(r.list.length).toBe(plain.list.length + 2);
+    // 精英按 at 触发:kind/count 由脚本给死,出生角 = 当时的主压方向
+    // (dirStart 0 → dirEnd 60, duration 2,@0.2s 线性插值 = 6°)
+    const elites = r.list.slice(plain.list.length);
+    for (const e of elites) {
+      expect(e.kind).toBe(3);
+      expect(e.affixes).toEqual([0, 3]);
+      expect(e.angle).toBeCloseTo(6 * DEG2RAD, 9);
+    }
+    // 每成功出一只 = 恰好一次 rng.next():精英不额外掷型号/词缀/数量,与 bursts 同一口径
+    expect(rng.calls).toBe(r.list.length);
+    // 游标到点即消费、不重复触发:触发帧后 eliteNext 已经越过这一只
+    expect(rs.eliteNext).toBe(1);
+
+    // 不扰动普通怪的型号序列:把两局跑完剩余帧对比。
+    // useScript 是全局替换,续跑哪一局就先装回哪份脚本(stepWaves 每帧现读 WAVE_SEGMENTS)
+    script(false);
+    run(ps, 18, 0.1, plainRng, plain);
+    script(true);
+    run(rs, 18, 0.1, rng, r);
+    expect(r.list.filter((x) => x.affixes !== undefined)).toHaveLength(2); // 到点过一次就不再复发
+    // 型号是脚本直给、与 rng 无关:普通怪的型号序列与无精英脚本完全一致
+    const ordinaryKinds = r.list.filter((x) => x.affixes === undefined).map((x) => x.kind);
+    expect(ordinaryKinds).toEqual(plain.list.map((x) => x.kind));
+    expect(rs.done).toBe(true);
+    expect(rng.calls).toBe(r.list.length); // 全程每出一只恰好一次
+  });
+
+  it('同 seed 两局:精英出现时刻与种类逐位可复现;且与种子无关(纯由 at 与脚本决定)', () => {
+    const play = (seed: number): Rec => {
+      script(true);
+      const r = rec();
+      run(createWaveState(), 5 * SIM_HZ, SIM_DT, new Rng(seed), r);
+      return r;
+    };
+    const a = play(20260814);
+    const b = play(20260814);
+    const c = play(20260815);
+    // 同 seed:整条列表(含普通怪的出生角)逐只一字不差
+    expect(b.list).toEqual(a.list);
+    // 精英的出现时刻(列表位置)与种类由 at 与脚本决定、与种子无关:
+    // 普通怪的角变了,精英的 kind/affixes/angle(= 主压方向)却一字不差
+    const eliteAt = (list: Rec['list']): number[] =>
+      list.map((x, i) => (x.affixes !== undefined ? i : -1)).filter((i) => i >= 0);
+    expect(eliteAt(a.list)).toEqual(eliteAt(c.list));
+    expect(a.list.filter((x) => x.affixes !== undefined)).toEqual(
+      c.list.filter((x) => x.affixes !== undefined),
+    );
+    expect(a.list.filter((x) => x.affixes !== undefined)).toHaveLength(2);
+    expect(a.list.filter((x) => x.affixes !== undefined).map((x) => x.kind)).toEqual([3, 3]);
   });
 });
 

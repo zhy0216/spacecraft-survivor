@@ -12,12 +12,24 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
+import {
+  AFFIX_ARMORED,
+  AFFIX_FISSION,
+  AFFIX_FRENZY,
+  AFFIX_MAGNETIC,
+  AFFIX_PHASED,
+  AFFIXES,
+  ELITE,
+} from '../data/affixes';
 import { DROP_MAX_ALIVE } from '../data/economy';
 import { DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   FX_LIFE_BEAM,
+  THR_AMMO,
+  THR_CHARGE,
+  THR_HEAT,
   TOWER_ARC,
   TOWER_AUTOCANNON,
   TOWER_LASER,
@@ -45,6 +57,7 @@ import {
   hullCoreHalfExtents,
   hullMaxHp,
 } from './damage';
+import type { Drop } from './drop';
 import {
   CELL_SUPPORT,
   CELL_WEAPON,
@@ -67,7 +80,16 @@ import {
   setOccupied,
   WELD_OK,
 } from './deck';
-import { type Enemy, ST_APPROACH, ST_DASH, ST_WINDUP } from './enemy';
+import {
+  type Enemy,
+  affixMask,
+  hasAffix,
+  hpScaleAt,
+  initEnemy,
+  ST_APPROACH,
+  ST_DASH,
+  ST_WINDUP,
+} from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { waveDirAt } from './waves';
@@ -1224,6 +1246,7 @@ describe('波次出怪接线(08 号 T2:正式出怪器)', () => {
       (w) => (w.wave.segment += 1),
       (w) => (w.wave.segTime += 0.5),
       (w) => (w.wave.burstNext += 1),
+      (w) => (w.wave.eliteNext += 1), // 14 号:精英游标是"到点即消费"的真状态,同一条口径
       (w) => (w.wave.debt[0] = w.wave.debt[0]! + 0.5),
     ];
     for (const mutate of mutations) {
@@ -2818,3 +2841,305 @@ function driftUnderPack(state: number): number {
   expect(charger.x).toBeGreaterThan(0); // 它确实在往前走,不是原地不动才"没漂移"
   return charger.y;
 }
+
+/**
+ * 精英与词缀接线(14 号)。规则本身(HP/体型放大、词缀位掩码)在 enemy.test.ts 钉,
+ * 这里钉**世界这一层**:波次脚本的精英事件真的带着词缀出生、四种词缀的效果各走一遍、
+ * 精英死亡必掉 3× 残骸、裂变分裂复用池且不掷随机,以及整套东西进 checksum。
+ *
+ * 一律用 splice 进来的短脚本(与 waves.test.ts / 上面的波次 describe 同口径):
+ * 精英事件只由 at 与脚本决定,短脚本里 at=0 第一帧就触发,断言不必等 40 秒。
+ */
+describe('精英与词缀接线(14 号:affixes 落地、四效果、掉落与确定性)', () => {
+  /** 真脚本原样留一份:每个用例都会换成短脚本,跑完必须还原 */
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  });
+
+  function useScript(...segs: WaveSegment[]): void {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...segs);
+  }
+
+  function segment(p: Partial<WaveSegment> = {}): WaveSegment {
+    return {
+      name: 'seg',
+      duration: 60,
+      dirStartDeg: 0,
+      dirEndDeg: 0,
+      streams: [],
+      bursts: [],
+      elites: [],
+      ...p,
+    };
+  }
+
+  /** 只出精英的脚本:场上第一帧就恰好 count 只精英,断言不受普通流干扰 */
+  function eliteScript(affixes: number[], kind: number = KIND_SWARM, count = 1): void {
+    useScript(segment({ elites: [{ at: 0, kind, count, affixes }] }));
+  }
+
+  it('波次脚本的精英事件真的带词缀出生:affixes 落成位掩码、HP/体型按 ELITE 放大', () => {
+    eliteScript([AFFIX_FRENZY, AFFIX_ARMORED], KIND_BEETLE);
+    const w = new World(50);
+    w.step();
+    expect(w.enemies.size).toBe(1);
+    const e = w.enemies.items[0]!;
+    expect(e.affixes).toBe(affixMask([AFFIX_FRENZY, AFFIX_ARMORED]));
+    // HP = 基础 × 时间缩放(第一帧,elapsed = SIM_DT)× ELITE.hpMul;出生环在船外,挨不着任何东西
+    expect(e.hp).toBeCloseTo(ENEMIES[KIND_BEETLE]!.hp * hpScaleAt(w.elapsed) * ELITE.hpMul, 9);
+    expect(e.maxHp).toBe(e.hp);
+  });
+
+  it('狂热光环:半径内**其他**敌人加速 ×frenzySpeedMul,圈外不加速、本体不自加速(查询走空间哈希)', () => {
+    eliteScript([AFFIX_FRENZY], KIND_SWARM);
+    const w = new World(51);
+    w.step();
+    const carrier = w.enemies.items[0]!;
+    expect(hasAffix(carrier, AFFIX_FRENZY)).toBe(true);
+
+    // 手动补三只普通怪:一只在光环半径内、两只在圈外(全仓的 park 口径:钉死 + 清速度)。
+    // 携带者第一帧已经攒下一小截速度,也 park 一次清零 —— 断言的是"这一帧被不被光环加成",
+    // 不是"它上一帧的速度还在不在"
+    // 注意圈外两只要分别覆盖两种漏网场景:同轴 450(离圆但离方形也远)与对角 (300,300)
+    // (√(300²+300²)≈424 > 400,落在 AABB 方形之内、光环圆之外 —— 旧实现在这里误加速)。
+    const inside = w.enemies.spawn();
+    const outside = w.enemies.spawn();
+    const corner = w.enemies.spawn();
+    park(inside, carrier.x + 100, carrier.y); // 100 < 400:圈内
+    park(outside, carrier.x + 450, carrier.y); // 450 > 400:圈外(同轴)
+    park(corner, carrier.x + 300, carrier.y + 300); // ≈424 > 400:圈外(AABB 角落)
+    park(carrier, carrier.x, carrier.y);
+
+    w.step();
+    const def = ENEMIES[KIND_SWARM]!;
+    const follow = Math.min(1, def.accel * SIM_DT);
+    const mul = AFFIXES[AFFIX_FRENZY]!.frenzySpeedMul;
+    // 第一帧:v = desired × follow(追随系数),desired = 基础速度 × 光环倍率
+    expect(Math.hypot(inside.vx, inside.vy)).toBeCloseTo(def.speed * mul * follow, 9);
+    expect(Math.hypot(outside.vx, outside.vy)).toBeCloseTo(def.speed * follow, 9);
+    expect(Math.hypot(corner.vx, corner.vy)).toBeCloseTo(def.speed * follow, 9); // 对角圈外:不加速
+    expect(Math.hypot(carrier.vx, carrier.vy)).toBeCloseTo(def.speed * follow, 9); // 本体不自加速
+  });
+
+  it('磁力干扰:携带者在场时拾取半径 ×pickupMul,死亡后当帧的下一帧恢复原半径', () => {
+    eliteScript([AFFIX_MAGNETIC], KIND_SWARM);
+    const w = new World(53);
+    w.step();
+    const half = tuning.dropMagnetRadius * AFFIXES[AFFIX_MAGNETIC]!.pickupMul;
+    const dropAt = (x: number): Drop => {
+      const d = w.drops.spawn();
+      d.x = d.px = x;
+      d.y = d.py = 0;
+      d.value = 1;
+      return d;
+    };
+    const inside = dropAt(half - 1); // 半半径之内:干扰下照样吸
+    const between = dropAt(half + 5); // 半半径与全半径之间:干扰下吸不了
+
+    w.step();
+    expect(inside.magnet).toBe(true);
+    expect(between.magnet).toBe(false);
+
+    expect(w.damageEnemy(w.enemies.items[0]!, 9999)).toBe(true);
+    w.step(); // 结算排在回收前:本帧磁吸仍受干扰(尸体整帧还在场)
+    expect(between.magnet).toBe(false);
+
+    w.step(); // 干扰源已回池:拾取半径恢复 170,这颗落回圈内
+    expect(between.magnet).toBe(true);
+    expect(inside.magnet).toBe(true); // 已锁定的不因干扰消失而松手(锁定单向)
+  });
+
+  it('装甲/相位:伤害按节流系减半(弹药 ×ballisticMul、能量 ×energyMul),只对词缀本体生效', () => {
+    eliteScript([AFFIX_ARMORED, AFFIX_PHASED], KIND_SWARM);
+    const w = new World(54);
+    w.step();
+    const elite = w.enemies.items[0]!;
+    const normal = w.enemies.spawn();
+    initEnemy(normal, KIND_SWARM, 100, 100, w.elapsed, w.rng); // 普通怪对照
+    expect(normal.affixes).toBe(0);
+
+    const A = AFFIXES[AFFIX_ARMORED]!;
+    const P = AFFIXES[AFFIX_PHASED]!;
+    // 单发 2 伤:精英(24 血)扛得住连续六发,断言不会被"打死了"这条岔路带跑
+    let hp = elite.hp;
+    // 弹药系(机炮/点防):装甲减半
+    expect(w.damageEnemy(elite, 2, THR_AMMO)).toBe(false);
+    expect(elite.hp).toBeCloseTo(hp - 2 * A.ballisticMul, 9);
+    // 能量系(过热:激光/电弧):相位减半
+    hp = elite.hp;
+    expect(w.damageEnemy(elite, 2, THR_HEAT)).toBe(false);
+    expect(elite.hp).toBeCloseTo(hp - 2 * P.energyMul, 9);
+    // 能量系(充能:磁轨/迫击炮):同样是相位减半
+    hp = elite.hp;
+    expect(w.damageEnemy(elite, 2, THR_CHARGE)).toBe(false);
+    expect(elite.hp).toBeCloseTo(hp - 2 * P.energyMul, 9);
+    // 不传节流 = 既有调用方语义:不抗
+    hp = elite.hp;
+    expect(w.damageEnemy(elite, 2)).toBe(false);
+    expect(elite.hp).toBeCloseTo(hp - 2, 9);
+
+    // 普通怪:同样一记弹药系,全伤(词缀只挂在词缀本体上,不传染)
+    hp = normal.hp;
+    expect(w.damageEnemy(normal, 2, THR_AMMO)).toBe(false);
+    expect(normal.hp).toBeCloseTo(hp - 2, 9);
+  });
+
+  it('抗性接线走真开火路径:机炮(弹药系)打装甲精英每发减半,激光(能量系)打相位精英每发减半', () => {
+    // —— 机炮 vs 装甲精英 ——
+    eliteScript([AFFIX_ARMORED], KIND_SWARM);
+    const gun = new World(56);
+    gun.step();
+    expect(gun.place(BOW_COL, BOW_ROW, CELL_WEAPON)).toBe(PLACE_OK); // 自动机炮 THR_AMMO
+    gun.ship.heading = gun.ship.pheading = 0;
+    park(gun.enemies.items[0]!, gun.ship.x + 150, gun.ship.y);
+    tuning.enemySpeedScale = 0; // 靶子钉死:断言的是伤害,不是它往哪走
+
+    const hp0 = gun.enemies.items[0]!.hp;
+    gun.step(); // 起手冷却 0 → 当帧开火
+    expect(gun.bullets.size).toBe(1);
+    for (let f = 0; f < 120 && gun.enemies.items[0]!.hp === hp0; f++) gun.step(); // 等弹飞到
+    expect(gun.enemies.items[0]!.hp).toBeCloseTo(
+      hp0 - TOWERS[TOWER_AUTOCANNON]!.damage * AFFIXES[AFFIX_ARMORED]!.ballisticMul,
+      9,
+    );
+
+    // —— 激光 vs 相位精英 ——
+    tuning.enemySpeedScale = 0;
+    eliteScript([AFFIX_PHASED], KIND_SWARM);
+    const laser = new World(56);
+    laser.step();
+    expect(laser.place(BOW_COL, BOW_ROW, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK); // THR_HEAT
+    laser.ship.heading = laser.ship.pheading = 0;
+    park(laser.enemies.items[0]!, laser.ship.x + 150, laser.ship.y);
+
+    const lhp0 = laser.enemies.items[0]!.hp;
+    laser.step(); // 激光是瞬时判定:第一帧就打满一发
+    expect(laser.enemies.items[0]!.hp).toBeCloseTo(
+      lhp0 - TOWERS[TOWER_LASER]!.damage * AFFIXES[AFFIX_PHASED]!.energyMul,
+      9,
+    );
+  });
+
+  it('精英死亡必掉 3× 残骸(ELITE.scrapMul 固定倍率),掉的是"这一只"的;普通怪照旧 1×', () => {
+    eliteScript([AFFIX_ARMORED], KIND_BEETLE);
+    const w = new World(55);
+    w.step();
+    const elite = w.enemies.items[0]!;
+    let at = { x: 0, y: 0 };
+    w.onEnemyDeath = (e) => {
+      at.x = e.x;
+      at.y = e.y;
+    };
+
+    expect(w.damageEnemy(elite, 9999)).toBe(true);
+    w.step();
+    expect(w.drops.size).toBe(1);
+    const d = w.drops.items[0]!;
+    expect(d.value).toBe(ENEMIES[KIND_BEETLE]!.scrap * ELITE.scrapMul); // 4 × 3 = 12,固定倍率
+    expect(d.x).toBe(at.x); // 就掉在它倒下的地方(世界自己的账,与挂钩无关)
+    expect(d.y).toBe(at.y);
+
+    // 对照:普通甲虫只掉 1× —— 三倍的那颗只能来自精英,不会被普通掉落顶替
+    const plain = w.enemies.spawn();
+    initEnemy(plain, KIND_BEETLE, 300, 300, w.elapsed, w.rng);
+    expect(w.damageEnemy(plain, 9999)).toBe(true);
+    w.step();
+    expect(w.drops.size).toBe(2);
+    expect(w.drops.items.some((x) => x.value === ENEMIES[KIND_BEETLE]!.scrap)).toBe(true);
+    expect(
+      w.drops.items.some((x) => x.value === ENEMIES[KIND_BEETLE]!.scrap * ELITE.scrapMul),
+    ).toBe(true);
+  });
+
+  it('裂变:精英死亡分裂成 3 只(复用池、不带词缀、普通血量、掉在原地),且一次 rng 都不掷', () => {
+    eliteScript([AFFIX_FISSION], KIND_SWARM);
+    const a = new World(52);
+    const b = new World(52);
+    a.step();
+    b.step();
+    const elite = a.enemies.items[0]!;
+    expect(hasAffix(elite, AFFIX_FISSION)).toBe(true);
+    const split = AFFIXES[AFFIX_FISSION]!.splitCount;
+    expect(split).toBe(3);
+
+    let at = { x: 0, y: 0 };
+    a.onEnemyDeath = (e) => {
+      at.x = e.x;
+      at.y = e.y;
+    };
+    expect(a.damageEnemy(elite, 9999)).toBe(true);
+    a.step(); // 帧尾回收 = 分裂
+    expect(a.kills).toBe(1);
+    expect(a.enemies.size).toBe(split);
+    for (const s of a.enemies.items) {
+      expect(s.affixes).toBe(0); // 分裂体不是小精英
+      expect(s.kind).toBe(KIND_SWARM);
+      expect(s.hp).toBeCloseTo(ENEMIES[KIND_SWARM]!.hp * hpScaleAt(a.elapsed), 9); // 普通血量
+      expect(s.x).toBe(at.x); // 就掉在父体倒下的地方(帧尾出生,当帧一步不动)
+      expect(s.y).toBe(at.y);
+    }
+
+    // 分裂不掷随机:对照世界(b)没死过人,两条随机流仍站在同一格上
+    b.step();
+    expect(a.rng.next()).toBe(b.rng.next());
+  });
+
+  it('同 seed 精英段重放:精英出现时刻/词缀与 checksum 逐位一致,击杀/分裂也不扰动序列', () => {
+    useScript(
+      segment({
+        duration: 60,
+        dirStartDeg: 0,
+        dirEndDeg: 60,
+        streams: [{ kind: KIND_SWARM, rate0: 8, rate1: 8, spreadDeg: 15 }],
+        elites: [
+          // 狂热+装甲侧掠者:活着的那几秒,光环在改**别人的**速度 —— checksum 里必须有它的位
+          { at: 5, kind: KIND_STRAFER, count: 1, affixes: [AFFIX_FRENZY, AFFIX_ARMORED] },
+          // 裂变甲虫:死掉那一刻爆出三只 —— 掉落/分裂的账也必须在 checksum 里
+          { at: 12, kind: KIND_BEETLE, count: 1, affixes: [AFFIX_FISSION] },
+        ],
+      }),
+    );
+    const play = (seed: number, killAtFrame: number): string => {
+      const w = new World(seed);
+      let elite: Enemy | null = null;
+      const eliteBorn: number[] = [];
+      w.onEnemySpawn = (e) => {
+        if (e.affixes !== 0) {
+          eliteBorn.push(e.affixes);
+          elite = e;
+        }
+      };
+      for (let f = 1; f <= 20 * SIM_HZ; f++) {
+        w.step();
+        if (elite && f === killAtFrame) {
+          w.damageEnemy(elite, 9999);
+          elite = null;
+        }
+      }
+      expect(eliteBorn).toEqual([affixMask([AFFIX_FRENZY, AFFIX_ARMORED]), affixMask([AFFIX_FISSION])]);
+      return w.checksum();
+    };
+    const a = play(20260814, 8 * SIM_HZ);
+    expect(play(20260814, 8 * SIM_HZ)).toBe(a); // 同 seed:整局逐位一致
+    expect(play(20260815, 8 * SIM_HZ)).not.toBe(a); // 换 seed 才换
+    expect(play(20260814, 0)).not.toBe(a); // 精英死活不同 → 击杀/掉落/分裂的账分叉
+  });
+
+  it('敌人词缀进 checksum:只把精英的词缀位抹掉就分叉,补回来又合流', () => {
+    eliteScript([AFFIX_ARMORED], KIND_SWARM);
+    const a = new World(57);
+    const b = new World(57);
+    a.step();
+    b.step();
+    expect(a.checksum()).toBe(b.checksum());
+
+    const e = a.enemies.items[0]!;
+    const affixes = e.affixes;
+    e.affixes = 0;
+    expect(a.checksum()).not.toBe(b.checksum());
+    e.affixes = affixes;
+    expect(a.checksum()).toBe(b.checksum());
+  });
+});

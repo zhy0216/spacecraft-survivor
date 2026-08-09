@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { Pool } from '../core/pool';
 import { SpatialHash } from '../core/spatialHash';
+import { ELITE } from '../data/affixes';
 import { ENEMIES, ENEMY_RADIUS_MAX, KIND_BEETLE, KIND_SWARM } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_MORTAR, TOWERS } from '../data/towers';
 import {
@@ -421,14 +422,16 @@ describe('抛射弹(BK_MORTAR):途中不碰撞,落点炸一片', () => {
 });
 
 describe('邻域查询的口径(GDD §13)', () => {
-  it('直射弹的查询半径 = 弹半径 + 最大敌半径,**不超过一个 cell**', () => {
+  it('直射弹的查询半径 = 弹半径 + 最大敌半径(精英按体型放大),**不超过一个 cell**', () => {
     const h = harness(enemyAt(KIND_SWARM, 500, 0));
     const b = directBullet(h);
     h.step();
 
     expect(h.queries.length).toBe(1);
     const q = h.queries[0]!;
-    expect(q.r).toBe(R_BULLET + ENEMY_RADIUS_MAX);
+    // 场上最大的判定体是精英(1.5× 体型):查询半径必须盖得住它,否则精英身体压着圈的
+    // 那一截会整个落在没被访问的 cell 里(见 bullet.ts 的 hitDirect)
+    expect(q.r).toBe(R_BULLET + ENEMY_RADIUS_MAX * ELITE.scale);
     // 空间哈希的 cell = 最大敌半径 ×2(见 world.ts 的 grid)。查询半径一旦超过一个 cell,
     // 3×3 邻域就不再必然覆盖,哈希会开始悄悄漏人 —— 这条是那个前提的守门员
     expect(q.r).toBeLessThan(ENEMY_RADIUS_MAX * 2);
@@ -451,9 +454,10 @@ describe('邻域查询的口径(GDD §13)', () => {
     expect(h.queries.length).toBe(0);
     h.step();
     expect(h.queries.length).toBe(1);
-    // 粗筛半径 = AoE 半径 + 最大敌半径:判据是"体型碰到圈",而哈希按 cell 的 AABB 返超集,
-    // 少了这一截就会漏掉圆心在圈外、身体压在圈上的那只(下一条用真哈希把它钉死)
-    expect(h.queries[0]!.r).toBe(TOWERS[TOWER_MORTAR]!.aoeRadius + ENEMY_RADIUS_MAX);
+    // 粗筛半径 = AoE 半径 + 最大敌半径(精英按体型放大):判据是"体型碰到圈",而哈希按
+    // cell 的 AABB 返超集,少了这一截就会漏掉圆心在圈外、身体压在圈上的那只
+    // (下一条用真哈希把它钉死)
+    expect(h.queries[0]!.r).toBe(TOWERS[TOWER_MORTAR]!.aoeRadius + ENEMY_RADIUS_MAX * ELITE.scale);
     expect(h.queries[0]!.r).toBeGreaterThan(ENEMY_RADIUS_MAX * 2); // 有意的例外,理由见 bullet.ts
   });
 

@@ -13,6 +13,7 @@
  * 也保证"冲刺中不重新瞄准"这类机制只有一处实现、只需一处钉住。
  */
 import type { Rng } from '../core/rng';
+import { ELITE } from '../data/affixes';
 import {
   BH_SEEK_CHARGE,
   BH_STRAFE,
@@ -61,6 +62,14 @@ export interface Enemy {
   vy: number;
   /** EnemyKind,switch 分派用;同时是 ENEMIES 的下标与渲染层的分桶键 */
   kind: number;
+  /**
+   * 词缀位掩码(14 号):bit = AFFIX_*(data/affixes.ts 的编号),0 = 普通怪。
+   * 精英 = affixes ≠ 0:HP/体型按 ELITE.* 放大、死亡掉 ELITE.scrapMul 倍残骸、
+   * 词缀效果(狂热光环/裂变/磁力干扰/装甲/相位)按各自的位在此生效。
+   * 用位掩码而不是数组:1000 敌热循环里只有按位与的判定,没有数组迭代,
+   * 也保住"池 reset 逐字段清回初值"那条 Object.keys 单测的扁平口径。
+   */
+  affixes: number;
   hp: number;
   maxHp: number;
   /** ST_* */
@@ -94,6 +103,7 @@ export function createEnemy(): Enemy {
     vx: 0,
     vy: 0,
     kind: 0,
+    affixes: 0,
     hp: 0,
     maxHp: 0,
     state: ST_APPROACH,
@@ -120,6 +130,7 @@ export function resetEnemy(e: Enemy): void {
   e.vx = 0;
   e.vy = 0;
   e.kind = 0;
+  e.affixes = 0; // 词缀位掩码:漏清,上一只精英的效果会原样带给下一只普通怪
   e.hp = 0;
   e.maxHp = 0;
   e.state = ST_APPROACH;
@@ -144,6 +155,9 @@ export function hpScaleAt(seconds: number): number {
  * 出生:池 spawn 之后由 World 调用,把一只空壳变成某型敌人。
  * @param elapsedSec 开局至今的秒数(World.elapsed),HP 时间缩放的唯一时间源
  * @param rng 世界的随机源;本函数固定消耗 1 次(side),改这里的消耗次数会移动整条随机序列
+ * @param affixes 词缀位掩码(data/affixes.ts 的 AFFIX_* 编号按位),缺省 0 = 普通怪。
+ *   **精英 = 非 0**:HP 当场 ×ELITE.hpMul(基础 HP × 时间缩放 × 它,与 affixes.ts 的口径逐字一致);
+ *   体型放大不在这里 —— 碰撞半径问 enemyRadius(),由使用方各取所需
  */
 export function initEnemy(
   e: Enemy,
@@ -152,6 +166,7 @@ export function initEnemy(
   y: number,
   elapsedSec: number,
   rng: Rng,
+  affixes = 0,
 ): void {
   const def = ENEMIES[kind]!;
   e.x = e.px = x;
@@ -159,7 +174,8 @@ export function initEnemy(
   e.vx = 0;
   e.vy = 0;
   e.kind = kind;
-  e.hp = e.maxHp = def.hp * hpScaleAt(elapsedSec);
+  e.affixes = affixes;
+  e.hp = e.maxHp = def.hp * hpScaleAt(elapsedSec) * (affixes !== 0 ? ELITE.hpMul : 1);
   e.state = ST_APPROACH;
   e.timer = 0;
   e.lockX = 0;
@@ -172,6 +188,68 @@ export function initEnemy(
 }
 
 /**
+ * 裂变分裂体的出生(14 号):与 initEnemy 同源,但**一次 rng 都不掷** ——
+ * side 直接继承父体(±1 的合法值现成),于是精英结算扰动不到出怪随机序列("同 seed 同序列"铁律)。
+ * 分裂体 = 同型、无词缀、普通血量(不 ×ELITE.hpMul):它们是"死亡爆出来的普通怪",不是小精英。
+ * 只在 World.reap 里调用,且调用方必须保证 **父体还没回池**(Pool.spawn 会对取出的对象先跑一遍
+ * reset —— 池后进先出,第一只分裂体拿到的正是父体这个对象,父体先回池的话 initSplit 读到的
+ * x/kind/side 就全是清零后的脏值了,见 World.reap 的顺序注释)。
+ */
+export function initSplit(e: Enemy, parent: Enemy, elapsedSec: number): void {
+  const def = ENEMIES[parent.kind]!;
+  e.x = e.px = parent.x;
+  e.y = e.py = parent.y;
+  e.vx = 0;
+  e.vy = 0;
+  e.kind = parent.kind;
+  e.affixes = 0;
+  e.hp = e.maxHp = def.hp * hpScaleAt(elapsedSec);
+  e.state = ST_APPROACH;
+  e.timer = 0;
+  e.lockX = 0;
+  e.lockY = 0;
+  e.side = parent.side;
+  e.hitCd = 0;
+  e.dead = false;
+}
+
+/**
+ * 词缀编号数组(WaveElite.affixes)→ 位掩码。**undefined = 普通怪**(waves.ts 的 SpawnSink
+ * 口径),普通流/压测路径不调本函数。只做按位换算,不认识词缀语义。
+ */
+export function affixMask(affixes: readonly number[] | undefined): number {
+  if (affixes === undefined) return 0;
+  let m = 0;
+  for (let i = 0; i < affixes.length; i++) m |= 1 << affixes[i]!;
+  return m;
+}
+
+/** 这一只带不带某个词缀(位掩码判定;affixId = data/affixes.ts 的 AFFIX_*) */
+export function hasAffix(e: Enemy, affixId: number): boolean {
+  return (e.affixes & (1 << affixId)) !== 0;
+}
+
+/**
+ * 敌人体型碰撞半径(14 号):精英 = 基础半径 × ELITE.scale(体型放大),
+ * 普通怪 = 基础半径。**碰撞半径的唯一口径** —— 接触粗筛、受击判定、子弹命中全走它,
+ * 别处再抄一遍 `ENEMIES[kind].radius` 就会让精英的判定体与画出来的剪影错位。
+ * ELITE.scale 是数据表里的占位(affixes.ts),改平衡只改那里。
+ */
+export function enemyRadius(e: Enemy): number {
+  const r = ENEMIES[e.kind]!.radius;
+  return e.affixes !== 0 ? r * ELITE.scale : r;
+}
+
+/**
+ * 冲锋起手距离:精英按体型放大(ELITE.scale —— 体型放大后起手圈跟着大,
+ * 否则"射程内才起手"对一只 1.5× 的甲虫名不副实;起手圈变远也让放大体型的前摇
+ * 预警来得更早,14 号"放大体型下前摇仍肉眼可读"验收的几何来源)。
+ */
+function chargeRangeOf(e: Enemy, def: EnemyDef): number {
+  return e.affixes !== 0 ? def.chargeRange * ELITE.scale : def.chargeRange;
+}
+
+/**
  * 够不够格起手前摇。不冲锋的型永远 false —— 它们的冲锋参数全是 0,
  * 放进来就会以"射程 0"起手,渲染层的前摇指示也会对着永不冲锋的敌人闪。
  */
@@ -181,7 +259,8 @@ function shouldWindup(e: Enemy, def: EnemyDef, ship: Ship): boolean {
 
   const dx = e.x - ship.x;
   const dy = e.y - ship.y;
-  if (dx * dx + dy * dy > def.chargeRange * def.chargeRange) return false;
+  const range = chargeRangeOf(e, def);
+  if (dx * dx + dy * dy > range * range) return false;
   if (def.behavior === BH_SEEK_CHARGE) return true;
 
   // 绕行型还得先真绕到位:方位没对就只是"路过射程",这一票否决才让它从舷侧起手

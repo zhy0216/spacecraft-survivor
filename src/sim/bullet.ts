@@ -19,8 +19,9 @@
  * 甚至那一格被拆掉,都不该改变已经出膛的那一发 —— 也省掉了"子弹持有塔引用"这条生命周期噩梦。
  */
 import type { Pool } from '../core/pool';
+import { ELITE } from '../data/affixes';
 import { ENEMIES, ENEMY_RADIUS_MAX } from '../data/enemies';
-import type { Enemy } from './enemy';
+import { type Enemy, enemyRadius } from './enemy';
 import { type FireSink, FXV_BLAST } from './fx';
 
 /** 直射弹:飞行途中逐帧碰撞,穿透次数用光即回收 */
@@ -79,6 +80,12 @@ export interface Bullet {
   aoeDamage: number;
   /** 来源塔型(TOWER_*):渲染层据此选纹理/色,09/10 号 issue 的伤害归因也认它 */
   towerType: number;
+  /**
+   * 来源塔的节流系(THR_*):伤害结算处(World.damageEnemy)的词缀抗性判定认它 ——
+   * 装甲抗弹药系、相位抗能量系(14 号)。**发射那一刻定死**,与 damage 同一条口径:
+   * 塔被拆掉也不该改变已经出膛的这一发的"伤害类型"。
+   */
+  throttle: number;
 }
 
 /** 池 factory:字段在这里一次性声明齐,之后只被赋值、绝不新增 */
@@ -98,6 +105,7 @@ export function createBullet(): Bullet {
     aoeRadius: 0,
     aoeDamage: 0,
     towerType: 0,
+    throttle: 0, // 0 = THR_AMMO(机炮系);直射弹与抛射弹都只在开火时被覆写
   };
 }
 
@@ -122,6 +130,7 @@ export function resetBullet(b: Bullet): void {
   b.aoeRadius = 0;
   b.aoeDamage = 0;
   b.towerType = 0;
+  b.throttle = 0; // 漏清:上一发的能量系节流会原样带给下一发(抗性判定认的就是它)
 }
 
 /**
@@ -166,9 +175,10 @@ export function stepBullets(bullets: Pool<Bullet>, dt: number, sink: FireSink): 
  * @returns 弹丸是否还活着(命中且穿透用光 = false,由调用方回收)
  */
 function hitDirect(b: Bullet, sink: FireSink): boolean {
-  // 查询半径 = 弹半径 + 最大敌半径(≈ 17px)< 一个 cell(28px):守住 GDD §13
+  // 查询半径 = 弹半径 + 最大敌半径(精英按体型放大,enemyRadius 的上界 = ENEMY_RADIUS_MAX × ELITE.scale)。
+  // 1.5 倍率下 ≈ 25px < 一个 cell(28px):守住 GDD §13
   // "查询半径不超过一个 cell"—— 那是 3×3 邻域必然覆盖的前提,破了它哈希就会开始漏人
-  sink.query(b.x, b.y, b.radius + ENEMY_RADIUS_MAX, scratch);
+  sink.query(b.x, b.y, b.radius + ENEMY_RADIUS_MAX * ELITE.scale, scratch);
 
   let best: Enemy | null = null;
   let bestD2 = Infinity;
@@ -181,16 +191,18 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
     const dx = e.x - b.x;
     const dy = e.y - b.y;
     const d2 = dx * dx + dy * dy;
-    const r = b.radius + def.radius;
+    // 体型那一项走 enemyRadius(精英 ×ELITE.scale):判定体与画出来的剪影同口径
+    const r = b.radius + enemyRadius(e);
     if (d2 > r * r) continue; // 含边界:恰好贴上算命中(与 findArcTarget 的射程圆同口径)
     if (d2 >= bestD2) continue; // 严格 < 才替换 —— 同距保留先到者
     best = e;
     bestD2 = d2;
-    bestRadius = def.radius;
+    bestRadius = enemyRadius(e);
   }
   if (!best) return true;
 
-  sink.damage(best, b.damage);
+  // 带节流系进伤害结算:词缀抗性(装甲/相位)在 World.damageEnemy 那一处按它判定
+  sink.damage(best, b.damage, b.throttle);
   if (b.pierce <= 0) return false;
   b.pierce--;
   return pushPast(b, best, b.radius + bestRadius);
@@ -237,12 +249,12 @@ function blast(b: Bullet, sink: FireSink): void {
   // 代价可控 —— 频次是"每颗迫击炮弹一次"(全场最慢的攒-放,几秒一发),
   // 与逐帧逐敌的邻居分离不在一个量级上。
   //
-  // 粗筛半径**必须 + ENEMY_RADIUS_MAX**,与 hitDirect 那一行同一条理由:判据是"体型碰到圈"
-  // (d ≤ aoeRadius + def.radius),而哈希只按 cell 的 AABB 返回超集。只问 aoeRadius 的话,
-  // 圆心在圈外一点点、身体却压在圈上的那只,可能整个落在从没被访问的 cell 里 ——
+  // 粗筛半径**必须 + ENEMY_RADIUS_MAX × ELITE.scale**,与 hitDirect 那一行同一条理由:
+  // 判据是"体型碰到圈"(d ≤ aoeRadius + enemyRadius),而哈希只按 cell 的 AABB 返回超集。
+  // 只问 aoeRadius 的话,圆心在圈外一点点、身体却压在圈上的那只,可能整个落在从没被访问的 cell 里 ——
   // 于是"圈内全员吃满"会随爆点与网格的对齐关系随机漏人(爆心 21 / 半径 90 / cell 28 时,
   // 124 处的甲虫 d = 103 ≤ 104 却查不到),而这种漏还极难复现。
-  sink.query(b.x, b.y, b.aoeRadius + ENEMY_RADIUS_MAX, scratch);
+  sink.query(b.x, b.y, b.aoeRadius + ENEMY_RADIUS_MAX * ELITE.scale, scratch);
   for (let i = 0; i < scratch.length; i++) {
     const e = scratch[i]!;
     if (e.dead) continue;
@@ -250,7 +262,7 @@ function blast(b: Bullet, sink: FireSink): void {
     if (!def) continue;
     const dx = e.x - b.x;
     const dy = e.y - b.y;
-    const r = b.aoeRadius + def.radius;
-    if (dx * dx + dy * dy <= r * r) sink.damage(e, b.aoeDamage); // 含边界,与直射弹同口径
+    const r = b.aoeRadius + enemyRadius(e);
+    if (dx * dx + dy * dy <= r * r) sink.damage(e, b.aoeDamage, b.throttle); // 含边界,与直射弹同口径
   }
 }

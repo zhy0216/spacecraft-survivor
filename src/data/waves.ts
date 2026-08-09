@@ -62,10 +62,10 @@ export interface WaveBurst {
 }
 
 /**
- * 精英插入 —— **接口预留,MVP 不实装**(todos/08 明写)。
- * 运行器一行都不读它,每段的 elites 恒为 []:留着类型与字段,是为了精英(GDD §6.4:放大体型 + 1–2 词缀)
- * 落地那天,脚本格式与运行器入口都不必回头改结构;而**不留死代码路径** —— 接口预留 = 类型存在,
- * 不是"先写一套永远走不到的分支在那里烂着"。
+ * 精英插入 —— 普通敌型的放大个体(GDD §6.4:放大体型 + 1–2 词缀),**运行器按 at 触发**(todos/14 实装)。
+ * 与 burst 同一条原子事件口径:到点那一帧整组出、不被单帧上限截断;kind/count 出怪、affixes 原样透传。
+ * 出生角 = **当时的主压方向**(接口没有偏移字段:精英是主压流的"节点",与流同源而来)。
+ * kind 用普通敌型编号,不另开一张表;词缀编号见 data/affixes.ts 的 AFFIX_*(五个编号的顺序由那张表钉死)。
  */
 export interface WaveElite {
   /** 段内触发时刻(秒) */
@@ -73,7 +73,7 @@ export interface WaveElite {
   /** KIND_*;精英是普通敌型的放大版,不另开一张表 */
   kind: number;
   count: number;
-  /** 词缀编号(GDD §6.4:狂热光环 / 裂变 / 磁力干扰 / 装甲 / 相位);词缀表将来另立 data/affixes.ts */
+  /** 词缀编号(GDD §6.4:狂热光环 / 裂变 / 磁力干扰 / 装甲 / 相位;编号表见 data/affixes.ts) */
   affixes: number[];
 }
 
@@ -93,7 +93,10 @@ export interface WaveSegment {
   dirEndDeg: number;
   streams: WaveStream[];
   bursts: WaveBurst[];
-  /** MVP 一律 [];见 WaveElite */
+  /**
+   * 精英插入节点,按 at 升序(与 bursts 同一条游标口径:运行器只往前扫,不回头找)。
+   * 编排口径(todos/14):教学段(第一段)恒空,其余段 1–2 个、中后段给力。
+   */
   elites: WaveElite[];
 }
 
@@ -109,6 +112,8 @@ export interface WaveSegment {
  *      除打底的蜂群蛭外,每一型**先在侧压事件里露一次面,下一段才进流** ——
  *      一次来一小队,比混进流里更看得清它的行为(冲锋型尤其:前摇得看得见才叫"来得及躲")。
  *   3. 侧压事件左右交替,并在中后段插入 180°(背后):船尾是火力死角,那一下就是在收"甲板怎么排"的账。
+ *   4. 精英从第二段起每段 1–2 个、中后段给力,教学段不塞;五种词缀整局轮着上场,
+ *      每只精英的 kind 不早于该型在侧压/流里的首秀(别让精英抢了首秀的戏)。
  */
 export const WAVE_SEGMENTS: WaveSegment[] = [
   {
@@ -152,7 +157,13 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { at: 62, offsetDeg: 180, spreadDeg: 20, counts: [0, 0, 4, 0] },
       { at: 96, offsetDeg: -90, spreadDeg: 14, counts: [8, 4, 0, 0] },
     ],
-    elites: [],
+    elites: [
+      // 首只精英:侧掠者 + 狂热光环/装甲 —— "这只不一样"的教学时刻:
+      // 光环让半径内的蜂群蛭提速,装甲让它硬吃弹药系(机炮/点防)更久
+      { at: 40, kind: KIND_STRAFER, count: 1, affixes: [0, 3] },
+      // 尾随蛆精英 + 磁力干扰:它赖在船尾,拾取半径减半就是逼玩家先处理它再捡钱
+      { at: 95, kind: KIND_TRAILER, count: 1, affixes: [2] },
+    ],
   },
   {
     name: '巡逻线',
@@ -173,7 +184,13 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 斜后方 135°:既不是纯侧也不是纯背,逼玩家在"转过去接"和"跑开"之间选
       { at: 110, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0] },
     ],
-    elites: [],
+    elites: [
+      // 相位蜂群蛭:能量系(激光/电弧/磁轨/迫击炮)对它减半,机炮/点防反而才是正解 ——
+      // 逼玩家读一读自己甲板上"哪座塔是什么系"
+      { at: 30, kind: KIND_SWARM, count: 1, affixes: [4] },
+      // 冲撞甲虫精英 + 裂变:击杀后爆成三只 —— 冲锋前摇在放大体型下更要看清,别站着不动
+      { at: 100, kind: KIND_BEETLE, count: 1, affixes: [1] },
+    ],
   },
   {
     // 收尾段:四型齐全、密度最高。方向从 320° 转到 480°(= 120°),
@@ -197,7 +214,12 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 终局正面压上(offset 0 = 主压方向本身):脚本的最后一口气,活过它就是胜利
       { at: 116, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4] },
     ],
-    elites: [],
+    elites: [
+      // 狂热光环侧掠者:收尾段怪最密,光环的收益最大 —— 它活着,整片虫潮都在加速
+      { at: 40, kind: KIND_STRAFER, count: 1, affixes: [0] },
+      // 收尾"小Boss":冲撞甲虫 + 裂变/装甲 —— 血厚、死了还炸三只,活过它就是胜利
+      { at: 85, kind: KIND_BEETLE, count: 1, affixes: [1, 3] },
+    ],
   },
 ];
 

@@ -140,6 +140,12 @@ function installDom(): StubDom {
   return dom;
 }
 
+interface StubEnemy {
+  affixes: number;
+  hp: number;
+  maxHp: number;
+}
+
 interface StubWorld {
   ship: { hp: number; maxHp: number };
   scrap: number;
@@ -149,6 +155,7 @@ interface StubWorld {
   threatDirection: number;
   threatIntensity: number;
   burstWarning(): { etaSeconds: number; dirRad: number } | null;
+  enemies: { items: StubEnemy[] };
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -161,6 +168,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     threatDirection: 0,
     threatIntensity: THREAT_INTENSITY_MAX * 0.5,
     burstWarning: () => null,
+    enemies: { items: [] },
     ...over,
   };
 }
@@ -190,9 +198,9 @@ describe('createHud', () => {
     const root = dom.ui.children[0]!;
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
-    // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)与左下角静音开关,
-    // 没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(4);
+    // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
+    // 与屏下缘精英血条,没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(5);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -223,6 +231,46 @@ describe('createHud', () => {
     mute.listeners.get('click')!(undefined);
     expect(mute.textContent).toBe('声音:开');
     expect(mute.style.color).toBe(colorOn);
+  });
+
+  it('精英血条:无精英隐藏,有精英亮出并反映 hp/maxHp', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const elite = root.children[4]!;
+    expect(elite.style.display).toBe('none');
+
+    hud.setWorld(
+      stubWorld({ enemies: { items: [{ affixes: 0b101, hp: 30, maxHp: 200 }] } }) as unknown as World,
+    );
+    expect(elite.style.display).toBe('block');
+    expect(findText(root, '30 / 200')).toBeDefined();
+    const fill = elite.children[1]!.children[0]!;
+    expect(fill.style.width).toBe('15%');
+
+    // 精英退场(死亡回池)当帧隐藏
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(elite.style.display).toBe('none');
+  });
+
+  it('精英血条:多只精英钉池序第一只,第一只退场后切到剩下那只', () => {
+    const hud = createHud({
+      world: stubWorld({
+        enemies: {
+          items: [
+            { affixes: 0b001, hp: 10, maxHp: 100 },
+            { affixes: 0b010, hp: 90, maxHp: 100 },
+          ],
+        },
+      }) as unknown as World,
+    });
+    const root = dom.ui.children[0]!;
+    expect(findText(root, '10 / 100')).toBeDefined();
+
+    hud.setWorld(
+      stubWorld({ enemies: { items: [{ affixes: 0b010, hp: 45, maxHp: 100 }] } }) as unknown as World,
+    );
+    expect(findText(root, '45 / 100')).toBeDefined();
+    expect(findText(root, '10 / 100')).toBeUndefined();
   });
 
   it('时停淡出;重开只换 World 引用,不重复 append DOM', () => {

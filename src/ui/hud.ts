@@ -3,12 +3,12 @@
  * 世界里同时有多少敌人都不会改变这里的节点数:整页只创建一次,每帧只改已有节点的
  * textContent / style。重开也只走 setWorld 换引用,不重复 append DOM 或注册监听器。
  *
- * 布局只占屏幕上沿与威胁所在的边缘,中央战场完全留空。升级时停与结算期间由 setPaused
+ * 布局只占屏幕上沿、屏下缘与威胁所在的边缘,中央战场完全留空。升级时停与结算期间由 setPaused
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
-import type { World } from '../sim/world';
+import type { Enemy, World } from '../sim/world';
 import { formatDuration } from './gameOver';
 
 const OK_COLOR = '#9adcff';
@@ -45,6 +45,15 @@ const TIMER_CSS =
   `${PANEL_CSS}justify-self:center;min-width:86px;text-align:center;color:${OK_COLOR};` +
   'font-size:17px;letter-spacing:.12em;';
 const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
+
+/**
+ * 精英血条(14 号):屏下缘居中的短条。与静音开关同一套罗盘通道边距(bottom:48px),
+ * 面板/轨道/描边复用上沿既有样式 —— 精英一亮就按"既有血条"的读法读它。
+ * 默认 display:none,有精英才亮(与 burst 预警箭头同一条显示/隐藏口径)。
+ */
+const ELITE_CSS =
+  `${PANEL_CSS}position:absolute;left:50%;bottom:48px;width:min(340px,60vw);` +
+  'transform:translateX(-50%);display:none;';
 
 /**
  * 静音开关:左下角小按钮,与四周 48px 罗盘通道同一套边距。
@@ -260,7 +269,13 @@ export function createHud(opts: { world: World }): HudUi {
   });
   paintMute();
 
-  root.append(top, threat, warn, muteBtn);
+  // 精英血条:屏下缘、与静音开关不抢位(一个贴左、一个居中)。填充色取威胁红,
+  // 与罗盘箭头同色 —— 这一只就是当下最需要盯着的威胁
+  const elite = document.createElement('div');
+  elite.style.cssText = ELITE_CSS;
+  const eliteBar = createBar(elite, '精英', THREAT_COLOR);
+
+  root.append(top, threat, warn, muteBtn, elite);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -314,6 +329,28 @@ export function createHud(opts: { world: World }): HudUi {
       warnTip.style.borderLeftWidth = `${wv.sizePx * 0.42}px`;
     } else {
       warn.style.display = 'none';
+    }
+
+    // 精英血条:扫在场池找词缀 ≠ 0 的敌人(精英 = affixes 非 0,见 sim/enemy.ts)。
+    // 多只精英时钉**池序第一只** —— swap-remove 让池序本身没有稳定性可言,但目标是
+    // "场上任何时候有精英,血条都亮着一只",钉住哪只并不影响这个目标;真要选"最危险"
+    // 还得定义危险度(剩余血?贴船距离?)并多写一个比较,收益不成比例。
+    let eliteTarget: Enemy | null = null;
+    const enemies = world.enemies.items;
+    for (let i = 0; i < enemies.length; i++) {
+      if (enemies[i]!.affixes !== 0) {
+        eliteTarget = enemies[i]!;
+        break;
+      }
+    }
+    if (eliteTarget !== null) {
+      const eMax = finiteOrZero(eliteTarget.maxHp);
+      const eNow = finiteOrZero(eliteTarget.hp);
+      elite.style.display = 'block';
+      eliteBar.value.textContent = `${Math.max(0, Math.round(eNow))} / ${Math.max(0, Math.round(eMax))}`;
+      eliteBar.fill.style.width = `${hudRatio(eNow, eMax) * 100}%`;
+    } else {
+      elite.style.display = 'none';
     }
   }
 
