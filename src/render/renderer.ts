@@ -800,6 +800,10 @@ export class Renderer {
   private deckZoomTarget = 1;
   /** 流程侧(main 的升级时停)是否要求甲板视图。与按住 Tab 的 arcOverlay 在 sync 里取或 */
   private deckViewRequested = false;
+  /** 固定装配界面右侧商店占掉的屏幕宽度；甲板视图据此只在左侧剩余区域内居中与缩放。 */
+  private deckViewRightInset = 0;
+  /** 航段装配模式：只展示星野与飞船甲板，隐藏冻结的敌人、弹道和掉落物。 */
+  private assemblyView = false;
   /** 底板当前画的是哪一档(战斗简化版 / 甲板视图详细版):模式翻转也要触发底板重建 */
   private deckBaseDetailed = false;
   /** 程序化星野(无限地图的方位参照,接替旧的场地边界圈)。变换由 sync 与镜头同步 */
@@ -1043,7 +1047,7 @@ export class Renderer {
     // 屏高比例换算回世界单位,于是 look-ahead 的实际观感与窗口大小无关。
     // scale 已含视图缩放 ⇒ 拉近时镜头前推那一截(世界单位)自动同步归零,
     // 放大后的甲板不会偏在屏幕后半区、上缘也不会伸出屏幕外
-    const lookAhead = (screen.height * tuning.cameraLookAhead) / scale;
+    const lookAhead = this.assemblyView ? 0 : (screen.height * tuning.cameraLookAhead) / scale;
     this.worldLayer.scale.set(scale);
     // pivot 落在船前方 → 船被推到屏幕后半区,腾出的视野正是要转过去的方向
     const pivotX = sx + Math.cos(sh) * lookAhead;
@@ -1053,8 +1057,10 @@ export class Renderer {
     // broadside 顿挫直接加在镜头的屏幕位置上:worldLayer 无旋转,故世界系的方向向量
     // 与屏幕系一一对应,不必再换算一次。screenToWorld 走的是 worldLayer.toLocal,
     // 于是抖动期间"光标底下是哪一格"依然算得对(那句注释里预留的"将来加震屏"就是这里)。
-    const kick = this.stepBroadside(dt, sh);
-    const posX = screen.width / 2 + this.broadsideDirX * kick;
+    const kick = this.assemblyView ? 0 : this.stepBroadside(dt, sh);
+    if (this.assemblyView && this.flashG.visible) this.flashG.visible = false;
+    const viewportWidth = Math.max(1, screen.width - this.deckViewRightInset);
+    const posX = viewportWidth / 2 + this.broadsideDirX * kick;
     const posY = screen.height / 2 + this.broadsideDirY * kick;
     this.worldLayer.position.set(posX, posY);
 
@@ -1208,6 +1214,34 @@ export class Renderer {
   }
 
   /**
+   * 航段装配是一个独立的固定界面，不是把战斗画面原样冻住后盖一张菜单：左边只留飞船甲板，
+   * 右边由 DOM 商店接管。隐藏的只是表现容器，World 中的敌人/子弹/掉落状态一项不改；退出装配后
+   * 同一批对象会原样恢复，因此这不会影响确定性、战斗结算或对象池。
+   */
+  setAssemblyView(on: boolean): void {
+    this.assemblyView = on;
+    const showBattle = !on;
+    this.telegraphG.visible = showBattle;
+    for (let i = 0; i < this.enemyPcs.length; i++) this.enemyPcs[i]!.visible = showBattle;
+    this.dropPc.visible = showBattle;
+    for (let i = 0; i < this.bulletPcs.length; i++) this.bulletPcs[i]!.visible = showBattle;
+    this.fxG.visible = showBattle;
+    this.muzzleFxG.visible = showBattle;
+    if (on) {
+      // 装配界面不应把进入前那一下齐射的镜头顿挫带到下一波恢复战斗之后。
+      this.broadsideLeft = 0;
+      this.broadsideDirX = 0;
+      this.broadsideDirY = 0;
+      this.flashG.visible = false;
+    }
+  }
+
+  /** 右侧固定商店的实时宽度；窗口缩放时由 refitFlow 重新灌入。 */
+  setDeckViewRightInset(px: number): void {
+    this.deckViewRightInset = Number.isFinite(px) && px > 0 ? px : 0;
+  }
+
+  /**
    * 甲板视图的放大倍数:让甲板外接圆直径占屏幕短边的 DECK_VIEW_FRACTION。
    * 每帧现算而不是进入视图时算一次:放置流程里就能焊拼块(甲板当场变大)、窗口也随时会变尺寸,
    * 两者都该让倍数当帧跟上 —— deckOuterRadius 是十几格的一遍 hypot,热路径付得起。
@@ -1217,7 +1251,8 @@ export class Renderer {
     const r = deckOuterRadius(this.world.deck);
     if (r <= 0) return 1;
     const screen = this.app.screen;
-    const fit = (Math.min(screen.width, screen.height) * DECK_VIEW_FRACTION) / (2 * r * scale);
+    const viewportWidth = Math.max(1, screen.width - this.deckViewRightInset);
+    const fit = (Math.min(viewportWidth, screen.height) * DECK_VIEW_FRACTION) / (2 * r * scale);
     return fit > 1 ? fit : 1;
   }
 
@@ -1253,6 +1288,8 @@ export class Renderer {
     // 上一局的甲板视图开出去,而那一局再也没有一次 setDeckZoom(false) 来关它。
     // **当场吸附、不缓动**:重开是"换一艘船",不是一次转场 —— 缩回去的那段动画属于上一局
     this.deckViewRequested = false;
+    this.deckViewRightInset = 0;
+    this.setAssemblyView(false);
     this.deckZoom = 1;
     this.deckZoomTarget = 1;
   }

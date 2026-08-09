@@ -111,8 +111,11 @@ async function boot(): Promise<void> {
     world,
     canvas: renderer.app.canvas,
     screenToDeckLocal: (sx, sy, out) => renderer.screenToDeckLocal(sx, sy, out),
+    // 右侧商店宽度随窗口变化；渲染器用它把飞船始终居中在左侧装配区，而不是压在商店下面。
+    onLayout: (rightInset) => renderer.setDeckViewRightInset(rightInset),
     onResolved: () => {
       refitFlow.hide();
+      renderer.setAssemblyView(false);
       renderer.setPlacement(upgradeFlow);
       renderer.setDeckZoom(false);
       run.paused = false;
@@ -169,6 +172,7 @@ async function boot(): Promise<void> {
       loop.halt();
       upgradeFlow.hide();
       refitFlow.hide();
+      renderer.setAssemblyView(false);
       gameOver.show({
         result,
         survivedSec: world.elapsed,
@@ -190,6 +194,7 @@ async function boot(): Promise<void> {
     world.onUpgradeOffer = () => {
       run.paused = true;
       loop.halt();
+      renderer.setAssemblyView(false);
       renderer.setPlacement(upgradeFlow);
       renderer.setDeckZoom(true);
       upgradeFlow.show();
@@ -200,6 +205,7 @@ async function boot(): Promise<void> {
     world.onRefitOffer = (segmentIndex) => {
       run.paused = true;
       loop.halt();
+      renderer.setAssemblyView(true);
       renderer.setPlacement(refitFlow);
       renderer.setDeckZoom(true);
       refitFlow.show(segmentIndex);

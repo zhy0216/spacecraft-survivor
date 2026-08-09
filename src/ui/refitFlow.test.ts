@@ -11,7 +11,7 @@ import {
   WELD_OVERLAP,
 } from '../sim/deck';
 import { REFIT_ALREADY_WELDED, REFIT_NOT_ACTIVE } from '../sim/world';
-import { refitDenyMessage, refitThreatSummary } from './refitFlow';
+import { refitDenyMessage, refitShopWidth, refitThreatSummary } from './refitFlow';
 
 describe('整备面板纯文案', () => {
   it('下一波摘要从波次表生成，并点出逐段首次出现的敌型', () => {
@@ -41,5 +41,12 @@ describe('整备面板纯文案', () => {
       expect(text.length).toBeGreaterThan(4);
       expect(text).not.toBe(`整备操作被拒绝(理由码 ${code})`);
     }
+  });
+
+  it('固定商店栏在常见桌面宽度下保持可读，并给左侧甲板留出空间', () => {
+    expect(refitShopWidth(800)).toBe(300);
+    expect(refitShopWidth(1200)).toBe(408);
+    expect(refitShopWidth(1920)).toBe(430);
+    expect(refitShopWidth(Number.NaN)).toBe(0);
   });
 });
