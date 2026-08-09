@@ -23,7 +23,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
-import { UPGRADE_SKIP_REFUND } from '../data/economy';
+import { UPGRADE_SKIP_FEE } from '../data/economy';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS, towerRange } from '../data/towers';
 import {
@@ -319,17 +319,19 @@ describe('cardLevelText', () => {
 });
 
 describe('skipRefund', () => {
-  it('返还额封顶在数值表那个数上', () => {
-    expect(skipRefund(UPGRADE_SKIP_REFUND * 10)).toBe(UPGRADE_SKIP_REFUND);
+  it('返还 = cost − 手续费:净亏恒为手续费,不随费用曲线暴涨', () => {
+    expect(skipRefund(UPGRADE_SKIP_FEE * 10)).toBe(UPGRADE_SKIP_FEE * 9);
+    expect(skipRefund(509)).toBe(509 - UPGRADE_SKIP_FEE);
   });
 
-  it('费用比返还额还低时只返还费用本身', () => {
-    // 与 World.skipUpgrade 里那一手 min 一字同源。分家的后果有两层:
-    // 按钮上印着"返还 15"而实际到账更少(玩家算不清账),更糟的是跳过会净赚残骸 ——
+  it('费用不高于手续费时返还 0,坏输入不印残骸', () => {
+    // 与 World.skipUpgrade 调的是同一个 skipRefundFor。分家的后果有两层:
+    // 按钮上印的返还数与实际到账各走各的(玩家算不清账),更糟的是跳过会净赚残骸 ——
     // 那样下一帧又满足 scrap ≥ upgradeCost,卡片会一张接一张地弹
-    const cheap = UPGRADE_SKIP_REFUND - 1;
-    expect(skipRefund(cheap)).toBe(cheap);
+    expect(skipRefund(UPGRADE_SKIP_FEE)).toBe(0);
+    expect(skipRefund(UPGRADE_SKIP_FEE - 1)).toBe(0);
     expect(skipRefund(0)).toBe(0);
+    expect(skipRefund(-5)).toBe(0);
   });
 });
 

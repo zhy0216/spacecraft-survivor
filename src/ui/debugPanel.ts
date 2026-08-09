@@ -72,6 +72,8 @@ export interface RunState {
  */
 export interface RunHooks {
   restart(): void;
+  /** 同 seed 重试(可选,见 main.ts 的 retry):面板终于能一键验"同 seed 可复现" */
+  retry?(): void;
 }
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): void {
@@ -99,9 +101,13 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   // label 得把这两件事都说出来:只写"压测出怪"的话,打开它等一局的人会以为脚本卡住了
   runF.addBinding(tuning, 'stressSpawn', { label: '压测出怪(旁路波次脚本,本局无胜利)' });
   // 重开与结算界面的「再来一局」是同一个入口(见 RunHooks):打歪了想重来时,
-  // 不必先把自己撞沉一次。注意它**换种子**(seed + runIndex),所以验不了"同 seed 可复现" ——
-  // 那件事只能带 ?seed= 刷新页面,别指望这个按钮
+  // 不必先把自己撞沉一次。注意它**换种子**(seed + runIndex)。
   runF.addButton({ title: '重开本局(换种子)' }).on('click', () => hooks.restart());
+  // 同 seed 重试与结算界面的「再试这一局」同一个入口:这才是能验"同 seed 可复现"的那个按钮
+  if (hooks.retry) {
+    const retry = hooks.retry.bind(hooks);
+    runF.addButton({ title: '重试本局(同种子)' }).on('click', retry);
+  }
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏
   //(08 号验收:改数据文件就能调,不改代码)—— 面板不该开第二个入口去改这一局的进度。

@@ -100,6 +100,7 @@ import { type Arc, cellArc, isTurretCell } from '../sim/arc';
 import { tuning } from '../sim/config';
 import { deckOuterRadius, hullCoreHalfExtents } from '../sim/damage';
 import {
+  canMoveModule,
   canPlace,
   canWeldPiece,
   CELL_SUPPORT,
@@ -117,17 +118,20 @@ import {
   edgeWorldNormal,
   isEdgeExposed,
   isPlaceSuccess,
+  MOVE_OK,
   WELD_OK,
 } from '../sim/deck';
 import type { Drop } from '../sim/drop';
 import { ST_WINDUP } from '../sim/enemy';
 import {
   FX_LIFE_HULL_HIT,
+  FX_LIFE_KILL,
   FX_LIFE_SPARK,
   FXV_BEAM,
   FXV_BLAST,
   FXV_CHAIN,
   FXV_HULL_HIT,
+  FXV_KILL,
   FXV_LANCE,
   FXV_MUZZLE,
   FXV_SPARK,
@@ -210,6 +214,8 @@ const DECK_PROW_HALF_W = 0.42;
 // "暖色 = 敌人"这条全局约定(GDD §12),真正的拒绝理由由 DOM 文案给。
 const DECK_HILITE_OK = 0x9adcff;
 const DECK_HILITE_DENY = 0xff7a6b;
+/** 整备时被拿起的模块：琥珀色只标“来源”，冷青色仍专门表示合法落点。 */
+const DECK_HILITE_SOURCE = 0xffc46b;
 /** 高亮矩形相对格边的内缩:留出底板格线,免得高亮把格子边界糊掉 */
 const DECK_HILITE_PAD = CELL * 0.107;
 const DECK_HILITE_FILL_ALPHA = 0.16; // 薄薄一层:合法格要看得出"能放",但不能盖掉格子本身的状态色
@@ -432,6 +438,21 @@ const FX_HULL_HIT_R0 = 5;
 const FX_HULL_HIT_R1 = 17;
 const FX_HULL_HIT_WIDTH = 2.5;
 
+/**
+ * 击杀爆点 FXV_KILL(畅玩性调整):敌人死亡处一个从敌半径向外扩的短促圆环 + 四条放射短线。
+ * 配色取 enemyTint(该敌型的红紫暖色):死的是敌人,爆点属于敌方色域 —— 与 FXV_BLAST
+ * (我方冷色 AoE 承诺)在色域上天然分开,不会被读成"这里炸到了这么大一片"。
+ * 射线方向定死不掷随机,与火花(FX_SPARK_DIRS)同一条理由;取正交而不是对角,
+ * 与火花的 × 形在形状通道上错开 —— 蜂群贴脸时两种事件常同屏。
+ */
+const FX_KILL_RING_WIDTH = 2;
+/** 爆环收尾半径 = 敌半径 × 它:虫死时"啵"地散开一圈,比本体大但远小于 AoE 的量级 */
+const FX_KILL_EXPAND = 2.5;
+/** 放射短线的满长(× 敌半径)与线宽 */
+const FX_KILL_RAY = 1.4;
+const FX_KILL_RAY_WIDTH = 1.6;
+const FX_KILL_DIRS = [1, 0, 0, 1, -1, 0, 0, -1];
+
 // —— broadside 反馈(05 号 issue T5 可选项)——
 /** 触发门槛:与 sim 的口径一致(world.broadsideCount ≥ 3 = 单舷齐射) */
 const BROADSIDE_MIN = 3;
@@ -519,6 +540,8 @@ export interface PlacementUiState {
   hoverIndex: number;
   /** 刚被拒绝的格,-1 = 无;由 ui 层超时清零(渲染层不持有计时器) */
   denyIndex: number;
+  /** >=0 = 整备期正在搬运的来源格；-1 = 普通放置/焊接。 */
+  moveSourceIndex: number;
 }
 
 /**
@@ -1693,6 +1716,11 @@ export class Renderer {
       return;
     }
 
+    if (st.moveSourceIndex >= 0) {
+      this.drawMoveHilite(deck, st);
+      return;
+    }
+
     const size = deckCellSize();
     const half = size / 2;
     const box = size - DECK_HILITE_PAD * 2;
@@ -1734,6 +1762,61 @@ export class Renderer {
 
     // 被拒格:短促闪一下(闪多久由 ui 层的超时清零决定,渲染层不持有计时器)。
     // 真正说明理由的是 DOM 文案,这里只负责把玩家的视线钉回"是这一格不行"
+    const deny = st.denyIndex >= 0 ? cells[st.denyIndex] : undefined;
+    if (deny) {
+      const p = cellLocalPos(deck, deny.col, deny.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box)
+        .fill({ color: DECK_HILITE_DENY, alpha: DECK_DENY_FILL_ALPHA })
+        .stroke({ width: DECK_HILITE_WIDTH, color: DECK_HILITE_DENY });
+    }
+  }
+
+  /** 整备搬运高亮：来源用琥珀，所有可落点继续用“合法操作”的冷青。 */
+  private drawMoveHilite(deck: Deck, st: PlacementUiState): void {
+    const g = this.deckHiliteG;
+    const cells = deck.cells;
+    const source = cells[st.moveSourceIndex];
+    if (!source) return;
+
+    const size = deckCellSize();
+    const half = size / 2;
+    const box = size - DECK_HILITE_PAD * 2;
+    let targets = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (canMoveModule(deck, source.col, source.row, c.col, c.row) !== MOVE_OK) continue;
+      const p = cellLocalPos(deck, c.col, c.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box);
+      targets++;
+    }
+    if (targets > 0) {
+      g.fill({ color: DECK_HILITE_OK, alpha: DECK_HILITE_FILL_ALPHA }).stroke({
+        width: DECK_HILITE_WIDTH,
+        color: DECK_HILITE_OK,
+      });
+    }
+
+    const sourcePos = cellLocalPos(deck, source.col, source.row, localPos);
+    g.rect(
+      sourcePos.x - half + DECK_HILITE_PAD,
+      sourcePos.y - half + DECK_HILITE_PAD,
+      box,
+      box,
+    )
+      .fill({ color: DECK_HILITE_SOURCE, alpha: DECK_HILITE_FILL_ALPHA })
+      .stroke({ width: DECK_HOVER_WIDTH, color: DECK_HILITE_SOURCE });
+
+    const hover = st.hoverIndex >= 0 ? cells[st.hoverIndex] : undefined;
+    if (hover && hover !== source) {
+      const legal =
+        canMoveModule(deck, source.col, source.row, hover.col, hover.row) === MOVE_OK;
+      const p = cellLocalPos(deck, hover.col, hover.row, localPos);
+      g.rect(p.x - half + DECK_HILITE_PAD, p.y - half + DECK_HILITE_PAD, box, box).stroke({
+        width: DECK_HOVER_WIDTH,
+        color: legal ? DECK_HILITE_OK : DECK_HILITE_DENY,
+      });
+    }
+
     const deny = st.denyIndex >= 0 ? cells[st.denyIndex] : undefined;
     if (deny) {
       const p = cellLocalPos(deck, deny.col, deny.row, localPos);
@@ -2167,6 +2250,23 @@ export class Renderer {
             color: HULL_HIT_COLOR,
             alpha: t,
           });
+          break;
+        }
+        case FXV_KILL: {
+          // 击杀爆点:towerType 一格借放的是**敌型下标**(见 sim/fx.ts),配色走 enemyTint ——
+          // 上面按塔型取的 color 对这一种 kind 不适用,当场覆盖。radius = 敌半径(sim 填的),
+          // 环从本体半径向外扩、射线向外缩,全部随 life 淡出:短促的一记"这只没了"的句号
+          const t = fxFade(e.life, FX_LIFE_KILL);
+          const tint = enemyTint(e.towerType);
+          const r = e.radius * (1 + (FX_KILL_EXPAND - 1) * (1 - t));
+          g.circle(e.x0, e.y0, r).stroke({ width: FX_KILL_RING_WIDTH, color: tint, alpha: t * 0.9 });
+          const len = e.radius * FX_KILL_RAY * t;
+          for (let k = 0; k < FX_KILL_DIRS.length; k += 2) {
+            const sx = e.x0 + FX_KILL_DIRS[k]! * r;
+            const sy = e.y0 + FX_KILL_DIRS[k + 1]! * r;
+            g.moveTo(sx, sy).lineTo(sx + FX_KILL_DIRS[k]! * len, sy + FX_KILL_DIRS[k + 1]! * len);
+          }
+          g.stroke({ width: FX_KILL_RAY_WIDTH, color: tint, alpha: t * 0.7 });
           break;
         }
         case FXV_MUZZLE: {

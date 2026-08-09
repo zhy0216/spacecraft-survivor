@@ -17,15 +17,15 @@
  *
  *   等比求和:攒够 N 次升级的累计残骸 = BASE × (GROWTH^N − 1) / (GROWTH − 1) = 4 × BASE × (1.25^N − 1)。
  *   GDD 的口径是 **25 分钟 / 22–26 次**:BASE = 10 时,26 次要 40 × (1.25²⁶ − 1) ≈ 13,200 残骸。
- *   MVP 单局只有 550s ≈ 9.2 分钟(data/waves.ts 的四段脚本),总出怪约 2700 只,
+ *   MVP 单局为 480s = 8 分钟(data/waves.ts 的四段脚本),总出怪约 2200 只,
  *   按 data/enemies.ts 的面额 1/2/2/4 折算,**每只都打死、每颗都捡到**的理论上界也才 ≈ 3500 残骸。
  *   拿 BASE = 10 去接这 3500:1.25^N = 3500/40 + 1 ≈ 88.5 ⇒ N ≈ 20 次,远超 todos/10 的 12–15。
  *   把 BASE 抬成 3.5 倍(10 → 35)等于把整条曲线右移 log(3.5)/log(1.25) ≈ 5.6 次 ⇒ N ≈ 14.5,正落在窗口里。
  *
- * 于是"12–15 次"这条验收换算成本文件的语言就是:**一局收到的残骸要落在 [Σ12, Σ16) ≈ [1898, 4834)**
- *(Σn = 前 n 次升级的累计花费,取整后的实数见 economy.test.ts)。
+ * 于是"12–15 次"这条验收换算成本文件的语言就是:**一局收到的残骸要落在 [Σ12, Σ16) ≈ [1844, 4781)**
+ *(Σn = 前 n 次升级的累计花费,含前三档特价 UPGRADE_EARLY_COSTS 共 −54,取整后的实数见 economy.test.ts)。
  * 上界远高于理论满收的 3500 是有意的余量:够到 16 次意味着经济已经彻底崩了;
- * 而下界 1898 = 理论满收的 54% —— 实测跑不到 12 次,该先怀疑的是火力/掉落面额,不是这条曲线。
+ * 而下界 1844 ≈ 理论满收的 53% —— 实测跑不到 12 次,该先怀疑的是火力/掉落面额,不是这条曲线。
  *
  * 真正的裁判是 sim/economy.test.ts(用 08 的真脚本跑一局实测)。这两个数与 enemies.ts 的四个面额
  * 都只是**起点**:调平衡时只改这几个数、不改一行逻辑,正是 todos/05 立下的那条验收。
@@ -34,7 +34,18 @@ export const UPGRADE_COST_BASE = 35;
 export const UPGRADE_COST_GROWTH = 1.25; // GDD §14 逐字锁定
 
 /**
+ * 前三档特价表(畅玩性调整):开局面额全是 1 的蜂群蛭、首段流速只有 1.2/s 起步,
+ * 首卡按 BASE=35 理论满收也要 25-30s 才见 —— 教学段前半分钟玩家没有任何经济反馈节点。
+ * 特价把首卡提前到约 20s 内、前三次升级整体前移,让玩家在 48s 侧掠者首秀(data/waves.ts)前
+ * 大概率已经放下第三样东西。只动前三档、不动 BASE/GROWTH:
+ * 累计费用只降 Σ = (35-15)+(44-25)+(55-40) = 54 残骸,对"一局 12–15 次"的验收窗口几乎无扰
+ * (真裁判 sim/economy.test.ts 的固定 seed 实测随本表一并重钉)。
+ */
+export const UPGRADE_EARLY_COSTS = [15, 25, 40];
+
+/**
  * 第 n 次升级(**n 从 0 起** = World.upgrades,即"已经结算过几次")所需残骸。
+ * 前几档先查特价表(UPGRADE_EARLY_COSTS),之后回归等比曲线。
  *
  * **取整**:残骸是整点记账的(每只怪掉整数颗,World.scrap 恒为整数),
  * 价钱带小数的话 `scrap >= upgradeCost` 这条判据就会卡在"永远差 0.4 点"上,
@@ -48,6 +59,8 @@ export const UPGRADE_COST_GROWTH = 1.25; // GDD §14 逐字锁定
  */
 export function upgradeCost(upgrades: number): number {
   const n = upgrades >= 1 ? Math.floor(upgrades) : 0;
+  const early = UPGRADE_EARLY_COSTS[n];
+  if (early !== undefined) return early;
   return Math.round(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_GROWTH, n));
 }
 
@@ -72,13 +85,34 @@ export const OFFER_WEIGHT_SUPPORT = 25;
 export const OFFER_WEIGHT_DECK = 15;
 
 /**
- * 跳过一次升级的返还额(GDD §7:"可跳过(返还 15 残骸)")。
- * 它是**返还**不是免单:跳过照样扣掉这一次的 upgradeCost、照样 upgrades++,
- * 否则下一帧 scrap 还够,同一张卡会当场再弹一次(那才是真正的死循环)。
- * 调用方(World.skipUpgrade / ui 的 skipRefund)必须把它夹到 cost 以内 ——
- * 第 0 级的 cost 有可能比返还额还小,不夹的话"跳过"就成了一台印残骸的机器。
+ * 跳过一次升级的**手续费**(畅玩性调整,取代旧的"固定返还 15"):
+ * 旧口径下跳过净亏 = cost − 15,随等比曲线暴涨(第 12 档跳一次净亏 494),
+ * 后期抽到三张不想要的卡等于被强制拿卡,"三选一"退化成"三选一必选"。
+ * 反转成固定手续费后,跳过的直接残骸损失恒为 15;但跳过**照样 upgrades++ 消费一档曲线**
+ * (那是防"下一帧 scrap 还够,同一张卡当场再弹"死循环的既有机制,也让下一档三张全新候选
+ * 成为天然的付费重随),曲线前移本身仍是一层温和代价。
  */
-export const UPGRADE_SKIP_REFUND = 15;
+export const UPGRADE_SKIP_FEE = 15;
+
+/**
+ * 跳过时实际返还多少残骸 = cost − 手续费,夹到 [0, cost]。
+ * **World.skipUpgrade 与 ui 的 skipRefund 共用这一份**:两边分家的话,
+ * 玩家看到的返还数与到账数会各走各的,而这种差额要攒好几次才看得出来。
+ * 第 0 档特价 15 时返还恰为 0(净亏仍是 15),不存在印残骸的口子。
+ */
+export function skipRefundFor(cost: number): number {
+  const refund = cost - UPGRADE_SKIP_FEE;
+  if (!(refund > 0)) return 0;
+  return Math.min(refund, cost);
+}
+
+/**
+ * 两次弹卡之间的最小间隔(秒)。settleUpgrade 原本每帧尾只判 scrap >= cost:
+ * 一波混战攒出跨档余额时,恢复战斗的下一帧会立刻再次时停弹卡,战斗高潮被连环打断。
+ * 5 秒只挡"背靠背",比平均升级间隔(约 40s)低一个量级,不挡正常节奏;
+ * 攒出的余额一分不丢,只是延后弹出。首次弹卡不受限(World 的冷却初值为 0)。
+ */
+export const UPGRADE_OFFER_COOLDOWN = 5;
 
 /**
  * 在场残骸上限:触顶后当帧掉落的那一颗**直接丢弃、不留账** ——

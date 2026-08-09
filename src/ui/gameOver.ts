@@ -169,8 +169,12 @@ function isTyping(): boolean {
  * @param opts.onRestart 「再来一局」的去处。**结算界面不认识 World、不动 loop、不复位任何状态**:
  *   那一整套(新 World + 新 loop + renderer.setWorld + upgradeFlow.setWorld + UI 复位)在 main.ts 一处,
  *   这里只负责把"玩家想再来一局"这件事说出来。
+ * @param opts.onRetry 「再试这一局」(同 seed 重开,畅玩性调整)。不传就不摆这个按钮 ——
+ *   语义仍是"说出玩家想要什么",换不换种子是 main.ts 那条重开流程的事。
+ *   被特定波次组合打死后,"我知道 48s 右舷会来侧掠者"这类死后学习必须有处可用,
+ *   否则 9 分钟从零重来的失败惩罚被换种子无谓放大。
  */
-export function createGameOverUi(opts: { onRestart: () => void }): GameOverUi {
+export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => void }): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
   const card = document.createElement('div');
@@ -188,7 +192,13 @@ export function createGameOverUi(opts: { onRestart: () => void }): GameOverUi {
   btn.style.cssText = BTN_CSS;
   // 键位写在按钮上:结算界面没有别的地方能提示"Enter 也行",而重开是这里唯一的动作
   btn.textContent = '再来一局(Enter)';
+  // 「再试这一局」摆在「再来一局」下面:换种子重开仍是主动作(同一份怪潮打第二遍没什么可玩的),
+  // 同 seed 重试是"这一局我想再练一次"的次动作 —— 顺序即优先级
+  const retryBtn = document.createElement('button');
+  retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
+  retryBtn.textContent = '再试这一局(R · 同种子)';
   card.append(titleEl, noteEl, shotEl, statsEl, btn);
+  if (opts.onRetry) card.appendChild(retryBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
@@ -208,11 +218,24 @@ export function createGameOverUi(opts: { onRestart: () => void }): GameOverUi {
     opts.onRestart();
   }
 
+  function retry(): void {
+    // 与 restart 同口径:先收面板再回调,理由一字同源
+    hide();
+    opts.onRetry?.();
+  }
+
   btn.addEventListener('click', restart);
+  retryBtn.addEventListener('click', retry);
 
   window.addEventListener('keydown', (e) => {
-    // 收着的时候一律不认:战斗中按 Enter 不该把正打着的一局重开掉
+    // 收着的时候一律不认:战斗中按 Enter/R 不该把正打着的一局重开掉
     if (!visible || e.repeat || isTyping()) return;
+    // R = 同 seed 重试(与放置阶段的旋转键无冲突:结算界面弹出时升级流程必然收着)
+    if (opts.onRetry && e.code === 'KeyR') {
+      e.preventDefault();
+      retry();
+      return;
+    }
     if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
     // **必须挡掉默认行为**:按钮刚被点过时它是带着焦点的,而 Enter 对一个聚焦的 button
     // 默认会再派一次 click —— 那就是一次按键重开两局(第二局立刻被第三局顶掉,

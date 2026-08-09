@@ -28,6 +28,11 @@ export const FXV_MUZZLE = 4; // 炮口闪:真子弹类塔开火时的短促提�
 // "蹭到了但没伤害"与"真掉血"在蜂群贴脸时是玩家唯一读得到的反馈差别。
 export const FXV_SPARK = 5; // 蹭到核心区之外的甲板:只出火花,一分血都不结算(GDD §4.4)
 export const FXV_HULL_HIT = 6; // 撞进核心区:真掉血
+// —— 击杀反馈(畅玩性调整)。死亡此前是全游戏唯一没有表现的高频事件:reap 只做 kills++、
+// 掉残骸、回池,玩家判断"打没打中"的读数只剩子弹消失与残骸出现 —— 对割草游戏这是爽快感的
+// 最大缺口。单开一个 kind 而不是复用 FXV_BLAST:那是我方炸到敌人的 AoE 承诺(实心盘摊在
+// 真实 aoeRadius 上),这只是"一只怪没了"的短促句号,画法与色域(敌方红紫)都不同。
+export const FXV_KILL = 7; // 敌人死亡爆点:radius = 敌半径,towerType 借放敌型下标(取 enemyTint 配色)
 
 /**
  * 上面这两种的存续秒数。**刻意不进 data/towers 的 FX_LIFE_* 那一组** ——
@@ -39,6 +44,9 @@ export const FXV_HULL_HIT = 6; // 撞进核心区:真掉血
  */
 export const FX_LIFE_SPARK = 0.12; // 占位待调
 export const FX_LIFE_HULL_HIT = 0.22; // 占位待调 —— 比火花长:真掉血那一下得留得住眼睛
+// 击杀爆点比受击那两种都长一点:它是玩家的正反馈,值得多留几帧;但仍远短于开火那组的
+// FX_LIFE_BLAST 之外的量级 —— 终局约 8 杀/秒,0.25s 存续让在场爆点稳定在个位数,远低于 500 弹预算
+export const FX_LIFE_KILL = 0.25; // 占位待调
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),
@@ -55,7 +63,11 @@ export interface FxEvent {
   y1: number;
   /** FXV_BLAST 的 AoE 半径,其余种类恒 0 */
   radius: number;
-  /** 来源塔型(TOWER_*):渲染层据此取 def.tint 选色,不必再回查是谁打的 */
+  /**
+   * 来源塔型(TOWER_*):渲染层据此取 def.tint 选色,不必再回查是谁打的。
+   * **FXV_KILL 例外**:死亡不是任何一座塔打出来的,这一格借放**敌型下标**(KIND_*),
+   * 渲染层照它取 enemyTint 配色 —— 借字段而不是加一格,是因为其余七种 kind 用不上第八个数字。
+   */
   towerType: number;
   /** 剩余存续秒。初值取 data/towers 的 FX_LIFE_*,由 World 每帧扣 dt */
   life: number;

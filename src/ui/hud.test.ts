@@ -142,6 +142,7 @@ interface StubWorld {
   wave: { segment: number; segTime: number };
   threatDirection: number;
   threatIntensity: number;
+  burstWarning(): { etaSeconds: number; dirRad: number } | null;
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -153,6 +154,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     wave: { segment: 0, segTime: WAVE_SEGMENTS[0]!.duration * 0.5 },
     threatDirection: 0,
     threatIntensity: THREAT_INTENSITY_MAX * 0.5,
+    burstWarning: () => null,
     ...over,
   };
 }
@@ -182,8 +184,8 @@ describe('createHud', () => {
     const root = dom.ui.children[0]!;
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
-    // 只含上沿读数与边缘箭头,没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(2);
+    // 只含上沿读数与两支边缘箭头(实况罗盘 + burst 预警),没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(3);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -223,5 +225,23 @@ describe('createHud', () => {
     expect(findText(root, '33 / 55')).toBeDefined();
     expect(findText(root, '2:10')).toBeDefined();
     expect(Number.parseFloat(root.children[1]!.style.left!)).toBeLessThan(100);
+  });
+
+  it('burst 预警:进窗才亮出第二支箭头,窗外与无事件时都藏着', () => {
+    const hud = createHud({
+      world: stubWorld({ burstWarning: () => ({ etaSeconds: 1.5, dirRad: 0 }) }) as unknown as World,
+    });
+    const root = dom.ui.children[0]!;
+    const warn = root.children[2]!;
+    expect(warn.title).toBe('即将来袭');
+    expect(warn.style.display).toBe('block');
+    expect(warn.style.opacity).not.toBe('');
+
+    // 距触发还远(窗外):预警不该常驻刷屏
+    hud.setWorld(stubWorld({ burstWarning: () => ({ etaSeconds: 30, dirRad: 0 }) }) as unknown as World);
+    expect(warn.style.display).toBe('none');
+    // 本段 burst 已放完 / 脚本走完:burstWarning 返回 null
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(warn.style.display).toBe('none');
   });
 });

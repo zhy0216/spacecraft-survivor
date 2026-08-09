@@ -97,7 +97,7 @@ export function magnetRadius(deck: Deck): number {
 }
 
 /**
- * 残骸的离场半径(px):离船超过这一档的**未锁定**残骸直接回池。
+ * 残骸的离场半径(px):离船超过这一档的**未锁定**残骸回池,并**折半入账**(见 DROP_CULL_REFUND)。
  * 地图无限之后,被玩家开过去不捡的残骸会永远躺在身后 —— DROP_MAX_ALIVE(data/economy)
  * 那道保险丝挡得住内存,挡不住"老残骸占满池、新掉落全被丢弃"的经济死账:
  * 打了怪却什么都不掉,玩家只会觉得掉落坏了。
@@ -108,10 +108,18 @@ export function magnetRadius(deck: Deck): number {
 export const DROP_CULL_RADIUS = 2000;
 
 /**
+ * 离场残骸的折半回收系数(畅玩性调整):被甩掉的那颗回池时按 ceil(value × 0.5) 记进本帧进账,
+ * 而不是纯丢弃。旧口径下风筝远离/不敢回场中心的打法会整批**静默漏钱**,而游戏里没有任何读数
+ * 告诉玩家漏了多少 —— 症状只是"卡弹得少"。折半保住了经济下限,又保留"亲自去捡收满额"的激励。
+ * ceil 而不是 floor:面额 1 的蜂群蛭残骸(全场最多的一种)floor 会折成 0,又回到静默漏钱。
+ */
+export const DROP_CULL_REFUND = 0.5;
+
+/**
  * 推进全场残骸一逻辑帧:起吸判定 → 积分 → 收取。
  * @param shipX @param shipY 船心世界坐标(调用方传本帧**积分之后**的位置:残骸追的是船现在在哪,
  *   晚一帧的话高速航行时整串残骸会恒定拖在船身后)
- * @returns **本帧收到的残骸总量**(收下的 value 之和,没收到就是 0)——
+ * @returns **本帧收到的残骸总量**(收下的 value 之和 + 离场残骸的折半回收,没收到就是 0)——
  *   调用方直接 `scrap += stepDrops(...)`。不由本函数去写 World 的字段:掉落这一层不认识"经济",
  *   正如 bullet.ts 不认识"击杀数"。
  *
@@ -148,9 +156,10 @@ export function stepDrops(
     const dx = shipX - d.x;
     const dy = shipY - d.y;
     const d2 = dx * dx + dy * dy;
-    // 被甩在身后的未锁定残骸出局(无限地图的内存/池位账,见 DROP_CULL_RADIUS)。
+    // 被甩在身后的未锁定残骸出局,但**折半入账**(经济下限账见 DROP_CULL_REFUND)。
     // 排在起吸判定之前 —— 反正两个半径差一个数量级,谁先谁后不会改变任何一颗的归属
     if (!d.magnet && d2 > DROP_CULL_RADIUS * DROP_CULL_RADIUS) {
+      got += Math.ceil(d.value * DROP_CULL_REFUND);
       drops.despawnAt(i);
       continue;
     }

@@ -33,7 +33,7 @@
  * 与 data/deckPieces 加 desc 字段:表里改一个数、加一座塔/拼块,卡片自己就跟上
  * (05 号验收口径:改数据文件即可调平衡,不改代码);而多一个手写描述字段,就是多一处会走散的真相。
  */
-import { UPGRADE_SKIP_REFUND } from '../data/economy';
+import { skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
 import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
 import {
   SUP_AMMO_BAY,
@@ -54,8 +54,14 @@ import {
   TOWER_MORTAR,
   TOWER_PD,
   TOWER_RAILGUN,
+  type TowerDef,
   TOWERS,
+  towerAoeDamage,
   towerArcDeg,
+  towerBurst,
+  towerChargeTime,
+  towerDamage,
+  towerFireInterval,
   towerRange,
 } from '../data/towers';
 import {
@@ -358,9 +364,41 @@ function supportDesc(def: SupportDef): string {
 }
 
 /**
+ * 表面 DPS(当前档现算)—— "伤害是随等级/加成一直在变的数"这条老顾虑的解法就是**现算不缓存**:
+ * 卡片弹出那一刻按数值表 + 等级算一遍,升一级重算一遍,永远不会印出过期的数。
+ * "表面" = 单目标持续输出的上限:含 Lv3 的多管跳变,不含装填/过热的停火窗与链跳/AoE 的
+ * 群体收益 —— 那些是塔的**节奏与形状**,卡片上由节流系那半句与塔名承诺,数字只答"这座塔多重"。
+ * 充能系没有 fireInterval,节奏在 chargeTime;迫击炮的伤害全在落点(def.damage 恒 0),取 AoE 档。
+ */
+export function towerDps(def: TowerDef, level: number): number {
+  const dmg = def.damage > 0 ? towerDamage(def, level) : towerAoeDamage(def, level);
+  const shots = towerBurst(def, level);
+  if (def.throttle === THR_CHARGE) {
+    const charge = towerChargeTime(def, level);
+    return charge > 0 ? (dmg * shots) / charge : 0;
+  }
+  const interval = towerFireInterval(def, level);
+  return interval > 0 ? (dmg * shots) / interval : 0;
+}
+
+/**
+ * 塔卡片上的伤害读数。玩家最常见的抉择是"新建一座 vs 给旧的叠一级",
+ * 而卡面此前刻意不报伤害 —— 两条路的强度无从比较,升级的期待感也就无从谈起。
+ * 已有未满级的同型塔时报 `伤 X→Y/s`(这张卡承诺的正是那一级的跳变);
+ * 新建(未装备/已满级)只报拿到手那一级的数。
+ */
+function dpsText(def: TowerDef, opt: UpgradeOption): string {
+  const granted = grantedLevel(opt);
+  if (opt.level >= 1 && opt.level < TOWER_MAX_LEVEL) {
+    return `伤 ${num(towerDps(def, opt.level))}→${num(towerDps(def, granted))}/s`;
+  }
+  return `伤 ${num(towerDps(def, granted))}/s`;
+}
+
+/**
  * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头:不给数值表加 desc 字段)。
- * 塔报"射界档 / 射程 / 节流系"三样:GDD §5.1 说的四要素里,伤害是随等级/加成一直在变的数,
- * 而这三样才是玩家决定"这座塔放哪一格"时真正要比的东西(射界与格子的暴露边直接相关)。
+ * 塔报"射界档 / 射程 / 表面 DPS / 节流系"四样(GDD §5.1 的四要素终于凑齐:
+ * 伤害那一档由 towerDps 现算当前档,不再因为"它一直在变"而缺席)。
  * 射界只报数值表里那一档:角落格 +60°(GDD §4.2)是**格子**的属性,要等选了格才算得出来,
  * 写进卡片就成了一个对不上的数。
  * 型号越界不静默兜底(与 placeLabel 同一条口径):把下标印出来,免得玩家照着另一座塔的读数下判断。
@@ -377,7 +415,7 @@ export function cardDesc(opt: UpgradeOption): string {
     if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
     const lv = grantedLevel(opt);
     // 射程取整:它是像素距离,小数位对玩家没有任何意义(等级成长乘出来全是 399.00000000000006)
-    return `射界 ${num(towerArcDeg(def, lv))}° · 射程 ${Math.round(towerRange(def, lv))} · ${throttleDesc(def.throttle)}`;
+    return `射界 ${num(towerArcDeg(def, lv))}° · 射程 ${Math.round(towerRange(def, lv))} · ${dpsText(def, opt)} · ${throttleDesc(def.throttle)}`;
   }
   const def = SUPPORTS[optionSupportType(opt)];
   if (!def) return `数值表里查不到这种设施(型号 ${opt.type})`;
@@ -403,13 +441,13 @@ export function cardLevelText(opt: UpgradeOption): string {
 }
 
 /**
- * 跳过这一次升级实际返还多少残骸。**与 World.skipUpgrade 里那一手夹取一字同源**:
- * 第 0 级的 cost 可能小于返还额,不夹的话跳过会净赚残骸(而按钮上还印着一个更大的数)。
- * 独立成纯函数就是为了让这条镜像关系有一道拦网:两边分家时,玩家看到的是"返还 15",
- * 到账的却是 10 —— 而这种差额要攒好几次才看得出来。
+ * 跳过这一次升级实际返还多少残骸 = cost − 手续费(畅玩性调整,语义见 data/economy)。
+ * **与 World.skipUpgrade 调的是同一个 skipRefundFor**:两边分家时,玩家看到的返还数
+ * 与到账数会各走各的,而这种差额要攒好几次才看得出来 —— 留这层薄包装只为 ui 侧
+ * 的调用点(按钮文案/toast/测试)有个稳定的名字。
  */
 export function skipRefund(cost: number): number {
-  return Math.min(UPGRADE_SKIP_REFUND, cost);
+  return skipRefundFor(cost);
 }
 
 /** 焦点在调参面板的输入框里:此时数字键/Esc 是在打字,不该被当成选卡/取消抢走 */
@@ -486,6 +524,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     weldDenied: false,
     hoverIndex: -1,
     denyIndex: -1,
+    moveSourceIndex: -1,
   };
 
   // —— DOM:两个直接子节点(卡片面板 + 左下角提示条),append 进 #ui 覆盖层,行内 style ——
@@ -642,7 +681,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       card.desc.textContent = cardDesc(opt);
       card.level.textContent = cardLevelText(opt);
     }
-    skipBtn.textContent = `跳过(返还 ${skipRefund(world.upgradeCost)})`;
+    skipBtn.textContent = `跳过(手续费 ${UPGRADE_SKIP_FEE} · 返还 ${skipRefund(world.upgradeCost)})`;
   }
 
   function hide(): void {
@@ -655,6 +694,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     state.weldDenied = false;
     state.hoverIndex = -1;
     state.denyIndex = -1;
+    state.moveSourceIndex = -1;
     panel.style.display = 'none';
   }
 
@@ -690,6 +730,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     state.weldDenied = false;
     state.active = true;
     state.denyIndex = -1;
+    state.moveSourceIndex = -1;
     if (state.weldPieceType >= 0) pickGrid(lastX, lastY);
     else state.hoverIndex = pick(lastX, lastY);
     phase = PHASE_PLACE;
@@ -710,6 +751,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     state.weldDenied = false;
     state.hoverIndex = -1;
     state.denyIndex = -1;
+    state.moveSourceIndex = -1;
     phase = PHASE_PICK;
     // 上一条拒绝文案说的是刚才那张卡的事,退回来就不该再挂着
     clearFlash();
@@ -758,10 +800,14 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       state.denyIndex = -1;
       // 等级现读那一格(takeUpgrade 里的 place 已经写完):ui 不自己推"应该升到几级",
       // 省得与 sim 的夹取规则走散
-      flash(
-        placedMessage(code, placeLabel(state.content, state.towerType, state.supportType), cell.level),
-        OK_COLOR,
-      );
+      let text = placedMessage(code, placeLabel(state.content, state.towerType, state.supportType), cell.level);
+      // 叠级的回执带上伤害变化量(畅玩性调整):同名叠级不占新格,恢复战斗后画面上什么都没
+      // 多出来 —— 这行 toast 是"这次升级让我变强了多少"唯一的可比读数,只报名字等于没报
+      if (code === PLACE_UPGRADE && state.content === CELL_WEAPON) {
+        const def = TOWERS[state.towerType];
+        if (def) text += ` · 伤 ${num(towerDps(def, cell.level - 1))}→${num(towerDps(def, cell.level))}/s`;
+      }
+      flash(text, OK_COLOR);
       resolve();
       return;
     }
@@ -780,13 +826,14 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   }
 
   /**
-   * 跳过这一次升级(GDD §7:返还 15)。**照样是一次结算** —— World 那边会扣费、返还、
-   * upgrades++、清空 offer,于是下一帧不会再弹同一张卡。
+   * 跳过这一次升级(手续费制,见 data/economy 的 UPGRADE_SKIP_FEE)。**照样是一次结算** ——
+   * World 那边会扣费、按 cost − 手续费返还、upgrades++、清空 offer,
+   * 于是下一帧不会再弹同一张卡,而下一档的三张是全新候选(= 付费重随)。
    */
   function skip(): void {
     if (phase !== PHASE_PICK) return;
     const refund = skipRefund(world.upgradeCost);
-    if (world.skipUpgrade()) flash(`跳过这次升级 —— 返还 ${refund} 残骸`, OK_COLOR);
+    if (world.skipUpgrade()) flash(`跳过这次升级 —— 手续费 ${UPGRADE_SKIP_FEE},返还 ${refund} 残骸`, OK_COLOR);
     // 无待选(理论上这张卡根本不该在屏幕上)也照样放行:留在这儿就是个点什么都没用的面板
     else flash(denyMessage(UPGRADE_NO_OFFER), DENY_COLOR);
     resolve();
@@ -867,6 +914,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       state.weldDenied = false;
       state.hoverIndex = -1;
       state.denyIndex = -1;
+      state.moveSourceIndex = -1;
       renderCards();
       syncPanel();
       panel.style.display = 'flex';

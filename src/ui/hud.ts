@@ -73,6 +73,13 @@ export const THREAT_INTENSITY_MAX = Math.max(
 /** 开发期 Tweakpane 固定在右侧约 256px;罗盘把这条不可用区域从战场边缘扣掉。 */
 const HUD_RIGHT_GUTTER = 288;
 
+/**
+ * burst 预警窗(秒):距侧压事件触发不足这一档时,在来向边缘亮出第二支(空心)箭头。
+ * 3s 够转半个船身(shipTurnRate 100°/s × 3s = 300°),又不至于常驻刷屏。
+ * 预警箭头随 eta 递减越来越实,出怪瞬间交棒给实况罗盘(那支实心箭头由真实出怪统计驱动)。
+ */
+export const BURST_WARNING_WINDOW = 3;
+
 function finiteOrZero(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
@@ -212,7 +219,18 @@ export function createHud(opts: { world: World }): HudUi {
   tip.style.cssText = THREAT_TIP_CSS;
   threat.append(shaft, tip);
 
-  root.append(top, threat);
+  // burst 预警箭头:与实况罗盘同一套形状,但**空心描边样式**(只留箭头尖 + 一小截空心杆),
+  // 且闪烁 —— "要来了"与"正在来"必须一眼分得开。默认藏着,只在预警窗内亮
+  const warn = document.createElement('div');
+  warn.style.cssText = THREAT_CSS + 'display:none;';
+  warn.title = '即将来袭';
+  const warnShaft = document.createElement('div');
+  warnShaft.style.cssText = THREAT_SHAFT_CSS + 'background:none;border-top:2px dashed ' + THREAT_COLOR + ';height:0!important;';
+  const warnTip = document.createElement('div');
+  warnTip.style.cssText = THREAT_TIP_CSS;
+  warn.append(warnShaft, warnTip);
+
+  root.append(top, threat, warn);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -245,6 +263,28 @@ export function createHud(opts: { world: World }): HudUi {
     tip.style.borderTopWidth = `${visual.sizePx * 0.25}px`;
     tip.style.borderBottomWidth = `${visual.sizePx * 0.25}px`;
     tip.style.borderLeftWidth = `${visual.sizePx * 0.42}px`;
+
+    // burst 预警:eta 进窗才亮。强度冒充值随 eta 递减走高(越近越大越实),
+    // 叠一层随 eta 的快闪(渲染帧现算 sin,不依赖 CSS keyframes);出怪瞬间 burstNext
+    // 游标前移,warning 自动换到下一个事件或消失 —— 交棒给上面那支实况箭头
+    const burst = world.burstWarning();
+    if (burst && burst.etaSeconds <= BURST_WARNING_WINDOW) {
+      const closeness = 1 - burst.etaSeconds / BURST_WARNING_WINDOW;
+      const wv = threatVisual(burst.dirRad, THREAT_INTENSITY_MAX * (0.4 + 0.6 * closeness), window.innerWidth, window.innerHeight);
+      const blink = 0.55 + 0.45 * Math.abs(Math.sin(burst.etaSeconds * Math.PI * 3));
+      warn.style.display = 'block';
+      warn.style.left = `${wv.x}px`;
+      warn.style.top = `${wv.y}px`;
+      warn.style.width = `${wv.sizePx}px`;
+      warn.style.height = `${wv.sizePx}px`;
+      warn.style.opacity = String(wv.opacity * blink);
+      warn.style.transform = `translate(-50%,-50%) rotate(${wv.rotationDeg}deg)`;
+      warnTip.style.borderTopWidth = `${wv.sizePx * 0.25}px`;
+      warnTip.style.borderBottomWidth = `${wv.sizePx * 0.25}px`;
+      warnTip.style.borderLeftWidth = `${wv.sizePx * 0.42}px`;
+    } else {
+      warn.style.display = 'none';
+    }
   }
 
   sync();

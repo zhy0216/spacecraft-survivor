@@ -242,7 +242,7 @@ describe('武器塔数值表', () => {
       expect(Number.isInteger(towerChainCount(def, TOWER_MAX_LEVEL))).toBe(true);
     }
     expect(towerMagazine(TOWERS[TOWER_AUTOCANNON]!, TOWER_MAX_LEVEL)).toBe(40); // 20 + 4×5
-    expect(towerChainCount(TOWERS[TOWER_ARC]!, TOWER_MAX_LEVEL)).toBe(6); // 2 + 4×1
+    expect(towerChainCount(TOWERS[TOWER_ARC]!, TOWER_MAX_LEVEL)).toBe(7); // 3 + 4×1(扶正后 Lv1 即 2 跳)
   });
 
   it('Lv3/Lv5 是机制小跳变而不是渐变(GDD §5.4:机炮双管 / 曳光弹)', () => {

@@ -26,6 +26,7 @@ import { World } from './sim/world';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
 import { createHud } from './ui/hud';
+import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
@@ -41,9 +42,12 @@ async function boot(): Promise<void> {
   //  loop 同理,tick 是这一局的帧号,而 checksum 与面板读数全挂在它上面)。
   // 下面所有闭包(loop 的 step、ticker、结算回调)读的都是这两个变量本身,故换引用一次就够。
   let runIndex = 0;
+  // **本局**的种子。restart 换种子时更新,retry(同 seed 重试)原样再用 ——
+  // 没有它的话被特定波次组合打死后想"再试同一局"只能手改 URL ?seed= 刷新页面
+  let runSeed = seed;
   // 首局的 World 得先建出来:Renderer.create 建层时就要读甲板。建完原样交给 startRun,
   // 于是**首局与重开走的是同一条装配流程** —— 两条路各写一份的话,重开那条永远会比首局少接一样东西
-  let world = new World(seed);
+  let world = new World(runSeed);
   let loop: FixedStepLoop;
   const renderer = await Renderer.create(world);
 
@@ -94,19 +98,39 @@ async function boot(): Promise<void> {
     // **恢复战斗只有这一条路** —— World 与 ui 都不认识"游戏流程",run.paused 只在 main 这一层动
     onResolved: () => {
       upgradeFlow.hide();
+      renderer.setPlacement(upgradeFlow);
       renderer.setDeckZoom(false);
       run.paused = false;
     },
   });
   renderer.setPlacement(upgradeFlow);
 
+  // 每两分钟的航段整备：与普通升级共用甲板拾格/高亮接口，但流程和权限完全独立。
+  // 它只允许焊一块甲板、搬运现有炮塔与支援；新增/升级模块仍只走普通升级。
+  const refitFlow: RefitFlowUi = createRefitFlow({
+    world,
+    canvas: renderer.app.canvas,
+    screenToDeckLocal: (sx, sy, out) => renderer.screenToDeckLocal(sx, sy, out),
+    onResolved: () => {
+      refitFlow.hide();
+      renderer.setPlacement(upgradeFlow);
+      renderer.setDeckZoom(false);
+      run.paused = false;
+    },
+  });
+  // 渲染器只接一个 PlacementUiState；两套流程各自 inactive 时同步悬停是空操作。
+  const syncPlacementHover = (): void => {
+    upgradeFlow.syncHover();
+    refitFlow.syncHover();
+  };
+
   // 结算界面同样**只建一次**(理由同上:每局多挂一份 Enter 监听器 = 一次回车重开好几局),
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
-  const gameOver = createGameOverUi({ onRestart: restart });
+  const gameOver = createGameOverUi({ onRestart: restart, onRetry: retry });
 
   // 调参面板也只建一次:它绑的是 stats/run/tuning 这几个**跨局复用**的对象,
   // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)
-  createDebugPanel(stats, run, { restart });
+  createDebugPanel(stats, run, { restart, retry });
 
   let lastChecksumTick = -SIM_HZ;
 
@@ -143,6 +167,8 @@ async function boot(): Promise<void> {
       // 还站在 while 里,不 halt 的话本次还会把剩余的固定步补完(最多 4 帧 ≈ 66ms)——
       // 结算界面背后那张"静止的战场"就会比玩家看到的最后一帧多走一段(与弹卡那一处同一个坑)
       loop.halt();
+      upgradeFlow.hide();
+      refitFlow.hide();
       gameOver.show({
         result,
         survivedSec: world.elapsed,
@@ -164,8 +190,19 @@ async function boot(): Promise<void> {
     world.onUpgradeOffer = () => {
       run.paused = true;
       loop.halt();
+      renderer.setPlacement(upgradeFlow);
       renderer.setDeckZoom(true);
       upgradeFlow.show();
+    };
+
+    // 航段跨过两分钟边界后，World 已经停住下一段的出怪；这里负责把当前固定步当场截住，
+    // 并切到独立整备界面。普通升级即使同帧够钱也会被 World 延后，不会叠两层时停。
+    world.onRefitOffer = (segmentIndex) => {
+      run.paused = true;
+      loop.halt();
+      renderer.setPlacement(refitFlow);
+      renderer.setDeckZoom(true);
+      refitFlow.show(segmentIndex);
     };
 
     // 吃 World 引用的地方(渲染层的脏标记缓存 / 升级流程 / HUD),各自的理由见它们自己那边。
@@ -173,6 +210,8 @@ async function boot(): Promise<void> {
     // 甲板缩放同理由渲染层的 setWorld 当场吸附回 1(时停中点重开按钮时,不复位就会带着放大开出去)
     renderer.setWorld(world);
     upgradeFlow.setWorld(world);
+    refitFlow.setWorld(world);
+    renderer.setPlacement(upgradeFlow);
     hud.setWorld(world);
     gameOver.hide();
 
@@ -183,7 +222,7 @@ async function boot(): Promise<void> {
     stats.hp = world.ship.hp;
     stats.maxHp = world.ship.maxHp;
     stats.turnRate = world.turnRate;
-    stats.seed = seed + runIndex;
+    stats.seed = runSeed;
     stats.kills = 0;
     stats.scrap = 0;
     stats.upgrades = 0;
@@ -196,7 +235,6 @@ async function boot(): Promise<void> {
     run.paused = false;
     // 上一局若停在升级/结算态,HUD 此刻仍是淡出的;新局装配完成就当场恢复,不等首个 ticker。
     hud.setPaused(false);
-    runIndex++;
 
     // 开发用全局句柄:浏览器控制台里可直接 __game.run.paused = true / __game.world.checksum()
     // / __game.input.desiredHeading() 确认键位真的被读到 / __game.restart() 手动重开。
@@ -208,21 +246,35 @@ async function boot(): Promise<void> {
       stats,
       input,
       upgradeFlow,
+      refitFlow,
       hud,
       gameOver,
       restart,
+      retry,
     };
   }
 
   /**
-   * 「再来一局」的唯一入口(结算界面的按钮/Enter 与调参面板的重开按钮共用)。
+   * 「再来一局」的换种子入口(结算界面的按钮/Enter 与调参面板的重开按钮共用)。
    * 种子 = seed + 局数:`?seed=` 仍然能复现**第一局**(01 号的确定性口径),
    * 而重开不会每局一模一样 —— 同一份怪潮打第二遍就没什么可玩的了。
    * 函数声明(而不是 const)是为了给上面的 createGameOverUi / createDebugPanel 提前引用:
    * 这两个面板都只建一次,而它们建的时候这一局还没开始装配。
    */
   function restart(): void {
-    startRun(new World(seed + runIndex));
+    runIndex++;
+    runSeed = seed + runIndex;
+    startRun(new World(runSeed));
+  }
+
+  /**
+   * 「再试这一局」的同 seed 入口(畅玩性调整):runSeed 不动、runIndex 不消耗,
+   * 新 World 拿到的就是刚打完那一局的种子 —— 确定性口径("同 seed + 同输入 → 同轨迹")
+   * 天然支撑它:35s 侧压从哪边来、哪一段最凶,死过一次就都是可用的知识。
+   * 它同时修复了调参面板那条"验不了同 seed 可复现"的遗留(面板现在两个按钮都有)。
+   */
+  function retry(): void {
+    startRun(new World(runSeed));
   }
 
   // 首局:把已经交给渲染层的那个 World 原样送进同一条装配流程
@@ -239,7 +291,7 @@ async function boot(): Promise<void> {
     // 船动了、光标没动,悬停格也得跟着重算;时停期间船虽不动,甲板放大还在缓动。
     // 同步点由 renderer 卡在「本帧 deckG 变换已更新、高亮尚未绘制」的位置调用,
     // 于是看到的框、screenToDeckLocal 与点击确认一帧都不会走散。直接传稳定方法引用,不按帧造闭包。
-    renderer.sync(loop.alpha, upgradeFlow.syncHover);
+    renderer.sync(loop.alpha, syncPlacementHover);
     // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
     // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。
     hud.setPaused(run.paused);

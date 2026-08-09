@@ -181,11 +181,40 @@ function maxTowerLevel(deck: Deck, towerType: number): number {
 }
 
 /**
+ * 甲板上是否存在至少一座**在线**且属于指定节流系的武器塔。
+ * 支援死卡过滤(见 offerLegal)专用:扫一遍 backing rectangle,抽卡每局只发生十几次,
+ * 不在热循环上。读 online 而不是只看 content —— 被扩建包成内部格的塔打不响,
+ * 挨着它放散热器同样是零收益。
+ */
+function deckHasThrottleTower(deck: Deck, throttle: number): boolean {
+  const cells = deck.cells;
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]!;
+    if (cell.content !== CELL_WEAPON || !cell.online) continue;
+    if (TOWERS[cell.towerType]?.throttle === throttle) return true;
+  }
+  return false;
+}
+
+/**
  * 这一型现在有没有地方放。统一走 optionHasLegalPlacement(不另写判据,理由见文件头)。
  * 塔/设施每问一次扫当前 backing rectangle，拼块则扫船体外一圈锚点；抽卡每局只发生十几次，
  * 不在任何热循环上，买的是"规则只有一份"。
+ *
+ * 支援设施多一道**死卡过滤**(畅玩性调整):作用于某个节流系的设施(throttle >= 0,
+ * 弹药库/散热器/电容组)只有在场上存在同节流系的在线武器塔时才进候选 ——
+ * 开局只有弹药系机炮时,散热器/电容组选了零收益、跳过又要付手续费,是"三选一里有陷阱卡"
+ * 的直接来源。装甲舱(SUPPORT_THR_NONE = -1,不作用于相邻塔)天然豁免,支援类永不被滤空到
+ * 连它都不剩。过滤只改可选表内容、不碰 rng 消耗次数(见 rollUpgradeOffer 的口径),
+ * 同 seed 的出怪序列逐位不变。
  */
 function offerLegal(deck: Deck, kind: number, type: number): boolean {
+  if (kind === OFFER_SUPPORT) {
+    const throttle = SUPPORTS[type]?.throttle;
+    if (throttle !== undefined && throttle >= 0 && !deckHasThrottleTower(deck, throttle)) {
+      return false;
+    }
+  }
   probe.kind = kind;
   probe.type = type;
   probe.level = 0;
@@ -227,11 +256,11 @@ function collectTypes(deck: Deck, kind: number, out: UpgradeOption[], count: num
  * 于是改 data/economy 的 45/25/15 不会移动整条随机序列(见文件头的 rng 消耗口径)。
  * 三个权重都被填成 0(或负数)时回落成塔类:总不能弹一张空气卡,而塔是卡池的主体。
  */
-function pickKind(roll: number): number {
+function pickKind(roll: number, includeDeck: boolean): number {
   // 数据表是手改的,负权重会让轮盘转反 —— 与 World.stressPickKind 同一手夹取
   const wTower = Math.max(0, OFFER_WEIGHT_TOWER);
   const wSupport = Math.max(0, OFFER_WEIGHT_SUPPORT);
-  const wDeck = Math.max(0, OFFER_WEIGHT_DECK);
+  const wDeck = includeDeck ? Math.max(0, OFFER_WEIGHT_DECK) : 0;
   const total = wTower + wSupport + wDeck;
   if (total <= 0) return OFFER_TOWER;
   const t = roll * total;
@@ -255,7 +284,13 @@ function pickKind(roll: number): number {
  *   掷中的类别没得选就按固定次序退到另两类,**复用同一个下标随机数**,一次都不额外掷;
  *   三类都没得选,这一位就空着(照样已经消耗了 2 次)。
  */
-export function rollUpgradeOffer(deck: Deck, rng: Rng, out: UpgradeOption[]): number {
+export function rollUpgradeOffer(
+  deck: Deck,
+  rng: Rng,
+  out: UpgradeOption[],
+  includeDeck: boolean = true,
+): number {
+  const kindCount = includeDeck ? 3 : 2;
   let count = 0;
   for (let slot = 0; slot < UPGRADE_CHOICE_COUNT; slot++) {
     // **两次随机在最前面、无条件**:下面每一条分支(类别回退、可选表为空、这一位空着)
@@ -263,12 +298,13 @@ export function rollUpgradeOffer(deck: Deck, rng: Rng, out: UpgradeOption[]): nu
     const kindRoll = rng.next();
     const indexRoll = rng.next();
 
-    let kind = pickKind(kindRoll);
+    let kind = pickKind(kindRoll, includeDeck);
     let pool = collectTypes(deck, kind, out, count);
     if (pool === 0) {
-      // 类别没得选就按固定顺序轮到另两类，复用同一个 indexRoll、不额外消耗 rng。
-      for (let offset = 1; offset < 3 && pool === 0; offset++) {
-        kind = (kind + 1) % 3;
+      // 类别没得选就按固定顺序轮到其余允许类别，复用同一个 indexRoll、不额外消耗 rng。
+      // 战斗升级 includeDeck=false 时只在塔/支援两类之间回退，绝不会绕进甲板拼块。
+      for (let offset = 1; offset < kindCount && pool === 0; offset++) {
+        kind = (kind + 1) % kindCount;
         pool = collectTypes(deck, kind, out, count);
       }
     }

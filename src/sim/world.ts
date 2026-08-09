@@ -39,8 +39,9 @@ import { Rng } from '../core/rng';
 import { SpatialHash } from '../core/spatialHash';
 import {
   DROP_MAX_ALIVE,
+  skipRefundFor,
   upgradeCost as economyUpgradeCost,
-  UPGRADE_SKIP_REFUND,
+  UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
 import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { SUP_AMMO_BAY } from '../data/supports';
@@ -71,6 +72,8 @@ import {
   isEdgeExposed,
   isPlaceSuccess,
   isWeldSuccess,
+  moveModule,
+  MOVE_OK,
   placeAt,
   weldPiece,
 } from './deck';
@@ -87,17 +90,19 @@ import {
 import {
   createFxEvent,
   FX_LIFE_HULL_HIT,
+  FX_LIFE_KILL,
   FX_LIFE_SPARK,
   type FireSink,
   type FxEvent,
   FXV_BLAST,
   FXV_CHAIN,
   FXV_HULL_HIT,
+  FXV_KILL,
   FXV_LANCE,
   FXV_SPARK,
   resetFxEvent,
 } from './fx';
-import { createShip, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
+import { createShip, DEG2RAD, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
 import { syncSupportBuffs } from './support';
 import { stepTurrets } from './turret';
 import {
@@ -109,7 +114,14 @@ import {
   type UpgradeOption,
   UPGRADE_NO_OFFER,
 } from './upgrade';
-import { createWaveState, type SpawnSink, stepWaves, type WaveState } from './waves';
+import {
+  type BurstPeek,
+  createWaveState,
+  peekNextBurst,
+  type SpawnSink,
+  stepWaves,
+  type WaveState,
+} from './waves';
 
 /** 渲染层与既有调用方都从 world 取 Enemy 类型,实体定义搬去 enemy.ts 后这条保持它们不破 */
 export type { Enemy } from './enemy';
@@ -182,6 +194,8 @@ function fxLife(kind: number): number {
       return FX_LIFE_SPARK;
     case FXV_HULL_HIT:
       return FX_LIFE_HULL_HIT;
+    case FXV_KILL:
+      return FX_LIFE_KILL;
     default:
       return FX_LIFE_BEAM;
   }
@@ -198,6 +212,10 @@ export const RESULT_RUNNING = 0;
 export const RESULT_WIN = 1;
 /** 失败:船体 HP 归零(shipDead)。**优先于胜利**,同一帧两样都成立时算失败(见 settleOutcome) */
 export const RESULT_LOSE = 2;
+
+/** 整备操作不是战斗放置，流程过期与“本轮已经焊过甲板”各用独立结果码。 */
+export const REFIT_NOT_ACTIVE = -20;
+export const REFIT_ALREADY_WELDED = -21;
 
 export class World {
   readonly rng: Rng;
@@ -338,10 +356,29 @@ export class World {
   readonly offer: UpgradeOption[] = [];
 
   /**
+   * 距下一次允许弹卡的剩余秒数(data/economy 的 UPGRADE_OFFER_COOLDOWN)。
+   * completeUpgrade 置位、settleUpgrade 每帧尾减 dt:早期相邻档价差只有 9-21,
+   * 一波混战攒出跨档余额时,没有它的话恢复战斗的下一帧会立刻再次时停弹卡。
+   * 初值 0 = 首次弹卡不受限。它决定 rollUpgradeOffer **何时**消耗 rng,
+   * 是逐帧演化的真状态而不是派生量,故进 checksum(与 edgePenalty 同口径)。
+   */
+  offerCooldown = 0;
+
+  /**
    * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
    * 回调也不会重复响。停 loop / 放大 / 弹卡全在 main.ts,World 不认识流程层。
    */
   onUpgradeOffer: (() => void) | null = null;
+
+  /**
+   * 已跨入下一航段、正在等待玩家整备。World 只持有状态并响一次回调；暂停与 UI 仍在 main.ts。
+   * pending 期间 stepWaves 不再推进，故即使无头调用方继续 step，下一波也不会偷跑。
+   */
+  refitPending = false;
+  /** 本轮整备是否已经焊过一块甲板；每轮最多一块，跳过则保持 false。 */
+  refitWelded = false;
+  /** 参数 = 即将开始的航段下标。 */
+  onRefitOffer: ((segment: number) => void) | null = null;
 
   /**
    * 开火/命中的可视化事件(05 号 issue):渲染层遍历 world.fx.items 逐个画,按 life 淡出。
@@ -489,6 +526,25 @@ export class World {
     return this.threatRate;
   }
 
+  /** peekNextBurst 的答复暂存与对外读数对象:整局复用,渲染帧现读不新增分配(铁律 3) */
+  private readonly burstPeek: BurstPeek = { etaSeconds: 0, offsetDeg: 0 };
+  private readonly burstWarningOut = { etaSeconds: 0, dirRad: 0 };
+
+  /**
+   * 下一个侧压 burst 的预警读数(11 号罗盘的补课,HUD 预警箭头用):
+   * etaSeconds = 还有几秒触发,dirRad = 世界系绝对角(脚本当前主压方向 + 脚本偏移,
+   * 与罗盘回退路径同源)。没有待触发的 burst(段内已放完 / 脚本走完 / 压测旁路)返回 null。
+   * 纯读取、零 rng、不进 checksum —— 它只是把脚本里本来就写着的事提前念给玩家听。
+   * 返回的是整局复用的同一个对象,调用方当场读走,别跨帧存引用。
+   */
+  burstWarning(): { etaSeconds: number; dirRad: number } | null {
+    if (tuning.stressSpawn || this.wave.done) return null;
+    if (!peekNextBurst(this.wave, this.burstPeek)) return null;
+    this.burstWarningOut.etaSeconds = this.burstPeek.etaSeconds;
+    this.burstWarningOut.dirRad = this.wave.dirRad + this.burstPeek.offsetDeg * DEG2RAD;
+    return this.burstWarningOut;
+  }
+
   /**
    * @param cmd 本逻辑帧的输入(纯数据)。只读不缓存引用,调用方可以整局复用同一个对象;
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
@@ -521,6 +577,7 @@ export class World {
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
+    let openedRefit = false;
 
     // 威胁统计先衰减、再接本帧成功出怪的脉冲。顺序定死后，同一帧的 burst 会以完整强度出现，
     // 而不是刚落地就先被扣掉一帧；没有新样本时三项只做乘法，平滑地退回 0。
@@ -560,7 +617,16 @@ export class World {
     // 波次状态冻在初值(方向不转、永不 done、这一局没有胜利条件),换来"场上恒定 N 只"这种定数。
     // 注意:压测路上运行中通过面板改数量会消耗 rng,之后的 checksum 不再与"从头跑"可比
     if (tuning.stressSpawn) this.stressSyncCounts();
-    else stepWaves(this.wave, SIM_DT, this.rng, this.waveSink);
+    else if (!this.refitPending) {
+      const segmentBefore = this.wave.segment;
+      // 正式流程在段边界停住:下一段的编号/预告已经可读，但它的第一只怪要等整备完成后再出生。
+      stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, true);
+      if (this.wave.segment !== segmentBefore && !this.wave.done) {
+        this.refitPending = true;
+        this.refitWelded = false;
+        openedRefit = true;
+      }
+    }
 
     // 重建空间哈希
     const enemies = this.enemies.items;
@@ -707,6 +773,15 @@ export class World {
     // kills 在 reap 里才加完)到这里才全部就位。判完世界也不停 —— 停不停是 main.ts 的事
     this.settleOutcome();
 
+    // 同一帧若沉船/通关，结算优先，不能在结算面板下面再弹一层整备。
+    if (openedRefit) {
+      if (this.result === RESULT_RUNNING) this.onRefitOffer?.(this.wave.segment);
+      else {
+        this.refitPending = false;
+        this.refitWelded = false;
+      }
+    }
+
     // 经济是帧尾最后一步:本帧刚收到的残骸已经进账、胜负也已经定完。
     // 只有仍在跑的局才会生成候选;World 只响回调,暂停与弹卡归 main.ts。
     this.settleUpgrade();
@@ -739,13 +814,30 @@ export class World {
    * 帧尾检查是否该生成一次三选一。候选存在时一律不重掷:玩家停在卡片前多久都看到同一组三张,
    * rng 也不会因为 UI 停留时间不同而继续往前走。
    *
+   * 弹卡冷却也在这里走帧(每帧减 dt、夹 0):上一次结算后的 UPGRADE_OFFER_COOLDOWN 秒内
+   * 即使够钱也不弹 —— 挡的是"跨档余额让恢复战斗的下一帧立刻再时停"那种连环打断,
+   * 攒出的余额一分不丢,只是延后。注意它移动了 rollUpgradeOffer 消耗 rng 的时点,
+   * 是确定性口径的一部分(进 checksum)。
+   *
    * 三类都没有合法项时 rollUpgradeOffer 返回 0:当场按「跳过」结算并且**不响回调** ——
    * 弹一张空面板会把玩家永久卡在时停里;什么都不做则下一帧又满足够钱条件,形成每帧重掷死循环。
    */
   private settleUpgrade(): void {
-    if (this.result !== RESULT_RUNNING || this.offer.length > 0 || this.scrap < this.upgradeCost) return;
-    if (rollUpgradeOffer(this.deck, this.rng, this.offer) === 0) {
-      this.completeUpgrade(UPGRADE_SKIP_REFUND);
+    if (this.offerCooldown > 0) {
+      const left = this.offerCooldown - SIM_DT;
+      this.offerCooldown = left > 0 ? left : 0;
+      if (left > 0) return;
+    }
+    if (
+      this.result !== RESULT_RUNNING ||
+      this.refitPending ||
+      this.offer.length > 0 ||
+      this.scrap < this.upgradeCost
+    )
+      return;
+    // 战斗内升级只在现有甲板上新增/强化炮塔与支援；甲板拼块专属于两分钟整备。
+    if (rollUpgradeOffer(this.deck, this.rng, this.offer, false) === 0) {
+      this.completeUpgrade(skipRefundFor(this.upgradeCost));
       return;
     }
     this.onUpgradeOffer?.();
@@ -754,6 +846,7 @@ export class World {
   /**
    * 结算一轮经济账。refund 是返还额的上限,实际到账夹在本轮 cost 内:
    * 第 0 级费用若低于返还额,跳过最多只是免单,绝不能净赚残骸并立刻再弹一张。
+   * 顺手把弹卡冷却拉满:下一次三选一至少隔 UPGRADE_OFFER_COOLDOWN 秒(理由见 settleUpgrade)。
    */
   private completeUpgrade(refund: number): void {
     const cost = this.upgradeCost;
@@ -761,6 +854,7 @@ export class World {
     this.scrap += Math.min(Math.max(0, refund), cost);
     this.upgrades++;
     this.offer.length = 0;
+    this.offerCooldown = UPGRADE_OFFER_COOLDOWN;
   }
 
   /**
@@ -774,6 +868,10 @@ export class World {
       const e = this.enemies.items[i]!;
       if (!e.dead) continue;
       this.kills++;
+      // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
+      // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
+      // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum
+      this.sink.fx(FXV_KILL, e.x, e.y, e.x, e.y, ENEMIES[e.kind]!.radius, e.kind);
       // 掉落排在公开挂钩**之前**:先把世界自己的账落地(残骸是这一局的成长资源,不是一段表现),
       // 再把这具尸体递给外面 —— 于是挂钩接不接、接的人在回调里做了什么,都影响不到掉落。
       // onEnemyDeath 的既有语义一个字没变:仍是回池前、每只恰好一次(见它的字段注释)
@@ -939,13 +1037,44 @@ export class World {
     return code;
   }
 
+  /** 整备期每轮最多焊一块甲板；普通战斗升级不会生成 OFFER_DECK。 */
+  weldRefitPiece(pieceType: number, rotation: number, col: number, row: number): number {
+    if (!this.refitPending) return REFIT_NOT_ACTIVE;
+    if (this.refitWelded) return REFIT_ALREADY_WELDED;
+    const code = this.weld(pieceType, rotation, col, row);
+    if (isWeldSuccess(code)) this.refitWelded = true;
+    return code;
+  }
+
+  /** 整备期搬运现有炮塔/支援；运行期状态由 deck.moveModule 原样随模块移动。 */
+  moveRefitModule(fromCol: number, fromRow: number, toCol: number, toRow: number): number {
+    if (!this.refitPending) return REFIT_NOT_ACTIVE;
+    const code = moveModule(this.deck, fromCol, fromRow, toCol, toRow);
+    if (code === MOVE_OK) {
+      syncSupportBuffs(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck);
+      if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    }
+    return code;
+  }
+
+  /** 完成本轮整备并放行下一航段；余额保留，但至少 5 秒内不连续弹普通升级。 */
+  completeRefit(): boolean {
+    if (!this.refitPending) return false;
+    this.refitPending = false;
+    this.refitWelded = false;
+    this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
+    return true;
+  }
+
   /**
-   * 跳过当前候选。照样消费这一次升级并 upgrades++,只返还 data/economy 的占位额;
+   * 跳过当前候选。照样消费这一次升级并 upgrades++(防同帧重弹 + 下一档全新候选 = 付费重随),
+   * 直接残骸损失恒为 UPGRADE_SKIP_FEE(refund = cost − 手续费,见 data/economy.skipRefundFor);
    * 没有待选时返回 false 且不动账,避免 UI 的过期按钮凭空消费一次曲线。
    */
   skipUpgrade(): boolean {
     if (this.offer.length === 0) return false;
-    this.completeUpgrade(UPGRADE_SKIP_REFUND);
+    this.completeUpgrade(skipRefundFor(this.upgradeCost));
     return true;
   }
 
@@ -1195,6 +1324,11 @@ export class World {
     // offer 则必须进:它消耗了 rng、决定玩家能放什么,不是甲板或残骸的派生量;
     // 漏了它,"同 seed 弹出不同三张卡"要等玩家选完、甲板分叉后才看得见。
     acc(this.upgrades);
+    // 弹卡冷却是逐帧演化的真状态:它决定 rollUpgradeOffer **何时**消耗 rng,差一帧就是整条
+    // 随机序列错位。× 100 的理由与 edgePenalty 那批秒数字段一字同源(量化到 1/8 抓不住单帧差)
+    acc(this.offerCooldown * 100);
+    acc(this.refitPending ? 1 : 0);
+    acc(this.refitWelded ? 1 : 0);
     for (const opt of this.offer) {
       acc(opt.kind);
       acc(opt.type);

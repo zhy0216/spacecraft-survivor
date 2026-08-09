@@ -98,6 +98,17 @@ export const PLACE_BAD_TOWER = 7;
 export const PLACE_BAD_SUPPORT = 8;
 
 /**
+ * 整备期移动结果码。移动与战斗放置是两条规则:前者搬运一块已经存在的完整模块，
+ * 后者获得一张升级卡后新建/叠级；编号分开，UI 才不会把“目标格被占”说成一次放置失败。
+ */
+export const MOVE_OK = 30;
+export const MOVE_NO_SOURCE = 31;
+export const MOVE_NO_TARGET = 32;
+export const MOVE_TARGET_TAKEN = 33;
+export const MOVE_WEAPON_INTERIOR = 34;
+export const MOVE_SAME_CELL = 35;
+
+/**
  * 放置成功的唯一判据。成功从此有**两种**(新塔 PLACE_OK / 升级 PLACE_UPGRADE),
  * 再让每个调用方各写一遍 `code === PLACE_OK` 就会分裂成两份规则 —— 而其中一份必然漏掉升级,
  * 表现是"塔明明升上去了,ui 却弹了一行红字"。
@@ -340,6 +351,26 @@ function updateOnline(cell: DeckCell): void {
   cell.online = cell.content !== CELL_WEAPON || cell.exposedCount > 0;
 }
 
+/** 把一个仍属于船体的格恢复成“空模块位”；occupied / exposed 等拓扑字段原样保留。 */
+function clearCellModule(cell: DeckCell): void {
+  cell.content = CELL_EMPTY;
+  cell.online = true;
+  cell.turretOffset = 0;
+  cell.towerType = -1;
+  cell.level = 0;
+  cell.cooldown = 0;
+  cell.ammo = 0;
+  cell.reloadLeft = 0;
+  cell.heat = 0;
+  cell.coolLock = 0;
+  cell.charge = 0;
+  cell.supportType = -1;
+  cell.fireRateMul = 1;
+  cell.reloadMul = 1;
+  cell.heatMaxMul = 1;
+  cell.chargeRateMul = 1;
+}
+
 /**
  * 从 occupied 集合全量重算 exposed/exposedCount/online。
  * 全量而不是就地打补丁:改一格会牵动四个邻格,局内几十格量级下这点开销买的是"绝不漏更新";
@@ -354,28 +385,8 @@ export function recomputeDeck(deck: Deck): void {
       // 炮管偏角一起清:拆掉这格再焊回来,新塔必须从归位状态起手,而不是继承上一座塔的指向
       cell.exposed = 0;
       cell.exposedCount = 0;
-      cell.content = CELL_EMPTY;
-      cell.online = true;
-      cell.turretOffset = 0;
-      // 塔的运行期状态与炮管偏角同理,**八个字段一个不落**:漏清哪一个,
-      // 拆了再焊出来的新塔就会继承上一座塔的弹夹/热量/充能,而这类脏值只在 12 号扩建之后才现形
-      cell.towerType = -1;
-      cell.level = 0;
-      cell.cooldown = 0;
-      cell.ammo = 0;
-      cell.reloadLeft = 0;
-      cell.heat = 0;
-      cell.coolLock = 0;
-      cell.charge = 0;
-      // 支援设施与它带来的加成同理,**五个字段一并清干净**:supportType 漏清,拆掉的装甲舱
-      // 就还在给全船加着 15 点 HP(damage.ts 的 hullMaxHp 只认这一个字段);四个倍率漏清,
-      // 就是"拆了再焊,新塔继承上一轮邻居给的射速"。倍率**复位成 1 不是 0**:0 是把塔抹死,
-      // 而这里要表达的是"这一格眼下没有任何加成"
-      cell.supportType = -1;
-      cell.fireRateMul = 1;
-      cell.reloadMul = 1;
-      cell.heatMaxMul = 1;
-      cell.chargeRateMul = 1;
+      // 塔/设施运行期字段的清理与整备搬运共用这一份，避免两条路径漏掉不同字段。
+      clearCellModule(cell);
       continue;
     }
     let mask = 0;
@@ -726,6 +737,71 @@ export function placeAt(
   updateOnline(cell);
   deck.revision++;
   return code;
+}
+
+/**
+ * 整备期能否把现有模块搬到一个空格。只读不写，渲染层用它画合法目标；
+ * “何时允许整备”不在甲板层判断，由 World.moveRefitModule 的 refitPending 闸门负责。
+ */
+export function canMoveModule(
+  deck: Deck,
+  fromCol: number,
+  fromRow: number,
+  toCol: number,
+  toRow: number,
+): number {
+  const source = cellAt(deck, fromCol, fromRow);
+  if (
+    !source ||
+    !source.occupied ||
+    (source.content !== CELL_WEAPON && source.content !== CELL_SUPPORT)
+  )
+    return MOVE_NO_SOURCE;
+  if (fromCol === toCol && fromRow === toRow) return MOVE_SAME_CELL;
+  const target = cellAt(deck, toCol, toRow);
+  if (!target || !target.occupied) return MOVE_NO_TARGET;
+  if (target.content !== CELL_EMPTY) return MOVE_TARGET_TAKEN;
+  if (source.content === CELL_WEAPON && !isEdgeCell(target)) return MOVE_WEAPON_INTERIOR;
+  return MOVE_OK;
+}
+
+/**
+ * 原子搬运一块模块。炮塔的等级/弹夹/热量/充能等运行期状态全部随模块走；
+ * 支援设施保留型号。拓扑不变，只在成功后 bump 一次 revision。
+ */
+export function moveModule(
+  deck: Deck,
+  fromCol: number,
+  fromRow: number,
+  toCol: number,
+  toRow: number,
+): number {
+  const code = canMoveModule(deck, fromCol, fromRow, toCol, toRow);
+  if (code !== MOVE_OK) return code;
+  const source = cellAt(deck, fromCol, fromRow)!;
+  const target = cellAt(deck, toCol, toRow)!;
+
+  target.content = source.content;
+  target.turretOffset = source.turretOffset;
+  target.towerType = source.towerType;
+  target.level = source.level;
+  target.cooldown = source.cooldown;
+  target.ammo = source.ammo;
+  target.reloadLeft = source.reloadLeft;
+  target.heat = source.heat;
+  target.coolLock = source.coolLock;
+  target.charge = source.charge;
+  target.supportType = source.supportType;
+  // 邻接倍率属于“目标格的新邻居关系”的派生缓存，不随模块搬运；下一次 sync 会重算。
+  target.fireRateMul = 1;
+  target.reloadMul = 1;
+  target.heatMaxMul = 1;
+  target.chargeRateMul = 1;
+
+  clearCellModule(source);
+  updateOnline(target);
+  deck.revision++;
+  return MOVE_OK;
 }
 
 /** 格心的船体局部坐标(+X = 船头,+Y = 右舷),整块甲板对称于船心 */

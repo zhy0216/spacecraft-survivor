@@ -4,7 +4,7 @@
  *
  * 它只回答"这一帧该朝哪个方向出几只什么怪",一个字都不认识世界:出生点坐标、在场上限、
  * 对象池与 initEnemy 全在实现 SpawnSink 的那一侧(World)。拆开换来的是整套波次脚本
- * 能脱开 World 单测(喂个假 sink 就能把 550 秒跑完),而 World 那边只剩一句
+ * 能脱开 World 单测(喂个假 sink 就能把 480 秒跑完),而 World 那边只剩一句
  * "把角度换成船外环上的一点"。
  *
  * 口径两条,别处不许另立:
@@ -99,6 +99,33 @@ export function waveIntensityAt(seg: WaveSegment, segTime: number): number {
   return sum;
 }
 
+/** peekNextBurst 的答复(调用方持有、跨帧复用,铁律 3:热路径零分配) */
+export interface BurstPeek {
+  /** 距触发还有几秒(>= 0;已到点未消费的帧上是 0) */
+  etaSeconds: number;
+  /** 相对当时主压方向的偏移(度,照抄脚本;换算成绝对角是调用方的事 —— 它有 dirRad,这里没有) */
+  offsetDeg: number;
+}
+
+/**
+ * 只读地看一眼**当前段**下一个未触发的 burst(HUD 预警箭头用,11 号罗盘的补课):
+ * waveIntensityAt 明文不含 burst,整队瞬时出现 —— 罗盘只能在怪已出生后才反应,
+ * 180° 背袭直扑火力死角时"看得懂再挨打"的可读性原则完全落空。
+ * 复用运行器自己的 burstNext 有序游标(bursts 按 at 升序),**零 rng、零状态改动**:
+ * 确定性与既有序列一个字都不碰。跨段不看 —— 下一段的 burst 要等换段才有确定的主压方向。
+ * @returns 是否有下一个 burst;false 时 out 不动
+ */
+export function peekNextBurst(s: WaveState, out: BurstPeek): boolean {
+  const seg = WAVE_SEGMENTS[s.segment];
+  if (seg === undefined) return false;
+  const b = seg.bursts[s.burstNext];
+  if (b === undefined) return false;
+  const eta = b.at - s.segTime;
+  out.etaSeconds = eta > 0 ? eta : 0;
+  out.offsetDeg = b.offsetDeg;
+  return true;
+}
+
 /**
  * 进入某一段时的复位:出怪账清零、侧压游标归零,并按新段的流数补齐 debt。
  * 补齐是运行期唯一可能的分配,且只发生在**换段那一帧**;热循环里一个字都不 push(铁律 3)。
@@ -164,7 +191,13 @@ export function resetWaveState(s: WaveState): void {
  *
  * @param dt 逻辑帧步长(秒),固定时步下恒为 SIM_DT;做成参数是为了单测能一口气跑完一段
  */
-export function stepWaves(s: WaveState, dt: number, rng: Rng, sink: SpawnSink): void {
+export function stepWaves(
+  s: WaveState,
+  dt: number,
+  rng: Rng,
+  sink: SpawnSink,
+  stopAtSegmentBoundary: boolean = false,
+): void {
   // 1. 脚本走完就彻底闭嘴。World 在胜利之后照常 step(既有那条"船沉后世界照常往下跑"的
   //    用例仍然成立),不在这里 return 的话结算界面背后还会继续涌怪
   if (s.done) return;
@@ -175,6 +208,7 @@ export function stepWaves(s: WaveState, dt: number, rng: Rng, sink: SpawnSink): 
   // 3. 段推进:**带余数进位**,于是整套脚本的总时长严格 = Σduration,
   //    不会因为 dt 除不尽 duration 而每段各吞掉小半帧。
   //    用 while 而不是 if:单测里 splice 进来的短脚本一帧跨两段也得算对。
+  const segmentBefore = s.segment;
   while (s.segment < WAVE_SEGMENTS.length) {
     const cur = WAVE_SEGMENTS[s.segment]!;
     if (cur.duration > 0 && s.segTime < cur.duration) break;
@@ -193,6 +227,9 @@ export function stepWaves(s: WaveState, dt: number, rng: Rng, sink: SpawnSink): 
   // 4. 脚本计划方向与强度。本帧主流出怪以 dirRad 为基准；World 另按真正成功的事件统计 HUD 实况。
   s.dirRad = waveDirAt(seg, s.segTime);
   s.intensity = waveIntensityAt(seg, s.segTime);
+  // 正式游戏在段边界进入整备:段号/余数/下一段预告已经落地，但下一段一只怪都还没出生。
+  // 默认 false 保留纯运行器原有语义，批量仿真与既有单测仍可一帧跨段并立即按新段出力。
+  if (stopAtSegmentBoundary && s.segment !== segmentBefore) return;
 
   // 本帧已出怪数。上限只是"数据写坏时别卡死一帧"的保险丝,正常脚本永远碰不到它
   let spawned = 0;

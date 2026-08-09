@@ -15,9 +15,9 @@
  *
  * 与 data/towers.ts 同风格:字段不加 readonly、数组也不 Object.freeze ——
  * 单测要把 WAVE_SEGMENTS 整段 splice 成一份几秒钟的短脚本、跑完再还原
- *(真跑完整局是 550s ≈ 33000 逻辑帧,单测里等不起)。
+ *(真跑完整局是 480s ≈ 28800 逻辑帧,单测里等不起)。
  *
- * 除"4 段 × 90–180s、总时长 8–10 分钟"这条结构口径来自 todos/08 外,所有数字全部占位待调。
+ * 当前结构固定为 **4 段 × 120s**:每两分钟敌群升级一次，同时给玩家一次甲板整备。
  */
 import { KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from './enemies';
 
@@ -112,10 +112,10 @@ export interface WaveSegment {
  */
 export const WAVE_SEGMENTS: WaveSegment[] = [
   {
-    // 教学段:只有一条蜂群蛭的正压流,方向几乎不动(60° / 100s = 0.6°/s)。
+    // 教学段:只有一条蜂群蛭的正压流,方向几乎不动(60° / 120s = 0.5°/s)。
     // 玩家有空把开局那几座塔摆上甲板,并认清"主压方向"这件事本身
     name: '离港航道',
-    duration: 100,
+    duration: 120,
     dirStartDeg: 0,
     dirEndDeg: 60,
     streams: [
@@ -123,18 +123,21 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_SWARM, rate0: 1.2, rate1: 2.6, spreadDeg: 50 },
     ],
     bursts: [
-      // 侧掠者首秀:右舷一小队。展宽收窄到 12° = 一眼看得出它们是一起从那边来的
-      { at: 35, offsetDeg: 90, spreadDeg: 12, counts: [0, 4, 0, 0] },
+      // 侧掠者首秀:右舷一小队。展宽收窄到 12° = 一眼看得出它们是一起从那边来的。
+      // 48s / 3 只(畅玩性调整,原 35s / 4 只):挪到第一次升级(前三档特价后约 20s 内见卡)
+      // 大概率落地之后 —— 首秀从"裸装配考试"变成"刚拿到新塔正好试刀";总血量 80→60,
+      // 一次处理不当也不再是 30-40% 船体的挫败源(整局无回血,教学段的坑要浅)
+      { at: 48, offsetDeg: 90, spreadDeg: 12, counts: [0, 3, 0, 0] },
       // 换到左舷:两次方向相反,玩家才会明白侧压不是固定一边(否则第一段就学歪了)
-      { at: 70, offsetDeg: -90, spreadDeg: 12, counts: [0, 5, 0, 0] },
+      { at: 80, offsetDeg: -90, spreadDeg: 12, counts: [0, 4, 0, 0] },
     ],
     elites: [],
   },
   {
-    // 主压方向开始真的走起来(140° / 130s ≈ 1.1°/s,全局最快的一段):
+    // 主压方向开始真的走起来(140° / 120s ≈ 1.17°/s,全局最快的一段):
     // 摆好的舷会慢慢偏出去,第一次逼玩家意识到"得一直转"
     name: '碎石带',
-    duration: 130,
+    duration: 120,
     dirStartDeg: 60,
     dirEndDeg: 200,
     streams: [
@@ -153,7 +156,7 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
   },
   {
     name: '巡逻线',
-    duration: 150,
+    duration: 120,
     dirStartDeg: 200,
     dirEndDeg: 320,
     streams: [
@@ -168,15 +171,15 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 冲撞甲虫首秀:只有一只,而且从侧面来 —— 0.9s 前摇看得清,躲一次就学会了
       { at: 95, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 1] },
       // 斜后方 135°:既不是纯侧也不是纯背,逼玩家在"转过去接"和"跑开"之间选
-      { at: 130, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0] },
+      { at: 110, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0] },
     ],
     elites: [],
   },
   {
-    // 收尾段:四型齐全、最长(170s)、密度最高。方向从 320° 转到 480°(= 120°),
+    // 收尾段:四型齐全、密度最高。方向从 320° 转到 480°(= 120°),
     // 累积角写成 480 而不是折回 120,见 WaveSegment.dirEndDeg
     name: '虫潮合围',
-    duration: 170,
+    duration: 120,
     dirStartDeg: 320,
     dirEndDeg: 480,
     streams: [
@@ -190,9 +193,9 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { at: 25, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 2] },
       { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 8, 0] },
       { at: 95, offsetDeg: 90, spreadDeg: 14, counts: [12, 6, 0, 0] },
-      { at: 130, offsetDeg: -135, spreadDeg: 25, counts: [0, 4, 4, 3] },
+      { at: 108, offsetDeg: -135, spreadDeg: 25, counts: [0, 4, 4, 3] },
       // 终局正面压上(offset 0 = 主压方向本身):脚本的最后一口气,活过它就是胜利
-      { at: 160, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4] },
+      { at: 116, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4] },
     ],
     elites: [],
   },

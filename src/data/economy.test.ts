@@ -9,7 +9,7 @@
  *   价钱掉出整数 ⇒ `scrap >= upgradeCost` 会卡在"永远差 0.4 点"上,而 UI 印的还是同一个整数;
  *   曲线不再单调 ⇒ 越升越便宜,分钟级循环的张力当场没了;
  *   总掉落量接不住 12 次的累计花费 ⇒ 这一局无论打得多好都升不到 12 次,而症状只是"卡弹得有点少"。
- * 真正的裁判(一局实测升几次)在 sim/economy.test.ts —— 本文件只负责在**跑那 33000 帧之前**
+ * 真正的裁判(一局实测升几次)在 sim/economy.test.ts —— 本文件只负责在**跑那 28800 帧之前**
  * 就把"量级压根对不上"这一类问题拦下来。
  */
 import { describe, expect, it } from 'vitest';
@@ -17,11 +17,13 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
+  skipRefundFor,
   UPGRADE_CHOICE_COUNT,
   UPGRADE_COST_BASE,
   UPGRADE_COST_GROWTH,
+  UPGRADE_EARLY_COSTS,
   upgradeCost,
-  UPGRADE_SKIP_REFUND,
+  UPGRADE_SKIP_FEE,
 } from './economy';
 import { ENEMIES } from './enemies';
 import { WAVE_SEGMENTS } from './waves';
@@ -55,10 +57,17 @@ function theoreticalScrap(): number {
 }
 
 describe('升级曲线', () => {
-  it('= round(BASE × GROWTH^级数),第 0 级就是 BASE', () => {
-    expect(upgradeCost(0)).toBe(Math.round(UPGRADE_COST_BASE));
-    // 逐级对着闭式算一遍:BASE/GROWTH 改了这条照样成立,改坏的是"取整口径"才会红
-    for (let n = 0; n < 24; n++) {
+  it('前几档走特价表,之后 = round(BASE × GROWTH^级数)', () => {
+    // 特价表(畅玩性调整):首卡要能在教学段前半分钟内见到,故前几档明码低于曲线
+    for (let n = 0; n < UPGRADE_EARLY_COSTS.length; n++) {
+      expect(upgradeCost(n)).toBe(UPGRADE_EARLY_COSTS[n]);
+      // 特价必须真的比曲线便宜:高过曲线的"特价"是在骗人
+      expect(upgradeCost(n)).toBeLessThan(
+        Math.round(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_GROWTH, n)),
+      );
+    }
+    // 特价档之外逐级对着闭式算一遍:BASE/GROWTH 改了这条照样成立,改坏的是"取整口径"才会红
+    for (let n = UPGRADE_EARLY_COSTS.length; n < 24; n++) {
       expect(upgradeCost(n)).toBe(Math.round(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_GROWTH, n)));
     }
   });
@@ -71,14 +80,17 @@ describe('升级曲线', () => {
     }
   });
 
-  it('严格递增,且相邻两级之比 ≈ GROWTH(取整误差之内)', () => {
+  it('严格递增,特价档之外相邻两级之比 ≈ GROWTH(取整误差之内)', () => {
     for (let n = 0; n < 24; n++) {
       const cost = upgradeCost(n);
       const next = upgradeCost(n + 1);
-      // 单调是机制:越升越便宜的话,"攒残骸"这件事在一局的后半段就不再有张力
+      // 单调是机制:越升越便宜的话,"攒残骸"这件事在一局的后半段就不再有张力。
+      // 特价档也在这条里 —— 特价只许便宜,不许把曲线折成非单调
       expect(next).toBeGreaterThan(cost);
-      // 容差 0.05 是留给**低位取整**的(35 → 44 的比值是 1.257,55 → 68 是 1.236),
-      // 高位的比值会一路收敛回 1.25;写死成 toBeCloseTo(1.25) 会在第一级就红
+      // 比值检查从特价档之后起:特价段的爬坡比(15→25→40)本就比 GROWTH 陡,
+      // 那是"前期便宜、快速跟上"的形状,不是取整误差。
+      // 容差 0.05 是留给**低位取整**的,高位的比值会一路收敛回 1.25
+      if (n < UPGRADE_EARLY_COSTS.length) continue;
       expect(Math.abs(next / cost - UPGRADE_COST_GROWTH)).toBeLessThan(0.05);
     }
   });
@@ -102,7 +114,7 @@ describe('升级曲线', () => {
     const need16 = cumulative(16);
     expect(need12).toBeLessThan(need16);
     // 必要条件:整局把每只怪都打死、每颗残骸都捡到,也得够得着第 12 次 ——
-    // 够不着的话这一局无论打得多好都升不到 12 次,而 sim/economy.test.ts 要跑 33000 帧才发现这件事。
+    // 够不着的话这一局无论打得多好都升不到 12 次,而 sim/economy.test.ts 要跑 28800 帧才发现这件事。
     // 反过来不是必要条件(实战收不满,故理论满收允许高过 Σ16),那一半归实测那条用例
     expect(theoreticalScrap()).toBeGreaterThanOrEqual(need12);
   });
@@ -123,13 +135,23 @@ describe('三选一与跳过', () => {
     expect(OFFER_WEIGHT_TOWER).toBeGreaterThan(OFFER_WEIGHT_SUPPORT);
   });
 
-  it('跳过返还是正整数,且小于第 0 级花费 —— 跳过永远净亏,不是一台印残骸的机器', () => {
-    expect(Number.isInteger(UPGRADE_SKIP_REFUND)).toBe(true);
-    expect(UPGRADE_SKIP_REFUND).toBeGreaterThan(0);
-    // 这一条是**绊线**而不是铁律:World.skipUpgrade 里那手 Math.min 兜得住"返还 > 花费",
-    // 但真到了那一步,跳过就成了免单(甚至净赚) —— 调 BASE 的人该在这里先被拦一次,
-    // 而不是等玩家发现"一直点跳过就能白升级"
-    expect(UPGRADE_SKIP_REFUND).toBeLessThan(upgradeCost(0));
+  it('跳过手续费是正整数,返还 = cost − 手续费夹在 [0, cost] —— 跳过永远净亏,不是印残骸的机器', () => {
+    expect(Number.isInteger(UPGRADE_SKIP_FEE)).toBe(true);
+    expect(UPGRADE_SKIP_FEE).toBeGreaterThan(0);
+    for (let n = 0; n < 24; n++) {
+      const cost = upgradeCost(n);
+      const refund = skipRefundFor(cost);
+      expect(Number.isInteger(refund)).toBe(true);
+      // 净亏恒为 min(手续费, cost):后期跳过不再是随曲线暴涨的断崖(旧口径第 12 档净亏 494),
+      // 但也绝不免单 —— 免单的话"三选一"会退化成无限白嫖重随
+      expect(refund).toBeGreaterThanOrEqual(0);
+      expect(refund).toBeLessThan(cost);
+      expect(cost - refund).toBe(Math.min(UPGRADE_SKIP_FEE, cost));
+    }
+    // 坏输入不印钱:0/负数费用最多返 0
+    expect(skipRefundFor(0)).toBe(0);
+    expect(skipRefundFor(-10)).toBe(0);
+    expect(skipRefundFor(Number.NaN)).toBe(0);
   });
 });
 

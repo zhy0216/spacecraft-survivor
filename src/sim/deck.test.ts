@@ -62,6 +62,14 @@ import {
   isInteriorCell,
   isPlaceSuccess,
   isWeldSuccess,
+  canMoveModule,
+  moveModule,
+  MOVE_NO_SOURCE,
+  MOVE_NO_TARGET,
+  MOVE_OK,
+  MOVE_SAME_CELL,
+  MOVE_TARGET_TAKEN,
+  MOVE_WEAPON_INTERIOR,
   neighborCell,
   PLACE_BAD_CONTENT,
   PLACE_BAD_SUPPORT,
@@ -431,13 +439,13 @@ describe('放置合法性与战斗规则(GDD §4.1 / §4.5)', () => {
     expect(canPlace(deck, 1, 1, CELL_WEAPON)).toBe(PLACE_TAKEN);
   });
 
-  it('模块里根本没有拆除/出售/移动的入口 —— 这就是"不可移动、不可出售"的全部实现', () => {
-    // 规则的实现是"没有那个 API",而不是某处的一个 if:能被调用的东西迟早会被调用。
-    // setOccupied 是 12 号焊/拆**甲板**的入口(拆掉的格连内容一起清),不是卖塔的后门,故不在此列。
-    // M1 的船坞真加了拆除入口时这条会红 —— 那正是回来重读 §4.5(战斗中仍然不许拆)的时候。
+  it('移动入口已经存在但与战斗放置分名；出售/拆除仍没有公开 API', () => {
+    // 整备期由 World 的 refitPending 闸门调用 moveModule；战斗升级 UI 仍只认识 placeAt。
+    // 甲板层本身不认识流程，所以只能在命名与返回码上把两条路彻底分开。
     const exported = Object.keys(deckApi);
-    expect(exported).toContain('placeAt'); // 反向确认这条断言不是在对着空模块空过
-    expect(exported.filter((k) => /remove|demolish|sell|move|clearCell/i.test(k))).toEqual([]);
+    expect(exported).toContain('placeAt');
+    expect(exported).toContain('moveModule');
+    expect(exported.filter((k) => /remove|demolish|sell|clearCell/i.test(k))).toEqual([]);
   });
 
   it('越界 / 洞 / 船体外 → PLACE_NO_CELL(拾取给回来的下标可能是任意整数)', () => {
@@ -508,6 +516,61 @@ describe('放置合法性与战斗规则(GDD §4.1 / §4.5)', () => {
     expect(canPlace(deck, 1, 1, CELL_SUPPORT)).toBe(PLACE_TAKEN);
     // 而边缘判定确实是现算的:这一格此刻已经不再收新的武器塔,船头那格却还收
     expect(canPlace(deck, 1, 0, CELL_WEAPON)).toBe(PLACE_OK);
+  });
+});
+
+describe('整备期模块搬运', () => {
+  it('炮塔只能搬到空边缘格，且等级/弹夹/热量等运行期状态完整随塔移动', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    const source = cellAt(deck, 0, 1)!;
+    source.level = 3;
+    source.ammo = 7;
+    source.cooldown = 0.4;
+    source.heat = 2.5;
+    source.charge = 0.6;
+    source.turretOffset = 0.25;
+    const rev = deck.revision;
+
+    expect(canMoveModule(deck, 0, 1, 1, 1)).toBe(MOVE_WEAPON_INTERIOR);
+    expect(moveModule(deck, 0, 1, 1, 1)).toBe(MOVE_WEAPON_INTERIOR);
+    expect(deck.revision).toBe(rev);
+
+    expect(moveModule(deck, 0, 1, 2, 2)).toBe(MOVE_OK);
+    const target = cellAt(deck, 2, 2)!;
+    expect(target.content).toBe(CELL_WEAPON);
+    expect(target.towerType).toBe(TOWER_AUTOCANNON);
+    expect([target.level, target.ammo, target.cooldown, target.heat, target.charge]).toEqual([
+      3,
+      7,
+      0.4,
+      2.5,
+      0.6,
+    ]);
+    expect(target.turretOffset).toBe(0.25);
+    expect(source.content).toBe(CELL_EMPTY);
+    expect(source.towerType).toBe(-1);
+    expect(source.level).toBe(0);
+    expect(deck.revision).toBe(rev + 1);
+  });
+
+  it('支援设施可搬到任意空甲板格；来源/目标/占用错误原子拒绝', () => {
+    const deck = createDeck();
+    expect(placeAt(deck, 1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_RADIATOR)).toBe(PLACE_OK);
+    expect(placeAt(deck, 0, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    const snapshot = JSON.stringify(deck);
+
+    expect(canMoveModule(deck, 9, 9, 0, 1)).toBe(MOVE_NO_SOURCE);
+    expect(canMoveModule(deck, 1, 1, 9, 9)).toBe(MOVE_NO_TARGET);
+    expect(canMoveModule(deck, 1, 1, 0, 0)).toBe(MOVE_TARGET_TAKEN);
+    expect(canMoveModule(deck, 1, 1, 1, 1)).toBe(MOVE_SAME_CELL);
+    expect(JSON.stringify(deck)).toBe(snapshot);
+
+    expect(moveModule(deck, 1, 1, 0, 1)).toBe(MOVE_OK);
+    expect(cellAt(deck, 0, 1)!.content).toBe(CELL_SUPPORT);
+    expect(cellAt(deck, 0, 1)!.supportType).toBe(SUP_RADIATOR);
+    expect(cellAt(deck, 1, 1)!.content).toBe(CELL_EMPTY);
+    expect(cellAt(deck, 1, 1)!.supportType).toBe(-1);
   });
 });
 

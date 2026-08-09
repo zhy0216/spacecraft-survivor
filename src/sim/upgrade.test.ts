@@ -8,11 +8,11 @@ import {
   OFFER_WEIGHT_DECK,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
+  skipRefundFor,
   UPGRADE_CHOICE_COUNT,
-  UPGRADE_SKIP_REFUND,
 } from '../data/economy';
 import { DECK_PIECES } from '../data/deckPieces';
-import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_CAPACITOR, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
   TOWER_AUTOCANNON,
   TOWER_KIND_COUNT,
@@ -152,7 +152,12 @@ describe('rollUpgradeOffer', () => {
 
     expect(rng.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
     expect(out.length).toBeGreaterThan(0);
-    expect(out.every((opt) => opt.kind === OFFER_SUPPORT)).toBe(true);
+    // 塔类确实一张都出不来;支援那一半还叠着死卡过滤 —— 场上没有任何武器塔,
+    // 作用于节流系的三种设施全是死卡,唯一能出的支援是装甲舱,其余候选位退到拼块类
+    expect(out.some((opt) => opt.kind === OFFER_TOWER)).toBe(false);
+    for (const opt of out) {
+      if (opt.kind === OFFER_SUPPORT) expect(opt.type).toBe(SUP_ARMOR_BAY);
+    }
   });
 
   it('满甲板仍可抽扩建;若抽到同型叠级卡,level 取该型最高等级', () => {
@@ -208,6 +213,60 @@ describe('rollUpgradeOffer', () => {
       out,
     );
     expect(out.map((o) => o.kind)).toEqual([OFFER_TOWER, OFFER_SUPPORT, OFFER_DECK]);
+  });
+
+  it('战斗升级关闭甲板类别:掷中原甲板区间也只会回落到炮塔/支援', () => {
+    const deck = createDeck();
+    placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    const out: UpgradeOption[] = [];
+    const rng = new CountingRng([0.99, 0, 0.99, 0.5, 0.99, 0.99]);
+    expect(rollUpgradeOffer(deck, rng as unknown as Rng, out, false)).toBeGreaterThan(0);
+    expect(rng.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(out.every((opt) => opt.kind === OFFER_TOWER || opt.kind === OFFER_SUPPORT)).toBe(true);
+  });
+
+  it('支援死卡过滤:没有同节流系的在线塔,散热器/电容组不进候选;放上对应塔就恢复出卡', () => {
+    // 只有一门自动机炮(弹药系)的甲板:散热器(过热系)/电容组(充能系)对着空气加成,
+    // 选了零收益、跳过还要付手续费 —— 这类死卡一张都不许进三选一
+    const gunOnly = createDeck();
+    placeAt(gunOnly, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    const offeredGunOnly = new Set<number>();
+    for (let seed = 0; seed < 80; seed++) {
+      const out: UpgradeOption[] = [];
+      rollUpgradeOffer(gunOnly, new Rng(seed), out);
+      for (const opt of out) if (opt.kind === OFFER_SUPPORT) offeredGunOnly.add(opt.type);
+    }
+    expect(offeredGunOnly.has(SUP_RADIATOR)).toBe(false);
+    expect(offeredGunOnly.has(SUP_CAPACITOR)).toBe(false);
+    // 弹药库(同系)与装甲舱(不作用于相邻塔,天然豁免)照常出卡
+    expect(offeredGunOnly.has(SUP_AMMO_BAY)).toBe(true);
+    expect(offeredGunOnly.has(SUP_ARMOR_BAY)).toBe(true);
+
+    // 加一座激光(过热系):散热器恢复出卡,电容组(充能系仍无塔)照旧被滤
+    const withLaser = createDeck();
+    placeAt(withLaser, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    placeAt(withLaser, 2, 0, CELL_WEAPON, TOWER_LASER);
+    const offeredWithLaser = new Set<number>();
+    for (let seed = 0; seed < 80; seed++) {
+      const out: UpgradeOption[] = [];
+      rollUpgradeOffer(withLaser, new Rng(seed), out);
+      for (const opt of out) if (opt.kind === OFFER_SUPPORT) offeredWithLaser.add(opt.type);
+    }
+    expect(offeredWithLaser.has(SUP_RADIATOR)).toBe(true);
+    expect(offeredWithLaser.has(SUP_CAPACITOR)).toBe(false);
+  });
+
+  it('支援死卡过滤不动 rng 消耗:同 seed 下过滤前后的出怪序列逐位一致', () => {
+    // 过滤只改可选表内容,每个候选位仍恒定消耗 2 次 rng —— 这是"改平衡不移动随机序列"的地基
+    const bare = createDeck();
+    const loaded = createDeck();
+    placeAt(loaded, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
+    const a = new CountingRng([0.1, 0.2, 0.6, 0.4, 0.95, 0.7]);
+    const b = new CountingRng([0.1, 0.2, 0.6, 0.4, 0.95, 0.7]);
+    rollUpgradeOffer(bare, a as unknown as Rng, []);
+    rollUpgradeOffer(loaded, b as unknown as Rng, []);
+    expect(a.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(b.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
   });
 });
 
@@ -272,12 +331,12 @@ describe('World 三选一经济接线', () => {
     expect(w.offer).toEqual([]);
   });
 
-  it('跳过扣本轮费用、返还封顶额并算一次升级;无待选不动账', () => {
+  it('跳过扣本轮费用、按手续费口径返还并算一次升级;无待选不动账', () => {
     const w = offerWorld(12);
     w.scrap += 7;
     const cost = w.upgradeCost;
     expect(w.skipUpgrade()).toBe(true);
-    expect(w.scrap).toBe(7 + Math.min(UPGRADE_SKIP_REFUND, cost));
+    expect(w.scrap).toBe(7 + skipRefundFor(cost));
     expect(w.upgrades).toBe(1);
     expect(w.offer).toEqual([]);
 
@@ -287,7 +346,7 @@ describe('World 三选一经济接线', () => {
     expect([w.scrap, w.upgrades]).toEqual(snapshot);
   });
 
-  it('既有甲板全满时仍弹拼块卡,不再把可扩建的船误判成“彻底没得放”', () => {
+  it('战斗内甲板全满且没有可叠级塔时自动跳过本档，不偷偷塞入甲板拼块', () => {
     Object.assign(tuning, WORLD_TUNING);
     const w = new World(13);
     for (const c of w.deck.cells) placeAt(w.deck, c.col, c.row, CELL_SUPPORT, 0, SUP_AMMO_BAY);
@@ -297,11 +356,10 @@ describe('World 三选一经济接线', () => {
     w.scrap = cost;
 
     w.step();
-    expect(w.offer.length).toBeGreaterThan(0);
-    expect(w.offer.every((o) => o.kind === OFFER_DECK)).toBe(true);
-    expect(offers).toBe(1);
-    expect(w.upgrades).toBe(0);
-    expect(w.scrap).toBe(cost);
+    expect(w.offer).toEqual([]);
+    expect(offers).toBe(0);
+    expect(w.upgrades).toBe(1);
+    expect(w.scrap).toBe(skipRefundFor(cost));
   });
 
   it('局终之后不再生成升级候选', () => {

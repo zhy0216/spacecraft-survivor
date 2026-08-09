@@ -1,7 +1,7 @@
 /**
  * 波次脚本(08 号 issue T1)的表级不变量。
  * 与 data/towers.test.ts 同口径:钉的不是出怪逻辑(那在 sim/waves.ts 里),而是**脚本本身的口径** ——
- * 单局结构(4 段 × 90–180s、总时长 8–10 分钟)、主压方向缓慢旋转且首尾相接不折回、
+ * 单局结构(4 段 × 120s、每两分钟一次敌群升级/玩家整备)、主压方向缓慢旋转且首尾相接不折回、
  * 侧压事件的时刻有序且落在段内、怪组合对得上敌人表、精英恒空、出怪环大于镜头视野。
  *
  * 后续调波次节奏时随便改数字是被鼓励的(那正是本表存在的理由),但改坏这几条就是改坏了机制本身:
@@ -25,7 +25,7 @@ import {
 
 /**
  * 最后一条用例要把整份脚本 splice 成短脚本(验证表可写),跑完必须还原,
- * 否则污染同文件后续用例 —— 也正是 T2 的运行器单测要用的那套手法(真跑完整局 550s ≈ 33000 帧,等不起)。
+ * 否则污染同文件后续用例 —— 也正是 T2 的运行器单测要用的那套手法(真跑完整局 480s ≈ 28800 帧,等不起)。
  */
 const BASE_SEGMENTS = WAVE_SEGMENTS.slice();
 const BASE_TOTAL = BASE_SEGMENTS.reduce((sum, seg) => sum + seg.duration, 0);
@@ -59,17 +59,15 @@ function viewRadius(): number {
 }
 
 describe('波次脚本', () => {
-  it('单局结构:4 段 × 90–180s,总时长 8–10 分钟(todos/08)', () => {
+  it('单局结构:4 段 × 120s,每两分钟一次敌群升级/玩家整备', () => {
     expect(WAVE_SEGMENTS.length).toBe(4);
     for (const seg of WAVE_SEGMENTS) {
-      expect(seg.duration, seg.name).toBeGreaterThanOrEqual(90);
-      expect(seg.duration, seg.name).toBeLessThanOrEqual(180);
+      expect(seg.duration, seg.name).toBe(120);
       expect(seg.name.length, '段名给结算界面与调参面板显示,不许留空').toBeGreaterThan(0);
     }
-    // 总时长从表里推导:改任一段时长它自动跟上,不会与"8–10 分钟"这条口径悄悄失配
+    // 四段共 8 分钟；整备发生在前三个段边界，最终段结束直接结算。
     expect(WAVE_TOTAL_TIME).toBe(WAVE_SEGMENTS.reduce((s, seg) => s + seg.duration, 0));
-    expect(WAVE_TOTAL_TIME).toBeGreaterThanOrEqual(480);
-    expect(WAVE_TOTAL_TIME).toBeLessThanOrEqual(600);
+    expect(WAVE_TOTAL_TIME).toBe(480);
   });
 
   it('主压方向首尾相接、写累积角不折回,且每段都在缓慢转(GDD §6.3:最优舷持续漂移)', () => {
@@ -250,7 +248,7 @@ describe('波次脚本', () => {
   });
 
   it('脚本是可写的:单测能整段 splice 成短脚本再还原(没有 readonly,也没 Object.freeze)', () => {
-    // T2 的运行器单测全靠这一手:真跑完整局是 550s ≈ 33000 逻辑帧,
+    // T2 的运行器单测全靠这一手:真跑完整局是 480s ≈ 28800 逻辑帧,
     // 冻表会让"跑到胜利"这条验收无从下手(与 data/towers.test.ts 那条"表是可写的"同源)
     const short: WaveSegment = {
       name: '短脚本',

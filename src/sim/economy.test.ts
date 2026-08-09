@@ -1,5 +1,5 @@
 /**
- * 全仓唯一一条跑完 08 真脚本(550s ≈ 33000 帧)的世界级经济用例。
+ * 全仓唯一一条跑完 08 真脚本(480s ≈ 28800 帧)的世界级经济用例。
  * 它回答的只有「自然战斗 + 自然磁吸能结算几次升级」,故关掉撞击伤害避免操作水平/沉船污染结果;
  * 火力、死亡、掉落、磁吸、候选与放置仍全部走真实链路,不手工清怪、不凭空加残骸。
  */
@@ -9,7 +9,7 @@ import { WAVE_TOTAL_TIME } from '../data/waves';
 import { tuning } from './config';
 import { canWeldPiece, isPlaceSuccess, WELD_OK } from './deck';
 import { applyStartingLoadout } from './loadout';
-import { OFFER_DECK, optionLegalCells } from './upgrade';
+import { OFFER_DECK, OFFER_TOWER, optionLegalCells } from './upgrade';
 import { RESULT_WIN, World } from './world';
 
 const before = {
@@ -21,16 +21,24 @@ afterEach(() => Object.assign(tuning, before));
 
 const legal: number[] = [];
 
-/** 固定自动玩家:永远取第 0 张、放进它的第 0 个合法格,不引入第二条合法性规则。 */
+/**
+ * 固定自动玩家:优先第一张**塔卡**(没有塔卡才取第 0 张),放进它的第 0 个合法格。
+ * 仍是零随机的固定策略,不引入第二条合法性规则。偏好塔而不是盲拿第 0 张,
+ * 是因为这条用例要量的是"经济循环喂不喂得起一条像样的火力成长" ——
+ * 支援死卡过滤让支援池收窄成弹药库/装甲舱之后,盲拿第 0 张的机器人会连堆五座装甲舱,
+ * 火力停摆 → 高面额敌人杀不掉 → 量出来的只是机器人自己的病,不是曲线的量级。
+ */
 function settleOffer(w: World): void {
-  const opt = w.offer[0];
-  if (!opt) return;
+  if (w.offer.length === 0) return;
+  const towerAt = w.offer.findIndex((o) => o.kind === OFFER_TOWER);
+  const choice = towerAt >= 0 ? towerAt : 0;
+  const opt = w.offer[choice]!;
   if (opt.kind === OFFER_DECK) {
     for (let rotation = 0; rotation < 4; rotation++) {
       for (let row = w.deck.minRow - 4; row < w.deck.minRow + w.deck.rows + 4; row++) {
         for (let col = w.deck.minCol - 4; col < w.deck.minCol + w.deck.cols + 4; col++) {
           if (canWeldPiece(w.deck, opt.type, rotation, col, row) !== WELD_OK) continue;
-          expect(w.takeUpgrade(0, col, row, rotation)).toBe(WELD_OK);
+          expect(w.takeUpgrade(choice, col, row, rotation)).toBe(WELD_OK);
           return;
         }
       }
@@ -39,7 +47,25 @@ function settleOffer(w: World): void {
   }
   expect(optionLegalCells(w.deck, opt, legal)).toBeGreaterThan(0);
   const cell = w.deck.cells[legal[0]!]!;
-  expect(isPlaceSuccess(w.takeUpgrade(0, cell.col, cell.row))).toBe(true);
+  expect(isPlaceSuccess(w.takeUpgrade(choice, cell.col, cell.row))).toBe(true);
+}
+
+/** 自动玩家在每个两分钟边界扩一块合法甲板，然后确认整备；不搬模块，保持策略固定。 */
+function settleRefit(w: World): void {
+  if (!w.refitPending) return;
+  for (let pieceType = 0; pieceType < 4; pieceType++) {
+    for (let rotation = 0; rotation < 4; rotation++) {
+      for (let row = w.deck.minRow - 4; row < w.deck.minRow + w.deck.rows + 4; row++) {
+        for (let col = w.deck.minCol - 4; col < w.deck.minCol + w.deck.cols + 4; col++) {
+          if (canWeldPiece(w.deck, pieceType, rotation, col, row) !== WELD_OK) continue;
+          expect(w.weldRefitPiece(pieceType, rotation, col, row)).toBe(WELD_OK);
+          expect(w.completeRefit()).toBe(true);
+          return;
+        }
+      }
+    }
+  }
+  expect(w.completeRefit()).toBe(true);
 }
 
 it(
@@ -57,6 +83,8 @@ it(
     for (let frame = 0; frame < maxFrames; frame++) {
       a.step();
       b.step();
+      settleRefit(a);
+      settleRefit(b);
       settleOffer(a);
       settleOffer(b);
       if (a.result === RESULT_WIN && b.result === RESULT_WIN) break;

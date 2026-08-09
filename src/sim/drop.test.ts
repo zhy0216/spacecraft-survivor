@@ -345,10 +345,19 @@ describe('对象池与零分配(铁律 2 / 铁律 3)', () => {
 });
 
 describe('离场剔除(无限地图:被甩在身后的残骸不许白占池位)', () => {
-  it('离船超过 DROP_CULL_RADIUS 的未锁定残骸当帧回池,且一分钱不进账', () => {
+  it('离船超过 DROP_CULL_RADIUS 的未锁定残骸当帧回池,按 ceil(value/2) 折半入账', () => {
     const h = harness();
     dropAt(h, DROP_CULL_RADIUS + 1, 0, { value: 4 });
-    expect(h.step()).toBe(0);
+    // 折半回收(畅玩性调整):风筝远离的打法从"静默漏钱"变成"远程收一半",
+    // 亲自去捡仍收满额 —— 下限保住了,激励没丢
+    expect(h.step()).toBe(2);
+    expect(h.drops.size).toBe(0);
+  });
+
+  it('面额 1 的残骸折半按 ceil 收 1,绝不折成 0(否则最常见的蜂群残骸又回到静默漏钱)', () => {
+    const h = harness();
+    dropAt(h, DROP_CULL_RADIUS + 1, 0, { value: 1 });
+    expect(h.step()).toBe(1);
     expect(h.drops.size).toBe(0);
   });
 

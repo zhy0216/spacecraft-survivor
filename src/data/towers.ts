@@ -233,24 +233,24 @@ export const TOWERS: TowerDef[] = [
     type: TOWER_ARC,
     name: '电弧塔',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
-    range: 220, // 占位待调(短程是它的代价)
-    damage: 5, // 占位待调(首跳伤害,之后逐跳 × chainFalloff)
-    fireInterval: 0.7, // 占位待调
+    range: 260, // 占位待调(短程仍是它的代价,只比机炮的 68%,但不再是抽到即坏卡的 58%)
+    damage: 7, // 占位待调(首跳伤害,之后逐跳 × chainFalloff)
+    fireInterval: 0.55, // 占位待调(Lv1 单体 ≈ 12.7 DPS:仍不如机炮 15,但三目标 ≈ 27,清群定位成立)
     turnRate: 300, // 占位待调
     aimTolDeg: 12, // 占位待调(放电不挑准头,广弧塔的容差也该宽)
     throttle: THR_HEAT,
     magazine: 0,
     reload: 0,
     heatPerShot: 3, // 占位待调
-    heatMax: 12, // 占位待调(满速连射 ≈ 9.3s 到顶)
-    coolPerSec: 3, // 占位待调
+    heatMax: 12, // 占位待调(满速连射净热 3/0.55 − 4 ≈ 1.45/s ⇒ ≈ 8.3s 到顶,与旧手感同档)
+    coolPerSec: 4, // 占位待调(射速加快后同步抬,半速点射仍收支平衡 → 永不停火的分水岭不破)
     overheatLock: 1.6, // 占位待调
     chargeTime: 0,
     fx: FX_CHAIN,
     bulletSpeed: 0,
     bulletRadius: 0,
     pierce: 0,
-    chainCount: 2, // 占位待调(含首目标;Lv5 = 6 跳,"清蜂群"的成长全在这一档)
+    chainCount: 3, // 占位待调(含首目标;Lv1 即 2 跳 —— "清蜂群"的定位从 Lv2 才成立提前到开箱可用)
     chainRange: 130, // 占位待调(每跳的搜索半径,小于射程 = 只在扎堆处才连得起来)
     chainFalloff: 0.7, // 占位待调
     lanceWidth: 0,
@@ -316,8 +316,8 @@ export const TOWERS: TowerDef[] = [
     type: TOWER_PD,
     name: '点防阵列',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
-    range: 170, // 占位待调(近防:射程最短)
-    damage: 2, // 占位待调(单发极轻,靠射速堆)
+    range: 210, // 占位待调(近防:射程仍全场最短 = 机炮的 55%,但漏怪贴脸前多一秒反应窗)
+    damage: 3, // 占位待调(单发轻、靠射速堆;持续 DPS ≈ 18.2 > 机炮 13.2,"最后一道近防闸"才对症)
     fireInterval: 0.12, // 占位待调
     turnRate: 540, // 占位待调(转得最快:近身目标的角速度最大,慢一点就永远追不上)
     aimTolDeg: 10, // 占位待调

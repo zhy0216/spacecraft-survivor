@@ -3,7 +3,7 @@
  * 钉的是「脚本 → 出怪事件」这条翻译本身:每帧五步的先后、带余数进位的段推进、
  * 小数速率的账,以及最要紧的一条 —— rng 消耗顺序(08 验收:同 seed 两局出怪序列一致)。
  *
- * 一律用本文件 splice 进去的短脚本,不拿 data/waves.ts 里那份 550 秒的真脚本当基准:
+ * 一律用本文件 splice 进去的短脚本,不拿 data/waves.ts 里那份 480 秒的真脚本当基准:
  * 真脚本在 M0 会被反复调,拿它写断言的用例活不过第一次平衡改动(与 steering.test.ts 同口径);
  * 真脚本自身的口径由 data/waves.test.ts 钉。splice + afterEach 还原也正是数据表
  * 刻意不 Object.freeze 的理由(与 data/enemies.test.ts 一致)。
@@ -347,7 +347,7 @@ describe('段推进', () => {
 
   it('总时长严格 = Σduration:60Hz 下 dt 除不尽段长,也不会每段各吞掉小半帧', () => {
     // 三段刻意都不是 SIM_DT 的整数倍(Σ = 1.33s)。每段各自把余数吞掉的话,一段最多多吞一帧,
-    // 三段就要 19 + 29 + 33 = 81 帧才走完 —— 真脚本 4 段同理会比表上的 550s 长出小半秒,
+    // 三段就要 19 + 29 + 33 = 81 帧才走完 —— 真脚本 4 段同理会比表上的 480s 长出小半秒,
     // "跑完 = 胜利"这条口径也就跟数据表对不上了
     useScript(
       segment({ name: 'a', duration: 0.31 }),
@@ -636,9 +636,9 @@ describe('确定性(08 验收:同 seed 两局出怪序列一致)', () => {
   });
 
   it('**真脚本**跑得完整局,且同 seed 两局逐只一致(08 验收标准第二条)', () => {
-    // 唯一一条直接跑 data/waves.ts 那份 550s 真脚本的用例:只断言"跑得完 + 可复现",
+    // 唯一一条直接跑 data/waves.ts 那份 480s 真脚本的用例:只断言"跑得完 + 可复现",
     // 一个具体数字都不断言(真脚本在 M0 会反复调,那些数字归 data/waves.test.ts 管)。
-    // 33000 帧看着吓人,但这里没有世界、没有池,纯粹是脚本插值 + 一次随机
+    // 28800 帧看着吓人,但这里没有世界、没有池,纯粹是脚本插值 + 一次随机
     const frames = Math.ceil(WAVE_TOTAL_TIME / SIM_DT) + SIM_HZ;
     const playReal = (seed: number): { kind: number; angle: number }[] => {
       const s = createWaveState();
