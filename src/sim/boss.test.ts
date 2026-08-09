@@ -341,17 +341,12 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(run(20260816)).not.toBe(a); // 换 seed 才换
   });
 
-  it('击杀 Boss → 胜利:记 bossKilledAt 与击杀数,Boss 必掉大额残骸(16 星币落地前就是它)', () => {
+  it('击杀 Boss → 胜利:记 bossKilledAt 与击杀数,Boss 必掉固定星币(击杀当场进账)', () => {
     const w = bossWorld(9);
     expect(w.wave.done).toBe(true);
     expect(w.bossPhase).toBe(1);
     expect(w.result).toBe(RESULT_RUNNING);
     const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS)!;
-    let fall = { x: 0, y: 0 };
-    w.onEnemyDeath = (e) => {
-      fall.x = e.x;
-      fall.y = e.y;
-    };
     let over = -1;
     w.onGameOver = (r) => (over = r);
     const killsBefore = w.kills;
@@ -365,12 +360,9 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(w.result).toBe(RESULT_WIN);
     expect(over).toBe(RESULT_WIN);
 
-    // 大额残骸:固定整数倍率、不掷随机(与 14 号精英的 3× 同一条口径)
-    expect(w.drops.size).toBe(1);
-    const d = w.drops.items[0]!;
-    expect(d.value).toBe(ENEMIES[KIND_BEETLE]!.scrap * BOSS.scrapMul);
-    expect(d.x).toBe(fall.x); // 就掉在 Boss 倒下的地方
-    expect(d.y).toBe(fall.y);
+    // 大额星币:固定面额、零 rng、击杀当场进账(16 号:旧"4× 残骸"整体替换为它)
+    expect(w.starCoins).toBe(BOSS.starCoins);
+    expect(w.drops.size).toBe(0); // 直接入账,不造掉落物(不占 DROP_MAX_ALIVE、不走磁吸)
   });
 
   it('Boss 撞击复用 09 受击模型:撞核心区扣 bossContactDamage(大质量,比底座更疼)', () => {

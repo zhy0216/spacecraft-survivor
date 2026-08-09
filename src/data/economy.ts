@@ -6,8 +6,8 @@
  * 分工(这三处别混着放,否则"改哪个数会动什么"就说不清了):
  *   一型一个数的掉落面额(哪一型死了掉几点残骸)→ data/enemies.ts 的 EnemyDef.scrap;
  *   磁吸的手感旋钮(起吸半径 / 磁吸速度 / 收取半径)→ sim/config.ts 的 tuning,那是面板上拖的东西;
- *   本文件放的是"这一局的经济口径" —— 既不属于某一型、也不该在面板上随手拖的那些数:
- *   升级曲线、三选一的类别权重、跳过返还,外加在场残骸这条保险丝。
+ * 本文件放的是"这一局的经济口径" —— 既不属于某一型、也不该在面板上随手拖的那些数:
+ *   升级曲线、三选一的类别权重、跳过返还、重摇价,外加在场残骸这条保险丝。
  */
 
 /**
@@ -105,6 +105,16 @@ export function skipRefundFor(cost: number): number {
   if (!(refund > 0)) return 0;
   return Math.min(refund, cost);
 }
+
+/**
+ * 重摇一次三选一的**星币**价格(GDD §7「每次升级可花 10 星币重摇一次」,16 号 issue)。
+ * 星币是第二货币:面额在 data/affixes.ts 的 ELITE.starCoins / data/enemies.ts 的
+ * BOSS.starCoins(击杀直接进账 World.starCoins),MVP 内唯一的消费点就是本常量。
+ * 与 UPGRADE_SKIP_FEE 同一条"固定支出"口径:**单次固定、不随曲线浮动** ——
+ * 否则"这一手值不值 10 星币"的取舍会随档位漂移,玩家没法建立直觉。
+ * 两条出口各管各的、不互相抵扣:跳过退残骸(15)、重摇花星币(10)。
+ */
+export const REROLL_PRICE = 10;
 
 /**
  * 两次弹卡之间的最小间隔(秒)。settleUpgrade 原本每帧尾只判 scrap >= cost:

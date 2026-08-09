@@ -17,6 +17,7 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
+  REROLL_PRICE,
   skipRefundFor,
   UPGRADE_CHOICE_COUNT,
   UPGRADE_COST_BASE,
@@ -152,6 +153,14 @@ describe('三选一与跳过', () => {
     expect(skipRefundFor(0)).toBe(0);
     expect(skipRefundFor(-10)).toBe(0);
     expect(skipRefundFor(Number.NaN)).toBe(0);
+  });
+
+  it('重摇价(16 号)是正整数星币:单次固定面额、不随曲线浮动,与跳过各管各的账', () => {
+    expect(Number.isInteger(REROLL_PRICE)).toBe(true);
+    expect(REROLL_PRICE).toBeGreaterThan(0);
+    // 与跳过互不抵扣:跳过退残骸(UPGRADE_SKIP_FEE)、重摇花星币 —— 两条出口不该撞成一个数,
+    // 否则玩家在 UI 上分不清这次点击花的是哪种钱
+    expect(REROLL_PRICE).not.toBe(UPGRADE_SKIP_FEE);
   });
 });
 

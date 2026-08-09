@@ -150,6 +150,7 @@ interface StubEnemy {
 interface StubWorld {
   ship: { hp: number; maxHp: number };
   scrap: number;
+  starCoins: number;
   upgradeCost: number;
   elapsed: number;
   wave: { segment: number; segTime: number };
@@ -163,6 +164,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
   return {
     ship: { hp: 75, maxHp: 100 },
     scrap: 10,
+    starCoins: 10,
     upgradeCost: 40,
     elapsed: 65,
     wave: { segment: 0, segTime: WAVE_SEGMENTS[0]!.duration * 0.5 },
@@ -200,8 +202,8 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
-    // 与屏下缘两根血条(精英 + Boss),没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(6);
+    // 与屏下缘两根血条(精英 + Boss)以及星币读数,没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(7);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -218,6 +220,19 @@ describe('createHud', () => {
     expect(Number.parseFloat(threat.style.left!)).toBeLessThan(730);
     expect(threat.style.transform).toContain('rotate(180deg)');
     expect(threat.style.opacity).not.toBe('');
+  });
+
+  it('星币读数:与残骸同族的独立面板,显示余额且 setWorld 换世界同步更新', () => {
+    const hud = createHud({ world: stubWorld({ starCoins: 27 }) as unknown as World });
+    const root = dom.ui.children[0]!;
+    const coins = root.children[6]!;
+    expect(coins.title).toBe('星币');
+    expect(findText(root, '★ 星币')).toBeDefined();
+    const value = coins.children[0]!.children[1]!;
+    expect(value.textContent).toBe('27');
+
+    hud.setWorld(stubWorld({ starCoins: 4 }) as unknown as World);
+    expect(value.textContent).toBe('4');
   });
 
   it('静音开关:默认有声,点击在开/关之间切换并同步文字与颜色', () => {

@@ -7,7 +7,9 @@
  *   渲染层现成的合法格高亮直接生效)→ 点合法格确认 → world.takeUpgrade → onResolved()
  *   (收卡、复位甲板缩放、恢复战斗全在 main.ts 那一侧)。
  * 取消只回退**一格**:放置阶段 Esc / 右键 / 「重选」退回选卡(不扣费、更不恢复战斗);
- * 选卡阶段唯一的出口是「跳过」(world.skipUpgrade,返还额见 skipRefund)。
+ * 选卡阶段唯一的出口是「跳过」(world.skipUpgrade,返还额见 skipRefund);
+ * 另有「重摇」(16 号)花 REROLL_PRICE 星币换一手牌,不改变阶段 —— 失败(星币不足 / 本档已摇过)
+ * 由返回码裁决,置灰只是让"点下去才知道不行"变成"看就知道不行"(跳过不受影响,两条出口各管各的)。
  * **刻意没有"什么都不选直接关掉"这条路**:费用是"这一次升级"本身,不消费掉的话
  * World 下一帧照样满足 scrap ≥ upgradeCost,当场再弹同一张卡 —— 那才是真正的死循环。
  * 非法格点击一律照 PLACE_* 码闪红 + 说人话,**不结算、不恢复战斗**(验收:非法格不可确认放置)。
@@ -33,7 +35,7 @@
  * 与 data/deckPieces 加 desc 字段:表里改一个数、加一座塔/拼块,卡片自己就跟上
  * (05 号验收口径:改数据文件即可调平衡,不改代码);而多一个手写描述字段,就是多一处会走散的真相。
  */
-import { skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
+import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
 import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
 import {
   SUP_AMMO_BAY,
@@ -96,7 +98,7 @@ import {
   UPGRADE_NO_OFFER,
   type UpgradeOption,
 } from '../sim/upgrade';
-import type { World } from '../sim/world';
+import { REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 import type { PlacementUiState } from '../render/renderer';
 
@@ -537,6 +539,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   cardsEl.style.cssText = CARDS_CSS;
   const btnRow = document.createElement('div');
   btnRow.style.cssText = 'display:flex;gap:10px;';
+  const rerollBtn = document.createElement('button');
+  rerollBtn.style.cssText = BTN_CSS;
+  rerollBtn.textContent = `重摇(${REROLL_PRICE} 星币)`;
   const skipBtn = document.createElement('button');
   skipBtn.style.cssText = BTN_CSS;
   const backBtn = document.createElement('button');
@@ -545,7 +550,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   const rotateBtn = document.createElement('button');
   rotateBtn.style.cssText = BTN_CSS;
   rotateBtn.textContent = '旋转(R)';
-  btnRow.append(skipBtn, backBtn, rotateBtn);
+  btnRow.append(rerollBtn, skipBtn, backBtn, rotateBtn);
   panel.append(headEl, cardsEl, btnRow);
   const toast = document.createElement('div');
   toast.style.cssText = TOAST_CSS;
@@ -637,7 +642,21 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     state.hoverRow = deckGrid.row;
   }
 
-  /** 按当前阶段刷面板:选卡阶段露卡片 + 跳过,放置阶段露一行提示 + 重选 */
+  /**
+   * 重摇按钮的置灰态,每次弹卡 / 重摇之后现读 World 刷新一次(不设每帧监听):
+   * 星币不足(starCoins < REROLL_PRICE)或本档已摇过一次(world.offerRerolled,每级最多 1 次,
+   * todos/16)都不可点。星币是 World 的账目(不参与 sim 判定、不进 checksum),置灰只是 UI
+   * 读数 —— **真正的裁决始终以 rerollOffer 的返回码为准**(见 reroll),这条置灰只是把
+   * "点下去才知道不行"提前到"看就知道不行"。跳过按钮不经过这里:手续费口径不受星币影响。
+   */
+  function syncRerollState(): void {
+    const enabled = world.starCoins >= REROLL_PRICE && !world.offerRerolled;
+    rerollBtn.disabled = !enabled;
+    rerollBtn.style.opacity = enabled ? '1' : '0.5';
+    rerollBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+  }
+
+  /** 按当前阶段刷面板:选卡阶段露卡片 + 重摇 + 跳过,放置阶段露一行提示 + 重选 */
   function syncPanel(): void {
     if (phase === PHASE_PICK) {
       const cost = world.upgradeCost;
@@ -645,9 +664,11 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       // 少了它们,玩家永远不知道自己下一张卡还要攒多久(11 号的 HUD 会接手这条读数)
       headEl.textContent = `三选一升级 · 残骸 ${Math.round(world.scrap)} · 本次花费 ${cost}`;
       cardsEl.style.display = 'flex';
+      rerollBtn.style.display = 'block';
       skipBtn.style.display = 'block';
       backBtn.style.display = 'none';
       rotateBtn.style.display = 'none';
+      syncRerollState();
       return;
     }
     if (state.weldPieceType >= 0) {
@@ -659,6 +680,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       rotateBtn.style.display = 'none';
     }
     cardsEl.style.display = 'none';
+    rerollBtn.style.display = 'none';
     skipBtn.style.display = 'none';
     backBtn.style.display = 'block';
   }
@@ -842,7 +864,39 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     resolve();
   }
 
+  /**
+   * 重摇这一手牌(16 号):花 REROLL_PRICE 星币,让 World 重掷三个候选。
+   * **不结算、不恢复战斗** —— 重摇只是换一手牌,选择仍归玩家,时停要继续停到这一次升级
+   * 真的结算掉为止。合法性过滤一行不在这里重写:重摇走 world.rerollOffer → sim 的
+   * rollUpgradeOffer,optionHasLegalPlacement 内建在那一侧(重摇后的卡同样放不下就出不来)。
+   * 失败按返回码处理(负数 = 理由码):
+   *   星币不足(REROLL_NO_STARCOINS)→ 重刷置灰态(按钮本来就该是灰的,这一支是拦
+   *     "置灰瞬间的最后一击"以及将来星币在选卡阶段可能被别处花掉的竞态);
+   *   本档已摇过(REROLL_ALREADY_DONE)→ 同上,置灰态已挡住,失败只可能来自竞态;
+   *   待选没了(UPGRADE_NO_OFFER)→ 与跳过同一条口径:说清楚并放行,不把玩家卡在时停里。
+   */
+  function reroll(): void {
+    if (phase !== PHASE_PICK || rerollBtn.disabled) return;
+    const code = world.rerollOffer();
+    if (code > 0) {
+      // 成功:World 已扣星币、标记本档已摇、就地重掷三候选 —— 与 show() 走同一条
+      // renderCards 路径重摆三张卡(卡片数量同样以 world.offer 为准,甲板快满时可能不足三张)
+      renderCards();
+      syncPanel();
+      flash(`已重摇 —— 花费 ${REROLL_PRICE} 星币`, OK_COLOR);
+      return;
+    }
+    if (code === REROLL_NO_STARCOINS || code === REROLL_ALREADY_DONE) {
+      // 失败的原因恰好就是置灰的两个条件:重刷一次置灰态,让按钮与账目重新对齐
+      syncRerollState();
+      return;
+    }
+    flash(denyMessage(code), DENY_COLOR);
+    resolve();
+  }
+
   skipBtn.addEventListener('click', skip);
+  rerollBtn.addEventListener('click', reroll);
   backBtn.addEventListener('click', cancel);
   function rotate(): void {
     if (phase !== PHASE_PLACE || state.weldPieceType < 0) return;

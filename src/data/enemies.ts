@@ -71,8 +71,9 @@ export interface BossDef {
    * 型号/数量直给、不掷随机 —— 只有每只召唤怪的出生角掷一次(见 sim/world 的召唤)。
    */
   summonCounts: number[];
-  /** 掉落倍率:Boss 必掉 底座 scrap × 它,固定整数倍率、不掷随机(16 号星币落地前就是它) */
-  scrapMul: number;
+  /** Boss 必掉星币面额(16 号):击杀当场进账 world.starCoins,零 rng、固定面额、掉的就是"这一只"的。
+   *  旧口径"底座 scrap × scrapMul 的 4× 残骸"整体替换为它(16 号星币落地);占位待调 */
+  starCoins: number;
 }
 
 /** Boss = 放大的冲撞甲虫(四型里唯一"直线蓄力冲锋"的,收尾高潮要的就是这一型的身位压力) */
@@ -93,7 +94,7 @@ export const BOSS: BossDef = {
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调
   summonCounts: [6, 2, 0, 0], // 6 蜂群蛭 + 2 侧掠者,型号/数量直给
-  scrapMul: 4, // 底座 4 → 16:大额残骸,16 星币落地前就是它
+  starCoins: 30, // 3 次重摇的价(10 × 3),占位待调
 };
 
 // 行为 = 接近原语 + 是否带冲锋;四型全部由三原语(seek/strafe/charge)组合而成 ——

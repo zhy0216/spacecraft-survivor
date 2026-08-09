@@ -21,7 +21,13 @@ import {
   AFFIXES,
   ELITE,
 } from '../data/affixes';
-import { DROP_MAX_ALIVE } from '../data/economy';
+import {
+  DROP_MAX_ALIVE,
+  REROLL_PRICE,
+  skipRefundFor,
+  UPGRADE_CHOICE_COUNT,
+  UPGRADE_OFFER_COOLDOWN,
+} from '../data/economy';
 import { DECK_PIECE_SQUARE } from '../data/deckPieces';
 import {
   ENEMIES,
@@ -100,9 +106,12 @@ import {
 import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { waveDirAt } from './waves';
+import { optionHasLegalPlacement, UPGRADE_NO_OFFER } from './upgrade';
 import {
   ENEMY_FALLBEHIND_RADIUS,
   ENEMY_REJOIN_RADIUS,
+  REROLL_ALREADY_DONE,
+  REROLL_NO_STARCOINS,
   RESULT_LOSE,
   RESULT_RUNNING,
   RESULT_WIN,
@@ -3086,7 +3095,7 @@ describe('精英与词缀接线(14 号:affixes 落地、四效果、掉落与确
     );
   });
 
-  it('精英死亡必掉 3× 残骸(ELITE.scrapMul 固定倍率),掉的是"这一只"的;普通怪照旧 1×', () => {
+  it('精英死亡必掉固定星币(ELITE.starCoins),击杀当场进账、不造掉落物;普通怪照旧 1× 残骸', () => {
     eliteScript([AFFIX_ARMORED], KIND_BEETLE);
     const w = new World(55);
     w.step();
@@ -3097,24 +3106,36 @@ describe('精英与词缀接线(14 号:affixes 落地、四效果、掉落与确
       at.y = e.y;
     };
 
+    expect(w.starCoins).toBe(0);
     expect(w.damageEnemy(elite, 9999)).toBe(true);
     w.step();
-    expect(w.drops.size).toBe(1);
-    const d = w.drops.items[0]!;
-    expect(d.value).toBe(ENEMIES[KIND_BEETLE]!.scrap * ELITE.scrapMul); // 4 × 3 = 12,固定倍率
-    expect(d.x).toBe(at.x); // 就掉在它倒下的地方(世界自己的账,与挂钩无关)
-    expect(d.y).toBe(at.y);
+    // 必掉高级掉落(16 号):3× 残骸整体替换为固定星币面额,零 rng、掉的就是"这一只"的
+    expect(w.starCoins).toBe(ELITE.starCoins);
+    expect(w.drops.size).toBe(0); // 星币直接入账,不造掉落物(不占 DROP_MAX_ALIVE、不走磁吸)
 
-    // 对照:普通甲虫只掉 1× —— 三倍的那颗只能来自精英,不会被普通掉落顶替
+    // 对照:普通甲虫照旧掉 1× 残骸掉落物 —— 星币只来自精英,普通怪不进星币
     const plain = w.enemies.spawn();
     initEnemy(plain, KIND_BEETLE, 300, 300, w.elapsed, w.rng);
     expect(w.damageEnemy(plain, 9999)).toBe(true);
     w.step();
-    expect(w.drops.size).toBe(2);
-    expect(w.drops.items.some((x) => x.value === ENEMIES[KIND_BEETLE]!.scrap)).toBe(true);
-    expect(
-      w.drops.items.some((x) => x.value === ENEMIES[KIND_BEETLE]!.scrap * ELITE.scrapMul),
-    ).toBe(true);
+    expect(w.drops.size).toBe(1);
+    expect(w.drops.items[0]!.value).toBe(ENEMIES[KIND_BEETLE]!.scrap);
+    expect(w.starCoins).toBe(ELITE.starCoins);
+  });
+
+  it('精英掉星币直接进账:零 rng,击杀/进账不扰动出怪随机序列', () => {
+    eliteScript([AFFIX_ARMORED], KIND_BEETLE);
+    const a = new World(58);
+    const b = new World(58);
+    a.step();
+    b.step();
+    const elite = a.enemies.items[0]!;
+    expect(a.damageEnemy(elite, 9999)).toBe(true);
+    a.step(); // a 击杀精英并当场收账;b 的精英还活着
+    b.step();
+    expect(a.starCoins).toBe(ELITE.starCoins);
+    expect(b.starCoins).toBe(0);
+    expect(a.rng.next()).toBe(b.rng.next()); // 击杀/进账一次 rng 都不掷:两条随机流仍站在同一格上
   });
 
   it('裂变:精英死亡分裂成 3 只(复用池、不带词缀、普通血量、掉在原地),且一次 rng 都不掷', () => {
@@ -3204,6 +3225,114 @@ describe('精英与词缀接线(14 号:affixes 落地、四效果、掉落与确
     e.affixes = 0;
     expect(a.checksum()).not.toBe(b.checksum());
     e.affixes = affixes;
+    expect(a.checksum()).toBe(b.checksum());
+  });
+});
+
+/**
+ * 星币与三选一重摇(16 号)。账目口径(击杀直接进账、不进 checksum)、rerollOffer 的
+ * rng 消耗与次数限制、以及同 seed 可复现性在这里钉;rollUpgradeOffer 那套 2×count 次
+ * 消耗的纯函数钉法见 upgrade.test.ts。
+ */
+describe('星币与重摇(16 号:账目、rerollOffer、确定性)', () => {
+  /** 固定随机序列 + 计数器(与 upgrade.test.ts 同款):类型私有字段使 Rng 名义化,经 unknown 显式转入 */
+  class CountingRng {
+    calls = 0;
+    constructor(private readonly values: number[] = []) {}
+    next(): number {
+      return this.values[this.calls++] ?? 0;
+    }
+  }
+
+  /** 空压测场:step() 全程不掷 rng,只有 settleUpgrade 那 6 次 —— rng 账才能数得清 */
+  const EMPTY = { stressSpawn: true, stressEnemies: 0 };
+
+  it('重摇:扣 10 星币 → 三个候选全部替换(允许重复),且恰消耗 2×UPGRADE_CHOICE_COUNT 次 rng', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(1);
+    // 12 次掷值:前 6 次 = 首轮 offer(塔 2/4/6),后 6 次 = 重摇(支援装甲舱 + 塔 4/5),
+    // 两段显然不同 —— 证明三个候选位真的被重掷,不是只换了一张
+    const counting = new CountingRng([0.05, 0.2, 0.1, 0.4, 0.15, 0.6, 0.9, 0.2, 0.85, 0.4, 0.8, 0.6]);
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    w.scrap = w.upgradeCost;
+    w.step(); // 首轮 offer:消费前 6 次
+    expect(counting.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    const first = w.offer.map((o) => ({ ...o }));
+
+    w.starCoins = REROLL_PRICE;
+    expect(w.rerollOffer()).toBe(UPGRADE_CHOICE_COUNT);
+    expect(counting.calls).toBe(UPGRADE_CHOICE_COUNT * 4); // 每次重摇恰 2×count 次,与首掷同口径
+    expect(w.starCoins).toBe(0); // 扣费 10
+    expect(w.offerRerolled).toBe(true);
+    expect(w.offer).not.toEqual(first);
+    for (const opt of w.offer) expect(optionHasLegalPlacement(w.deck, opt)).toBe(true);
+
+    // 星币不足:拒绝、不扣费、不耗 rng(失败的尝试不许推动随机序列)
+    const calls = counting.calls;
+    w.starCoins = REROLL_PRICE - 1;
+    expect(w.rerollOffer()).toBe(REROLL_NO_STARCOINS);
+    expect(counting.calls).toBe(calls);
+    expect(w.starCoins).toBe(REROLL_PRICE - 1);
+    expect(w.offerRerolled).toBe(true); // 失败的尝试也不翻转次数限制
+  });
+
+  it('跳过(退残骸 15)与重摇(花星币 10)两条出口互不抵扣', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(3);
+    w.scrap = w.upgradeCost;
+    w.starCoins = REROLL_PRICE * 3;
+    w.step();
+    const cost = w.upgradeCost;
+
+    expect(w.rerollOffer()).toBe(UPGRADE_CHOICE_COUNT);
+    expect(w.starCoins).toBe(REROLL_PRICE * 2); // 重摇只花星币
+    expect(w.scrap).toBe(cost); // 残骸分文未动
+
+    expect(w.skipUpgrade()).toBe(true);
+    expect(w.scrap).toBe(skipRefundFor(cost)); // 跳过照旧退残骸(手续费口径不变)
+    expect(w.starCoins).toBe(REROLL_PRICE * 2); // 跳过不动星币
+    expect(w.offer).toEqual([]);
+  });
+
+  it('同 seed 同操作序列:重摇消耗的 rng 次数与结果逐位可复现,且每级第一次重摇必成功', () => {
+    const play = (): string => {
+      Object.assign(tuning, EMPTY);
+      const w = new World(20260816);
+      w.scrap = w.upgradeCost;
+      w.starCoins = REROLL_PRICE * 4;
+      const trace: string[] = [];
+      for (let round = 0; round < 3; round++) {
+        w.step(); // 生成新一档 offer(次数限制随新 offer 重置)
+        trace.push(w.offer.map((o) => `${o.kind}:${o.type}:${o.level}`).join('|'));
+        expect(w.rerollOffer()).toBeGreaterThan(0); // 新一档的第一次重摇必须成功
+        trace.push(w.offer.map((o) => `${o.kind}:${o.type}:${o.level}`).join('|'));
+        expect(w.skipUpgrade()).toBe(true); // 结算掉这一档(与重摇各管各的账)
+        w.scrap = w.upgradeCost; // 下一档的钱
+        for (let f = 0; f < UPGRADE_OFFER_COOLDOWN * SIM_HZ + 1; f++) w.step(); // 冲掉 5s 弹卡冷却
+      }
+      expect(w.starCoins).toBe(REROLL_PRICE); // 3 次重摇 × 10 = 30,剩 10
+      trace.push(w.checksum());
+      return trace.join(';');
+    };
+    expect(play()).toBe(play()); // 整条操作序列(含每次重摇的 6 次 rng)逐位可复现
+  });
+
+  it('offerRerolled 进 checksum(它决定重摇是否再消耗 rng);starCoins 余额不进(只影响 UI 与消费)', () => {
+    Object.assign(tuning, EMPTY);
+    const a = new World(77);
+    const b = new World(77);
+    a.scrap = b.scrap = a.upgradeCost;
+    a.starCoins = b.starCoins = 999;
+    a.step();
+    b.step();
+    expect(a.checksum()).toBe(b.checksum());
+
+    a.offerRerolled = true; // 摇没摇过 = 下一次 rerollOffer 会不会再吃 2×count 次 rng
+    expect(a.checksum()).not.toBe(b.checksum());
+    a.offerRerolled = false;
+    expect(a.checksum()).toBe(b.checksum());
+
+    a.starCoins += 500; // 余额只是序列的读数(重摇消耗的 rng 本身在序列里):不进 checksum
     expect(a.checksum()).toBe(b.checksum());
   });
 });

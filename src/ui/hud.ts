@@ -18,6 +18,7 @@ const IDLE_COLOR = '#5f7a99';
 const LINE_COLOR = '#2b4a6e';
 const HP_COLOR = '#73d9e8';
 const SCRAP_COLOR = '#e6c878';
+const STAR_COLOR = '#ffd86e';
 const THREAT_COLOR = '#ff5f77';
 
 const ROOT_CSS =
@@ -46,6 +47,14 @@ const TIMER_CSS =
   `${PANEL_CSS}justify-self:center;min-width:86px;text-align:center;color:${OK_COLOR};` +
   'font-size:17px;letter-spacing:.12em;';
 const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
+
+/**
+ * 星币读数(16 号):与残骸读数同族(同一套 PANEL/LABEL_ROW/LABEL/VALUE 样式)的独立读数,
+ * 但没有进度轨道 —— 星币只有余额、没有"目标费用"可填。贴在 vitals 面板正下方
+ * (面板顶 48 + 两行面板高:行 17.4×2 + 轨道 10×2 + gap 7 + padding 16 ≈ 78 + 间距 14 = 140);
+ * vitals 将来加行需同步改这里。
+ */
+const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:140px;`;
 
 /**
  * 精英血条(14 号):屏下缘居中的短条。与静音开关同一套罗盘通道边距(bottom:48px),
@@ -294,7 +303,21 @@ export function createHud(opts: { world: World }): HudUi {
   boss.style.cssText = BOSS_CSS;
   const bossBar = createBar(boss, BOSS.name, BOSS_HP_COLOR);
 
-  root.append(top, threat, warn, muteBtn, elite, boss);
+  // 星币读数:残骸读数的同族姊妹 —— ★ 前缀的一行数字,无进度轨道;每帧 sync 直接写余额
+  const starCoins = document.createElement('div');
+  starCoins.style.cssText = STARCOINS_CSS;
+  starCoins.title = '星币';
+  const starRow = document.createElement('div');
+  starRow.style.cssText = LABEL_ROW_CSS;
+  const starLabel = document.createElement('span');
+  starLabel.style.cssText = LABEL_CSS;
+  starLabel.textContent = '★ 星币';
+  const starValue = document.createElement('span');
+  starValue.style.cssText = `${VALUE_CSS}color:${STAR_COLOR};`;
+  starRow.append(starLabel, starValue);
+  starCoins.appendChild(starRow);
+
+  root.append(top, threat, warn, muteBtn, elite, boss, starCoins);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -307,6 +330,9 @@ export function createHud(opts: { world: World }): HudUi {
     const scrapNow = finiteOrZero(world.scrap);
     scrap.value.textContent = `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}`;
     scrap.fill.style.width = `${hudRatio(scrapNow, cost) * 100}%`;
+
+    const coins = finiteOrZero(world.starCoins);
+    starValue.textContent = String(Math.max(0, Math.round(coins)));
 
     timer.textContent = formatDuration(world.elapsed);
 

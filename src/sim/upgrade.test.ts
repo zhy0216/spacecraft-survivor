@@ -8,6 +8,7 @@ import {
   OFFER_WEIGHT_DECK,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
+  REROLL_PRICE,
   skipRefundFor,
   UPGRADE_CHOICE_COUNT,
 } from '../data/economy';
@@ -33,7 +34,7 @@ import {
   placeAt,
   WELD_OK,
 } from './deck';
-import { RESULT_WIN, World } from './world';
+import { RESULT_WIN, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, World } from './world';
 import {
   OFFER_SUPPORT,
   OFFER_TOWER,
@@ -385,6 +386,62 @@ describe('World 三选一经济接线', () => {
     a.offer[0]!.type++;
     expect(a.checksum()).not.toBe(b.checksum());
     a.offer[0]!.type--;
+    expect(a.checksum()).toBe(b.checksum());
+  });
+
+  it('rerollOffer:每次重摇恰消耗 2×UPGRADE_CHOICE_COUNT 次 rng,三候选全替换(允许重复)', () => {
+    const w = offerWorld(30);
+    const first = w.offer.map((o) => ({ ...o }));
+    // 重摇段喂给 CountingRng 的 6 次掷值:与首轮显然不同(类别/型号都换),证明三个候选位被重掷
+    const counting = new CountingRng([0.9, 0.2, 0.85, 0.4, 0.8, 0.6]);
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    w.starCoins = REROLL_PRICE;
+
+    expect(w.rerollOffer()).toBe(UPGRADE_CHOICE_COUNT);
+    expect(counting.calls).toBe(UPGRADE_CHOICE_COUNT * 2); // 恰 2×count 次,与首掷同口径
+    expect(w.starCoins).toBe(0); // 扣费 10
+    expect(w.offerRerolled).toBe(true);
+    expect(w.offer).not.toEqual(first);
+    for (const opt of w.offer) expect(optionHasLegalPlacement(w.deck, opt)).toBe(true);
+
+    // 全替换的强证明:重摇结果 == 用同一串 6 次掷值在同等甲板上重新滚一轮的产物
+    // (甲板时停期间不动,offerWorld 的甲板就是空甲板 → 与 createDeck 完全同构)
+    const expectOut: UpgradeOption[] = [];
+    rollUpgradeOffer(
+      createDeck(),
+      new CountingRng([0.9, 0.2, 0.85, 0.4, 0.8, 0.6]) as unknown as Rng,
+      expectOut,
+      false,
+    );
+    expect(w.offer).toEqual(expectOut);
+
+    // 星币不足:拒绝、不扣费、不耗 rng(失败的尝试不许推动随机序列)
+    const calls = counting.calls;
+    w.starCoins = REROLL_PRICE - 1;
+    expect(w.rerollOffer()).toBe(REROLL_NO_STARCOINS);
+    expect(counting.calls).toBe(calls);
+    expect(w.starCoins).toBe(REROLL_PRICE - 1);
+    expect(w.offerRerolled).toBe(true); // 失败的尝试也不翻转次数限制
+
+    // 本档已摇过一次:同样拒绝且不耗 rng(每级最多 1 次)
+    w.starCoins = REROLL_PRICE;
+    expect(w.rerollOffer()).toBe(REROLL_ALREADY_DONE);
+    expect(counting.calls).toBe(calls);
+
+    // 没有待选:拒绝
+    w.offer.length = 0;
+    expect(w.rerollOffer()).toBe(UPGRADE_NO_OFFER);
+  });
+
+  it('rerollOffer:真 Rng 同 seed 两次重摇逐字段一致,扣费与状态同步', () => {
+    const a = offerWorld(33);
+    const b = offerWorld(33);
+    a.starCoins = b.starCoins = REROLL_PRICE * 3;
+
+    expect(a.rerollOffer()).toBe(b.rerollOffer());
+    expect(a.offer).toEqual(b.offer); // 逐字段一致(候选、顺序、等级全同)
+    expect(a.starCoins).toBe(b.starCoins); // 扣费同步
+    expect(a.offerRerolled).toBe(b.offerRerolled);
     expect(a.checksum()).toBe(b.checksum());
   });
 });

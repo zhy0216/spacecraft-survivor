@@ -19,7 +19,7 @@
 | 13 | [13-audio.md](done/13-audio.md) | 音频系统(WebAudio 合成器) | P0 ✅ | — |
 | 14 | [14-elites.md](done/14-elites.md) | 精英与词缀 | P1 ✅ | 08 |
 | 15 | [15-boss.md](done/15-boss.md) | Boss 收尾(简单版 → 镜像巨舰) | P1 ✅ | 08, 16* |
-| 16 | [16-starcoins-reroll.md](16-starcoins-reroll.md) | 星币与三选一重摇 | P1 | 10, 14* |
+| 16 | [16-starcoins-reroll.md](done/16-starcoins-reroll.md) | 星币与三选一重摇 | P1 ✅ | 10, 14* |
 | 17 | [17-tower-evolutions.md](17-tower-evolutions.md) | 空间进化配方(Lv5 + 相邻设施) | P2 | 05, 06, 10 |
 | 18 | [18-edicts.md](18-edicts.md) | 法令卡(全船被动) | P2 | 10 |
 | 19 | [19-meta-progression.md](19-meta-progression.md) | 元进度解锁与图鉴 | P2 | 16* |

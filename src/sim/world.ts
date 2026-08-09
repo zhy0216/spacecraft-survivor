@@ -30,6 +30,8 @@
  * 残骸掉落(10 号 T1)落在帧尾的 reap 里:每只死者当场掉一颗,面额按型取自数值表。
  * 磁吸与收取的**全部规则**在 sim/drop.ts(它连世界都不认识,喂一个池 + 一块甲板 + 船心坐标就能单测),
  * 本文件照旧只做接线 —— 敌人死了往池里放一颗(spawnDrop)、把 stepDrops 结算出来的那笔账记进 scrap。
+ * 星币(16 号)与残骸不同源但同仓:精英/Boss 击杀在 spawnDrop 里当场入账 world.starCoins
+ * (不造掉落物、不走磁吸),消费点 = 时停中的 rerollOffer(10 星币重掷三候选,每级最多一次)。
  * 三选一经济(T2)同样只在这里接线:sim/upgrade.ts 负责生成合法候选,本文件负责扣残骸、记升级次数、
  * 帧尾在够钱时弹出一次 offer。暂停/卡片/放大甲板仍一概不在 World,那层在 main.ts。
  */
@@ -48,6 +50,7 @@ import {
 } from '../data/affixes';
 import {
   DROP_MAX_ALIVE,
+  REROLL_PRICE,
   skipRefundFor,
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
@@ -243,6 +246,15 @@ export const RESULT_LOSE = 2;
 export const REFIT_NOT_ACTIVE = -20;
 export const REFIT_ALREADY_WELDED = -21;
 
+/**
+ * 重摇失败(16 号):星币不足(重摇价 = data/economy 的 REROLL_PRICE)。
+ * **负数、落在既有成功码之外**是有意的:调用方拿到的与 takeUpgrade 是同一条返回通道,
+ * 一次 `> 0` 判据就能把"新候选数"与"失败理由"分开(重摇成功返回新候选数)。
+ */
+export const REROLL_NO_STARCOINS = -30;
+/** 重摇失败:当前这档 offer 已经摇过一次(每级最多 1 次,todos/16)。 */
+export const REROLL_ALREADY_DONE = -31;
+
 export class World {
   readonly rng: Rng;
   readonly enemies: Pool<Enemy>;
@@ -397,6 +409,19 @@ export class World {
   scrap = 0;
 
   /**
+   * 已入账、未花掉的星币(GDD §7 第二货币,16 号)。**恒整数**:面额是数值表里的整数
+   * (ELITE.starCoins / BOSS.starCoins),精英/Boss 击杀当场整笔进账(spawnDrop 里结),
+   * 重摇时整笔扣费(rerollOffer),全程没有任何系数或按比例结算。
+   *
+   * 与残骸同口径的只是"逐帧演化出来的账目"这一面;**它不进 checksum**(与 maxHp 同一条
+   * "不进"的先例,但理由不同,见下):星币只影响 UI 读数与消费,不参与任何 sim 判定 ——
+   * 重摇消耗的 rng 本身在随机序列里(每次恰 2×UPGRADE_CHOICE_COUNT 次),余额只是那条
+   * 序列的**读数**:同一局扣过费没有,序列照样逐位可复现。一旦出现"星币 ≥ X 触发某行为"
+   * 的规则(如商店购买门槛),它就成了判定输入,必须改成进 checksum(todos/16 口径)。
+   */
+  starCoins = 0;
+
+  /**
    * 已经**结算完**的升级次数,同时也是下一次费用曲线的级数。
    * 它不是甲板等级之和:跳过照样算结算一次、同一张卡也可能新建 Lv1 或叠到 Lv4;
    * 经济曲线只关心这局已经消费过几次机会。逐帧演化、进 checksum。
@@ -418,6 +443,17 @@ export class World {
    * 是逐帧演化的真状态而不是派生量,故进 checksum(与 edgePenalty 同口径)。
    */
   offerCooldown = 0;
+
+  /**
+   * 当前这档 offer 是否已经重摇过一次(每级最多 1 次,16 号)。true = 星币够也不许再摇,
+   * 防"刷到天牌才停";与跳过/takeUpgrade 各管各的,不互相抵扣。
+   * 它是**真状态**:重摇在 step() 之外由玩家操作触发,而它决定 rerollOffer 是否再次消耗
+   * 2×UPGRADE_CHOICE_COUNT 次 rng —— 漏了它,"这档摇没摇过"的分叉就从确定性口径下漏掉,
+   * 故进 checksum(照 offerCooldown 的先例:凡是决定 rng 何时被消耗的字段都是真状态)。
+   * **每次新 offer 生成时重置为 false**(重置点 = settleUpgrade 里 rollUpgradeOffer 成功那一处):
+   * 次数限制按"级"计,新一档三张全新候选就是一次新的机会。
+   */
+  offerRerolled = false;
 
   /**
    * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
@@ -974,6 +1010,9 @@ export class World {
       this.completeUpgrade(skipRefundFor(this.upgradeCost));
       return;
     }
+    // 新一档三张全新候选 = 一次新的重摇机会(16 号):次数限制随档重置。
+    // 排在 rollUpgradeOffer **之后**:失败的那一档(返回 0)没有生成新 offer,不重置。
+    this.offerRerolled = false;
     this.onUpgradeOffer?.();
   }
 
@@ -1044,37 +1083,42 @@ export class World {
   }
 
   /**
-   * 一只死者掉一颗残骸 —— **掉落的唯一落点**(与 spawnFromWave 同一条分工:
+   * 一只死者的死亡结算 —— **击杀落账的唯一落点**(与 spawnFromWave 同一条分工:
    * 规则在别处,这里只补世界这一层才知道的三件事:掉在哪、值多少、在场上限)。
    * 只在 reap 里、对象回池之前调用:坐标必须当场读走。
    *
-   * **一次 rng 都不掷**:每只必掉、面额按型定死(data/enemies 的整数 scrap)——
+   * 16 号起它同时管两本账:
+   *   **精英 / Boss = 星币**(GDD §7):击杀当场 `starCoins += 面额`,**不造掉落物** ——
+   *     14/15 的"3×/4× 残骸"就是星币的占位(两处注释的"16 号星币落地前就是它"正是这个意思),
+   *     落地后整体替换,星币没有"掉在地上捡不到"的问题,也不占 DROP_MAX_ALIVE、不走磁吸;
+   *   **普通怪 = 基础残骸掉落物**(data/enemies 的整数 scrap)。
+   * 两条路都**一次 rng 都不掷**:每只必掉、面额按型定死 ——
    * 于是战斗打得好不好(死了几只、什么时候死)反过来扰动不到出怪的随机序列,
    * 08 号那条"同 seed 同出怪序列"照旧成立。
-   * 速度不填:池里取出来的那颗刚走过 resetDrop,vx/vy = 0 就是"停在尸体上等人来捡"。
    *
+   * 残骸掉落物:速度不填,池里取出来的那颗刚走过 resetDrop,vx/vy = 0 就是"停在尸体上等人来捡";
    * 面额 ≤ 0 的型**不掉**(数值表允许 0,见 enemies.test.ts 的表级不变量):
-   * 一颗看得见却给不了任何东西的残骸只会骗玩家专程绕一趟,还白占着下面那道保险丝的名额。
+   * 一颗看得见却给不了任何东西的残骸只会骗玩家专程绕一趟,还白占着下面那道保险丝的名额;
    * 触到在场上限就**丢弃这一颗、不留账**(与 spawnFromWave 那句一字同源):
    * DROP_MAX_ALIVE 是保险丝不是旋钮,理由全文见 data/economy.ts。
+   * (星币那条路没有保险丝:它直接进账,根本不经过掉落物池。)
    */
   private spawnDrop(e: Enemy): void {
-    // Boss(15 号)= 大额残骸:底座 scrap × BOSS.scrapMul,固定整数倍率、不掷随机
-    // (照 14 号精英 ELITE.scrapMul 的口径;16 号星币落地前就是它)。
-    // 底座值取 data/enemies.ts 的 BOSS.baseKind —— 改底座/改倍率只动那张表
-    const value =
-      e.kind === KIND_BOSS
-        ? ENEMIES[BOSS.baseKind]!.scrap * BOSS.scrapMul
-        : ENEMIES[e.kind]!.scrap;
+    if (e.kind === KIND_BOSS) {
+      this.starCoins += BOSS.starCoins;
+      return;
+    }
+    if (e.affixes !== 0) {
+      // 精英(14 号 → 16 号)= 固定星币面额:零 rng、掉的就是"这一只"的,不会被普通掉落顶替
+      this.starCoins += ELITE.starCoins;
+      return;
+    }
+    const value = ENEMIES[e.kind]!.scrap;
     if (value <= 0 || this.drops.size >= DROP_MAX_ALIVE) return;
-    // 精英(14 号)= 固定倍率的高级掉落(ELITE.scrapMul = 3× 残骸):不掷随机、按型定死,
-    // 掉的就是"这一只"的 —— 同一颗残骸,面额 × 倍率,不会被普通怪掉落顶替;
-    // 16 号星币落地前先按它给(todos/14 口径)。Boss 的 affixes 恒为 0,这里恒 1
-    const mul = e.affixes !== 0 ? ELITE.scrapMul : 1;
     const d = this.drops.spawn();
     d.x = d.px = e.x;
     d.y = d.py = e.y;
-    d.value = value * mul;
+    d.value = value;
   }
 
   /**
@@ -1267,6 +1311,32 @@ export class World {
     if (this.offer.length === 0) return false;
     this.completeUpgrade(skipRefundFor(this.upgradeCost));
     return true;
+  }
+
+  /**
+   * 重摇当前三选一(16 号):玩家在时停中的一次主动操作,与 skipUpgrade / takeUpgrade 同一条
+   * **"step() 之外的外部输入"路径** —— 消费 rng、改 offer 都是玩家行为的一部分,天然确定性:
+   * 序列推进由玩家操作决定,同 seed 同操作序列逐位可复现。
+   *
+   * 校验顺序定死:**有待选 → 星币够 → 本档还没摇过** 才动手;任何一条不满足就原样返回,
+   * 一个字段都不动 —— 尤其**不消耗 rng**(失败的尝试不许推动随机序列)。
+   * 通过校验后:扣 REROLL_PRICE 星币 → 再次调 rollUpgradeOffer(deck, rng, offer, false)
+   * 重掷三个候选位 —— 自动继承它那套定死的 2×UPGRADE_CHOICE_COUNT 次 rng 消耗与
+   * optionHasLegalPlacement 过滤(重摇后的卡同样放不下就出不来),rng 口径与首掷完全相同,
+   * 改平衡不会漂。三候选可能与原候选重复(与 GDD 语义一致,不额外去重,rollUpgradeOffer
+   * 的去重只在**本次**新掷的三张之间)。
+   *
+   * @returns 成功 = 新候选数(与 offer.length 相等,照 takeUpgrade 的成功码口径);
+   *   失败 = 负数理由码:UPGRADE_NO_OFFER(没有待选)、REROLL_NO_STARCOINS(星币不足)、
+   *   REROLL_ALREADY_DONE(本档已摇过一次)。
+   */
+  rerollOffer(): number {
+    if (this.offer.length === 0) return UPGRADE_NO_OFFER;
+    if (this.starCoins < REROLL_PRICE) return REROLL_NO_STARCOINS;
+    if (this.offerRerolled) return REROLL_ALREADY_DONE;
+    this.starCoins -= REROLL_PRICE;
+    this.offerRerolled = true;
+    return rollUpgradeOffer(this.deck, this.rng, this.offer, false);
   }
 
   /**
@@ -1618,6 +1688,12 @@ export class World {
       acc(opt.type);
       acc(opt.level);
     }
+    // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
+    // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。
+    // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何判定;重摇消耗的 rng
+    // 本身在序列里,余额只是那条序列的读数 —— 扣过费没有,序列照样逐位可复现
+    // (与 maxHp 同一条"不进"的口径,理由全文见 starCoins 字段注释)。
+    acc(this.offerRerolled ? 1 : 0);
     // FxEvent 一律**不进** checksum:它纯是表现(少画一条闪电不改变世界的下一帧),
     // 混进来只会让"渲染改一下淡出时长"看起来像一次确定性回归。broadside 同理是本帧的表现读数。
     return (h >>> 0).toString(16).padStart(8, '0');

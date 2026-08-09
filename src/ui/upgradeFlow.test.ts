@@ -23,9 +23,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
-import { UPGRADE_SKIP_FEE } from '../data/economy';
-import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
-import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWERS, towerRange } from '../data/towers';
+import { REROLL_PRICE, UPGRADE_CHOICE_COUNT, UPGRADE_SKIP_FEE } from '../data/economy';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
+import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
 import {
   CELL_SUPPORT,
   CELL_WEAPON,
@@ -345,10 +345,11 @@ interface StubEvent {
   preventDefault(): void;
 }
 
-/** 桩元素:createUpgradeFlow 只碰它的 style 三项 / textContent / append / appendChild / addEventListener */
+/** 桩元素:createUpgradeFlow 只碰它的 style 几项 / textContent / disabled / append / addEventListener */
 interface StubEl {
-  style: { cssText: string; color: string; display: string };
+  style: { cssText: string; color: string; display: string; opacity: string; cursor: string };
   textContent: string;
+  disabled: boolean;
   children: StubEl[];
   handlers: Map<string, Array<(e: StubEvent) => void>>;
   append(...kids: StubEl[]): void;
@@ -358,8 +359,9 @@ interface StubEl {
 
 function createStubEl(): StubEl {
   const el: StubEl = {
-    style: { cssText: '', color: '', display: '' },
+    style: { cssText: '', color: '', display: '', opacity: '', cursor: '' },
     textContent: '',
+    disabled: false,
     children: [],
     handlers: new Map<string, Array<(e: StubEvent) => void>>(),
     append(...kids: StubEl[]): void {
@@ -467,23 +469,31 @@ function installDom(): StubDom {
 
 /**
  * 桩 World:只提供 createUpgradeFlow 真的会读的那几样(见文件头的取舍)。
- * takeUpgrade / skipUpgrade 的答复由用例现填 —— 本文件钉的是"点了之后调没调、调的是哪一格",
+ * takeUpgrade / skipUpgrade / rerollOffer 的答复由用例现填 —— 本文件钉的是"点了之后调没调、调的是哪一格",
  * 而**它们各自答什么**是 sim 那边的规则。
  */
 interface StubWorld {
   deck: Deck;
   offer: UpgradeOption[];
   scrap: number;
+  /** 星币账目(16 号):重摇按钮的置灰态读它;扣费/记账在真 World 里,桩只在成功时照扣 */
+  starCoins: number;
+  /** 本档是否已摇过一次(每级最多 1 次):true = 星币够也不许再摇 */
+  offerRerolled: boolean;
   upgradeCost: number;
   /** 每次 takeUpgrade 的入参:[choice, col, row] */
   takeCalls: number[][];
   skipCalls: number;
+  rerollCalls: number;
   /** takeUpgrade 的返回码,由用例现填 */
   takeCode: number;
+  /** rerollOffer 的返回码,由用例现填;>0 = 成功(新候选数),负数为理由码 */
+  rerollCode: number;
   turnRate: number;
   skipOk: boolean;
   takeUpgrade(choice: number, col: number, row: number, rotation?: number): number;
   skipUpgrade(): boolean;
+  rerollOffer(): number;
 }
 
 function createStubWorld(offer: UpgradeOption[]): StubWorld {
@@ -491,10 +501,14 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     deck: createDeck(),
     offer,
     scrap: 60,
+    starCoins: 30,
+    offerRerolled: false,
     upgradeCost: 35,
     takeCalls: [],
     skipCalls: 0,
+    rerollCalls: 0,
     takeCode: PLACE_OK,
+    rerollCode: UPGRADE_CHOICE_COUNT,
     turnRate: 100,
     skipOk: true,
     takeUpgrade(choice: number, col: number, row: number, rotation?: number): number {
@@ -504,6 +518,16 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     skipUpgrade(): boolean {
       w.skipCalls++;
       return w.skipOk;
+    },
+    // 成功时照真 World 的语义记账(扣费、标记本档已摇);offer 的替换由用例先摆好 ——
+    // 本文件要钉的是"点重摇 → 调 rerollOffer → 卡片按世界当前 offer 重摆",不是扣费规则本身
+    rerollOffer(): number {
+      w.rerollCalls++;
+      if (w.rerollCode > 0) {
+        w.starCoins -= REROLL_PRICE;
+        w.offerRerolled = true;
+      }
+      return w.rerollCode;
     },
   };
   return w;
@@ -522,12 +546,13 @@ function cellPoint(deck: Deck, col: number, row: number): Vec2 {
 }
 
 // —— 面板的 DOM 结构(见 createUpgradeFlow 里 append 的顺序):
-//    #ui = [面板, 提示条];面板 = [标题行, 卡片行, 按钮行];按钮行 = [跳过, 重选] ——
+//    #ui = [面板, 提示条];面板 = [标题行, 卡片行, 按钮行];按钮行 = [重摇, 跳过, 重选, 旋转] ——
 const panelOf = (dom: StubDom): StubEl => dom.ui.children[0]!;
 const cardsOf = (dom: StubDom): StubEl => panelOf(dom).children[1]!;
-const skipBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[0]!;
-const backBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[1]!;
-const rotateBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[2]!;
+const rerollBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[0]!;
+const skipBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[1]!;
+const backBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[2]!;
+const rotateBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[3]!;
 const toastOf = (dom: StubDom): StubEl => dom.ui.children[1]!;
 
 describe('createUpgradeFlow 两阶段状态机', () => {
@@ -712,6 +737,72 @@ describe('createUpgradeFlow 两阶段状态机', () => {
     expect(world.takeCalls.length).toBe(0);
     expect(resolved).toBe(1);
     expect(panelOf(dom).style.display).toBe('none');
+  });
+
+  it('重摇按钮存在:选卡阶段可见可点、印着星币价,放置阶段退场', () => {
+    setup();
+    expect(rerollBtnOf(dom).style.display).toBe('block');
+    expect(rerollBtnOf(dom).textContent).toContain(String(REROLL_PRICE));
+    expect(rerollBtnOf(dom).textContent).toContain('重摇');
+    // 起手星币 30 ≥ 10、本档没摇过 ⇒ 初始可点
+    expect(rerollBtnOf(dom).disabled).toBe(false);
+    expect(rerollBtnOf(dom).style.opacity).toBe('1');
+    // 放置阶段没有"换一手牌"这个动作:重摇与跳过一起退场
+    fire(cardsOf(dom).children[0]!, 'click');
+    expect(rerollBtnOf(dom).style.display).toBe('none');
+    expect(skipBtnOf(dom).style.display).toBe('none');
+  });
+
+  it('重摇:调 world.rerollOffer,成功后按新 offer 重摆三张卡,仍停在选卡阶段', () => {
+    setup();
+    // 用例先摆好"重摇后"的候选(真 World 由 rerollOffer 就地重掷,桩不负责替换 offer)
+    const next = [towerOpt(TOWER_RAILGUN, 0), supportOpt(SUP_RADIATOR), deckOpt(DECK_PIECE_SQUARE)];
+    world.rerollCode = UPGRADE_CHOICE_COUNT;
+    world.offer = next;
+    fire(rerollBtnOf(dom), 'click');
+    expect(world.rerollCalls).toBe(1);
+    // 重摇不是结算:面板还开着、战斗不恢复,选择仍归玩家
+    expect(resolved).toBe(0);
+    expect(panelOf(dom).style.display).toBe('flex');
+    // 三张卡按新候选重摆(与 show() 同一条 renderCards 路径,数量以 world.offer 为准)
+    const titles = cardsOf(dom).children.slice(0, next.length).map((c) => c.children[1]!.textContent);
+    expect(titles).toEqual(next.map(cardTitle));
+    // 扣费与"本档已摇"由 World 记账;UI 读出后按钮立刻置灰 —— 同一档不能再摇
+    expect(world.starCoins).toBe(30 - REROLL_PRICE);
+    expect(rerollBtnOf(dom).disabled).toBe(true);
+    expect(toastOf(dom).textContent).toContain('重摇');
+    // 置灰后的第二次点击不再惊动 World(真 DOM 里 disabled 不派发 click,这是防桩的拦网)
+    fire(rerollBtnOf(dom), 'click');
+    expect(world.rerollCalls).toBe(1);
+  });
+
+  it('星币不足:按钮置灰,点了也不会惊动 World;跳过按钮照旧可用', () => {
+    world.starCoins = REROLL_PRICE - 1;
+    setup();
+    expect(rerollBtnOf(dom).disabled).toBe(true);
+    expect(rerollBtnOf(dom).style.opacity).toBe('0.5');
+    fire(rerollBtnOf(dom), 'click');
+    expect(world.rerollCalls).toBe(0);
+    expect(resolved).toBe(0);
+    // 两条出口各管各的:星币不足只影响重摇,跳过的手续费口径不受影响
+    expect(skipBtnOf(dom).disabled).toBe(false);
+    fire(skipBtnOf(dom), 'click');
+    expect(world.skipCalls).toBe(1);
+    expect(resolved).toBe(1);
+  });
+
+  it('本档已摇过:按钮禁用,星币够也不许再摇(每级最多 1 次)', () => {
+    world.offerRerolled = true;
+    world.starCoins = REROLL_PRICE * 10;
+    setup();
+    expect(rerollBtnOf(dom).disabled).toBe(true);
+    fire(rerollBtnOf(dom), 'click');
+    expect(world.rerollCalls).toBe(0);
+    expect(resolved).toBe(0);
+    // 跳过照常是这条升级的出口
+    fire(skipBtnOf(dom), 'click');
+    expect(world.skipCalls).toBe(1);
+    expect(resolved).toBe(1);
   });
 
   it('弹一张空卡不会把玩家永久卡在时停里', () => {
