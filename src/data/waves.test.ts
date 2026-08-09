@@ -17,6 +17,7 @@ import { ENEMIES, ENEMY_KIND_COUNT, KIND_BEETLE, KIND_STRAFER, KIND_SWARM } from
 import {
   SPAWN_RADIUS,
   SPAWN_RADIUS_BAND,
+  WAVE_LOCKED_ELITES,
   WAVE_MAX_ALIVE,
   WAVE_MAX_SPAWN_PER_TICK,
   WAVE_MAX_STREAMS,
@@ -24,6 +25,7 @@ import {
   WAVE_TOTAL_TIME,
   type WaveSegment,
 } from './waves';
+import { UNLOCK_ELITE, UNLOCKS } from './unlocks';
 
 /**
  * 最后一条用例要把整份脚本 splice 成短脚本(验证表可写),跑完必须还原,
@@ -314,5 +316,85 @@ describe('波次脚本', () => {
     // WAVE_TOTAL_TIME 是模块加载时算的**设计口径**快照,不随 splice 变 ——
     // 运行器一个字都不读它(局终由逐段推进到越界自然得出),故这里不是漏算
     expect(WAVE_TOTAL_TIME).toBe(BASE_TOTAL);
+  });
+});
+
+describe('解锁精英事件(19 号)—— 独立槽位,不碰既有段脚本的确定性', () => {
+  it('槽位合法:segmentIndex/at 都落在目标段内,kind/count/词缀编号全部合法', () => {
+    for (const el of WAVE_LOCKED_ELITES) {
+      expect(el.unlockId.length, '解锁 id 不许空串').toBeGreaterThan(0);
+      expect(Number.isInteger(el.segmentIndex)).toBe(true);
+      expect(el.segmentIndex).toBeGreaterThanOrEqual(0);
+      expect(el.segmentIndex).toBeLessThan(WAVE_SEGMENTS.length);
+      const seg = WAVE_SEGMENTS[el.segmentIndex]!;
+      expect(el.at, `${seg.name}@${el.at}s`).toBeGreaterThanOrEqual(0);
+      // 与 WaveElite 同一条口径:== duration 那一刻已经进了下一段,事件永远轮不到触发
+      expect(el.at, seg.name).toBeLessThan(seg.duration);
+
+      // 精英是普通敌型的放大版:kind 必须落在敌人表内(错一位就出成另一型)
+      expect(Number.isInteger(el.kind)).toBe(true);
+      expect(el.kind).toBeGreaterThanOrEqual(0);
+      expect(el.kind).toBeLessThan(ENEMY_KIND_COUNT);
+      expect(ENEMIES[el.kind]!.kind).toBe(el.kind);
+
+      expect(Number.isInteger(el.count)).toBe(true);
+      expect(el.count).toBeGreaterThanOrEqual(1);
+
+      for (const a of el.affixes) {
+        expect(Number.isInteger(a)).toBe(true);
+        expect(a).toBeGreaterThanOrEqual(0);
+        expect(a).toBeLessThan(AFFIX_COUNT);
+      }
+    }
+  });
+
+  it('词缀数 > 既有段上限 2:这就是"词缀更高的精英事件"', () => {
+    // 既有段(GDD §6.4)的精英 1–2 词缀;解锁事件必须比它能解锁的"普通威胁"更重,
+    // 否则"解锁了更强的精英"这句承诺就是空话
+    for (const el of WAVE_LOCKED_ELITES) expect(el.affixes.length).toBeGreaterThanOrEqual(3);
+    for (const seg of WAVE_SEGMENTS) {
+      for (const el of seg.elites) expect(el.affixes.length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('教学段不塞、与既有段精英不挤在同几秒(编排口径:突发事件要错得开)', () => {
+    for (const el of WAVE_LOCKED_ELITES) {
+      expect(el.segmentIndex).not.toBe(0); // 教学段(离港航道)是白给区,不塞精英(todos/14)
+      const seg = WAVE_SEGMENTS[el.segmentIndex]!;
+      // 与既有精英的触发时刻错开:同一段同几秒冒出两只"突发",玩家分不清谁是谁的
+      for (const existing of seg.elites) {
+        expect(Math.abs(existing.at - el.at), `${seg.name}@${el.at}s 与既有精英 ${existing.at}s 撞车`).toBeGreaterThan(5);
+      }
+    }
+  });
+
+  it('解锁引用互相咬合:UNLOCK_ELITE 条目 ↔ WAVE_LOCKED_ELITES 槽位一一对应', () => {
+    // unlocks.ts 的 UNLOCK_ELITE 条目 type = WAVE_LOCKED_ELITES 下标,
+    // 且槽位的 unlockId === 该条目的 id —— 同串不同名,错位 = 解锁到别人家的事件
+    const eliteEntries = UNLOCKS.filter((u) => u.kind === UNLOCK_ELITE);
+    for (const u of eliteEntries) {
+      const el = WAVE_LOCKED_ELITES[u.type];
+      expect(el, `解锁条目 ${u.id} 引用的槽位不存在`).toBeDefined();
+      expect(el!.unlockId).toBe(u.id);
+    }
+    // 反过来:每条槽位都有一条解锁条目指着,不许出现"永远出不来"的事件
+    const ids = new Set(eliteEntries.map((u) => u.id));
+    for (const el of WAVE_LOCKED_ELITES) expect(ids.has(el.unlockId)).toBe(true);
+  });
+
+  it('确定性口径:解锁事件零 rng —— 槽位表不在 WAVE_SEGMENTS 里,既有同 seed 序列结构上不受影响', () => {
+    // 19 号验收"解锁状态不影响同 seed rng 序列":解锁精英是脚本事件(与既有精英同一条
+    // "按 at 触发、整组出"的原子口径,不消耗任何 rng),且以独立槽位存在 ——
+    // 它要么被运行器整条跳过(未解锁),要么按 at 归位后照脚本出(已解锁),
+    // 两条路都不移动随机序列。这里钉的是结构前提:槽位表确实不在 WAVE_SEGMENTS 里,
+    // 段脚本本身(与它的同 seed 用例)一个字都不用改
+    expect(WAVE_LOCKED_ELITES.length).toBeGreaterThan(0);
+    for (const seg of WAVE_SEGMENTS) {
+      for (const el of seg.elites) {
+        expect(el.affixes.length).toBeLessThanOrEqual(2); // 既有段的 1–2 词缀上限原样站着
+      }
+    }
+    // 槽位表的存在不影响单局总时长:它不占段,也不在 WAVE_TOTAL_TIME 的口径里
+    expect(WAVE_TOTAL_TIME).toBe(WAVE_SEGMENTS.reduce((s, seg) => s + seg.duration, 0));
   });
 });

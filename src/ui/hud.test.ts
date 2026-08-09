@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EDICT_GYRO, EDICT_HULL, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
+import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import type { World } from '../sim/world';
 import { createHud, hudRatio, segmentReadout, THREAT_INTENSITY_MAX, threatVisual } from './hud';
@@ -112,6 +113,9 @@ function createStubEl(tag = 'div'): StubEl {
 interface StubDom {
   ui: StubEl;
   windowListeners: number;
+  /** toast 的到点计时器桩(与 upgradeFlow/refitFlow 的桩同款) */
+  timers: Map<number, () => void>;
+  fireTimers(): void;
   restore(): void;
 }
 
@@ -119,9 +123,16 @@ function installDom(): StubDom {
   const g = globalThis as unknown as Record<string, unknown>;
   const prevWindow = g.window;
   const prevDocument = g.document;
+  let nextTimer = 0;
+  const timers = new Map<number, () => void>();
   const dom: StubDom = {
     ui: createStubEl(),
     windowListeners: 0,
+    timers,
+    fireTimers(): void {
+      for (const fn of [...timers.values()]) fn();
+      timers.clear();
+    },
     restore(): void {
       g.window = prevWindow;
       g.document = prevDocument;
@@ -132,6 +143,14 @@ function installDom(): StubDom {
     innerHeight: 600,
     addEventListener(): void {
       dom.windowListeners++;
+    },
+    setTimeout(fn: () => void): number {
+      const id = nextTimer++;
+      timers.set(id, fn);
+      return id;
+    },
+    clearTimeout(id: number): void {
+      timers.delete(id);
     },
   };
   g.document = {
@@ -161,6 +180,8 @@ interface StubWorld {
   enemies: { items: StubEnemy[] };
   /** 已持有法令掩码(18 号):HUD 徽记按它逐位查名字 */
   edicts: number;
+  /** 解锁状态掩码(19 号):位 i = UNLOCKS[i] 开没开;图鉴计数按它数置位 */
+  unlockMask: number;
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -176,6 +197,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     burstWarning: () => null,
     enemies: { items: [] },
     edicts: 0,
+    unlockMask: 0,
     ...over,
   };
 }
@@ -206,9 +228,9 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
-    // 与屏下缘两根血条(精英 + Boss)、星币读数以及法令徽记(18 号),
-    // 没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(8);
+    // 与屏下缘两根血条(精英 + Boss)、星币读数、法令徽记(18 号)、解锁 toast
+    // 与图鉴读数(19 号),没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(10);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -260,6 +282,54 @@ describe('createHud', () => {
     // 重开一局(新世界无法令):徽记当帧收起
     hud.setWorld(stubWorld() as unknown as World);
     expect(edicts.style.display).toBe('none');
+  });
+
+  it('图鉴读数:按 world.unlockMask 置位数显示已解锁数/总数,setWorld 换世界当帧跟上', () => {
+    const hud = createHud({ world: stubWorld({ unlockMask: 0b011 }) as unknown as World });
+    const root = dom.ui.children[0]!;
+    const collection = root.children[9]!;
+    expect(collection.title).toBe('图鉴');
+    expect(findText(root, '图鉴')).toBeDefined();
+    const value = collection.children[0]!.children[1]!;
+    // 位 0 + 位 1 置位 = 已解锁 2 条;总数直取 UNLOCKS.length(与 World 掩码同编码)
+    expect(value.textContent).toBe(`2/${UNLOCKS.length}`);
+
+    // 全解锁掩码:计数当帧跟上
+    hud.setWorld(stubWorld({ unlockMask: (1 << UNLOCKS.length) - 1 }) as unknown as World);
+    expect(value.textContent).toBe(`${UNLOCKS.length}/${UNLOCKS.length}`);
+
+    // 空掩码(新档):归零
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(value.textContent).toBe(`0/${UNLOCKS.length}`);
+  });
+
+  it('解锁 toast:toast() 亮出"解锁 XX",到点自动消失;setWorld 换局清掉上一局的提示', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const toastEl = root.children[8]!;
+    // 初始隐藏(display:none 写在 cssText 里,toast() 点亮时才落成 style.display 属性)
+    expect(toastEl.style.cssText).toContain('display:none');
+
+    hud.toast('解锁:导弹巢');
+    expect(toastEl.textContent).toBe('解锁:导弹巢');
+    expect(toastEl.style.display).toBe('block');
+    // 长在 pointer-events:none 的根里,不抢焦点
+    expect(root.style.cssText).toContain('pointer-events:none');
+
+    // 到点自动消失
+    dom.fireTimers();
+    expect(toastEl.style.display).toBe('none');
+    expect(toastEl.textContent).toBe('');
+    expect(dom.timers.size).toBe(0);
+
+    // 再弹一条;换局(setWorld)当场清掉,计时器也不留
+    hud.toast('解锁:急速协议');
+    expect(toastEl.style.display).toBe('block');
+    expect(dom.timers.size).toBe(1);
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(toastEl.style.display).toBe('none');
+    expect(toastEl.textContent).toBe('');
+    expect(dom.timers.size).toBe(0);
   });
 
   it('静音开关:默认有声,点击在开/关之间切换并同步文字与颜色', () => {

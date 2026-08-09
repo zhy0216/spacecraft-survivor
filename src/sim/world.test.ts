@@ -35,6 +35,7 @@ import {
   EDICT_GYRO,
   EDICT_HULL,
   EDICT_MAGNET,
+  EDICT_RAPID,
   EDICT_TRACER,
   edictAmmoFireRateMul,
   edictHeatMaxMul,
@@ -59,12 +60,14 @@ import {
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_MAX_LEVEL,
+  TOWER_MISSILE_NEST,
   towerArcDeg,
   towerFireInterval,
   towerHeatMax,
   towerMagazine,
   TOWERS,
 } from '../data/towers';
+import { UNLOCKS } from '../data/unlocks';
 import {
   SPAWN_RADIUS,
   SPAWN_RADIUS_BAND,
@@ -73,6 +76,7 @@ import {
   type WaveSegment,
 } from '../data/waves';
 import { type Arc, cellArc } from './arc';
+import { initBoss } from './boss';
 import { tuning } from './config';
 import {
   classifyHit,
@@ -3577,5 +3581,165 @@ describe('法令接线(18 号:授予、现读点、确定性)', () => {
       for (let f = 0; f < UPGRADE_OFFER_COOLDOWN * SIM_HZ + 1; f++) w.step();
     }
     expect(granted.size).toBeGreaterThan(0); // 这一局的固定 seed 真的抽到过法令,断言不空转
+  });
+});
+
+/**
+ * 解锁接线(19 号):解锁掩码的构造注入、卡池过滤(未解锁塔/法令绝不进候选)、
+ * eliteKills 计数与它"不进 checksum"的口径,以及"过滤在掷前不耗 rng"的确定性。
+ * 纯函数那一半(逐型可达 / 消耗次数)在 upgrade.test.ts 钉,这里钉 World 这一层的接线。
+ */
+describe('解锁接线(19 号:掩码注入、卡池过滤、eliteKills 与确定性)', () => {
+  /** 空压测场:step() 全程不掷 rng,只有 settleUpgrade 那 6 次 —— rng 账才能数得清 */
+  const EMPTY = { stressSpawn: true, stressEnemies: 0 };
+  /** 掩码位 = 该解锁条目在 UNLOCKS 里的下标(与 waves.ts 的 unlockBit / upgrade.ts 的闸门同约定) */
+  const maskOf = (...ids: string[]): number => {
+    let m = 0;
+    for (const id of ids) {
+      const i = UNLOCKS.findIndex((u) => u.id === id);
+      expect(i, `解锁条目 ${id} 必须存在`).toBeGreaterThanOrEqual(0);
+      m |= 1 << i;
+    }
+    return m;
+  };
+  const MASK_ALL = (1 << UNLOCKS.length) - 1;
+
+  /** 固定随机序列 + 计数器(与"星币与重摇"describe 同款) */
+  class CountingRng {
+    calls = 0;
+    constructor(private readonly values: number[] = []) {}
+    next(): number {
+      return this.values[this.calls++] ?? 0;
+    }
+  }
+
+  /** 真脚本原样留一份:eliteKills 那几条会换成短脚本,跑完必须还原 */
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+    Object.assign(tuning, BASE);
+  });
+
+  it('eliteKills:reap 按 affixes ≠ 0 计数(与 spawnDrop 同判定),普通怪与 Boss 不计', () => {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, {
+      name: 'seg',
+      duration: 60,
+      dirStartDeg: 0,
+      dirEndDeg: 0,
+      streams: [],
+      bursts: [],
+      elites: [{ at: 0, kind: KIND_BEETLE, count: 1, affixes: [AFFIX_ARMORED] }],
+    });
+    const w = new World(20260819);
+    w.step();
+    expect(w.enemies.size).toBe(1);
+    const elite = w.enemies.items[0]!;
+    expect(w.damageEnemy(elite, 9999)).toBe(true);
+    w.step();
+    expect(w.kills).toBe(1);
+    expect(w.eliteKills).toBe(1); // 精英 = affixes ≠ 0:这一只算
+
+    // 普通怪:击杀照常进 kills,精英数不动
+    const plain = w.enemies.spawn();
+    initEnemy(plain, KIND_SWARM, 300, 300, w.elapsed, w.rng);
+    expect(plain.affixes).toBe(0);
+    expect(w.damageEnemy(plain, 9999)).toBe(true);
+    w.step();
+    expect(w.kills).toBe(2);
+    expect(w.eliteKills).toBe(1);
+
+    // Boss 绝不用 affixes 位(boss.test.ts 钉着):击杀计入 kills,不计入精英
+    const boss = w.enemies.spawn();
+    initBoss(boss, 400, 400, w.elapsed);
+    expect(boss.affixes).toBe(0);
+    expect(w.damageEnemy(boss, 9999)).toBe(true);
+    w.step();
+    expect(w.kills).toBe(3);
+    expect(w.eliteKills).toBe(1);
+  });
+
+  it('eliteKills 不进 checksum:与 kills 同一条派生量口径(击杀本身在敌人池与 affixes 里可见)', () => {
+    Object.assign(tuning, EMPTY);
+    const a = new World(77);
+    const b = new World(77);
+    a.step();
+    b.step();
+    expect(a.checksum()).toBe(b.checksum());
+
+    const before = a.checksum();
+    a.eliteKills += 5; // 跨局累计的存档读数:漏哈不影响重放 —— 与 kills 同口径
+    expect(a.checksum()).toBe(before);
+    a.kills += 5; // 对照:kills 同样不进 —— 两条"回收帧记账"的读数同一条待遇
+    expect(a.checksum()).toBe(before);
+  });
+
+  it('未解锁掩码(缺省 0):40 seed 穷举,导弹巢与急速协议绝不进候选;基础塔照常出', () => {
+    Object.assign(tuning, EMPTY);
+    let towers = 0;
+    for (let seed = 0; seed < 40; seed++) {
+      const w = new World(seed); // 缺省 unlockMask = 0 = 一切未解锁(旧构造语义)
+      w.scrap = w.upgradeCost;
+      w.step();
+      expect(w.offer.length).toBeGreaterThan(0);
+      for (const opt of w.offer) {
+        if (opt.kind === OFFER_TOWER) {
+          towers++;
+          expect(opt.type, `seed ${seed} 弹出了未解锁塔 ${opt.type}`).not.toBe(TOWER_MISSILE_NEST);
+        } else if (opt.kind === OFFER_EDICT) {
+          expect(opt.type, `seed ${seed} 弹出了未解锁法令 ${opt.type}`).not.toBe(EDICT_RAPID);
+        }
+      }
+    }
+    expect(towers).toBeGreaterThan(0); // 塔类照常出卡:不是整池被掏空,只是闸门外的型号进不来
+  });
+
+  it('解锁掩码传入后:同一组掷值就能掷中导弹巢/急速协议(掩码 0 的对照掷不中)', () => {
+    Object.assign(tuning, EMPTY);
+    // 塔类:0.1 落在塔类区间,6.5/7 落在空甲板全解锁塔池(0..5 + 12)的最后一型 = 导弹巢
+    const open = new CountingRng([0.1, 6.5 / 7, 0, 0, 0, 0]);
+    const wOpen = new World(1, MASK_ALL);
+    Object.defineProperty(wOpen, 'rng', { value: open, configurable: true });
+    wOpen.scrap = wOpen.upgradeCost;
+    wOpen.step();
+    expect(open.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(wOpen.offer.some((o) => o.kind === OFFER_TOWER && o.type === TOWER_MISSILE_NEST)).toBe(true);
+
+    // 同一组掷值、掩码 0:导弹巢在池外,同一下标落不到它头上
+    const closed = new CountingRng([0.1, 6.5 / 7, 0, 0, 0, 0]);
+    const wClosed = new World(1, 0);
+    Object.defineProperty(wClosed, 'rng', { value: closed, configurable: true });
+    wClosed.scrap = wClosed.upgradeCost;
+    wClosed.step();
+    expect(closed.calls).toBe(UPGRADE_CHOICE_COUNT * 2); // 过滤不改变消耗次数
+    expect(wClosed.offer.some((o) => o.kind === OFFER_TOWER && o.type === TOWER_MISSILE_NEST)).toBe(false);
+
+    // 法令类:0.9 落在法令区间,6.5/7 落在全解锁法令池的最后一型 = 急速协议
+    const openE = new CountingRng([0.9, 6.5 / 7, 0, 0, 0, 0]);
+    const wOpenE = new World(2, MASK_ALL);
+    Object.defineProperty(wOpenE, 'rng', { value: openE, configurable: true });
+    wOpenE.scrap = wOpenE.upgradeCost;
+    wOpenE.step();
+    expect(openE.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(wOpenE.offer.some((o) => o.kind === OFFER_EDICT && o.type === EDICT_RAPID)).toBe(true);
+  });
+
+  it('同 seed 解锁前后:rng 序列逐位一致 —— 过滤只收窄候选集合,不移动消耗次数', () => {
+    Object.assign(tuning, EMPTY);
+    const play = (mask: number): number[] => {
+      const w = new World(20260819, mask);
+      // 三轮"弹卡 → 跳过"各消费 6 次 rng;两局操作序列完全一致,只有掩码不同
+      for (let round = 0; round < 3; round++) {
+        w.scrap = w.upgradeCost;
+        w.step();
+        expect(w.offer.length).toBeGreaterThan(0);
+        expect(w.skipUpgrade()).toBe(true);
+        for (let f = 0; f < UPGRADE_OFFER_COOLDOWN * SIM_HZ + 1; f++) w.step();
+      }
+      const stream: number[] = [];
+      for (let i = 0; i < 24; i++) stream.push(w.rng.next());
+      return stream;
+    };
+    expect(play(0)).toEqual(play(MASK_ALL)); // 解锁与否,后续 24 次掷值逐位一致
   });
 });

@@ -18,14 +18,19 @@
  * 型号由脚本直接给、不掷随机。于是调一次平衡(改速率、改占比、改展宽)都不会移动整条随机序列。
  * 精英(14 号实装 WaveElite)同一条口径:型号/词缀/数量全是脚本直给、不额外掷随机 ——
  * 出现时刻只由 at 与 segTime 决定、与种子无关,每出一只恰好一次 rng.next()。
+ * 19 号的解锁精英(WAVE_LOCKED_ELITES)也走这条链:换段时按 at 归并进本段精英链,
+ * 未解锁的整条跳过 —— 精英零 rng,解锁与否只决定"这组怪出不出",不移动随机序列。
  * 出场顺序 = 侧压 → 主压流 → 精英(帧末):精英排在帧末,触发帧内的普通怪
  * 与无精英脚本逐只一致(帧间序列从下一帧起才整体顺延)。
  */
 import type { Rng } from '../core/rng';
+import { UNLOCKS } from '../data/unlocks';
 import {
+  WAVE_LOCKED_ELITES,
   WAVE_MAX_SPAWN_PER_TICK,
   WAVE_MAX_STREAMS,
   WAVE_SEGMENTS,
+  type WaveElite,
   type WaveSegment,
   type WaveStream,
 } from '../data/waves';
@@ -49,8 +54,9 @@ export interface SpawnSink {
 /**
  * 一局波次脚本的运行期状态。**前五个字段是真状态**(segment / segTime / burstNext / eliteNext / debt),
  * 全部进 World.checksum(14 号起 eliteNext 也由世界侧哈希,防止重放失配);
- * 后三个是 segment + segTime + 脚本的纯函数,随时可重算 —— 与 ship.maxHp / World.shipDead
- * 同一条派生量口径:哈它只是把同一件事哈两遍。
+ * unlockMask 是开局定死的输入配置(见字段注释,不进 checksum);
+ * elites / dirRad / intensity / done 是 segment + segTime + 脚本的纯函数,随时可重算
+ * —— 与 ship.maxHp / World.shipDead 同一条派生量口径:哈它只是把同一件事哈两遍。
  */
 export interface WaveState {
   /** 当前航段下标;== WAVE_SEGMENTS.length 表示脚本走完 */
@@ -66,6 +72,22 @@ export interface WaveState {
    * 0.7 只/秒这种小数速率全靠它攒:每帧四舍五入的话,速率低于 60 只/秒的流会被抹成 0 或炸成满帧。
    */
   debt: number[];
+  /**
+   * 解锁状态位掩码(19 号):**位 i = UNLOCKS[i] 开没开**(掩码由存档侧构造,跨局不变)。
+   * 它只决定"未解锁的 WAVE_LOCKED_ELITES 槽位出不出",而精英是脚本事件(零 rng)——
+   * 于是解锁与否只收窄"这组怪出不出",不移动随机序列(19 号验收)。
+   * 它是开局定死的**输入配置**(与 seed 同一条"构造时给一次"的待遇),不是逐帧演化的状态,
+   * 也不进 checksum:它从不参与任何判定,只影响"脚本里本来就没有的槽位"出不出。
+   */
+  unlockMask: number;
+  /**
+   * 本段实际要出的精英链:**段表 elites + 已解锁的 WAVE_LOCKED_ELITES**,按 at 归并升序。
+   * 解锁槽位不进 WAVE_SEGMENTS(19 号:往既有段里塞一只精英 = 改掉所有既有 seed 的出怪序列),
+   * 这里是它们唯一的落点;未解锁的整条跳过。精英零 rng,两条路都不扰动随机序列。
+   * **派生量**:segment + 脚本 + unlockMask 的纯函数(enterSegment 每次换段现拼),
+   * 与 dirRad / intensity 同一条"哈它只是把同一件事哈两遍"的口径 —— eliteNext 是唯一真状态。
+   */
+  elites: WaveElite[];
   /** 脚本计划的主压方向(弧度,折回 (-π, π]);实际统计无样本时供 World 罗盘兜底。**派生量** */
   dirRad: number;
   /** 脚本计划强度 = 本段各 stream 当前速率之和(只/秒);供调试与脚本测试，不冒充实际生成。**派生量** */
@@ -154,9 +176,7 @@ export interface ElitePeek {
  * @returns 是否有下一个精英;false 时 out 不动
  */
 export function peekNextElite(s: WaveState, out: ElitePeek): boolean {
-  const seg = WAVE_SEGMENTS[s.segment];
-  if (seg === undefined) return false;
-  const el = seg.elites[s.eliteNext];
+  const el = s.elites[s.eliteNext];
   if (el === undefined) return false;
   const eta = el.at - s.segTime;
   out.etaSeconds = eta > 0 ? eta : 0;
@@ -167,7 +187,20 @@ export function peekNextElite(s: WaveState, out: ElitePeek): boolean {
 }
 
 /**
+ * 解锁槽位的掩码位 = 它在 UNLOCKS 表里的下标(unlockId 与条目 id 同串,data/waves.test 钉着)。
+ * @returns 掩码位;unlockId 在表里查不到 = 数据写坏了,返回 -1 按"未解锁"跳过
+ */
+function unlockBit(unlockId: string): number {
+  for (let i = 0; i < UNLOCKS.length; i++) {
+    if (UNLOCKS[i]!.id === unlockId) return i;
+  }
+  return -1;
+}
+
+/**
  * 进入某一段时的复位:出怪账清零、侧压游标归零,并按新段的流数补齐 debt。
+ * 顺带把本段要出的精英链拼出来(段表 elites + 已解锁的 WAVE_LOCKED_ELITES,按 at 升序)——
+ * 解锁槽位的归并只发生在**换段那一帧**,与 debt 补齐同一条铁律 3 例外。
  * 补齐是运行期唯一可能的分配,且只发生在**换段那一帧**;热循环里一个字都不 push(铁律 3)。
  */
 function enterSegment(s: WaveState): void {
@@ -175,6 +208,35 @@ function enterSegment(s: WaveState): void {
   s.burstNext = 0;
   s.eliteNext = 0;
   const seg = WAVE_SEGMENTS[s.segment];
+  // 精英链每次换段整条重拼(派生量,见 WaveState.elites 的注释)。
+  // 两条源都按 at 升序,双游标归并;未解锁槽位在归并现场跳过 —— 精英零 rng,
+  // 跳过只是少出一组怪,随机序列一个字节都不动(19 号验收"同 seed 普通怪序列逐位一致")
+  s.elites.length = 0;
+  if (seg !== undefined) {
+    const regs = seg.elites;
+    let i = 0; // 段表精英游标
+    let j = 0; // 解锁槽位游标
+    while (i < regs.length || j < WAVE_LOCKED_ELITES.length) {
+      // 槽位游标先越过"不属于本段 / 未解锁"的条目:它们不配出现在本段的精英链里
+      while (j < WAVE_LOCKED_ELITES.length) {
+        const l = WAVE_LOCKED_ELITES[j]!;
+        const bit = unlockBit(l.unlockId);
+        if (l.segmentIndex === s.segment && bit >= 0 && (s.unlockMask & (1 << bit)) !== 0) break;
+        j++;
+      }
+      const l = WAVE_LOCKED_ELITES[j];
+      if (l === undefined) {
+        // 槽位已耗尽:剩下的全是段表精英,原样续完
+        while (i < regs.length) s.elites.push(regs[i++]!);
+      } else if (i >= regs.length || l.at < regs[i]!.at) {
+        s.elites.push(l);
+        j++;
+      } else {
+        s.elites.push(regs[i]!);
+        i++;
+      }
+    }
+  }
   if (seg === undefined) return;
   // 正常脚本下 WAVE_MAX_STREAMS 已经预留够了,这里兜的是单测 splice 进来的长脚本
   while (s.debt.length < seg.streams.length) s.debt.push(0);
@@ -192,8 +254,10 @@ function refreshDerived(s: WaveState): void {
 /**
  * 建一局的波次状态。**立刻按第 0 段 t = 0 算好 dirRad / intensity** ——
  * 开局第一帧 HUD 就该拿到真的主压方向,而不是先指着 0 弧度再在下一帧跳过去。
+ * @param unlockMask 解锁状态位掩码(位 i = UNLOCKS[i] 开没开),缺省 0 = 全部未解锁;
+ *   它只决定 WAVE_LOCKED_ELITES 槽位出不出(见 WaveState.unlockMask 的注释)
  */
-export function createWaveState(): WaveState {
+export function createWaveState(unlockMask: number = 0): WaveState {
   const s: WaveState = {
     segment: 0,
     segTime: 0,
@@ -201,6 +265,8 @@ export function createWaveState(): WaveState {
     eliteNext: 0,
     // 预分配到全脚本的最大流数:正常换段时一个字节都不必再分配(铁律 3)
     debt: new Array<number>(WAVE_MAX_STREAMS).fill(0),
+    unlockMask,
+    elites: [],
     dirRad: 0,
     intensity: 0,
     done: WAVE_SEGMENTS.length === 0,
@@ -319,7 +385,8 @@ export function stepWaves(
   // 7. 精英插入(帧末)。与侧压同一条原子事件口径:按 at 升序游标一路向前、不被本帧上限截断;
   // 型号/词缀/数量全是脚本直给,每出一只恰好消耗一次角度随机(与展宽无关的既有惯例)。
   // 排在帧末出:触发帧内的普通怪(事件 + 流)与无精英脚本逐只一致,帧间序列才整体顺延。
-  const elites = seg.elites;
+  // 精英链 = 段表 elites + 已解锁的 WAVE_LOCKED_ELITES(enterSegment 每段拼好,见 s.elites)
+  const elites = s.elites;
   while (s.eliteNext < elites.length) {
     const el = elites[s.eliteNext]!;
     if (el.at > s.segTime) break;

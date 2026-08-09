@@ -134,9 +134,11 @@ describe('支援设施数值表', () => {
         const want = tower.throttle === thr;
         expect(supportAffects(def, tower), `${def.name} × ${tower.name}`).toBe(want);
       }
-      // 六塔三系各两座 + 17 号六座进化塔继承基塔节流系 ⇒ 每种节流系设施恰好带得动四座塔
+      // 六塔三系各两座 + 17 号六座进化塔继承基塔节流系 + 19 号导弹巢(弹药系迫击炮)
+      // ⇒ 弹药库带得动五座、散热器/电容组各带得动四座
       // (进化后继续吃邻接,17 号口径;基塔带得动的那两座是"判定机制"的锚点,见 towers.test.ts)
-      expect(TOWERS.filter((t) => supportAffects(def, t)).length, def.name).toBe(4);
+      const wantCount = thr === THR_AMMO ? 5 : 4;
+      expect(TOWERS.filter((t) => supportAffects(def, t)).length, def.name).toBe(wantCount);
     }
 
     // 每座塔恰好被**一种**设施认领:0 就是有塔配不到设施,2 就是两种设施重叠、四选一的取舍塌掉

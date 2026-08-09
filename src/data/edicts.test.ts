@@ -12,6 +12,7 @@ import {
   EDICT_HULL,
   EDICT_KIND_COUNT,
   EDICT_MAGNET,
+  EDICT_RAPID,
   EDICT_TRACER,
   EDICTS,
   edictAmmoFireRateMul,
@@ -25,10 +26,18 @@ import {
 } from './edicts';
 
 describe('法令表级不变量', () => {
-  it('六条齐全,编号与 EDICT_* 常量一一对应、与下标一致', () => {
-    expect(EDICT_KIND_COUNT).toBe(6);
+  it('七条齐全,编号与 EDICT_* 常量一一对应、与下标一致', () => {
+    expect(EDICT_KIND_COUNT).toBe(7);
     expect(EDICTS).toHaveLength(EDICT_KIND_COUNT);
-    const ids = [EDICT_TRACER, EDICT_GYRO, EDICT_MAGNET, EDICT_COOLANT, EDICT_HULL, EDICT_CRUISE];
+    const ids = [
+      EDICT_TRACER,
+      EDICT_GYRO,
+      EDICT_MAGNET,
+      EDICT_COOLANT,
+      EDICT_HULL,
+      EDICT_CRUISE,
+      EDICT_RAPID,
+    ];
     EDICTS.forEach((e, i) => {
       expect(e.type, `下标 ${i} 的 type 必须 === 下标`).toBe(i);
       expect(ids[i], `EDICT_* 常量顺序必须与表顺序一致`).toBe(i);
@@ -37,13 +46,21 @@ describe('法令表级不变量', () => {
     expect(new Set(ids)).toEqual(new Set(EDICTS.map((e) => e.type))); // 无重复编号
   });
 
-  it('六条的效果数值逐条到位(全部数值型,不引入新机制)', () => {
+  it('七条的效果数值逐条到位(全部数值型,不引入新机制)', () => {
     expect(EDICTS[EDICT_TRACER]!.ammoFireRateMul).toBe(1.1); // 弹药系射速 +10%
     expect(EDICTS[EDICT_GYRO]!.turnRateAdd).toBe(10); // 转向 +10°/s
     expect(EDICTS[EDICT_MAGNET]!.magnetRadiusMul).toBe(1.3); // 拾取半径 +30%
     expect(EDICTS[EDICT_COOLANT]!.heatMaxMul).toBe(1.2); // 过热上限 +20%
     expect(EDICTS[EDICT_HULL]!.hullHpAdd).toBe(20); // 船体 HP +20
     expect(EDICTS[EDICT_CRUISE]!.cruiseSpeedMul).toBe(1.1); // 巡航速度 +10%
+    // 19 号进阶法令:曳光协议的更强档,仍是同一个字段的数值
+    expect(EDICTS[EDICT_RAPID]!.ammoFireRateMul).toBe(1.25); // 弹药系射速 +25%
+    // 除弹药射速外,急速协议其余档全部中性(与其它六条同一套"不用就填中性"口径)
+    expect(EDICTS[EDICT_RAPID]!.turnRateAdd).toBe(0);
+    expect(EDICTS[EDICT_RAPID]!.magnetRadiusMul).toBe(1);
+    expect(EDICTS[EDICT_RAPID]!.heatMaxMul).toBe(1);
+    expect(EDICTS[EDICT_RAPID]!.hullHpAdd).toBe(0);
+    expect(EDICTS[EDICT_RAPID]!.cruiseSpeedMul).toBe(1);
   });
 
   it('不用的乘法档填 1、加法档填 0(与 towers.ts 的中性值分工同源)', () => {

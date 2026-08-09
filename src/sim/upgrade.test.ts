@@ -14,7 +14,7 @@ import {
   UPGRADE_CHOICE_COUNT,
 } from '../data/economy';
 import { DECK_PIECES } from '../data/deckPieces';
-import { EDICT_KIND_COUNT, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
+import { EDICT_CRUISE, EDICT_KIND_COUNT, EDICT_RAPID, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
 import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_CAPACITOR, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
@@ -22,8 +22,11 @@ import {
   TOWER_KIND_COUNT,
   TOWER_LASER,
   TOWER_MAX_LEVEL,
+  TOWER_MISSILE_NEST,
+  TOWER_MORTAR,
   TOWERS,
 } from '../data/towers';
+import { UNLOCKS } from '../data/unlocks';
 import { tuning } from './config';
 import {
   CELL_EMPTY,
@@ -300,12 +303,14 @@ describe('rollUpgradeOffer', () => {
     // 18 号:法令不叠级 —— "重复抽到已持有法令"必须从候选生成这一层就消失(结构上),
     // 而不是靠 ui 事后弹一句"重复无效"。heldEdicts 只改可选表内容,与支援死卡过滤同构
     const deck = createDeck();
-    // 没持有时的全表可达性:逐型喂掷值(kind 0.99 = 法令区间,index = (t+0.5)/6 ⇒ 必掷中 t),
-    // 比扫一批 seed 攒覆盖更确定 —— 6 条都要能进候选,一条都不许被埋
+    // 没持有时的全表可达性:逐型喂掷值(kind 0.99 = 法令区间,index = (t+0.5)/7 ⇒ 必掷中 t),
+    // 比扫一批 seed 攒覆盖更确定 —— 7 条都要能进候选,一条都不许被埋。
+    // 解锁掩码全开:急速协议(19 号闸门)此时也进池,可达性才算"这张表真的全通"
+    const MASK_ALL = (1 << UNLOCKS.length) - 1;
     for (let t = 0; t < EDICT_KIND_COUNT; t++) {
       const out: UpgradeOption[] = [];
       const rng = new CountingRng([0.99, (t + 0.5) / EDICT_KIND_COUNT]);
-      rollUpgradeOffer(deck, rng as unknown as Rng, out);
+      rollUpgradeOffer(deck, rng as unknown as Rng, out, true, 0, MASK_ALL);
       expect(out[0]).toEqual({ kind: OFFER_EDICT, type: t, level: 0 });
     }
 
@@ -334,6 +339,95 @@ describe('rollUpgradeOffer', () => {
     }
     // 名字也能取到(卡片照常印"曳光协议"而不是未知法令)
     expect(optionLabel({ kind: OFFER_EDICT, type: EDICT_TRACER, level: 0 })).toBe(EDICTS[EDICT_TRACER]!.name);
+  });
+
+  it('解锁闸门(19 号):未解锁掩码下导弹巢/急速协议绝不进候选(穷举 40 seed)', () => {
+    // 缺省 unlockMask = 0 = 一切未解锁(旧世界构造语义不变):被闸门覆盖的型号一张都不许出
+    for (let seed = 0; seed < 40; seed++) {
+      const out: UpgradeOption[] = [];
+      rollUpgradeOffer(createDeck(), new Rng(seed), out);
+      for (const opt of out) {
+        if (opt.kind === OFFER_TOWER) expect(opt.type).not.toBe(TOWER_MISSILE_NEST);
+        if (opt.kind === OFFER_EDICT) expect(opt.type).not.toBe(EDICT_RAPID);
+      }
+    }
+  });
+
+  it('解锁闸门:掩码打开后全表可达 —— 逐型喂掷值,导弹巢与急速协议都能被掷中', () => {
+    const deck = createDeck();
+    const MASK_ALL = (1 << UNLOCKS.length) - 1;
+    // 塔类:空甲板的塔池 = 型号升序去掉进化塔(6..11),全解锁后 7 型;
+    // 逐型喂 (位置+0.5)/池长,每一型都必须能被掷中(不许被闸门以外的过滤埋掉)
+    const towerPool: number[] = [];
+    for (let t = 0; t < TOWER_KIND_COUNT; t++) {
+      if (!isEvolutionTower(t)) towerPool.push(t);
+    }
+    for (const [pos, type] of towerPool.entries()) {
+      const out: UpgradeOption[] = [];
+      const rng = new CountingRng([0.1, (pos + 0.5) / towerPool.length]);
+      expect(rollUpgradeOffer(deck, rng as unknown as Rng, out, false, 0, MASK_ALL)).toBeGreaterThan(0);
+      expect(out[0]).toEqual(tower(type, 0));
+    }
+    expect(towerPool).toContain(TOWER_MISSILE_NEST); // 上述可达性里真的包括了导弹巢
+
+    // 法令类:同样逐型可达(急速协议 = 7 型里的最后一型)
+    for (let t = 0; t < EDICT_KIND_COUNT; t++) {
+      const out: UpgradeOption[] = [];
+      const rng = new CountingRng([0.99, (t + 0.5) / EDICT_KIND_COUNT]);
+      expect(rollUpgradeOffer(deck, rng as unknown as Rng, out, false, 0, MASK_ALL)).toBeGreaterThan(0);
+      expect(out[0]).toEqual({ kind: OFFER_EDICT, type: t, level: 0 });
+    }
+  });
+
+  it('解锁闸门:同一组掷值,掩码关时掷中迫击炮/巡航校准,掩码开时掷中导弹巢/急速协议', () => {
+    const deck = createDeck();
+    const MASK_ALL = (1 << UNLOCKS.length) - 1;
+    // 塔类:6.5/7 落在全解锁塔池(7 型)的最后一型 = 导弹巢;掩码 0 时池只有 6 型,
+    // 同一下标落到第 5 型 = 迫击炮 —— 过滤只收窄池、不移动掷值的解释
+    const open = new CountingRng([0.1, 6.5 / 7, 0, 0, 0, 0]);
+    const outOpen: UpgradeOption[] = [];
+    rollUpgradeOffer(deck, open as unknown as Rng, outOpen, false, 0, MASK_ALL);
+    expect(outOpen[0]).toEqual(tower(TOWER_MISSILE_NEST, 0));
+    expect(open.calls).toBe(UPGRADE_CHOICE_COUNT * 2); // 过滤不改变消耗次数
+
+    const closed = new CountingRng([0.1, 6.5 / 7, 0, 0, 0, 0]);
+    const outClosed: UpgradeOption[] = [];
+    rollUpgradeOffer(deck, closed as unknown as Rng, outClosed, false);
+    expect(outClosed[0]).toEqual(tower(TOWER_MORTAR, 0));
+    expect(closed.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+
+    // 法令类:同一组掷值,掩码开 = 急速协议(7 型末位),掩码关 = 巡航校准(6 型末位)
+    const openE = new CountingRng([0.99, 6.5 / 7, 0, 0, 0, 0]);
+    const outOpenE: UpgradeOption[] = [];
+    rollUpgradeOffer(deck, openE as unknown as Rng, outOpenE, false, 0, MASK_ALL);
+    expect(outOpenE[0]).toEqual({ kind: OFFER_EDICT, type: EDICT_RAPID, level: 0 });
+
+    const closedE = new CountingRng([0.99, 6.5 / 7, 0, 0, 0, 0]);
+    const outClosedE: UpgradeOption[] = [];
+    rollUpgradeOffer(deck, closedE as unknown as Rng, outClosedE, false);
+    expect(outClosedE[0]).toEqual({ kind: OFFER_EDICT, type: EDICT_CRUISE, level: 0 });
+  });
+
+  it('解锁过滤不耗 rng:同 seed 掩码开/关,每个候选位 2 次消耗一字不变', () => {
+    // 与支援死卡过滤、法令剔已持有同一条"只改可选表内容、不碰 rng 消耗次数"的口径
+    const a = new CountingRng([0.1, 0.2, 0.6, 0.4, 0.95, 0.7]);
+    const b = new CountingRng([0.1, 0.2, 0.6, 0.4, 0.95, 0.7]);
+    rollUpgradeOffer(createDeck(), a as unknown as Rng, [], false, 0, 0);
+    rollUpgradeOffer(createDeck(), b as unknown as Rng, [], false, 0, (1 << UNLOCKS.length) - 1);
+    expect(a.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(b.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+  });
+
+  it('解锁闸门与法令剔已持有独立生效:已解锁但已持有的急速协议照样进不了候选', () => {
+    // 两条过滤都"只改可选表、不碰 rng",叠加时各自管各自的一档,不互相覆盖
+    const MASK_ALL = (1 << UNLOCKS.length) - 1;
+    const held = edictMask(EDICT_RAPID);
+    const out: UpgradeOption[] = [];
+    const rng = new CountingRng([0.99, 6.5 / 7, 0, 0, 0, 0]);
+    expect(rollUpgradeOffer(createDeck(), rng as unknown as Rng, out, false, held, MASK_ALL)).toBe(
+      UPGRADE_CHOICE_COUNT,
+    );
+    expect(out.some((o) => o.kind === OFFER_EDICT && o.type === EDICT_RAPID)).toBe(false);
   });
 });
 

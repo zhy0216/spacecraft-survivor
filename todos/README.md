@@ -22,7 +22,7 @@
 | 16 | [16-starcoins-reroll.md](done/16-starcoins-reroll.md) | 星币与三选一重摇 | P1 ✅ | 10, 14* |
 | 17 | [17-tower-evolutions.md](done/17-tower-evolutions.md) | 空间进化配方(Lv5 + 相邻设施) | P2 ✅ | 05, 06, 10 |
 | 18 | [18-edicts.md](done/18-edicts.md) | 法令卡(全船被动) | P2 ✅ | 10 |
-| 19 | [19-meta-progression.md](19-meta-progression.md) | 元进度解锁与图鉴 | P2 | 16* |
+| 19 | [19-meta-progression.md](done/19-meta-progression.md) | 元进度解锁与图鉴 | P2 ✅ | 16* |
 
 \* = 松耦合联动(精英掉星币 / Boss 掉星币),不阻塞,未实装前用残骸加倍代替。
 

@@ -49,7 +49,8 @@ describe('空间进化配方表', () => {
     // 结果塔型就是"新塔编号"那六个:配方顺序错位 = 塔的张冠李戴,钉死两条链的对应
     expect(TOWER_GATLING).toBe(6);
     expect(TOWER_THORN).toBe(11);
-    expect(TOWER_KIND_COUNT).toBe(12);
+    // 13 = 六基塔 + 六进化塔 + 19 号进阶塔导弹巢(进阶塔不在此表,走解锁入池,见 unlocks)
+    expect(TOWER_KIND_COUNT).toBe(13);
   });
 
   it('配方里的塔型与支援型都指向合法型号,结果塔型落在表内', () => {

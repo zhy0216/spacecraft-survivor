@@ -18,15 +18,18 @@
  */
 import { Input } from './core/input';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
+import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
 import { Renderer } from './render/renderer';
 import { applyStartingLoadout } from './sim/loadout';
+import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
-import { World } from './sim/world';
+import { RESULT_WIN, World } from './sim/world';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
-import { createHud } from './ui/hud';
+import { createHud, type HudUi } from './ui/hud';
+import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
@@ -56,9 +59,13 @@ async function boot(): Promise<void> {
   // **本局**的种子。restart 换种子时更新,retry(同 seed 重试)原样再用 ——
   // 没有它的话被特定波次组合打死后想"再试同一局"只能手改 URL ?seed= 刷新页面
   let runSeed = seed;
+  // 元进度存档(19 号):页载时读一次,此后每局结算(onGameOver)写一次。
+  // World 构造时注入 unlockMask(卡池过滤与解锁精英门控读它);掩码 0 = 全未解锁,首局就是这么起步的。
+  // 局内不写 —— 解锁状态只在"一局结束"这一个点入档(progress.ts 的口径,见 onGameOver)
+  let progress: Progress = loadProgress();
   // 首局的 World 得先建出来:Renderer.create 建层时就要读甲板。建完原样交给 startRun,
   // 于是**首局与重开走的是同一条装配流程** —— 两条路各写一份的话,重开那条永远会比首局少接一样东西
-  let world = new World(runSeed);
+  let world = new World(runSeed, progress.unlockMask);
   let loop: FixedStepLoop;
   const renderer = await Renderer.create(world);
 
@@ -149,6 +156,9 @@ async function boot(): Promise<void> {
   let lastChecksumTick = -SIM_HZ;
   // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)
   let lastScrap = 0;
+  // 本局已 toast 过的解锁位掩码(19 号):与 progress.unlockMask 同编码。局内检测跨过阈值
+  // 就置位,防止同一局里"300 杀达标"这类条件每帧弹一次 —— 置位过的不再重复提示
+  let announcedMask = 0;
 
   /**
    * 装配一局。首局与重开走的是同一条路,顺序有讲究:
@@ -186,6 +196,25 @@ async function boot(): Promise<void> {
       upgradeFlow.hide();
       refitFlow.hide();
       renderer.setAssemblyView(false);
+      // 剪影在渲染层只截一次,存档与结算界面共用同一张(渲染层抓不到就是 null,此时不入图鉴)
+      const silhouette = renderer.captureShipSilhouette();
+      // 19 号:一局结束 → 结算进元进度。**条件达成即记,不看胜负**:失败局照常入档
+      // (progress.ts 口径),wins 是否 +1 由 evaluateRun 自己判,这里只摘 runStats 读数。
+      // 失败局同样保存 —— "下一把的新理由"不因这一把输了就欠着
+      const evalResult = evaluateRun(progress, {
+        result,
+        kills: world.kills,
+        eliteKills: world.eliteKills,
+        silhouette,
+      });
+      // 单调合并:掩码取并、计数取最大、剪影去重 —— 两份进度只会向前,不会把哪边拉回去
+      progress = mergeProgress(progress, evalResult.progress);
+      saveProgress(progress);
+      // 增量掩码 → UNLOCKS 下标数组:结算界面"解锁 XX"提示与将来图鉴任务读的都是它
+      const newUnlockIdx: number[] = [];
+      for (let i = 0; i < UNLOCKS.length; i++) {
+        if ((evalResult.newUnlocks & (1 << i)) !== 0) newUnlockIdx.push(i);
+      }
       gameOver.show({
         result,
         survivedSec: world.elapsed,
@@ -198,7 +227,11 @@ async function boot(): Promise<void> {
         bossKilledAtSec: world.bossKilledAt,
         // 剪影是**可选项**:抓不到就是 null,结算界面照常弹(见 renderer.captureShipSilhouette)。
         // 在这里截而不是在渲染层自己判断时机:一局只截一次,而"哪一刻算一局的最终船形"是流程的事
-        silhouette: renderer.captureShipSilhouette(),
+        silhouette,
+        // 19 号:newUnlocks = 本次新开锁的 UNLOCKS 下标(增量),结算界面「解锁 XX」提示;
+        // progressStats = 结算后的元进度,图鉴读它 —— 两字段定义在 ui/gameOver.ts 的 RunSummary
+        newUnlocks: newUnlockIdx,
+        progressStats: progress,
       });
     };
 
@@ -249,6 +282,8 @@ async function boot(): Promise<void> {
     stats.scrap = 0;
     // 新局基准 = 新世界的 scrap(当前为 0):首帧增量检测零出发,不会误响拾取音
     lastScrap = world.scrap;
+    // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
+    announcedMask = 0;
     stats.upgrades = 0;
     stats.upgradeCost = world.upgradeCost;
     stats.segment = world.wave.segment;
@@ -288,7 +323,7 @@ async function boot(): Promise<void> {
   function restart(): void {
     runIndex++;
     runSeed = seed + runIndex;
-    startRun(new World(runSeed));
+    startRun(new World(runSeed, progress.unlockMask));
   }
 
   /**
@@ -298,7 +333,7 @@ async function boot(): Promise<void> {
    * 它同时修复了调参面板那条"验不了同 seed 可复现"的遗留(面板现在两个按钮都有)。
    */
   function retry(): void {
-    startRun(new World(runSeed));
+    startRun(new World(runSeed, progress.unlockMask));
   }
 
   // 首局:把已经交给渲染层的那个 World 原样送进同一条装配流程
@@ -350,6 +385,27 @@ async function boot(): Promise<void> {
     stats.threatDeg = threatDeg < 0 ? threatDeg + 360 : threatDeg;
     stats.threatRate = world.threatIntensity;
     stats.kills = world.kills;
+    // 局内解锁提示(19 号):每渲染帧对照 UNLOCKS 查"已达成但还没入档"的条件。
+    // 局内可达的只有单局击杀(COND_KILLS)与累计精英击杀(COND_ELITE_KILLS,跨局累计 +
+    // 本局 world.eliteKills);首胜与收藏在结算入档,局内不存在"达成瞬间",不在这里弹。
+    // unlockMet 是单调的(条件不会回退),所以跨过阈值就弹一次、announcedMask 挡住重复。
+    // 时停/结算期间不查:那些帧世界不动,阈值不可能跨过,也免得在结算界面底下弹 toast。
+    if (!run.paused) {
+      const live: UnlockProgress = {
+        wins: progress.wins + (world.result === RESULT_WIN ? 1 : 0),
+        kills: world.kills,
+        eliteKills: progress.eliteKills + world.eliteKills,
+      };
+      for (let i = 0; i < UNLOCKS.length; i++) {
+        if ((progress.unlockMask & (1 << i)) !== 0) continue; // 已解锁不重复判
+        if ((announcedMask & (1 << i)) !== 0) continue; // 本局已提示过
+        const entry = UNLOCKS[i]!;
+        if (entry.condition.kind === COND_NONE) continue; // 收藏类无"达成瞬间",结算时自然入档
+        if (!unlockMet(entry, live)) continue;
+        announcedMask |= 1 << i;
+        hud.toast(`解锁:${entry.name}`);
+      }
+    }
     // 残骸拾取:scrap 值爬升的那一帧响一声轻快高频叮(增量检测,首帧基准在 startRun 里已对齐,
     // 不会误触发;升级花掉残骸是下降,不响)
     if (world.scrap > lastScrap) audioBus.playCollect();

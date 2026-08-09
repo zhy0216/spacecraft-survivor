@@ -12,7 +12,7 @@
  * 一字同源,连乘永远推不到 ≤ 0。MVP 每号只可能出现一次(三选一把已持有的从候选里剔掉,
  * 见 sim/upgrade.ts 的 heldEdicts),故"几号同持"的连乘/相加只发生在不同号之间。
  *
- * 六条全部数值型、不引入新机制(18 号调味定位:build 主体必须长在甲板上,法令只是调味)。
+ * 七条全部数值型、不引入新机制(18 号调味定位:build 主体必须长在甲板上,法令只是调味)。
  */
 export const EDICT_TRACER = 0; // 曳光协议
 export const EDICT_GYRO = 1; // 重心校准
@@ -20,7 +20,10 @@ export const EDICT_MAGNET = 2; // 磁力过载
 export const EDICT_COOLANT = 3; // 散热协议
 export const EDICT_HULL = 4; // 结构加固
 export const EDICT_CRUISE = 5; // 巡航校准
-export const EDICT_KIND_COUNT = 6;
+// 19 号进阶法令:条件式解锁(单局击杀达标)后进三选一池,未解锁时由卡池过滤挡在候选之外。
+// 与 18 号同一条"数值型、不引入新机制"的口径 —— 它是既有字段的**更强档**,不是新机制
+export const EDICT_RAPID = 6; // 急速协议
+export const EDICT_KIND_COUNT = 7;
 
 export interface EdictDef {
   /** 下标 === type,与 EDICT_* 一致;EDICTS[type] 直取,错一位就全船串味 */
@@ -40,7 +43,7 @@ export interface EdictDef {
   cruiseSpeedMul: number;
 }
 
-/** 下标 === type,顺序 曳光/重心/磁力/散热/结构/巡航;sim 靠 EDICTS[type] 直取 */
+/** 下标 === type,顺序 曳光/重心/磁力/散热/结构/巡航 + 19 号急速协议;sim 靠 EDICTS[type] 直取 */
 export const EDICTS: EdictDef[] = [
   {
     type: EDICT_TRACER,
@@ -101,6 +104,18 @@ export const EDICTS: EdictDef[] = [
     heatMaxMul: 1,
     hullHpAdd: 0,
     cruiseSpeedMul: 1.1, // 巡航速度 +10%
+  },
+  {
+    // 19 号进阶法令:曳光协议的更强档(弹药系射速 +10% → +25%)。
+    // 全数值、不引入新机制 —— 解锁内容的价值在"更强的既有档",不在新机制(18 号口径)
+    type: EDICT_RAPID,
+    name: '急速协议',
+    ammoFireRateMul: 1.25, // 弹药系射速 +25%
+    turnRateAdd: 0,
+    magnetRadiusMul: 1,
+    heatMaxMul: 1,
+    hullHpAdd: 0,
+    cruiseSpeedMul: 1,
   },
 ];
 

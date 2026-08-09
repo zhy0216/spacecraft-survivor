@@ -37,7 +37,13 @@ export const TOWER_PARTICLE = 8; // 磁轨 + 电容组 → 粒子长矛(全屏�
 export const TOWER_TESLA = 9; // 电弧 + 散热器 → 特斯拉冠冕(链数翻倍)※ GDD 原表是反应堆,17 号口径方案 A 挂散热器
 export const TOWER_FIRESTORM = 10; // 迫击炮 + 弹药库 → 轨道火雨(三连发)
 export const TOWER_THORN = 11; // 点防 + 装甲舱 → 荆棘壁垒(击落弹幕拦截旗子)
-export const TOWER_KIND_COUNT = 12;
+
+// —— 进阶塔(19 号 issue,GDD §10 的"只解锁内容"):条件式解锁后进三选一池。
+// 不是进化塔(不在 evolutions.ts 的配方表里),isEvolutionTower(12) 恒 false ——
+// 它走的是"解锁 → 入池"这条路,与进化塔的"配方 → 船坞"是两扇不同的闸门。
+// 未解锁时由卡池过滤(sim/upgrade.ts 的 collectTypes,后续 issue 接线)挡在候选之外。
+export const TOWER_MISSILE_NEST = 12; // 导弹巢(首次胜利解锁;弹药系迫击炮,见下)
+export const TOWER_KIND_COUNT = 13;
 
 /** 同名叠级上限(GDD §5.4:Lv1→Lv5,原格生效不占新格) */
 export const TOWER_MAX_LEVEL = 5;
@@ -160,7 +166,7 @@ export interface TowerDef {
 
 /**
  * 下标 === type,顺序 机炮/激光/电弧/磁轨/点防/迫击炮 + 17 号六座进化塔(6..11,与 evolutions.ts
- * 配方顺序一一对应);sim 靠 TOWERS[cell.towerType] 直取
+ * 配方顺序一一对应)+ 19 号进阶塔导弹巢(12,首次胜利解锁);sim 靠 TOWERS[cell.towerType] 直取
  */
 export const TOWERS: TowerDef[] = [
   {
@@ -686,6 +692,55 @@ export const TOWERS: TowerDef[] = [
       heatMax: 1,
       chargeRate: 1,
       magazine: 10, // 占位待调
+      chain: 0,
+    },
+  },
+  // —— 19 号进阶塔(GDD §10 的"只解锁内容"):首次胜利解锁后进三选一池。
+  // 签名 = 节流系里唯一一座迫击炮:**弹药系装填节奏的落点 AoE** ——
+  // 与迫击炮(充能系)的"攒-放"手感正好互为反面:一夹六发、打空装填、每发都是一颗落点弹。
+  // 数值全部占位待调,但四条不变式要能在任意值上成立:
+  //   弹药系四数齐全(magazine/reload/fireInterval 全正,没有买断例外);
+  //   FX_MORTAR 五件套自洽(damage 0 / bulletSpeed / bulletRadius / aoeRadius / aoeDamage);
+  //   等级成长全向(伤害在 AoE 档、弹夹加法成长);不叠 Lv3/Lv5 跳变 ——
+  {
+    type: TOWER_MISSILE_NEST,
+    name: '导弹巢',
+    arcDeg: ARC_MEDIUM_DEG, // 中 100°(比迫击炮的窄 60° 宽:导弹走弹道,射界宽一点才对得起装填的代价)
+    range: 460, // 占位待调(夹在机炮 380 与迫击炮 520 之间)
+    damage: 0, // 直击不结算:伤害全在落点(同迫击炮口径,见 FX_MORTAR 五件套)
+    fireInterval: 1.2, // 占位待调(弹夹 6 发 × 1.2s = 一轮齐射 7.2s,打空接装填)
+    turnRate: 150, // 占位待调(比迫击炮 90 略活:装填期足够把炮口转回来)
+    aimTolDeg: 10, // 占位待调(打的是落点范围,准头容差比激光宽,同迫击炮 8 一档)
+    throttle: THR_AMMO, // 弹药系迫击炮:弹药库邻接对这座塔生效(06 号支援设施的作用锚点)
+    magazine: 6, // 占位待调(一夹六发 = 一整轮齐射)
+    reload: 2.5, // 占位待调
+    heatPerShot: 0,
+    heatMax: 0,
+    coolPerSec: 0,
+    overheatLock: 0, // 非过热系,整段填 0
+    chargeTime: 0, // 非充能系
+    fx: FX_MORTAR,
+    bulletSpeed: 320, // 占位待调(慢到看得见抛物线,才有"躲开落点"的余地,同迫击炮一档)
+    bulletRadius: 5, // 占位待调(途中不碰撞,这个半径只给渲染用)
+    pierce: 0,
+    chainCount: 0,
+    chainRange: 0,
+    chainFalloff: 0, // 非链式
+    lanceWidth: 0, // 非穿透线
+    aoeRadius: 110, // 占位待调(比迫击炮 90 大:导弹的落点就该比炮弹糊得开)
+    aoeDamage: 26, // 占位待调(单发略轻于迫击炮 34,但一夹六发 ≈ 156 全中 —— 密度换单发)
+    interceptsProjectiles: false,
+    burst: 0, // 非恒发塔(一次开火一发;密度由 1.2s 间隔 × 6 发弹夹给)
+    burstAtLv3: 0, // 不做 Lv3 跳变:进阶塔的定位是"节流系交叉",不是叠等级小跳变
+    pierceAtLv5: 0,
+    tint: 0x4ec4f0, // 占位待调(中档天蓝,与 0x66c2ff 机炮拉开一档但仍在冷色域)
+    growth: {
+      damage: 1.25, // 占位待调:伤害全在 AoE,这一档喂的是 towerAoeDamage
+      fireRate: 1.1, // 占位待调
+      range: 1.06, // 占位待调
+      heatMax: 1,
+      chargeRate: 1, // 不用的乘法档填 1 = 无成长
+      magazine: 3, // 占位待调(Lv5 = 6 + 4×3 = 18 发,弹夹是加法成长:整数个东西)
       chain: 0,
     },
   },

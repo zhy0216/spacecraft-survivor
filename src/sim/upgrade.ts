@@ -36,6 +36,7 @@ import { EDICT_KIND_COUNT, EDICTS, edictMask } from '../data/edicts';
 import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
+import { UNLOCK_EDICT, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
 import {
   canPlace,
   CELL_EMPTY,
@@ -94,6 +95,24 @@ const legalScratch: number[] = [];
 const probe: UpgradeOption = { kind: OFFER_TOWER, type: 0, level: 0 };
 /** 某一类别里"合法且本次还没被抽中"的型号表(掷下标就是在它上面掷)。同样绝不外借 */
 const typePool: number[] = [];
+
+/**
+ * 解锁闸门(19 号):塔型 / 法令号 → 它在 UNLOCKS 表里的下标(= 解锁掩码位)。
+ * 掩码位 i = UNLOCKS[i] 开没开,与 waves.ts 的 WAVE_LOCKED_ELITES 门控同一条约定。
+ * 未被解锁表闸门覆盖的型号填 -1 = 恒进池(六座基础塔、进化塔的池外身份另由
+ * isEvolutionTower 管 —— 解锁闸门只碰"解锁才进池"的那几号)。
+ * 模块加载时算一次(表是静态的,运行期只做一次按位判定,铁律 3:热路径零分配)。
+ */
+const TOWER_UNLOCK_BIT: number[] = new Array<number>(TOWER_KIND_COUNT).fill(-1);
+const EDICT_UNLOCK_BIT: number[] = new Array<number>(EDICT_KIND_COUNT).fill(-1);
+for (let i = 0; i < UNLOCKS.length; i++) {
+  const u = UNLOCKS[i]!;
+  if (u.kind === UNLOCK_TOWER && u.type >= 0 && u.type < TOWER_KIND_COUNT) {
+    TOWER_UNLOCK_BIT[u.type] = i;
+  } else if (u.kind === UNLOCK_EDICT && u.type >= 0 && u.type < EDICT_KIND_COUNT) {
+    EDICT_UNLOCK_BIT[u.type] = i;
+  }
+}
 
 /**
  * 候选对应 deck 的哪种内容(CELL_WEAPON / CELL_SUPPORT)。
@@ -244,6 +263,9 @@ function alreadyOffered(out: UpgradeOption[], count: number, kind: number, type:
  * @param heldEdicts World 已持有的法令掩码(18 号):OFFER_EDICT 分支把已持有的剔出可选表 ——
  *   与支援死卡过滤同一条"只改可选表内容、不碰 rng 消耗次数"的口径,于是抽到已持有法令
  *   的"重复法令无效"沉默陷阱从结构上不存在;法令池被剔空就走 rollUpgradeOffer 的类别回退
+ * @param unlockMask 解锁状态位掩码(19 号):未解锁的塔(TOWER_MISSILE_NEST)/ 法令(EDICT_RAPID)
+ *   在 offerLegal **之前**就剔出可选表 —— 与 heldEdicts 同位置同口径:只收窄 typePool,
+ *   不碰 rng(每个候选位 2 次 rng 无条件消耗不变),"未解锁项绝不进候选"由此结构上成立
  */
 function collectTypes(
   deck: Deck,
@@ -251,6 +273,7 @@ function collectTypes(
   out: UpgradeOption[],
   count: number,
   heldEdicts = 0,
+  unlockMask = 0,
 ): number {
   typePool.length = 0;
   const kindCount =
@@ -268,6 +291,12 @@ function collectTypes(
     if (kind === OFFER_TOWER && isEvolutionTower(type)) continue;
     // 18 号:法令不叠级 —— 已持有的直接剔掉(与支援死卡过滤同一条"只改可选表、不碰 rng"口径)
     if (kind === OFFER_EDICT && heldEdicts !== 0 && (heldEdicts & edictMask(type)) !== 0) continue;
+    // 19 号:解锁闸门 —— 未解锁的塔/法令绝不进候选(与 heldEdicts 同一条"只改可选表、不碰 rng"
+    // 口径:过滤在掷之前,不耗 rng)。掩码位 = UNLOCKS 下标;unlockMask = 0 时被闸门覆盖的
+    // 型号全部挡在池外(默认的旧世界构造 = 一切未解锁),不碰闸门的型号恒进池
+    const unlockBit =
+      kind === OFFER_TOWER ? TOWER_UNLOCK_BIT[type]! : kind === OFFER_EDICT ? EDICT_UNLOCK_BIT[type]! : -1;
+    if (unlockBit >= 0 && (unlockMask & (1 << unlockBit)) === 0) continue;
     if (!offerLegal(deck, kind, type)) continue;
     typePool.push(type);
   }
@@ -304,6 +333,10 @@ function pickKind(roll: number, includeDeck: boolean): number {
  *   故这里宁可把多余的对象丢掉,也不留一截长度对不上的尾巴。
  * @param heldEdicts World 已持有的法令掩码(18 号),OFFER_EDICT 分支按它剔掉已持有:
  *   法令不叠级,候选生成时直接过滤(与支援死卡过滤同构,见 collectTypes)。
+ * @param unlockMask 解锁状态位掩码(19 号,跨局存档的一部分):未解锁的塔/法令在
+ *   collectTypes 里、offerLegal **之前**就剔出可选表 —— 与 heldEdicts 同位置同口径:
+ *   只收窄 typePool,不碰 rng(每个候选位 2 次无条件消耗不变),于是同 seed 的随机序列
+ *   逐位不受解锁状态影响(19 号验收)。缺省 0 = 一切未解锁(默认的旧世界构造语义)。
  * @returns 0 = 四类都没有合法项(通常只会是数值表/拼块表被整体裁空)。
  *   这一档由调用方兜底(World 当场按跳过结算,不响回调、不时停),本函数不认识"流程"这回事 ——
  *   返回一张空的候选表让 World 去弹,才是每帧重弹一张空卡的死循环。
@@ -322,6 +355,7 @@ export function rollUpgradeOffer(
   out: UpgradeOption[],
   includeDeck: boolean = true,
   heldEdicts: number = 0,
+  unlockMask: number = 0,
 ): number {
   const kindCount = includeDeck ? 4 : 3;
   let count = 0;
@@ -332,14 +366,14 @@ export function rollUpgradeOffer(
     const indexRoll = rng.next();
 
     let kind = pickKind(kindRoll, includeDeck);
-    let pool = collectTypes(deck, kind, out, count, heldEdicts);
+    let pool = collectTypes(deck, kind, out, count, heldEdicts, unlockMask);
     if (pool === 0) {
       // 类别没得选就按固定顺序轮到其余允许类别，复用同一个 indexRoll、不额外消耗 rng。
       // 战斗升级 includeDeck=false 时甲板(2)在绕圈里跳去法令(3),绝不会绕进甲板拼块。
       for (let offset = 1; offset < kindCount && pool === 0; offset++) {
         kind = (kind + 1) % 4;
         if (!includeDeck && kind === OFFER_DECK) kind = OFFER_EDICT;
-        pool = collectTypes(deck, kind, out, count, heldEdicts);
+        pool = collectTypes(deck, kind, out, count, heldEdicts, unlockMask);
       }
     }
     if (pool === 0) continue;

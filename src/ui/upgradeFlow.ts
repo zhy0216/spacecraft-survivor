@@ -43,6 +43,7 @@ import {
   EDICT_GYRO,
   EDICT_HULL,
   EDICT_MAGNET,
+  EDICT_RAPID,
   EDICT_TRACER,
   type EdictDef,
   EDICTS,
@@ -63,6 +64,7 @@ import {
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_MAX_LEVEL,
+  TOWER_MISSILE_NEST,
   TOWER_MORTAR,
   TOWER_PD,
   TOWER_RAILGUN,
@@ -285,6 +287,8 @@ export function cardIcon(opt: UpgradeOption): string {
         return '▣';
       case EDICT_CRUISE:
         return '➤';
+      case EDICT_RAPID:
+        return '≫'; // 急速协议(19 号:单局击杀达标的解锁法令)
       default:
         return '?';
     }
@@ -303,6 +307,8 @@ export function cardIcon(opt: UpgradeOption): string {
         return '✣';
       case TOWER_MORTAR:
         return '◉';
+      case TOWER_MISSILE_NEST:
+        return '♁'; // 导弹巢(19 号:首次胜利解锁的进阶塔)
       default:
         return '?';
     }

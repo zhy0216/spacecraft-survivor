@@ -11,7 +11,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
 import { Rng } from '../core/rng';
+import { UNLOCKS } from '../data/unlocks';
 import {
+  WAVE_LOCKED_ELITES,
   WAVE_MAX_SPAWN_PER_TICK,
   WAVE_MAX_STREAMS,
   WAVE_SEGMENTS,
@@ -33,8 +35,11 @@ import {
 
 /** 真脚本原样留一份:每个用例都会换成短脚本,跑完必须还原,否则污染同文件后续用例 */
 const REAL = WAVE_SEGMENTS.slice();
+/** 解锁槽位表同样原样留一份:用例会换成测试槽位,跑完必须还原 */
+const REAL_LOCKED = WAVE_LOCKED_ELITES.slice();
 afterEach(() => {
   WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, ...REAL_LOCKED);
 });
 
 /** 换脚本。runner 每帧现读 WAVE_SEGMENTS,故换完直接 createWaveState 就是新脚本的开局 */
@@ -735,6 +740,122 @@ describe('精英插入(14 号:实装 todos/08 预留的 WaveElite 接口)', () =
     );
     expect(a.list.filter((x) => x.affixes !== undefined)).toHaveLength(2);
     expect(a.list.filter((x) => x.affixes !== undefined).map((x) => x.kind)).toEqual([3, 3]);
+  });
+});
+
+describe('解锁精英事件(19 号:WAVE_LOCKED_ELITES 按解锁掩码门控)', () => {
+  /** 测试槽位:收尾段(第 3 段)的"虫群母巢"占位 —— 与真表同构,但挂在第 0 段好测 */
+  const LOCKED = { unlockId: 'elite-queen', segmentIndex: 0, at: 0.2, kind: 3, count: 1, affixes: [0, 3, 4] };
+  /** 掩码位 = 该解锁条目在 UNLOCKS 里的下标(与运行器同一条约定,见 waves.ts 的 unlockBit) */
+  const queenBit = UNLOCKS.findIndex((u) => u.id === LOCKED.unlockId);
+  expect(queenBit).toBeGreaterThanOrEqual(0);
+  const QUEEN_MASK = 1 << queenBit;
+
+  /** 同一份脚本:一条普通流 + 一只段表精英(at 0.5) + 槽位表里的一只锁定精英(at 0.2) */
+  const script = (): void =>
+    useScript(
+      segment({
+        name: 'a',
+        duration: 10,
+        dirStartDeg: 0,
+        dirEndDeg: 60,
+        streams: [stream({ kind: 0, rate0: 10, rate1: 10, spreadDeg: 10 })], // dt=0.1 → 每帧整 1 只
+        elites: [{ at: 0.5, kind: 1, count: 1, affixes: [0] }],
+      }),
+    );
+
+  it('未解锁(掩码 0):锁定精英整条跳过 —— 精英链只有段表那一条,连 at 时刻都轮不到它', () => {
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, LOCKED);
+    const s = createWaveState(0); // 全部未解锁
+    expect(s.elites.map((e) => e.at)).toEqual([0.5]); // 归并时就被挡在链外
+    const r = rec();
+    run(s, 30, 0.1, new Rng(8), r); // 3 秒:锁定的 at=0.2 早就到点
+    expect(r.list.filter((x) => x.affixes !== undefined).map((x) => x.affixes)).toEqual([[0]]);
+    expect(r.list.filter((x) => x.affixes !== undefined)).toHaveLength(1); // 只有段表那只
+    expect(s.eliteNext).toBe(1); // 段表那只到点即消费,锁定那只没占过游标
+  });
+
+  it('解锁后按 at 归并触发:锁定精英照脚本出、游标到点即消费,且不重复触发', () => {
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, LOCKED);
+    const s = createWaveState(QUEEN_MASK);
+    // 归并链 = 锁定(0.2) + 段表(0.5),按 at 升序 —— 解锁只是"放进链",顺序由 at 定
+    expect(s.elites.map((e) => e.at)).toEqual([0.2, 0.5]);
+    const r = rec();
+    run(s, 30, 0.1, new Rng(8), r);
+    const elites = r.list.filter((x) => x.affixes !== undefined);
+    expect(elites).toHaveLength(2);
+    // 锁定精英:kind/count/affixes 原样透传,出生角 = 当时的主压方向
+    // (dirStart 0 → dirEnd 60, duration 10,@0.2s 线性插值 = 1.2°)
+    const queen = elites[0]!;
+    expect(queen.kind).toBe(3);
+    expect(queen.affixes).toEqual([0, 3, 4]);
+    expect(queen.angle).toBeCloseTo(1.2 * DEG2RAD, 9);
+    expect(s.eliteNext).toBe(2); // 两条都到点即消费
+    // 到点过一次就不再复发:继续跑也不再多出精英
+    run(s, 60, 0.1, new Rng(8), r);
+    expect(r.list.filter((x) => x.affixes !== undefined)).toHaveLength(2);
+  });
+
+  it('未解锁 = 槽位不存在:掩码 0 与空槽位表同 seed 逐只一字不差(含出生角)', () => {
+    // 19 号验收"解锁状态不影响同 seed rng 序列"的最强形式:未解锁的槽位表现得
+    // 就像它从没被加进表里 —— 同 seed 两局的普通怪序列(型号 + 出生角)逐只一致,
+    // rng 消耗次数也一字不差
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, LOCKED);
+    const lockedRun = rec();
+    const lockedRng = new CountingRng(20260819);
+    run(createWaveState(0), 5 * SIM_HZ, SIM_DT, lockedRng, lockedRun);
+
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length); // 槽位表清空 = 19 号落地前的世界
+    const emptyRun = rec();
+    const emptyRng = new CountingRng(20260819);
+    run(createWaveState(0), 5 * SIM_HZ, SIM_DT, emptyRng, emptyRun);
+
+    expect(lockedRun.list).toEqual(emptyRun.list);
+    expect(lockedRng.calls).toBe(emptyRng.calls);
+  });
+
+  it('解锁后触发:多出那一组正是锁定精英;普通怪型号序列与未解锁局逐位一致(型号与 rng 无关)', () => {
+    // 精英排在帧末、型号脚本直给:解锁让触发帧之后的普通怪出生角顺延(与既有精英同一条
+    // 既有口径,14 号用例同款断言),但**型号序列**逐位一致 —— 解锁与否只决定"这组怪出不出"
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, LOCKED);
+    const lockedRun = rec();
+    run(createWaveState(0), 5 * SIM_HZ, SIM_DT, new Rng(20260819), lockedRun);
+
+    const openRun = rec();
+    const openRng = new CountingRng(20260819);
+    run(createWaveState(QUEEN_MASK), 5 * SIM_HZ, SIM_DT, openRng, openRun);
+
+    expect(openRun.list.length).toBe(lockedRun.list.length + 1); // 多出恰好一组
+    const ordinaryKinds = (list: Rec['list']): number[] =>
+      list.filter((x) => x.affixes === undefined).map((x) => x.kind);
+    expect(ordinaryKinds(openRun.list)).toEqual(ordinaryKinds(lockedRun.list));
+    // rng 消耗口径不变:每出一只恰好一次,多出的那只是精英的"每只一次"
+    expect(openRng.calls).toBe(openRun.list.length);
+  });
+
+  it('掩码只认自己的位:别的解锁位开着、本槽位未开 = 照样跳过(闸门按条目独立)', () => {
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, LOCKED);
+    // 全开但**不包含** queen 的掩码:除 queen 位外全 1
+    const otherBits = (1 << UNLOCKS.length) - 1 - QUEEN_MASK;
+    const s = createWaveState(otherBits);
+    expect(s.elites.map((e) => e.at)).toEqual([0.5]); // queen 位未开 → 仍被挡在链外
+    const r = rec();
+    run(s, 30, 0.1, new Rng(8), r);
+    expect(r.list.filter((x) => x.affixes !== undefined)).toHaveLength(1);
+  });
+
+  it('unlockId 查不到 = 数据写坏,按未解锁跳过(不抛、不出、不扰动)', () => {
+    script();
+    WAVE_LOCKED_ELITES.splice(0, WAVE_LOCKED_ELITES.length, { ...LOCKED, unlockId: 'no-such-entry' });
+    const s = createWaveState((1 << UNLOCKS.length) - 1); // 全开
+    const r = rec();
+    run(s, 30, 0.1, new Rng(8), r);
+    expect(r.list.filter((x) => x.affixes !== undefined)).toHaveLength(1); // 只有段表那只
   });
 });
 

@@ -12,9 +12,13 @@
  * 绝不发展成半个 jsdom:本仓的 vitest 跑在 Node 环境里,不装 jsdom(见 ui/upgradeFlow.test.ts)。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { UNLOCK_COLLECT, UNLOCK_EDICT, UNLOCK_ELITE, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
+import { createProgress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN } from '../sim/world';
 import {
+  collectionCategoryName,
+  collectionItemName,
   createGameOverUi,
   formatDuration,
   type RunSummary,
@@ -95,6 +99,8 @@ function summary(over: Partial<RunSummary> = {}): RunSummary {
     segmentCount: 4,
     bossKilledAtSec: 0,
     silhouette: null,
+    newUnlocks: [],
+    progressStats: createProgress(),
     ...over,
   };
 }
@@ -137,6 +143,25 @@ describe('summaryText', () => {
   });
 });
 
+describe('collectionCategoryName / collectionItemName(19 号图鉴)', () => {
+  it('分类名按 UNLOCK_* 给四类文案,未知 kind 印码不静默(与 resultTitle 的未知码同一口径)', () => {
+    expect(collectionCategoryName(UNLOCK_TOWER)).toBe('塔');
+    expect(collectionCategoryName(UNLOCK_ELITE)).toBe('敌人');
+    expect(collectionCategoryName(UNLOCK_EDICT)).toBe('法令');
+    expect(collectionCategoryName(UNLOCK_COLLECT)).toBe('船形剪影');
+    expect(collectionCategoryName(99)).toBe('分类 99');
+  });
+
+  it('条目名从内容表读:塔/法令取数据表名,精英条目带底敌型名', () => {
+    // 导弹巢 / 急速协议在内容表与 UNLOCKS 表同名 —— 数据表改名,图鉴跟着走
+    expect(collectionItemName(UNLOCKS[0]!)).toBe('导弹巢');
+    expect(collectionItemName(UNLOCKS[1]!)).toBe('急速协议');
+    // 虫群母巢的底敌型 = WAVE_LOCKED_ELITES[0].kind → 冲撞甲虫(这条钉着两表的下标咬合)
+    expect(collectionItemName(UNLOCKS[2]!)).toBe('虫群母巢(冲撞甲虫精英)');
+    expect(collectionItemName(UNLOCKS[3]!)).toBe('船形收藏');
+  });
+});
+
 // —— 以下只服务 createGameOverUi 那三条(破例的理由见文件头)——
 
 /** 桩元素:createGameOverUi 只碰它的 style / textContent / src / alt / append / addEventListener */
@@ -150,6 +175,8 @@ interface StubEl {
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
   appendChild(kid: StubEl): StubEl;
+  /** 图鉴刷新每次 show 整块重排,createGameOverUi 用 replaceChildren 清场(见 renderCollection) */
+  replaceChildren(...kids: StubEl[]): void;
   addEventListener(type: string, fn: (e: unknown) => void): void;
 }
 
@@ -168,6 +195,10 @@ function createStubEl(tag = 'div'): StubEl {
     appendChild(kid: StubEl): StubEl {
       el.children.push(kid);
       return kid;
+    },
+    replaceChildren(...kids: StubEl[]): void {
+      el.children.length = 0;
+      el.children.push(...kids);
     },
     addEventListener(type: string, fn: (e: unknown) => void): void {
       el.listeners.set(type, fn);
@@ -251,6 +282,26 @@ function installDom(): StubDom {
 /** 遮罩 = #ui 的唯一子节点(见 createGameOverUi 的 appendChild) */
 function root(dom: StubDom): StubEl {
   return dom.ui.children[0]!;
+}
+
+/** 结算卡 = 遮罩的唯一子节点;图鉴与「解锁 XX」都长在它里面 */
+function panel(dom: StubDom): StubEl {
+  return root(dom).children[0]!;
+}
+
+/** 深度查找:按谓词扫子树,返回第一个命中(图鉴条目/解锁块都是 leaf,textContent 可精确匹配) */
+function findEl(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl | undefined {
+  if (pred(rootEl)) return rootEl;
+  for (const kid of rootEl.children) {
+    const hit = findEl(kid, pred);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** 「解锁 XX」块 = 结算卡第 5 个子节点(标题/注/剪影/读数/解锁/图鉴/按钮,构造顺序固定,与 upgradeFlow.test 同款按位取) */
+function unlockBlock(dom: StubDom): StubEl {
+  return panel(dom).children[4]!;
 }
 
 /** 剪影那张 img:createGameOverUi 只造一个 */
@@ -373,5 +424,74 @@ describe('createGameOverUi', () => {
     // 每局多一份监听器 = 一次回车重开好几局;每局多一块遮罩 = 战场上永远糊着一层看不见的点击拦截层
     expect(dom.windowListeners).toBe(listeners);
     expect(dom.ui.children.length).toBe(1);
+  });
+
+  it('图鉴:已解锁项彩色、未解锁项灰显(降透明度 + 标注)(19 号)', () => {
+    const ui = make();
+    // 掩码位 0 = 导弹巢已解锁,其余内容锁全关
+    ui.show(
+      summary({ progressStats: { unlockMask: 1, wins: 1, kills: 0, eliteKills: 0, silhouettes: [] } }),
+    );
+    const cardEl = panel(dom);
+    const tower = findEl(cardEl, (el) => el.textContent === '导弹巢')!;
+    expect(tower.style.cssText).toContain('#c8dcf0');
+    expect(tower.style.cssText).not.toContain('opacity');
+    const edict = findEl(cardEl, (el) => el.textContent === '急速协议(未解锁)')!;
+    expect(edict.style.cssText).toContain('#5f7a99');
+    expect(edict.style.cssText).toContain('opacity:.45');
+    const elite = findEl(cardEl, (el) => el.textContent === '虫群母巢(冲撞甲虫精英)(未解锁)')!;
+    expect(elite.style.cssText).toContain('opacity:.45');
+    // 计数头:3 条内容解锁里开了 1 条(船形收藏无条件,不计入分子分母)
+    const title = findEl(cardEl, (el) => el.textContent.startsWith('图鉴'))!;
+    expect(title.textContent).toBe('图鉴 · 内容解锁 1/3');
+    // 全解锁时计数头到顶,条目不再带"(未解锁)"
+    ui.show(summary({ progressStats: { unlockMask: 0b111, wins: 1, kills: 9999, eliteKills: 14, silhouettes: [] } }));
+    expect(findEl(cardEl, (el) => el.textContent.startsWith('图鉴'))!.textContent).toBe('图鉴 · 内容解锁 3/3');
+    expect(findEl(cardEl, (el) => el.textContent === '导弹巢(未解锁)')).toBeUndefined();
+  });
+
+  it('图鉴:剪影展示最近 N 张,一张都没有给占位(19 号)', () => {
+    const ui = make();
+    ui.show(summary({ progressStats: createProgress() }));
+    const cardEl = panel(dom);
+    const placeholder = findEl(cardEl, (el) => el.textContent.includes('暂无收藏剪影'))!;
+    expect(placeholder.textContent).toContain('暂无收藏剪影');
+
+    ui.show(
+      summary({
+        progressStats: { ...createProgress(), silhouettes: ['data:old', 'data:a', 'data:b', 'data:c'] },
+      }),
+    );
+    // 只留最近 N 张缩略图;最旧那张(data:old)被挤掉;shotEl(src 为空)不混进来
+    const imgs: StubEl[] = [];
+    (function collect(el: StubEl): void {
+      if (el.tagName === 'IMG') imgs.push(el);
+      for (const kid of el.children) collect(kid);
+    })(cardEl);
+    const thumbs = imgs.filter((el) => el.src !== '');
+    expect(thumbs.map((el) => el.src)).toEqual(['data:a', 'data:b', 'data:c']);
+    expect(findEl(cardEl, (el) => el.textContent.includes('暂无收藏剪影'))).toBeUndefined();
+  });
+
+  it('「解锁 XX」:有新解锁才显示,空数组整个隐藏(19 号)', () => {
+    const ui = make();
+    ui.show(summary({ newUnlocks: [] }));
+    // 无新解锁:块藏起来,且不残留上一局的"解锁:"字样
+    expect(unlockBlock(dom).style.display).toBe('none');
+    expect(findEl(panel(dom), (el) => el.textContent.startsWith('解锁:'))).toBeUndefined();
+
+    ui.show(summary({ newUnlocks: [0, 2] }));
+    expect(unlockBlock(dom).style.display).toBe('block');
+    // 与局内 toast 同一句"解锁:名字";多条换行排开
+    expect(unlockBlock(dom).textContent).toBe('解锁:导弹巢\n解锁:虫群母巢');
+  });
+
+  it('失败局同样带 newUnlocks:条件达成即记,结算页照报(19 号)', () => {
+    const ui = make();
+    ui.show(summary({ result: RESULT_LOSE, newUnlocks: [1] }));
+    expect(unlockBlock(dom).style.display).toBe('block');
+    expect(unlockBlock(dom).textContent).toBe('解锁:急速协议');
+    // 失败局图鉴照常铺(未解锁灰显、计数如实),不看胜负
+    expect(findEl(panel(dom), (el) => el.textContent === '导弹巢(未解锁)')).toBeDefined();
   });
 });

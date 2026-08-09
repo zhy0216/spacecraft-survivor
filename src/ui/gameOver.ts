@@ -2,8 +2,10 @@
  * 结算界面(08 号 issue T3)—— DOM 覆盖层,**永不 import pixi**(铁律 1 的另一半:
  * 世界里的东西走 Pixi,菜单/卡片/面板走 #ui)。
  *
- * 它只做三件事:把一局的结果念出来(胜/负 + 存活时间 + 击杀数 + 航段进度)、
- * 摆一张可选的船形剪影、给一个「再来一局」。**一个字都不认识 World**:
+ * 它只做五件事:把一局的结果念出来(胜/负 + 存活时间 + 击杀数 + 航段进度)、
+ * 摆一张可选的船形剪影、报一次「解锁 XX」(19 号)、铺一张元进度图鉴(19 号:
+ * 塔/敌人/法令的解锁状态 + 最近几张船形剪影,未解锁灰显)、给一个「再来一局」。
+ * **一个字都不认识 World**:
  * 摘数据、停 sim、换 World 全在 main.ts 那条重开流程里,这里收的是一份纯数据 RunSummary ——
  * 于是"结算显示什么"能脱开渲染与 sim 单测(下面那几个纯函数就是拦网),
  * 而 10 号 issue 把结算并进正式流程时,换掉的只是这一层的皮。
@@ -15,6 +17,19 @@
  * **暖红只许出现在失败标题那几个字上**,不铺成色块 —— 铺开就成了敌方色域,
  * 而失败界面里唯一属于敌人的只有"你被打沉了"这个事实本身。
  */
+import { EDICTS } from '../data/edicts';
+import { ENEMIES } from '../data/enemies';
+import { TOWERS } from '../data/towers';
+import {
+  UNLOCK_COLLECT,
+  UNLOCK_EDICT,
+  UNLOCK_ELITE,
+  UNLOCK_TOWER,
+  UNLOCKS,
+  type UnlockEntry,
+} from '../data/unlocks';
+import { WAVE_LOCKED_ELITES } from '../data/waves';
+import type { Progress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
 
 /** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
@@ -56,6 +71,26 @@ const SHOT_CSS = 'display:none;max-width:60%;height:auto;margin:0 auto 14px;';
  */
 const STATS_CSS = `white-space:pre;text-align:left;display:inline-block;color:${VALUE_COLOR};margin-bottom:16px;`;
 
+/** 「解锁 XX」块:与读数同一套左对齐多行文本,但用提示条那支冷青蓝(19 号:解锁是正反馈,不是账本) */
+const UNLOCK_CSS =
+  'white-space:pre;text-align:left;' +
+  `display:inline-block;color:${OK_COLOR};margin-bottom:16px;letter-spacing:.04em;`;
+
+/** 图鉴块:与读数区之间顶边线分隔;内容超高时自己滚动,别把按钮挤出屏外 */
+const COLLECTION_CSS =
+  'margin-top:14px;padding-top:12px;border-top:1px solid rgba(43,74,110,.55);' +
+  'text-align:left;max-height:38vh;overflow-y:auto;';
+const COLLECTION_TITLE_CSS = `color:${OK_COLOR};font-size:12px;letter-spacing:.16em;margin-bottom:2px;`;
+const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;margin-top:10px;margin-bottom:3px;`;
+/** 图鉴条目:已解锁 = 读数同色;未解锁 = 灰字 + 降透明度(灰显,见 renderCollection) */
+const ITEM_CSS = `color:${VALUE_COLOR};`;
+const ITEM_LOCKED_CSS = `color:${IDLE_COLOR};opacity:.45;`;
+/** 历史船形缩略图;dataURL 原样显示,object-fit 兜住剪影的透明边 */
+const SHOT_THUMB_CSS =
+  `width:52px;height:52px;object-fit:contain;background:rgba(5,7,13,.6);` +
+  `border:1px solid ${LINE_COLOR};border-radius:4px;margin:4px 6px 0 0;`;
+const SHOT_PLACEHOLDER_CSS = `color:${IDLE_COLOR};margin-top:4px;`;
+
 /** button 不继承页面字体,font:inherit 这一句不能省(否则读数是等宽、按钮是系统黑体) */
 const BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
@@ -76,6 +111,10 @@ export interface RunSummary {
   bossKilledAtSec: number;
   /** 船形剪影 dataURL;渲染层抓不到就是 null,此时那一格整个不显示 */
   silhouette: string | null;
+  /** 本次结算新开锁的 UNLOCKS 下标(增量);空数组 = 没有新解锁,「解锁 XX」区块整个不显示 */
+  newUnlocks: number[];
+  /** 结算后的元进度(sim/progress.ts):解锁掩码 + 计数器 + 剪影集合,图鉴读它 */
+  progressStats: Progress;
 }
 
 export interface GameOverUi {
@@ -161,6 +200,55 @@ export function summaryText(s: RunSummary): string {
 }
 
 /**
+ * 图鉴一次展示的剪影张数:从 progressStats.silhouettes 取**最近 N 张**
+ * (存档侧本来就限量存最近 10 张,这里只摆一小排,免得结算卡拖一堆 100KB 级 dataURL)。
+ */
+export const COLLECTION_SILHOUETTE_MAX = 3;
+
+/** 图鉴分类名(UNLOCK_* → 类别文案);未知 kind 印出码本身,与 resultTitle 的未知结果码同一口径 */
+export function collectionCategoryName(kind: number): string {
+  switch (kind) {
+    case UNLOCK_TOWER:
+      return '塔';
+    case UNLOCK_ELITE:
+      return '敌人';
+    case UNLOCK_EDICT:
+      return '法令';
+    case UNLOCK_COLLECT:
+      return '船形剪影';
+    default:
+      return `分类 ${kind}`;
+  }
+}
+
+/** 解锁精英的底敌型名(WAVE_LOCKED_ELITES[type] → ENEMIES[kind].name);查不到返回 null */
+function eliteBaseName(entry: UnlockEntry): string | null {
+  const elite = WAVE_LOCKED_ELITES[entry.type];
+  if (elite === undefined) return null;
+  return ENEMIES[elite.kind]?.name ?? null;
+}
+
+/**
+ * 图鉴条目显示名:从内容表读(towers / edicts / waves),数据表改名图鉴跟着走 ——
+ * 与 summaryText 的"段数由调用方传"相反:这里是静态展示,数据表即真相。
+ * 精英条目把底敌型名带进括号("虫群母巢(冲撞甲虫精英)"),未解锁时玩家也读得到"解锁的是什么"。
+ */
+export function collectionItemName(entry: UnlockEntry): string {
+  switch (entry.kind) {
+    case UNLOCK_TOWER:
+      return TOWERS[entry.type]?.name ?? entry.name;
+    case UNLOCK_EDICT:
+      return EDICTS[entry.type]?.name ?? entry.name;
+    case UNLOCK_ELITE: {
+      const base = eliteBaseName(entry);
+      return base === null ? entry.name : `${entry.name}(${base}精英)`;
+    }
+    default:
+      return entry.name;
+  }
+}
+
+/**
  * 焦点在调参面板的输入框里:此时 Enter 是在提交一个数值,不该被当成"再来一局"抢走。
  * 判据与 ui/upgradeFlow.ts 里那份一字不差 —— tweakpane 挂在 body 上、位置比 #ui 还靠后,
  * 结算弹出时它照样点得到,所以这道拦网这里也得有(为两行 DOM 判断单开一个共享模块不值得,
@@ -199,6 +287,17 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
   shotEl.alt = '本局最终船形';
   const statsEl = document.createElement('div');
   statsEl.style.cssText = STATS_CSS;
+  // —— 19 号:「解锁 XX」+ 图鉴两块。图鉴常显(未解锁全灰 = "下一把的新理由"就摆在眼前),
+  // 「解锁 XX」只在本次有新解锁时露脸;内容由 show() 按 newUnlocks / progressStats 现刷 ——
+  const unlockEl = document.createElement('div');
+  unlockEl.style.cssText = UNLOCK_CSS;
+  unlockEl.style.display = 'none'; // 默认收着:首局往往没有新解锁,由 renderUnlocks 决定何时露脸
+  const collectionEl = document.createElement('div');
+  collectionEl.style.cssText = COLLECTION_CSS;
+  const collectionTitleEl = document.createElement('div');
+  collectionTitleEl.style.cssText = COLLECTION_TITLE_CSS;
+  const collectionItemsEl = document.createElement('div');
+  collectionEl.append(collectionTitleEl, collectionItemsEl);
   const btn = document.createElement('button');
   btn.style.cssText = BTN_CSS;
   // 键位写在按钮上:结算界面没有别的地方能提示"Enter 也行",而重开是这里唯一的动作
@@ -208,7 +307,7 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
   retryBtn.textContent = '再试这一局(R · 同种子)';
-  card.append(titleEl, noteEl, shotEl, statsEl, btn);
+  card.append(titleEl, noteEl, shotEl, statsEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
@@ -233,6 +332,73 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
     // 与 restart 同口径:先收面板再回调,理由一字同源
     hide();
     opts.onRetry?.();
+  }
+
+  /** 刷新「解锁 XX」块:有新解锁才露脸;空数组整个隐藏(没有新解锁的局没有这条新闻) */
+  function renderUnlocks(s: RunSummary): void {
+    if (s.newUnlocks.length === 0) {
+      unlockEl.textContent = '';
+      unlockEl.style.display = 'none';
+      return;
+    }
+    const lines: string[] = [];
+    for (const i of s.newUnlocks) {
+      // 名字取 UNLOCKS 表 —— 与局内 toast 同源,结算页报的与局内弹的是同一句
+      lines.push(`解锁:${UNLOCKS[i]?.name ?? `#${i}`}`);
+    }
+    unlockEl.textContent = lines.join('\n');
+    unlockEl.style.display = 'block';
+  }
+
+  /** 刷新图鉴:塔 → 敌人 → 法令三栏列内容解锁项(已解锁彩色、未解锁灰显 + 标注),末尾挂最近几张船形剪影 */
+  function renderCollection(s: RunSummary): void {
+    const mask = s.progressStats.unlockMask;
+    const content: Array<{ index: number; entry: UnlockEntry }> = [];
+    for (let i = 0; i < UNLOCKS.length; i++) {
+      if (UNLOCKS[i]!.kind === UNLOCK_COLLECT) continue; // 船形收藏无条件,不占"内容解锁"的分子分母
+      content.push({ index: i, entry: UNLOCKS[i]! });
+    }
+    let unlocked = 0;
+    for (const c of content) if ((mask & (1 << c.index)) !== 0) unlocked++;
+    collectionTitleEl.textContent = `图鉴 · 内容解锁 ${unlocked}/${content.length}`;
+    collectionItemsEl.replaceChildren();
+    for (const kind of [UNLOCK_TOWER, UNLOCK_ELITE, UNLOCK_EDICT]) {
+      const members = content.filter((c) => c.entry.kind === kind);
+      if (members.length === 0) continue;
+      const label = document.createElement('div');
+      label.style.cssText = CATEGORY_CSS;
+      label.textContent = collectionCategoryName(kind);
+      collectionItemsEl.appendChild(label);
+      for (const { index, entry } of members) {
+        const locked = (mask & (1 << index)) === 0;
+        const item = document.createElement('div');
+        item.style.cssText = locked ? ITEM_LOCKED_CSS : ITEM_CSS;
+        item.textContent = locked
+          ? `${collectionItemName(entry)}(未解锁)`
+          : collectionItemName(entry);
+        collectionItemsEl.appendChild(item);
+      }
+    }
+    // 船形剪影收尾:最近 N 张缩略图;一张都没有给占位(别让这一栏空着)
+    const label = document.createElement('div');
+    label.style.cssText = CATEGORY_CSS;
+    label.textContent = collectionCategoryName(UNLOCK_COLLECT);
+    collectionItemsEl.appendChild(label);
+    const shots = s.progressStats.silhouettes.slice(-COLLECTION_SILHOUETTE_MAX);
+    if (shots.length === 0) {
+      const ph = document.createElement('div');
+      ph.style.cssText = SHOT_PLACEHOLDER_CSS;
+      ph.textContent = '暂无收藏剪影 —— 每局结算自动收录';
+      collectionItemsEl.appendChild(ph);
+    } else {
+      for (const url of shots) {
+        const thumb = document.createElement('img');
+        thumb.style.cssText = SHOT_THUMB_CSS;
+        thumb.src = url;
+        thumb.alt = '历史船形';
+        collectionItemsEl.appendChild(thumb);
+      }
+    }
   }
 
   btn.addEventListener('click', restart);
@@ -262,6 +428,8 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
       titleEl.style.color = s.result === RESULT_LOSE ? LOSE_COLOR : OK_COLOR;
       noteEl.textContent = resultNote(s.result);
       statsEl.textContent = summaryText(s);
+      renderUnlocks(s);
+      renderCollection(s);
       // 抓不到剪影就整个不显示,**且不去动 src** —— 置空 src 在部分浏览器上会重新请求当前页面,
       // 而这里唯一想表达的只是"这一局没截到图"
       if (s.silhouette !== null) {

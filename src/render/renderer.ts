@@ -1545,7 +1545,7 @@ export class Renderer {
    * 抓不到就交 null(ui 侧 RunSummary.silhouette 收的就是 string | null),结算界面照常弹 ——
    * 一张图绝不许把胜负结算这条主流程带崩。
    *
-   * 一局只调一次(结算那一下),故这里的临时数组与 2x 分辨率都不必心疼(铁律 3 管的是热路径)。
+   * 一局只调一次(结算那一下),故这里的临时数组与分辨率都不必心疼(铁律 3 管的是热路径)。
    */
   captureShipSilhouette(): string | null {
     const hidden = [
@@ -1557,12 +1557,14 @@ export class Renderer {
     ];
     try {
       for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = false;
-      // 8x + 抗锯齿:船缩到 48×36 世界 px 后,deckG 的 local bounds 只有 ~60×48 ——
-      // 还按 2x 烤,结算卡片上的"最终船形"就是一张 ~120px 的糊图。8x 出 ~480px,
-      // 够结算界面按 CSS 封顶缩着放;一局只截一次,显存代价可忽略(铁律 3 管的是热路径)
+      // 4x + 抗锯齿:船缩到 48×36 世界 px 后,deckG 的 local bounds 只有 ~60×48 ——
+      // 4x 出 ~240px。这里不取 8x:剪影要进 localStorage 限量集合(19 号口径"降采样或限量",
+      // sim/progress.ts 已做最近 10 张 + 500KB 预算,渲染侧负责压单张体积;PNG dataURL 按
+      // 面积走,8x 比 4x 大 ~4 倍),240px 对图鉴缩略图足够,结算卡片则用 CSS 封顶缩放 ——
+      // 图鉴收藏优先保容量,清晰度交给按需放大
       const canvas = this.app.renderer.extract.canvas({
         target: this.deckG,
-        resolution: 8,
+        resolution: 4,
         antialias: true,
       });
       // toDataURL 在 ICanvas 上是**可选**方法(某些离屏 canvas 实现没有它):没有就当作抓不到

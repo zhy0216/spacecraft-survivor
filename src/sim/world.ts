@@ -298,10 +298,21 @@ export class World {
    * 单独把波次拨回去只会造出一个"敌人还在场、脚本却从头开始"的四不像。
    *
    * 里头 segment / segTime / burstNext / eliteNext / debt 是真状态(全进 checksum,14 号起精英游标也哈),
-   * dirRad / intensity / done 是它们与脚本的纯函数(派生量口径见 sim/waves.ts 的字段注释)。
+   * unlockMask 是开局定死的输入配置(19 号,不进 checksum),dirRad / intensity / done 是它们与脚本的
+   * 纯函数(派生量口径见 sim/waves.ts 的字段注释)。
    * **tuning.stressSpawn = true 时它整段旁路**:冻在初值、方向不转、永不 done。
    */
-  readonly wave: WaveState = createWaveState();
+  readonly wave: WaveState;
+
+  /**
+   * 解锁状态位掩码(19 号):位 i = UNLOCKS[i] 开没开。**跨局存档的一部分**,与局内字段
+   * (edicts / offer 那些)不是一类东西,故不借它们存,单独走构造参数 —— 参照 seed 的构造待遇。
+   * 用法只有两处:卡池过滤(rollUpgradeOffer 的 unlockMask 参数)与解锁精英门控
+   * (createWaveState 喂给波次运行器)。
+   * **它不进 checksum**:只收窄候选集合与"解锁槽位出不出",与跨 seed 同一条口径 ——
+   * 换个掩码重放,同 seed 的 rng 序列逐位不变(19 号验收,过滤在掷前、精英零 rng)。
+   */
+  readonly unlockMask: number;
 
   /**
    * 本帧贴到船身的敌人 —— **粗筛候选**(照 sim/turret.ts 的 candidates 口径),不是"真撞上的人"。
@@ -382,6 +393,15 @@ export class World {
 
   /** 累计击杀。面板改数量导致的清场不计入 —— 那不是打死的 */
   kills = 0;
+
+  /**
+   * 累计**精英**击杀(19 号):精英 = affixes ≠ 0(与 spawnDrop 同一条判定,词缀位由 14 号
+   * 在 initEnemy 里落地;Boss 绝不用 affixes 位,故不占这一格)。与 kills 同一条
+   * "回收那一帧记账"的口径,也同一条**派生量口径**:击杀本身在敌人池与 affixes 里可见
+   * (affixes 进 checksum),故**不进 checksum** —— 它只供存档侧做累计解锁判定
+   * (unlocks.ts 的 COND_ELITE_KILLS),跨局累计,第 0 局起不清零。
+   */
+  eliteKills = 0;
 
   /**
    * Boss 阶段(15 号 T1)的状态机位:0 = 未进入(脚本没走完);1 = 战斗中;
@@ -600,8 +620,16 @@ export class World {
     spawn: (kind, angleRad, affixes) => this.spawnFromWave(kind, angleRad, affixes),
   };
 
-  constructor(seed: number) {
+  /**
+   * @param seed 随机种子(同 seed 同操作序列逐位可复现,01 号验收)。
+   * @param unlockMask 解锁状态位掩码(19 号):位 i = UNLOCKS[i] 开没开。跨局存档的一部分,
+   *   与 seed 同一条"构造时给一次"的待遇 —— 它只收窄卡池与解锁精英事件的候选集合,
+   *   不移动 rng 消耗次数,故不进 checksum。缺省 0 = 一切未解锁(既有调用方语义不变)。
+   */
+  constructor(seed: number, unlockMask: number = 0) {
     this.rng = new Rng(seed);
+    this.unlockMask = unlockMask;
+    this.wave = createWaveState(unlockMask);
     this.enemies = new Pool<Enemy>(createEnemy, resetEnemy);
     this.bullets = new Pool<Bullet>(createBullet, resetBullet);
     this.drops = new Pool<Drop>(createDrop, resetDrop);
@@ -1047,8 +1075,9 @@ export class World {
     )
       return;
     // 战斗内升级在现有甲板上新增/强化炮塔与支援，或抽法令(18 号:全船被动,不占格);
-    // 甲板拼块专属于两分钟整备。heldEdicts 让法令候选剔掉已持有(不叠级)。
-    if (rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts) === 0) {
+    // 甲板拼块专属于两分钟整备。heldEdicts 让法令候选剔掉已持有(不叠级);
+    // unlockMask(19 号)让未解锁的塔/法令不进候选 —— 两者同一条"只收窄可选表、不碰 rng"口径
+    if (rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts, this.unlockMask) === 0) {
       this.completeUpgrade(skipRefundFor(this.upgradeCost));
       return;
     }
@@ -1083,6 +1112,9 @@ export class World {
       const e = this.enemies.items[i]!;
       if (!e.dead) continue;
       this.kills++;
+      // 精英击杀计数(19 号):与 spawnDrop 同一条"affixes ≠ 0 即精英"的判定,
+      // Boss 绝不用 affixes 位故不计入;与 kills 同一条回收帧记账、不进 checksum
+      if (e.affixes !== 0) this.eliteKills++;
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
       // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum。
@@ -1407,8 +1439,9 @@ export class World {
     if (this.offerRerolled) return REROLL_ALREADY_DONE;
     this.starCoins -= REROLL_PRICE;
     this.offerRerolled = true;
-    // heldEdicts 同传:重摇后的法令候选同样剔掉已持有(与首掷同一套过滤,不叠级)
-    return rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts);
+    // heldEdicts 同传:重摇后的法令候选同样剔掉已持有(与首掷同一套过滤,不叠级);
+    // unlockMask 同传:重摇后的卡同样不出现未解锁的塔/法令(与首掷同一套过滤)
+    return rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts, this.unlockMask);
   }
 
   /**
@@ -1764,6 +1797,9 @@ export class World {
     // effective 数值(射速/转向/拾取半径/过热/HP/巡航) —— 那些数值本就参与判定,
     // 漏了它,"同 seed 一边抽到曳光协议一边没抽到"就会在若干帧后以"谁的塔先开火"
     // 的形式分叉,却查不出是哪一帧走岔的。整数掩码,不放大(与 offer 的 kind/type 同口径)。
+    // **unlockMask(19 号)不进**:它是开局定死的跨局存档输入,只收窄候选集合与解锁槽位
+    // 出不出,不参与任何判定、不移动 rng 消耗 —— 与跨 seed 同一条口径,哈它只是把
+    // "同一份存档"哈一遍;eliteKills 同理不进(与 kills 同一条派生量口径,见字段注释)
     acc(this.edicts);
     // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
     // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。

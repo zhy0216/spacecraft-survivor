@@ -8,6 +8,7 @@
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
 import { EDICTS, edictMask } from '../data/edicts';
+import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
 import type { Enemy, World } from '../sim/world';
@@ -64,6 +65,29 @@ const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:140px;`;
  * 名字直取 data/edicts(ui 不抄第二份);无法令时整体隐藏(display:none),持有才亮。
  */
 const EDICTS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:188px;display:none;`;
+
+/**
+ * 图鉴读数(19 号):与星币/法令同族的面板,叠在法令徽记正下方
+ * (top 188 + 面板高 ≈ 34 + 间距 14 = 236)。一行"图鉴 n/总":
+ * 已解锁计数 = world.unlockMask 的置位数(位 i = UNLOCKS[i],与 World 构造时
+ * 喂进来的 progress.unlockMask 同编码),总数直取 UNLOCKS.length ——
+ * 每帧 sync 现算,重开换世界(setWorld → sync)当帧跟上,HUD 不需要单独接进度引用。
+ */
+const COLLECTION_CSS = `${PANEL_CSS}position:absolute;left:48px;top:236px;`;
+
+/**
+ * 解锁 toast(19 号):与升级/改造流程那两枚 toast 同族的提示条,但长在 HUD 根里
+ * (时停淡出时跟着一起淡)。叠在静音开关正上方(开关 bottom:48,条放 104,都对齐
+ * 48px 罗盘通道);pointer-events 继承根的 none,不抢焦点。颜色取星币金 ——
+ * "解锁"是正向的收藏事件,与 ★ 同色系。
+ */
+const TOAST_CSS =
+  'position:absolute;left:48px;bottom:104px;padding:8px 12px;border-radius:6px;display:none;' +
+  `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.78);box-shadow:0 2px 12px rgba(0,0,0,.28);` +
+  `color:${STAR_COLOR};letter-spacing:.06em;white-space:pre;`;
+
+/** 解锁 toast 的存留时长(ms):到点自动消失(简单口径:闪现一下,不赖到局末) */
+const UNLOCK_TOAST_MS = 2600;
 
 /**
  * 精英血条(14 号):屏下缘居中的短条。与静音开关同一套罗盘通道边距(bottom:48px),
@@ -216,6 +240,11 @@ export interface HudUi {
   setPaused(paused: boolean): void;
   /** 每渲染帧同步现有节点 */
   sync(): void;
+  /**
+   * 局内解锁提示(19 号):闪现"解锁 XX",到点自动消失。由 main 每渲染帧按
+   * 阈值检测驱动(达成瞬间弹一次);根节点 pointer-events:none,不抢焦点。
+   */
+  toast(msg: string): void;
 }
 
 interface BarEls {
@@ -340,7 +369,43 @@ export function createHud(opts: { world: World }): HudUi {
   edictsRow.append(edictsLabel, edictsValue);
   edicts.appendChild(edictsRow);
 
-  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts);
+  // 图鉴读数(19 号):星币/法令同族的第三块左列面板,节点只建一次,每帧按掩码现算
+  const collection = document.createElement('div');
+  collection.style.cssText = COLLECTION_CSS;
+  collection.title = '图鉴';
+  const collectionRow = document.createElement('div');
+  collectionRow.style.cssText = LABEL_ROW_CSS;
+  const collectionLabel = document.createElement('span');
+  collectionLabel.style.cssText = LABEL_CSS;
+  collectionLabel.textContent = '图鉴';
+  const collectionValue = document.createElement('span');
+  collectionValue.style.cssText = `${VALUE_CSS}color:${OK_COLOR};`;
+  collectionRow.append(collectionLabel, collectionValue);
+  collection.appendChild(collectionRow);
+
+  // 解锁 toast(19 号):初始隐藏,toast() 点亮并计时自动收回 —— 与升级/改造流程的
+  // flash 同一条"闪现一下"的口径;连点重置计时,换局(setWorld)清掉上一局的话
+  const unlockToast = document.createElement('div');
+  unlockToast.style.cssText = TOAST_CSS;
+  let toastTimer = 0;
+  function clearToast(): void {
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toastTimer = 0;
+    unlockToast.textContent = '';
+    unlockToast.style.display = 'none';
+  }
+  function toast(msg: string): void {
+    unlockToast.textContent = msg;
+    unlockToast.style.display = 'block';
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      toastTimer = 0;
+      unlockToast.textContent = '';
+      unlockToast.style.display = 'none';
+    }, UNLOCK_TOAST_MS);
+  }
+
+  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -369,6 +434,15 @@ export function createHud(opts: { world: World }): HudUi {
     } else {
       edicts.style.display = 'none';
     }
+
+    // 图鉴读数(19 号):已解锁计数 = world.unlockMask 置位数 / UNLOCKS 总数。
+    // World 的掩码就是开局时喂进来的 progress.unlockMask(同编码,world.ts 字段注释),
+    // 局内只增不减、重开换世界当帧跟上 —— HUD 不另接进度引用
+    let unlocked = 0;
+    for (let i = 0; i < UNLOCKS.length; i++) {
+      if ((world.unlockMask & (1 << i)) !== 0) unlocked++;
+    }
+    collectionValue.textContent = `${unlocked}/${UNLOCKS.length}`;
 
     timer.textContent = formatDuration(world.elapsed);
 
@@ -451,6 +525,8 @@ export function createHud(opts: { world: World }): HudUi {
   return {
     setWorld(next: World): void {
       world = next;
+      // 上一局(或上一帧)弹的解锁提示属于旧世界:换局当场清掉,不赖到新局里
+      clearToast();
       sync();
     },
     setPaused(next: boolean): void {
@@ -459,5 +535,6 @@ export function createHud(opts: { world: World }): HudUi {
       root.style.opacity = paused ? '0.06' : '1';
     },
     sync,
+    toast,
   };
 }

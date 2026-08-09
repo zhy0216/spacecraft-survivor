@@ -233,6 +233,50 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
 export const WAVE_TOTAL_TIME = WAVE_SEGMENTS.reduce((sum, seg) => sum + seg.duration, 0);
 
 /**
+ * 解锁精英事件(19 号 issue)—— **不进 WAVE_SEGMENTS** 的预留槽位表。
+ * 为什么要单独成表而不是直接加进某一段:
+ *   WAVE_SEGMENTS 是"同 seed 出怪序列逐位可复现"的确定性地基(08/14 号用例钉死),
+ *   往既有段里多塞一只精英 = 改掉所有既有 seed 的出怪序列,一整批用例跟着作废;
+ *   而解锁事件的出场是**看存档的**(未解锁绝不出现),两件事不该缠在一起。
+ * 于是新事件以独立槽位存在:unlockId 指向 unlocks.ts 的 UNLOCK_ELITE 条目,
+ * 运行器(sim/waves.ts,后续 issue 接线)在"该解锁已开"时按 segmentIndex 归位、
+ * 按 at 升序插入目标段 —— 与既有精英同一套"按 at 触发、整组出、零 rng"的原子口径:
+ * 精英本来就是脚本事件(不消耗任何 rng),解锁与否只决定"这组怪出不出",
+ * 不移动随机序列 —— 19 号"解锁状态不影响同 seed rng 序列"的验收由此天然成立。
+ *
+ * 词缀数刻意 > 既有段的上限 2(GDD §6.4 的 1–2 词缀是普通段口径):
+ * "词缀更高的精英事件" = 更多词缀的复合威胁,这正是它值得被解锁的原因。
+ * 数值占位待调;unlockId 与 unlocks.ts 的同串咬合由 unlocks.test 钉着。
+ */
+export interface LockedElite {
+  /** unlocks.ts 的 UNLOCK_ELITE 条目 id;未解锁时运行器整条跳过 */
+  unlockId: string;
+  /** 解锁后归位的目标航段下标(落 [0, WAVE_SEGMENTS.length));加段/调段后运行器照下标读 */
+  segmentIndex: number;
+  /** 段内触发时刻(秒),与 WaveElite.at 同口径:必须 < 该段 duration */
+  at: number;
+  /** KIND_*;精英是普通敌型的放大版,不另开一张表 */
+  kind: number;
+  count: number;
+  /** 词缀编号(data/affixes.ts 的 AFFIX_*);本表词缀数必须 > 既有段的 2(单测钉住) */
+  affixes: number[];
+}
+
+/** 解锁精英事件槽位。当前一条(19 号首批):收尾段的"虫群母巢"。 */
+export const WAVE_LOCKED_ELITES: LockedElite[] = [
+  {
+    // 三重词缀小Boss:狂热光环(半径内虫潮加速)× 装甲(弹药系减半)× 相位(能量系减半) ——
+    // 三种减伤/增益叠在同一只上,两系塔谁都不能无脑吃它,得先清光环再集火
+    unlockId: 'elite-queen',
+    segmentIndex: 3, // 收尾段(虫潮合围)
+    at: 70, // 占位待调(与既有精英 40/85 错开,不挤在同几秒)
+    kind: KIND_BEETLE,
+    count: 1,
+    affixes: [0, 3, 4],
+  },
+];
+
+/**
  * 一段里最多几条主压流 = sim/waves.ts 里 debt 数组的**预分配长度**(铁律 3:运行期零新增分配)。
  * 同样从表里推导:加一条流不必回头改运行器。
  * 运行器仍会在换段时按需补齐 —— 单测 splice 进来的短脚本可能比它长,而补齐只发生在换段那一帧,

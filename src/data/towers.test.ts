@@ -36,6 +36,7 @@ import {
   TOWER_KIND_COUNT,
   TOWER_LASER,
   TOWER_MAX_LEVEL,
+  TOWER_MISSILE_NEST,
   TOWER_MORTAR,
   TOWER_PARTICLE,
   TOWER_PD,
@@ -85,7 +86,7 @@ const ACCESSORS: Array<[string, (def: TowerDef, level: number) => number]> = [
 describe('武器塔数值表', () => {
   it('下标 === type:sim 靠 TOWERS[cell.towerType] 直取,错一位就全塔串味', () => {
     expect(TOWERS.length).toBe(TOWER_KIND_COUNT);
-    expect(TOWER_KIND_COUNT).toBe(12); // GDD §5.2 的 MVP 六塔 + 17 号进化六塔
+    expect(TOWER_KIND_COUNT).toBe(13); // GDD §5.2 的 MVP 六塔 + 17 号进化六塔 + 19 号进阶塔导弹巢
     TOWERS.forEach((def, i) => expect(def.type).toBe(i));
     expect(TOWERS[TOWER_AUTOCANNON]!.name).toBe('自动机炮');
     expect(TOWERS[TOWER_LASER]!.name).toBe('激光棱镜');
@@ -99,6 +100,7 @@ describe('武器塔数值表', () => {
     expect(TOWERS[TOWER_TESLA]!.name).toBe('特斯拉冠冕');
     expect(TOWERS[TOWER_FIRESTORM]!.name).toBe('轨道火雨');
     expect(TOWERS[TOWER_THORN]!.name).toBe('荆棘壁垒');
+    expect(TOWERS[TOWER_MISSILE_NEST]!.name).toBe('导弹巢');
   });
 
   it('自动机炮 = GDD §14 锚点五数,不会被"顺手调平衡"改掉', () => {
@@ -118,7 +120,7 @@ describe('武器塔数值表', () => {
     expect(towerMagazine(gun, 1)).toBe(20);
   });
 
-  it('十二塔弧度:六塔与 GDD §5.2 一致,进化塔沿袭基塔档位,一律取自 data/arcs(不许写裸数字)', () => {
+  it('十三塔弧度:六塔与 GDD §5.2 一致,进化塔沿袭基塔档位,一律取自 data/arcs(不许写裸数字)', () => {
     expect(TOWERS[TOWER_AUTOCANNON]!.arcDeg).toBe(ARC_MEDIUM_DEG); // 100°
     expect(TOWERS[TOWER_LASER]!.arcDeg).toBe(ARC_NARROW_DEG); // 60°
     expect(TOWERS[TOWER_ARC]!.arcDeg).toBe(ARC_WIDE_DEG); // 150°
@@ -133,6 +135,8 @@ describe('武器塔数值表', () => {
     expect(TOWERS[TOWER_TESLA]!.arcDeg).toBe(ARC_WIDE_DEG);
     expect(TOWERS[TOWER_FIRESTORM]!.arcDeg).toBe(ARC_NARROW_DEG);
     expect(TOWERS[TOWER_THORN]!.arcDeg).toBe(ARC_WIDE_DEG);
+    // 进阶塔(19 号):导弹巢走中档 100° —— 既不在窄档堆里,也不抢广角塔的清群定位
+    expect(TOWERS[TOWER_MISSILE_NEST]!.arcDeg).toBe(ARC_MEDIUM_DEG);
 
     // 落在有序档位表里 = 没人偷偷写了个 137°,也没人给 MVP 塔挂上全向档
     // (ARC_OMNI_DEG 是绕开整套射界机制的例外,不在 ARC_TIERS_DEG 里)
@@ -144,9 +148,9 @@ describe('武器塔数值表', () => {
     }
   });
 
-  it('三种节流各四塔,机制字段与 throttle 自洽(06 号支援设施的三个作用锚点)', () => {
+  it('三种节流各塔自洽,机制字段与 throttle 对得上(06 号支援设施的三个作用锚点)', () => {
     const count = (thr: number): number => TOWERS.filter((d) => d.throttle === thr).length;
-    expect(count(THR_AMMO)).toBe(4); // 机炮/点防 + 加特林/荆棘
+    expect(count(THR_AMMO)).toBe(5); // 机炮/点防 + 加特林/荆棘 + 19 号导弹巢
     expect(count(THR_HEAT)).toBe(4); // 激光/电弧 + 相位/特斯拉
     expect(count(THR_CHARGE)).toBe(4); // 磁轨/迫击炮 + 粒子/火雨
     expect(TOWERS[TOWER_AUTOCANNON]!.throttle).toBe(THR_AMMO);
@@ -162,6 +166,7 @@ describe('武器塔数值表', () => {
     expect(TOWERS[TOWER_TESLA]!.throttle).toBe(THR_HEAT);
     expect(TOWERS[TOWER_FIRESTORM]!.throttle).toBe(THR_CHARGE);
     expect(TOWERS[TOWER_THORN]!.throttle).toBe(THR_AMMO);
+    expect(TOWERS[TOWER_MISSILE_NEST]!.throttle).toBe(THR_AMMO); // 弹药系迫击炮:装填节奏的落点 AoE
 
     for (const def of TOWERS) {
       const ammo = def.throttle === THR_AMMO;
@@ -419,5 +424,24 @@ describe('进化塔(17 号)—— 数值占位,但"变化可测"钉死:签名改
     expect(thorn.interceptsProjectiles).toBe(true);
     expect(thorn.throttle).toBe(THR_AMMO);
     expect(TOWERS.filter((d) => d.interceptsProjectiles).length).toBe(2); // 点防 + 荆棘
+  });
+});
+
+describe('进阶塔(19 号)—— 条件式解锁入池,数值占位但"可打"钉死', () => {
+  it('导弹巢:弹药系迫击炮 —— 弹夹装填的落点 AoE,与迫击炮的攒-放互为反面', () => {
+    const nest = TOWERS[TOWER_MISSILE_NEST]!;
+    expect(nest.throttle).toBe(THR_AMMO); // 弹药库邻接对这座塔生效(06 号作用锚点)
+    expect(nest.fx).toBe(FX_MORTAR);
+    expect(nest.damage).toBe(0); // 伤害全在落点(同迫击炮口径,见"开火表现与弹道字段自洽")
+    expect(nest.magazine).toBeGreaterThan(0); // 弹药系四数齐全,没有买断例外
+    expect(nest.reload).toBeGreaterThan(0);
+    expect(nest.fireInterval).toBeGreaterThan(0);
+    expect(nest.chargeTime).toBe(0); // 非充能系
+    // 弹夹是加法成长且取整:Lv5 仍是整数,UI 直接印出来
+    expect(towerMagazine(nest, TOWER_MAX_LEVEL)).toBe(
+      nest.magazine + nest.growth.magazine * (TOWER_MAX_LEVEL - 1),
+    );
+    // 落点伤害吃等级成长:升级对这座塔要看得见
+    expect(towerAoeDamage(nest, TOWER_MAX_LEVEL)).toBeGreaterThan(nest.aoeDamage);
   });
 });
