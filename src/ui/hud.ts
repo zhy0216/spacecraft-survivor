@@ -7,6 +7,7 @@
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { WAVE_SEGMENTS } from '../data/waves';
+import { audioBus } from '../render/audio';
 import type { World } from '../sim/world';
 import { formatDuration } from './gameOver';
 
@@ -44,6 +45,18 @@ const TIMER_CSS =
   `${PANEL_CSS}justify-self:center;min-width:86px;text-align:center;color:${OK_COLOR};` +
   'font-size:17px;letter-spacing:.12em;';
 const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
+
+/**
+ * 静音开关:左下角小按钮,与四周 48px 罗盘通道同一套边距。
+ * 根节点是 pointer-events:none!important,这里必须自己放行点击(auto 覆盖继承值,
+ * 子树可单独开 target —— 整层其它区域仍不抢焦点)。
+ */
+const MUTE_CSS =
+  'position:absolute;left:48px;bottom:48px;padding:6px 12px;' +
+  `border:1px solid ${LINE_COLOR};border-radius:7px;` +
+  'background:rgba(5,7,13,.68);box-shadow:0 2px 12px rgba(0,0,0,.28);' +
+  'font:inherit;letter-spacing:.08em;cursor:pointer;user-select:none;' +
+  'pointer-events:auto!important;';
 
 /** 罗盘根是一支向 +X 的 CSS 箭头;sync 时只改位置、旋转、尺寸与透明度 */
 const THREAT_CSS =
@@ -230,7 +243,24 @@ export function createHud(opts: { world: World }): HudUi {
   warnTip.style.cssText = THREAT_TIP_CSS;
   warn.append(warnShaft, warnTip);
 
-  root.append(top, threat, warn);
+  // 静音开关:默认有声(开)。点击只切 audioBus 总线增益并改自己的文字/颜色,
+  // 不新增任何窗口监听、不动 sim;按钮本体是 div,不会抢键盘焦点(Enter/空格不受干扰)
+  const muteBtn = document.createElement('div');
+  muteBtn.style.cssText = MUTE_CSS;
+  muteBtn.title = '静音开关';
+  let muted = false;
+  function paintMute(): void {
+    muteBtn.textContent = muted ? '声音:关' : '声音:开';
+    muteBtn.style.color = muted ? IDLE_COLOR : OK_COLOR;
+  }
+  muteBtn.addEventListener('click', () => {
+    muted = !muted;
+    audioBus.setMuted(muted);
+    paintMute();
+  });
+  paintMute();
+
+  root.append(top, threat, warn, muteBtn);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {

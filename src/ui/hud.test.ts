@@ -80,8 +80,10 @@ interface StubEl {
   textContent: string;
   title: string;
   children: StubEl[];
+  listeners: Map<string, (e?: unknown) => void>;
   append(...kids: StubEl[]): void;
   appendChild(kid: StubEl): StubEl;
+  addEventListener(type: string, fn: (e?: unknown) => void): void;
 }
 
 function createStubEl(tag = 'div'): StubEl {
@@ -91,12 +93,16 @@ function createStubEl(tag = 'div'): StubEl {
     textContent: '',
     title: '',
     children: [],
+    listeners: new Map(),
     append(...kids: StubEl[]): void {
       el.children.push(...kids);
     },
     appendChild(kid: StubEl): StubEl {
       el.children.push(kid);
       return kid;
+    },
+    addEventListener(type: string, fn: (e?: unknown) => void): void {
+      el.listeners.set(type, fn);
     },
   };
   return el;
@@ -184,8 +190,9 @@ describe('createHud', () => {
     const root = dom.ui.children[0]!;
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
-    // 只含上沿读数与两支边缘箭头(实况罗盘 + burst 预警),没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(3);
+    // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)与左下角静音开关,
+    // 没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(4);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -202,6 +209,20 @@ describe('createHud', () => {
     expect(Number.parseFloat(threat.style.left!)).toBeLessThan(730);
     expect(threat.style.transform).toContain('rotate(180deg)');
     expect(threat.style.opacity).not.toBe('');
+  });
+
+  it('静音开关:默认有声,点击在开/关之间切换并同步文字与颜色', () => {
+    createHud({ world: stubWorld() as unknown as World });
+    const mute = dom.ui.children[0]!.children[3]!;
+    expect(mute.title).toBe('静音开关');
+    expect(mute.textContent).toBe('声音:开');
+    const colorOn = mute.style.color;
+    mute.listeners.get('click')!(undefined);
+    expect(mute.textContent).toBe('声音:关');
+    expect(mute.style.color).not.toBe(colorOn);
+    mute.listeners.get('click')!(undefined);
+    expect(mute.textContent).toBe('声音:开');
+    expect(mute.style.color).toBe(colorOn);
   });
 
   it('时停淡出;重开只换 World 引用,不重复 append DOM', () => {

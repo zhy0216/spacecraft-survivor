@@ -30,6 +30,7 @@ import {
   WELD_OVERLAP,
 } from '../sim/deck';
 import type { Vec2 } from '../sim/ship';
+import { audioBus } from '../render/audio';
 import { REFIT_ALREADY_WELDED, REFIT_NOT_ACTIVE, type World } from '../sim/world';
 
 const OK_COLOR = '#9adcff';
@@ -491,6 +492,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       const name = DECK_PIECES[state.weldPieceType]?.name ?? '甲板拼块';
       enterArrange();
       flash(`已焊接 ${name}，现在可以重排模块`, OK_COLOR);
+      audioBus.playPlace();
       return;
     }
     state.weldDenied = true;

@@ -140,6 +140,7 @@ import { lerpAngle, type Vec2 } from '../sim/ship';
 import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
 import type { Bullet, Enemy, World } from '../sim/world';
+import { audioBus } from './audio';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
 import { Starfield } from './starfield';
@@ -2181,6 +2182,54 @@ export class Renderer {
    * 与塔数同量级(十几到几十个),与 500 弹那条口径不在一个数量级上,故不设配额上限
    * (前摇指示器要设,是因为它的上限是"敌人数",那是上千)。
    */
+  /**
+   * 开火音家族映射:音频随 FXV 类型而不是塔型走 —— 同一种事件永远同一种音色
+   * (对照 sim/fx.ts 的五种开火事件;受击/击杀那几种返回 null = 不出声)。
+   * 弹药系塔(FXV_MUZZLE)哒哒、激光(FXV_BEAM)短鸣、电弧(FXV_CHAIN)是过热系"嘶"、
+   * 磁轨/迫击炮(FXV_LANCE/BLAST)都是充能系爆发 —— 与 audio.ts 的四家族一一对应。
+   */
+  private shootFamily(kind: number): 'ammo' | 'heat' | 'charge' | 'beam' | null {
+    switch (kind) {
+      case FXV_MUZZLE:
+        return 'ammo';
+      case FXV_BEAM:
+        return 'beam';
+      case FXV_CHAIN:
+        return 'heat';
+      case FXV_LANCE:
+        return 'charge';
+      case FXV_BLAST:
+        return 'charge';
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * 该塔当前节流压力(0..1),喂给 playShoot 的 throttle —— 热量越高"嘶"声越亮越绵长。
+   * FxEvent 不背这个数(见 sim/fx.ts 的字段表),只能顺着 towerType 在甲板上反查;
+   * 甲板最多十几格,逐事件扫一遍的开销可忽略。查不到(塔已拆/表被改坏)退回 1:
+   * 音频宁可恒常也不哑火。
+   */
+  private shootThrottle(towerType: number, def: TowerDef): number {
+    const cells = this.world.deck.cells;
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i]!;
+      if (c.towerType !== towerType) continue;
+      switch (def.throttle) {
+        case THR_HEAT: {
+          const max = cellHeatMax(c, def);
+          return max > 0 ? clamp01(c.heat / max) : 1;
+        }
+        case THR_CHARGE:
+          return clamp01(c.charge);
+        default:
+          return 1;
+      }
+    }
+    return 1;
+  }
+
   private drawFx(): void {
     const g = this.fxG;
     g.clear();
@@ -2197,6 +2246,10 @@ export class Renderer {
       // 色相 = 哪座塔打的(与它的子弹同色,一眼认得出是哪门炮);查不到就退回冷色兜底,
       // 绝不让暖色漏进我方光效(GDD §12 的敌我色域分离不可破)
       const def = TOWERS[e.towerType];
+      // 开火音:开火事件是"这一帧发生了什么"的表现层读数,音频照同一批事件发声 ——
+      // 节流值从甲板反查(事件不带 throttle),音频引擎自带同族限流,蜂群贴脸不糊成一片
+      const family = this.shootFamily(e.kind);
+      if (family) audioBus.playShoot(family, def ? this.shootThrottle(e.towerType, def) : 1);
       const color = def ? def.tint : FX_TINT_FALLBACK;
       switch (e.kind) {
         case FXV_BEAM: {
@@ -2269,6 +2322,7 @@ export class Renderer {
           }
           // 四条射线共用一次 stroke:同一个事件同一个 alpha,拆开画只是白跑三趟
           g.stroke({ width: FX_SPARK_WIDTH, color: FX_SPARK_COLOR, alpha: t });
+          audioBus.playHurt('spark'); // 蹭甲板:细金属刮音,与真掉血的"撞击"同口径分家
           break;
         }
         case FXV_HULL_HIT: {
@@ -2282,12 +2336,14 @@ export class Renderer {
             color: HULL_HIT_COLOR,
             alpha: t,
           });
+          audioBus.playHurt('hull'); // 真伤害:低频撞击,全仓最沉的反馈之一
           break;
         }
         case FXV_KILL: {
           // 击杀爆点:towerType 一格借放的是**敌型下标**(见 sim/fx.ts),配色走 enemyTint ——
           // 上面按塔型取的 color 对这一种 kind 不适用,当场覆盖。radius = 敌半径(sim 填的),
           // 环从本体半径向外扩、射线向外缩,全部随 life 淡出:短促的一记"这只没了"的句号
+          audioBus.playKill(); // 短促爆点,与画面同拍 —— 爽感的正反馈一半在这里
           const t = fxFade(e.life, FX_LIFE_KILL);
           const tint = enemyTint(e.towerType);
           const r = e.radius * (1 + (FX_KILL_EXPAND - 1) * (1 - t));
@@ -2368,6 +2424,9 @@ export class Renderer {
     const w = this.world;
     if (w.broadsideCount >= BROADSIDE_MIN && w.tick !== this.broadsideTick) {
       this.broadsideTick = w.tick;
+      // 齐射那一下的和弦(GDD §12 的签名时刻):只在这帧触发一次 —— tick 去重挡住了同帧重复,
+      // 音频引擎另有 0.22s 窗口再兜一道
+      audioBus.playBroadside();
       this.broadsideLeft = BROADSIDE_TIME;
       const edge = w.broadsideEdge;
       if (edge >= 0 && edge < EDGE_COUNT) {

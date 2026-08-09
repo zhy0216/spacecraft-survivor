@@ -97,6 +97,7 @@ import {
   type UpgradeOption,
 } from '../sim/upgrade';
 import type { World } from '../sim/world';
+import { audioBus } from '../render/audio';
 import type { PlacementUiState } from '../render/renderer';
 
 /**
@@ -772,6 +773,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
         state.weldDenied = false;
         const name = DECK_PIECES[state.weldPieceType]?.name ?? `甲板拼块(${state.weldPieceType})`;
         flash(`已焊接:${name} · 转向 ${world.turnRate}°/s`, OK_COLOR);
+        audioBus.playPlace();
         resolve();
         return;
       }
@@ -808,6 +810,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
         if (def) text += ` · 伤 ${num(towerDps(def, cell.level - 1))}→${num(towerDps(def, cell.level))}/s`;
       }
       flash(text, OK_COLOR);
+      audioBus.playPlace();
       resolve();
       return;
     }
@@ -918,6 +921,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       renderCards();
       syncPanel();
       panel.style.display = 'flex';
+      // 三选一弹卡那一刻的"弹出"音;空 offer 的早退路径在上面已 return,不会走到这
+      audioBus.playUpgrade();
     },
     hide,
     syncHover(): void {

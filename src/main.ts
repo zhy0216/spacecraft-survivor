@@ -18,7 +18,8 @@
  */
 import { Input } from './core/input';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
-import { WAVE_SEGMENTS } from './data/waves';
+import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
+import { audioBus } from './render/audio';
 import { Renderer } from './render/renderer';
 import { applyStartingLoadout } from './sim/loadout';
 import type { ShipCommand } from './sim/ship';
@@ -33,6 +34,16 @@ const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 2
 
 async function boot(): Promise<void> {
   const input = new Input();
+  // 浏览器自动播放策略:AudioContext 只能由用户手势解锁。在首次键盘/点击的同步栈里 resume
+  // 一次就摘掉监听(浏览器要求 resume 必须落在手势处理里;之后发声全靠已解锁的 ctx)。
+  // 挂在 main 而不是 Input 里:输入管线不认识声音,音频只从事件出口消费(见 render/audio.ts)。
+  const unlockAudio = (): void => {
+    window.removeEventListener('keydown', unlockAudio);
+    window.removeEventListener('pointerdown', unlockAudio);
+    void audioBus.resume();
+  };
+  window.addEventListener('keydown', unlockAudio);
+  window.addEventListener('pointerdown', unlockAudio);
   // 整局复用同一个 cmd:World 只读它、不缓存引用,所以就地改字段是安全的,
   // 也省下 60Hz 的稳定分配(铁律 3 的运行期零新增分配)。跨局也复用 —— 它是输入的暂存,不是世界状态
   const cmd: ShipCommand = { desiredHeading: null };
@@ -136,6 +147,8 @@ async function boot(): Promise<void> {
   createDebugPanel(stats, run, { restart, retry });
 
   let lastChecksumTick = -SIM_HZ;
+  // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)
+  let lastScrap = 0;
 
   /**
    * 装配一局。首局与重开走的是同一条路,顺序有讲究:
@@ -231,6 +244,8 @@ async function boot(): Promise<void> {
     stats.seed = runSeed;
     stats.kills = 0;
     stats.scrap = 0;
+    // 新局基准 = 新世界的 scrap(当前为 0):首帧增量检测零出发,不会误响拾取音
+    lastScrap = world.scrap;
     stats.upgrades = 0;
     stats.upgradeCost = world.upgradeCost;
     stats.segment = world.wave.segment;
@@ -305,6 +320,9 @@ async function boot(): Promise<void> {
 
     stats.fps = Math.round(renderer.app.ticker.FPS);
     stats.enemies = world.enemies.size;
+    // 背景底噪:存活敌人数 ÷ WAVE_MAX_ALIVE(同屏保险丝上限)→ 0..1 密度比。
+    // setAmbience 每帧只写一条 gain 缓动(setTargetAtTime),便宜到可以每帧灌
+    audioBus.setAmbience(Math.min(1, Math.max(0, world.enemies.size / WAVE_MAX_ALIVE)));
     stats.bullets = world.bullets.size;
     // 拖巡航滑杆时盯这个数爬到新上限,才算证实了"改参数无需重启"(02 号 issue 验收标准)
     stats.speed = Math.hypot(world.ship.vx, world.ship.vy);
@@ -324,7 +342,11 @@ async function boot(): Promise<void> {
     stats.threatDeg = threatDeg < 0 ? threatDeg + 360 : threatDeg;
     stats.threatRate = world.threatIntensity;
     stats.kills = world.kills;
+    // 残骸拾取:scrap 值爬升的那一帧响一声轻快高频叮(增量检测,首帧基准在 startRun 里已对齐,
+    // 不会误触发;升级花掉残骸是下降,不响)
+    if (world.scrap > lastScrap) audioBus.playCollect();
     stats.scrap = world.scrap;
+    lastScrap = world.scrap;
     stats.upgrades = world.upgrades;
     stats.upgradeCost = world.upgradeCost;
     if (loop.tick - lastChecksumTick >= SIM_HZ) {
