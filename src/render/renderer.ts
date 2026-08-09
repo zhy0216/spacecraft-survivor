@@ -82,7 +82,16 @@ import {
   type Texture,
 } from 'pixi.js';
 import { ELITE } from '../data/affixes';
-import { BOSS, ENEMIES, KIND_BOSS, type EnemyDef } from '../data/enemies';
+import {
+  BOSS,
+  ENEMIES,
+  KIND_BEETLE,
+  KIND_BOSS,
+  KIND_STRAFER,
+  KIND_SWARM,
+  KIND_TRAILER,
+  type EnemyDef,
+} from '../data/enemies';
 import { DECK_PIECES } from '../data/deckPieces';
 import { SUPPORTS } from '../data/supports';
 import {
@@ -703,6 +712,58 @@ function generatedEnemySpan(def: EnemyDef): number {
 }
 
 /**
+ * 单型敌人的程序化动画参数(第一步:纯表现,不换贴图,零 API 成本)。
+ * 全部乘在"静止缩放的基准"之上,不碰 sim 数值 —— 判定体多大画多大那条口径不受影响。
+ * 相位 = animClock × freq + seed × 2π,seed 来自 e.animSeed(出生位置 hash,同 seed 两局一致)。
+ */
+export interface EnemyAnim {
+  /** 呼吸/摆动角频率(rad/s);0 = 这一型不做周期动作 */
+  freq: number;
+  /** 呼吸幅度:基准缩放的乘数波动 ±(0 = 不缩放)。必须 < 1,否则缩放会翻负 */
+  breatheAmp: number;
+  /** 摆动幅度(rad):叠加在行进朝向角上(0 = 不摆)。前摇锁向期间照摆 —— 蓄力颤抖也是信号 */
+  wobbleAmp: number;
+  /** 自旋速度(rad/s):非 0 = 圆型敌人持续漂移自转,不跟随速度朝向 */
+  spin: number;
+}
+
+/**
+ * 每型一档,下标 === EnemyKind(与 ENEMIES 同序,热路径按 kind 直取,不查字符串表)。
+ * 取值按"轮廓越圆越靠频率低幅度小的慢漂,轮廓越明确越靠高频小摆":
+ * 蜂群蛭(近圆,数量最多)= 缓慢呼吸 + 自转,口器绕圈就是它的"活着";
+ * 侧掠者/尾随蛆(新月/J 形)= 高频小幅摆动,读作游动;甲虫(重甲楔形)= 最低幅,读作沉稳蓄力。
+ */
+const ENEMY_ANIM: readonly EnemyAnim[] = [
+  { freq: 2.0, breatheAmp: 0.07, wobbleAmp: 0, spin: 0.9 }, // KIND_SWARM 蜂群蛭
+  { freq: 4.5, breatheAmp: 0.06, wobbleAmp: 0.15, spin: 0 }, // KIND_STRAFER 侧掠者
+  { freq: 3.0, breatheAmp: 0.1, wobbleAmp: 0.25, spin: 0 }, // KIND_TRAILER 尾随蛆
+  { freq: 6.0, breatheAmp: 0.05, wobbleAmp: 0.08, spin: 0 }, // KIND_BEETLE 冲撞甲虫
+];
+
+/** 动画读数的模块级 scratch:syncParticles 热循环每帧重写,绝不 new(与 localPos 同一条零分配纪律) */
+const animFrameScratch = { scale: 0, spin: 0, wobble: 0 };
+
+/**
+ * 单帧动画读数的纯计算:给同步循环一次算出缩放乘数 / 自转角 / 摆动角。
+ * 拆出来就是为了 Node 单测 —— 热路径之外的三个 sin 换来的可测性值得(renderer.test.ts 钉边界)。
+ * 写进调用方给的 out(缺省 = 模块级 scratch),绝不 new:syncParticles 每帧要为 1000 只怪调它,
+ * 返回值一旦是新建对象,帧时间就直接写在 GC 上(零分配铁律,与 localPos 同一条纪律)。
+ */
+export function enemyAnimFrame(
+  anim: EnemyAnim,
+  time: number,
+  seed: number,
+  baseScale: number,
+  out: { scale: number; spin: number; wobble: number } = animFrameScratch,
+): { scale: number; spin: number; wobble: number } {
+  const phase = time * anim.freq + seed * Math.PI * 2;
+  out.scale = baseScale * (1 + Math.sin(phase) * anim.breatheAmp);
+  out.spin = time * anim.spin + seed * Math.PI * 2;
+  out.wobble = Math.sin(phase) * anim.wobbleAmp;
+  return out;
+}
+
+/**
  * 按塔型生成子弹剪影。**一律取圆对称的轮廓**,不用拉长的弹丸 ——
  * 粒子的 rotation 是静态属性(取舍见构造函数里那段:每帧为 500 颗重传旋转,买的只是一个小块的朝向),
  * 拉长的形状于是会在除 +X 外的任何飞行方向上指错,反倒骗人。朝向信息本来就由弹道自己交代(它在动),
@@ -798,6 +859,8 @@ export class Renderer {
   private enemyRotationOffsets: number[] = [];
   /** 每帧复用的分桶数组:清空只用 length=0,绝不新建(运行期零分配,铁律 3) */
   private enemyBuckets: Enemy[][] = [];
+  /** 程序化动画时钟:渲染帧累加(与 stepShake 同一份 dt),时停/甲板视图期间照走 —— 虫子冻结不等于死物 */
+  private animClock = 0;
   /**
    * 精英(affixes ≠ 0)各型独立容器。与普通型**同一张纹理、同一个 tint**,只是静态缩放
    * 乘 ELITE.scale:体型差就是"这只不一样"的第一眼读数,而色相通道已经被"哪一型"占满。
@@ -1050,6 +1113,12 @@ export class Renderer {
     // 那等于每帧为全部 1000 个粒子重传 4 顶点的颜色/顶点缓冲,而这些值其实一辈子不变。
     // 分容器的代价只是多 3 个 draw call,GPU 侧可忽略。故:dynamicProperties 保持只有 position
     // 是动态的,每帧只重传位置,tint 与纹理都退化成建粒子时上传一次的静态属性。
+    //
+    // 敌人容器例外两项(程序化动画,取舍见 ENEMY_ANIM 的注释):
+    //   vertex: true —— 呼吸 = 逐帧改 scaleX/scaleY,scale 烤在四角顶点里,不重传就看不见;
+    //   rotation: true —— 摆动/自转逐帧改角度(其余三型本来就要按速度转向,圆型蜂群蛭这次也要自转)。
+    // 旧注释那句"这些值一辈子不变"的反对不成立:它们是这一帧就要变的数,不重传 = 动画不存在。
+    // 子弹/残骸仍是原样(纯静态属性),四型敌人多付出的只是两个本就逐帧上传的缓冲。
     for (let k = 0; k < ENEMIES.length; k++) {
       const def = ENEMIES[k]!;
       const generatedTexture = generatedArt.enemies[k] ?? null;
@@ -1068,8 +1137,8 @@ export class Renderer {
       // 显式把纹理绑在容器上(而不是听任它取第一个粒子的):让"一容器一纹理"这条约束写在明面上
       this.enemyPcs.push(
         new ParticleContainer({
-          // 蜂群蛭数量最多且轮廓近圆，不为它上传看不出来的逐帧旋转；其余三型按真实速度转向。
-          dynamicProperties: { ...dyn, rotation: def.shape !== 'circle' },
+          // 蜂群蛭也要自转(口器绕圈 = 活着),故敌人容器一律开 rotation + vertex(见上注释)
+          dynamicProperties: { ...dyn, rotation: true, vertex: true },
           boundsArea: bounds,
           texture: tex,
         }),
@@ -1079,7 +1148,7 @@ export class Renderer {
       // 精英容器与普通型同纹理同 dynamicProperties,唯一差别是 sync 时传进去的静态缩放
       this.elitePcs.push(
         new ParticleContainer({
-          dynamicProperties: { ...dyn, rotation: def.shape !== 'circle' },
+          dynamicProperties: { ...dyn, rotation: true, vertex: true },
           boundsArea: bounds,
           texture: tex,
         }),
@@ -1099,7 +1168,7 @@ export class Renderer {
     this.bossTextureScale = (bossRadius() * 2) / Math.max(bossTex.width, bossTex.height);
     this.bossRotationOffset = this.enemyRotationOffsets[BOSS.baseKind]!;
     this.bossPc = new ParticleContainer({
-      dynamicProperties: { ...dyn, rotation: baseDef.shape !== 'circle' },
+      dynamicProperties: { ...dyn, rotation: true, vertex: true },
       boundsArea: bounds,
       texture: bossTex,
     });
@@ -1227,6 +1296,8 @@ export class Renderer {
     this.deckZoomTarget = wantDeckView ? this.deckViewZoom(baseScale) : 1;
     // dt 取渲染帧的实际间隔(不是 SIM_DT):broadside 与缩放两条缓动都在渲染层自持,与逻辑帧率无关
     const dt = Math.min(this.app.ticker.deltaMS / 1000, BROADSIDE_MAX_DT);
+    // 程序化动画时钟与缓动同一份 dt:掉帧时一次多走一段,总节奏不变(与 stepBroadside 同口径)
+    this.animClock += dt;
     this.stepDeckZoom(dt);
     // 甲板视图 = **整个 worldLayer 的镜头拉近**,不是只放大 deckG:
     // 只放大甲板的话,射界扇形/弹道/光效仍按未放大的世界坐标画,扇形看着能罩住的敌人
@@ -1299,6 +1370,7 @@ export class Renderer {
         tint: this.enemyTextureTints[k]!,
         scale: this.enemyTextureScales[k]!,
         rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
+        anim: ENEMY_ANIM[k]!,
         alpha,
       });
       // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
@@ -1309,6 +1381,7 @@ export class Renderer {
         tint: this.enemyTextureTints[k]!,
         scale: this.enemyTextureScales[k]! * ELITE.scale,
         rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
+        anim: ENEMY_ANIM[k]!,
         alpha,
       });
       // 前摇指示按型共享配额:精英与普通怪同型,合起来不能超过一型的预算
@@ -1323,6 +1396,7 @@ export class Renderer {
       tint: this.enemyTextureTints[BOSS.baseKind]!,
       scale: this.bossTextureScale,
       rotationOffset: this.bossRotationOffset,
+      anim: ENEMY_ANIM[BOSS.baseKind]!,
       alpha,
     });
     this.drawBossTelegraph(alpha);
@@ -3121,6 +3195,8 @@ export class Renderer {
       alpha: number;
       scale?: number;
       rotationOffset?: number;
+      /** 程序化动画参数:只在敌人/精英/Boss 容器传入,子弹/残骸不付这个分支 */
+      anim?: EnemyAnim;
     },
   ): void {
     // 扩容:tint/texture 是静态属性,增粒子后需 pc.update() 重传。
@@ -3152,7 +3228,21 @@ export class Renderer {
       if (e) {
         p.x = e.px + (e.x - e.px) * a;
         p.y = e.py + (e.y - e.py) * a;
-        if (entity && opts.rotationOffset !== undefined) {
+        const anim = opts.anim;
+        let seed = 0.5;
+        let frame: { scale: number; spin: number; wobble: number } | undefined;
+        if (anim && entity) {
+          // anim 只随敌人容器传入,这里读得到 animSeed;兜 0.5 只是让类型收窄闭嘴,实际走不到
+          seed = 'animSeed' in entity ? entity.animSeed : 0.5;
+          frame = enemyAnimFrame(anim, this.animClock, seed, opts.scale ?? 1, animFrameScratch);
+          // 呼吸 = 逐帧重写缩放(容器已开 vertex: true):基准永远是 opts.scale,
+          // 不拿 p.scaleX 当基准 —— 那是上一帧的呼吸值,拿它当基准会逐帧放大/缩小漂移
+          if (anim.breatheAmp > 0) {
+            p.scaleX = frame.scale;
+            p.scaleY = frame.scale;
+          }
+        }
+        if (entity && (opts.rotationOffset !== undefined || anim)) {
           let vx = entity.vx;
           let vy = entity.vy;
           // 冲锋前摇会刹停,但朝向已经锁死;用锁定向量,避免候选图在预警环里停在上一方向。
@@ -3161,7 +3251,15 @@ export class Renderer {
             vx = entity.lockX;
             vy = entity.lockY;
           }
-          if (vx * vx + vy * vy > 1e-6) p.rotation = Math.atan2(vy, vx) + opts.rotationOffset;
+          if (anim && frame && anim.spin !== 0) {
+            // 自旋型(蜂群蛭):不跟速度朝向,持续漂移转 —— 口器绕圈就是它的"活着"信号
+            p.rotation = frame.spin;
+          } else if (vx * vx + vy * vy > 1e-6) {
+            p.rotation =
+              Math.atan2(vy, vx) +
+              (opts.rotationOffset ?? 0) +
+              (anim && frame ? frame.wobble : 0);
+          }
         }
       } else {
         p.x = OFFSCREEN;

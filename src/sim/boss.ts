@@ -26,7 +26,7 @@ import {
   KIND_BOSS,
 } from '../data/enemies';
 import { tuning } from './config';
-import { hpScaleAt, type Enemy, ST_APPROACH } from './enemy';
+import { enemyAnimSeed, hpScaleAt, type Enemy, ST_APPROACH } from './enemy';
 import { type Ship, type Vec2 } from './ship';
 import { lockCharge, seek } from './steering';
 
@@ -78,6 +78,7 @@ export function initBoss(e: Enemy, x: number, y: number, elapsedSec: number): vo
   e.lockX = 0;
   e.lockY = 0;
   e.side = 0;
+  e.animSeed = enemyAnimSeed(x, y);
   e.hitCd = 0;
   e.dead = false;
 }
@@ -108,6 +109,7 @@ export function initSummon(
   e.lockX = 0;
   e.lockY = 0;
   e.side = index % 2 === 0 ? -1 : 1;
+  e.animSeed = enemyAnimSeed(x, y);
   e.hitCd = 0;
   e.dead = false;
 }

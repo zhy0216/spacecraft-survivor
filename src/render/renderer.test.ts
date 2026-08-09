@@ -8,6 +8,8 @@ import {
   ELITE_WARN_LEAD,
   eliteWarnActive,
   eliteWarnKey,
+  enemyAnimFrame,
+  type EnemyAnim,
 } from './renderer';
 
 /**
@@ -86,5 +88,75 @@ describe('bossWarnOnEnter(出场音帧判定)', () => {
     expect(bossWarnOnEnter(1, 1)).toBe(false);
     expect(bossWarnOnEnter(1, 2)).toBe(false);
     expect(bossWarnOnEnter(-1, 0)).toBe(false);
+  });
+});
+
+/**
+ * 程序化敌人动画(第一步)的纯读数:enemyAnimFrame 是 syncParticles 热循环里每帧对每只怪
+ * 的调用,值域/界就是画面上虫群的动作边界 —— 缩放翻负 = 虫子变成黑点,摆动超界 = 朝向说谎。
+ * 画图本身(vertex/rotation 缓冲上传)需要 WebGL,不在这里测。
+ */
+
+const breathing: EnemyAnim = { freq: 3, breatheAmp: 0.1, wobbleAmp: 0.2, spin: 0 };
+const spinner: EnemyAnim = { freq: 0, breatheAmp: 0, wobbleAmp: 0, spin: 1.5 };
+const idle: EnemyAnim = { freq: 0, breatheAmp: 0, wobbleAmp: 0, spin: 0 };
+
+describe('enemyAnimFrame(动画读数)', () => {
+  it('全 0 参数恒等:缩放 = 基准、摆动 = 0 —— 不该动的型绝不白动', () => {
+    for (let t = 0; t < 10; t += 0.37) {
+      const f = enemyAnimFrame(idle, t, 0.7, 2.5);
+      expect(f.scale).toBe(2.5);
+      expect(f.wobble).toBeCloseTo(0, 9); // sin 为负时 -0,toBeCloseTo 才不挑刺
+      expect(f.spin).toBeCloseTo(0.7 * Math.PI * 2, 9); // spin 公式恒成立:seed 相位仍在
+    }
+  });
+
+  it('呼吸缩放夹在基准 ×(1∓幅度)内,且一个完整周期上下界都到得了', () => {
+    const base = 1.6;
+    let lo = Number.POSITIVE_INFINITY;
+    let hi = Number.NEGATIVE_INFINITY;
+    for (let t = 0; t <= (Math.PI * 2) / breathing.freq; t += 1 / 240) {
+      const s = enemyAnimFrame(breathing, t, 0, base).scale;
+      lo = Math.min(lo, s);
+      hi = Math.max(hi, s);
+      expect(s).toBeGreaterThan(0); // 幅度 < 1 的硬约束:缩放翻负 = 图形反相的黑点
+      expect(s).toBeLessThanOrEqual(base * (1 + breathing.breatheAmp) + 1e-9);
+      expect(s).toBeGreaterThanOrEqual(base * (1 - breathing.breatheAmp) - 1e-9);
+    }
+    expect(lo).toBeCloseTo(base * (1 - breathing.breatheAmp), 2);
+    expect(hi).toBeCloseTo(base * (1 + breathing.breatheAmp), 2);
+  });
+
+  it('摆动幅度不超 wobbleAmp,且一个周期内正负都过 —— 真的在摆,不是停在一边', () => {
+    let sawNeg = false;
+    let sawPos = false;
+    for (let t = 0; t < (Math.PI * 2) / breathing.freq; t += 1 / 240) {
+      const w = enemyAnimFrame(breathing, t, 0.3, 1).wobble;
+      expect(Math.abs(w)).toBeLessThanOrEqual(breathing.wobbleAmp + 1e-9);
+      if (w < 0) sawNeg = true;
+      if (w > 0) sawPos = true;
+    }
+    expect(sawNeg && sawPos).toBe(true);
+  });
+
+  it('自转随时间单调推进(漂移转,不是摆回来):t 越大转角越大', () => {
+    let prev = Number.NEGATIVE_INFINITY;
+    for (let t = 0; t < 3; t += 1 / 60) {
+      const s = enemyAnimFrame(spinner, t, 0.1, 1).spin;
+      expect(s).toBeGreaterThan(prev);
+      prev = s;
+    }
+  });
+
+  it('同参数同输出:确定性 —— 同 seed 两局相位一字不差的前提', () => {
+    expect(enemyAnimFrame(breathing, 1.234, 0.8, 2)).toEqual(
+      enemyAnimFrame(breathing, 1.234, 0.8, 2),
+    );
+  });
+
+  it('不同 seed 的相位错开:同型两只不会在同一时刻同向呼吸', () => {
+    expect(enemyAnimFrame(breathing, 0, 0.1, 1).scale).not.toBe(
+      enemyAnimFrame(breathing, 0, 0.9, 1).scale,
+    );
   });
 });

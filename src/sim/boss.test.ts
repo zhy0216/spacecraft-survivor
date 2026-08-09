@@ -33,11 +33,12 @@ import {
   bossContactDamage,
   bossRadius,
   initBoss,
+  initSummon,
   stepBossBehavior,
 } from './boss';
 import { tuning } from './config';
 import { classifyHit, HIT_CORE } from './damage';
-import { createEnemy, type Enemy, hpScaleAt, initEnemy } from './enemy';
+import { createEnemy, enemyAnimSeed, type Enemy, hpScaleAt, initEnemy } from './enemy';
 import { createShip, type Vec2 } from './ship';
 import { RESULT_RUNNING, RESULT_WIN, World } from './world';
 import { CELL_WEAPON, PLACE_OK } from './deck';
@@ -109,6 +110,15 @@ describe('Boss 行为状态机(纯函数,可脱离世界)', () => {
     initBoss(e, x, y, 0);
     return e;
   }
+
+  it('initBoss / initSummon 写入动画相位种子(出生位置 hash,与 initEnemy 同口径)', () => {
+    const boss = makeBoss(400, -200);
+    expect(boss.animSeed).toBe(enemyAnimSeed(400, -200));
+
+    const summon = createEnemy();
+    initSummon(summon, 0, -50, 80, 0, 3);
+    expect(summon.animSeed).toBe(enemyAnimSeed(-50, 80));
+  });
 
   it('接近段 seek 追船;进冲锋距离 → 锁方向进长前摇,前摇刹停且帧数 = 表里 chargeWindup', () => {
     const ship = createShip(); // 船在原点

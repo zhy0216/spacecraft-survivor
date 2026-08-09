@@ -84,6 +84,13 @@ export interface Enemy {
   /** +1/-1:绕行型从左舷还是右舷切入。生成时定死 —— 每帧现选会让它在船头前来回抖 */
   side: number;
   /**
+   * 渲染层程序化动画的相位种子,[0,1)。由出生位置 hash 出来,**不掷 rng**:
+   * 掷 rng 会移动整条出怪随机序列("同 seed 同序列"铁律),而出生位置本身就是确定的,
+   * 于是"同一局里每只怪的呼吸/摆动错开相位、且两局同 seed 相位一致"两条同时成立。
+   * sim 永不读它 —— 纯表现字段,只为渲染层免掉一张 WeakMap 和出生时的堆分配。
+   */
+  animSeed: number;
+  /**
    * 距下次可以再咬船一口的剩余秒(09 号 issue 的无敌帧)。
    * **每只敌人各自一份**,不是全船一个冷却:后者在蜂群贴脸时只有最先判到的那一只咬得动,
    * "一百只压上来"与"一只压上来"的掉血速率会一模一样,GDD §4.6 的挫败曲线当场作废。
@@ -113,6 +120,7 @@ export function createEnemy(): Enemy {
     lockX: 0,
     lockY: 0,
     side: 1,
+    animSeed: 0,
     hitCd: 0,
     dead: false,
   };
@@ -140,6 +148,7 @@ export function resetEnemy(e: Enemy): void {
   e.lockX = 0;
   e.lockY = 0;
   e.side = 1;
+  e.animSeed = 0;
   e.hitCd = 0;
   e.dead = false;
 }
@@ -151,6 +160,16 @@ export function resetEnemy(e: Enemy): void {
  */
 export function hpScaleAt(seconds: number): number {
   return (1 + tuning.enemyHpScalePerMinute * (seconds / 60)) * ZONE_HP_MULT;
+}
+
+/**
+ * 渲染层动画相位种子:把出生位置 hash 进 [0,1)。**不掷 rng** ——
+ * 位置是确定的,同 seed 的两局里相位序列一字不差(铁律里"同 seed 同序列"只约束随机,
+ * 这里连随机都不用碰);渲染层拿它给同型敌人错开呼吸/摆动相位。
+ */
+export function enemyAnimSeed(x: number, y: number): number {
+  const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+  return h - Math.floor(h);
 }
 
 /**
@@ -183,6 +202,7 @@ export function initEnemy(
   e.lockX = 0;
   e.lockY = 0;
   e.side = rng.next() < 0.5 ? -1 : 1;
+  e.animSeed = enemyAnimSeed(x, y);
   // 起手 0 = 一出生就能咬:出生点在船外一千多 px 的出怪环上(见 World.spawnFromWave),
   // 给它一个初始冷却只会让"生在船脸上"这类将来的出怪规则悄悄免掉第一口伤害
   e.hitCd = 0;
@@ -211,6 +231,7 @@ export function initSplit(e: Enemy, parent: Enemy, elapsedSec: number): void {
   e.lockX = 0;
   e.lockY = 0;
   e.side = parent.side;
+  e.animSeed = enemyAnimSeed(parent.x, parent.y);
   e.hitCd = 0;
   e.dead = false;
 }

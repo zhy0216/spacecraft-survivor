@@ -28,6 +28,7 @@ import {
   applyDamage,
   createEnemy,
   type Enemy,
+  enemyAnimSeed,
   enemyRadius,
   hasAffix,
   hpScaleAt,
@@ -164,8 +165,45 @@ describe('initEnemy(出生)', () => {
   });
 });
 
-describe('resetEnemy(池 reset)', () => {
-  it('Object.keys 的每个字段都清回初值 —— 将来加字段忘了重置会被这条抓住', () => {
+describe('enemyAnimSeed(渲染层动画相位种子)', () => {
+  it('值域 [0,1):渲染层拿它当相位起点,越界会破坏 sin 周期的连续性', () => {
+    for (let i = 0; i < 200; i++) {
+      const s = enemyAnimSeed(i * 13, i * 7 + 3);
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThan(1);
+    }
+  });
+
+  it('同位置两次 hash 一字不差 —— 同 seed 两局的相位序列一致的前提', () => {
+    expect(enemyAnimSeed(123.5, -77.25)).toBe(enemyAnimSeed(123.5, -77.25));
+  });
+
+  it('不同位置基本不撞:200 个不同出生点几乎全部分开(同型虫子不同步呼吸)', () => {
+    const seeds = new Set<number>();
+    for (let i = 0; i < 200; i++) seeds.add(enemyAnimSeed(i * 13, i * 7 + 3));
+    expect(seeds.size).toBeGreaterThan(190);
+  });
+
+  it('initEnemy 写入 animSeed = 出生位置的 hash,且不消耗 rng(序列一步不挪)', () => {
+    const rng = new Rng(7);
+    const probe = new Rng(7);
+    const e = createEnemy();
+    initEnemy(e, KIND_SWARM, 12, 34, 0, rng);
+    expect(e.animSeed).toBe(enemyAnimSeed(12, 34));
+    probe.next(); // 只有 side 那一次消耗,动画种子不参与随机
+    expect(rng.next()).toBe(probe.next());
+  });
+
+  it('initSplit 同样写入(由父体位置推出):裂变体的呼吸相位也是确定的', () => {
+    const parent = createEnemy();
+    initEnemy(parent, KIND_STRAFER, 100, 50, 0, new Rng(1));
+    const s = createEnemy();
+    initSplit(s, parent, 0);
+    expect(s.animSeed).toBe(enemyAnimSeed(100, 50));
+  });
+});
+
+describe('resetEnemy(池 reset)', () => {  it('Object.keys 的每个字段都清回初值 —— 将来加字段忘了重置会被这条抓住', () => {
     const e = createEnemy();
     const rec = e as unknown as Record<string, number | boolean>;
     const initial = { ...rec }; // createEnemy() 的返回值即"初值"的定义
