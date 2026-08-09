@@ -72,17 +72,19 @@ export function upgradeCost(upgrades: number): number {
 export const UPGRADE_CHOICE_COUNT = 3;
 
 /**
- * 三选一里"塔类 / 支援 / 甲板拼块"的类别权重，恢复 GDD §7 的 45/25/15。
- * **不必凑 100**:法令(M2)尚未实装，sim/upgrade.ts 按三者之和 85 归一化；以后补法令 15
- * 只需把第四类接进同一轮盘，不必重写现有三类的相对权重。
+ * 三选一里"塔类 / 支援 / 甲板拼块 / 法令"的类别权重，恢复 GDD §7 的 45/25/15/15。
+ * **四类之和恰为 100**(18 号落地后不再有归一化过渡态):甲板拼块专属于两分钟整备,
+ * 战斗升级时 sim/upgrade.ts 把它的权重当场按 0 处理(同一条轮盘,不必改这四个数)。
  *
  * 权重只决定"掷出来的那个数怎么解释",**不决定掷几次**:每个候选位恒定消耗 2 次 rng
- *(见 rollUpgradeOffer),于是改这三个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
+ *(见 rollUpgradeOffer),于是改这四个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
  */
 export const OFFER_WEIGHT_TOWER = 45;
 export const OFFER_WEIGHT_SUPPORT = 25;
-/** 甲板拼块恢复 GDD §7 的 15% 占位；法令尚未实装，三类按 45:25:15 自动归一化。 */
+/** 甲板拼块(GDD §7 的 15% 占位;战斗升级关它)。 */
 export const OFFER_WEIGHT_DECK = 15;
+/** 法令(GDD §7 的 15% 占位;全船被动,不占格 —— 18 号)。 */
+export const OFFER_WEIGHT_EDICT = 15;
 
 /**
  * 跳过一次升级的**手续费**(畅玩性调整,取代旧的"固定返还 15"):

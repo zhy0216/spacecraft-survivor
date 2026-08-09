@@ -56,6 +56,15 @@ import {
   UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
 import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import {
+  edictAmmoFireRateMul,
+  edictCruiseSpeedMul,
+  edictHeatMaxMul,
+  edictHullHpAdd,
+  edictMagnetRadiusMul,
+  edictMask,
+  edictTurnRateAdd,
+} from '../data/edicts';
 import { SUP_AMMO_BAY } from '../data/supports';
 import {
   FX_LIFE_BEAM,
@@ -91,6 +100,7 @@ import {
   isWeldSuccess,
   moveModule,
   MOVE_OK,
+  PLACE_OK,
   placeAt,
   weldPiece,
 } from './deck';
@@ -139,6 +149,7 @@ import {
   optionTowerType,
   rollUpgradeOffer,
   OFFER_DECK,
+  OFFER_EDICT,
   type UpgradeOption,
   UPGRADE_NO_OFFER,
 } from './upgrade';
@@ -458,6 +469,18 @@ export class World {
   offerRerolled = false;
 
   /**
+   * 已持有的法令位掩码(18 号)。data/edicts 的 EDICT_* 各占一位,抽到即置位、**不叠级**:
+   * rollUpgradeOffer 把已持有的从候选里剔掉(heldEdicts 参数),卡面上永远不会出现
+   * "重复法令无效"的沉默陷阱。
+   *
+   * 效果**不在这里算** —— 六个现读点(弹药射速 / 转向 / 拾取半径 / 过热上限 / 船体 HP /
+   * 巡航速度)各自按位查表(edictXxx 聚合函数),于是改 data/edicts 即热调,与 tuning 同口径。
+   * 它是逐帧演化的真状态、**不是派生量**,进 checksum(与塔等级同口径):法令只改 effective
+   * 数值,而那些数值本就参与判定(谁开火、转到哪、捡不捡得到),漏了它重放当场失配。
+   */
+  edicts = 0;
+
+  /**
    * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
    * 回调也不会重复响。停 loop / 放大 / 弹卡全在 main.ts,World 不认识流程层。
    */
@@ -584,8 +607,9 @@ export class World {
     this.drops = new Pool<Drop>(createDrop, resetDrop);
     // HP 上限问 damage.hullMaxHp 而不是直接读 tuning:06 号的装甲舱("船体 HP +15")会把它变成
     // **甲板的派生量**,调用点今天就接好,届时 06 只需要把那个函数体填掉,World 一个字不用动。
-    // 满血进场(hp = maxHp):createShip 里那份初值只是"船不进池"的兜底,真相以这一句为准
-    this.ship.hp = this.ship.maxHp = hullMaxHp(this.deck);
+    // 法令点数(18 号结构加固)同样从这里进 —— 新世界必然空法令,故构造时显式传 0(edicts 字段
+    // 虽已初始化为 0,这里不依赖那条先后顺序,把"开局没有法令"写死在这一行)
+    this.ship.hp = this.ship.maxHp = hullMaxHp(this.deck, 0);
   }
 
   /** 开局至今的秒数。HP 时间缩放(GDD §14)的唯一时间源:挂在 tick 上才与 checksum 同口径 */
@@ -598,9 +622,9 @@ export class World {
     return economyUpgradeCost(this.upgrades);
   }
 
-  /** 当前实际转向速率(°/s)= tuning 基础值 − 每个扩建占用格 1°/s。 */
+  /** 当前实际转向速率(°/s)= tuning 基础值 − 每个扩建占用格 1°/s + 已持有法令的加点(重心校准 +10)。 */
   get turnRate(): number {
-    return deckTurnRate(this.deck);
+    return deckTurnRate(this.deck) + edictTurnRateAdd(this.edicts);
   }
 
   /**
@@ -699,14 +723,15 @@ export class World {
     // **只夹不涨**:上限回落时把 hp 压进新上限(否则拆掉装甲舱会留下一艘 hp > maxHp 的船,
     // 血条画出去满出来),但上限涨上去时 hp 一分不还 —— 装甲舱是船的规格,不是治疗
     // (与 place 里那句"这一局打下来的账一分不还"同一条口径)。
-    // 不在这里判 shipDead:hp 已经是 0,夹取对它是恒等,多一个分支只是多一条要维护的路
-    this.ship.maxHp = hullMaxHp(this.deck);
+    // 法令点数(18 号结构加固)每帧现算:抽到/没抽到,当帧的上限就改(现读点口径,与 tuning 同源)
+    this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
 
     // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后。
-    // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_FALLBEHIND_RADIUS 那段)
+    // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_FALLBEHIND_RADIUS 那段)。
+    // 巡航倍率(18 号巡航校准)照 turnRateDeg 的先例由 World 现算传入:未持有 = 1,逐位恒等
     const ship = this.ship;
-    stepShip(ship, cmd.desiredHeading, SIM_DT, this.turnRate);
+    stepShip(ship, cmd.desiredHeading, SIM_DT, this.turnRate, edictCruiseSpeedMul(this.edicts));
 
     // 出怪。正式路径是波次脚本的运行器(sim/waves.ts):它一个字都不认识世界,只说"朝这个方向
     // 出一只这型的怪",落点由 waveSink → spawnFromWave 补完。
@@ -784,6 +809,9 @@ export class World {
       }
       if (hasAffix(c, AFFIX_MAGNETIC)) magnetMul = magnetPickupMul;
     }
+    // 18 号磁力过载(拾取半径 +30%):与词缀干扰同一个倍率连乘 —— 法令只在已持有那几帧生效,
+    // 授予/回滚当帧即读(现读点口径,与 tuning 同源)。未持有 = ×1,既有链路逐位一字不差
+    magnetMul *= edictMagnetRadiusMul(this.edicts);
     // 粗筛半径 = 甲板外接圆(damage.ts 的唯一口径,随 12 号扩建一起长),体型那一项见下面 cr
     const contactR = deckOuterRadius(this.deck);
 
@@ -909,8 +937,19 @@ export class World {
     // 炮管:朝射界内最近的敌人转,没得打就归位(04 号 issue),够得着又转得过来就开火(05 号)。
     // 传 this.grid 而不是 enemies:1000 敌 × 十座塔的线性扫描是 GDD §13 明令要用哈希避开的那件事;
     // 传 this.sink 而不是 this:开火侧只认识 FireSink 那份契约,永远不认识 World(见 sim/fx.ts);
-    // 传 this.edgePenalty:被撞舷的塔在惩罚期内变慢(09 号 §4.6),逐塔归属由 damage.cellFireRateMul 定
-    stepTurrets(this.deck, ship, this.grid, SIM_DT, this.sink, this.edgePenalty);
+    // 传 this.edgePenalty:被撞舷的塔在惩罚期内变慢(09 号 §4.6),逐塔归属由 damage.cellFireRateMul 定;
+    // 传两个法令倍率(18 号):曳光协议(弹药射速)与散热协议(过热上限)的现读点就在 stepTurrets,
+    // 由它按格上节流系折进塔(未持有 = 1,逐位恒等)
+    stepTurrets(
+      this.deck,
+      ship,
+      this.grid,
+      SIM_DT,
+      this.sink,
+      this.edgePenalty,
+      edictAmmoFireRateMul(this.edicts),
+      edictHeatMaxMul(this.edicts),
+    );
 
     // 子弹:积分 → 命中 → 迫击炮到期在落点炸 AoE(规则全在 sim/bullet.ts,本文件只给它一个 sink)
     stepBullets(this.bullets, SIM_DT, this.sink);
@@ -1007,8 +1046,9 @@ export class World {
       this.scrap < this.upgradeCost
     )
       return;
-    // 战斗内升级只在现有甲板上新增/强化炮塔与支援；甲板拼块专属于两分钟整备。
-    if (rollUpgradeOffer(this.deck, this.rng, this.offer, false) === 0) {
+    // 战斗内升级在现有甲板上新增/强化炮塔与支援，或抽法令(18 号:全船被动,不占格);
+    // 甲板拼块专属于两分钟整备。heldEdicts 让法令候选剔掉已持有(不叠级)。
+    if (rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts) === 0) {
       this.completeUpgrade(skipRefundFor(this.upgradeCost));
       return;
     }
@@ -1247,6 +1287,14 @@ export class World {
   takeUpgrade(choice: number, col: number, row: number, rotation: number = 0): number {
     const opt = this.offer[choice];
     if (!opt) return UPGRADE_NO_OFFER;
+    // 18 号法令:不占格、不碰甲板 —— 直接授予,return PLACE_OK 让既有成功判定(isPlaceSuccess)
+    // 与 ui 的"已放置"回执路径原样放行。法令没有"放哪"这回事,col/row 一律无视
+    //(法令专属的卡面/回执文案属于 ui 侧,不在 18 号 sim 范围)
+    if (opt.kind === OFFER_EDICT) {
+      this.edicts |= edictMask(opt.type);
+      this.completeUpgrade(0);
+      return PLACE_OK;
+    }
     if (opt.kind === OFFER_DECK) {
       const code = this.weld(opt.type, rotation, col, row);
       if (isWeldSuccess(code)) this.completeUpgrade(0);
@@ -1268,7 +1316,7 @@ export class World {
     const code = weldPiece(this.deck, pieceType, rotation, col, row);
     if (isWeldSuccess(code)) {
       syncSupportBuffs(this.deck);
-      this.ship.maxHp = hullMaxHp(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
       if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
     }
     return code;
@@ -1289,7 +1337,7 @@ export class World {
     const code = moveModule(this.deck, fromCol, fromRow, toCol, toRow);
     if (code === MOVE_OK) {
       syncSupportBuffs(this.deck);
-      this.ship.maxHp = hullMaxHp(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
       if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
     }
     return code;
@@ -1310,7 +1358,7 @@ export class World {
     const code = evolveAt(this.deck, towerCol, towerRow, supportCol, supportRow);
     if (code === EVOLVE_OK) {
       syncSupportBuffs(this.deck);
-      this.ship.maxHp = hullMaxHp(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
       if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
     }
     return code;
@@ -1359,7 +1407,8 @@ export class World {
     if (this.offerRerolled) return REROLL_ALREADY_DONE;
     this.starCoins -= REROLL_PRICE;
     this.offerRerolled = true;
-    return rollUpgradeOffer(this.deck, this.rng, this.offer, false);
+    // heldEdicts 同传:重摇后的法令候选同样剔掉已持有(与首掷同一套过滤,不叠级)
+    return rollUpgradeOffer(this.deck, this.rng, this.offer, false, this.edicts);
   }
 
   /**
@@ -1383,12 +1432,12 @@ export class World {
     supportType: number = SUP_AMMO_BAY,
   ): number {
     const code = placeAt(this.deck, col, row, content, towerType, supportType);
-    // 放置成功就重刷上限:HP 上限从设计上就是**甲板的派生量**(06 号的装甲舱 +15)。
-    // hullMaxHp 当场遍历 cells、不读任何缓存,故这一句放下去当帧就是新的上限。
+    // 放置成功就重刷上限:HP 上限从设计上就是**甲板的派生量**(06 号的装甲舱 +15、
+    // 18 号的结构加固 +20)。hullMaxHp 当场遍历 cells、不读任何缓存,故这一句放下去当帧就是新的上限。
     // **hp 不跟着涨**:上限是船的规格,当前 HP 是这一局打下来的账 —— 装一块装甲舱不该顺手治疗。
     // 被拒的放置一个字段都没动(见 sim/deck),自然也不必重刷
     if (isPlaceSuccess(code)) {
-      this.ship.maxHp = hullMaxHp(this.deck);
+      this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
       // 邻接加成也当场重算,不等下一帧的 step:放置发生在 step **之外**(ui 的一次点击),
       // 而 10 号的"三选一 → 时停 → 放置"里时间是停的 —— 那时不补这一句,玩家就会看见
       // 一块焊好的弹药库连着一门一动不动的机炮,直到时停结束才突然提速。
@@ -1711,6 +1760,11 @@ export class World {
       acc(opt.type);
       acc(opt.level);
     }
+    // 已持有法令(18 号)紧跟候选:它是逐帧演化的真状态(抽卡授予、永不撤销),而它只改
+    // effective 数值(射速/转向/拾取半径/过热/HP/巡航) —— 那些数值本就参与判定,
+    // 漏了它,"同 seed 一边抽到曳光协议一边没抽到"就会在若干帧后以"谁的塔先开火"
+    // 的形式分叉,却查不出是哪一帧走岔的。整数掩码,不放大(与 offer 的 kind/type 同口径)。
+    acc(this.edicts);
     // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
     // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。
     // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何判定;重摇消耗的 rng

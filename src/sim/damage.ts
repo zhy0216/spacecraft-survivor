@@ -228,8 +228,10 @@ export function cellFireRateMul(cell: DeckCell, edgePenalty: readonly number[]):
 
 /**
  * 船体 HP 上限 = 基准(tuning.shipHullHp,GDD §14 锁定的 100)+ 甲板上每块设施的 hullHp
- * (GDD §5.3 的装甲舱 = +15,数值在 data/supports)。09 号立的签名一个字没动:
- * HP 上限从设计上就是**甲板的派生量**,故参数一直是 deck 而不是一个数。
+ * (GDD §5.3 的装甲舱 = +15,数值在 data/supports)+ 已持有法令的 hullHpAdd
+ * (18 号结构加固 = +20,数值在 data/edicts)。09 号立的签名只扩了一个尾参:
+ * HP 上限从设计上就是**甲板的派生量**,故参数一直是 deck 而不是一个数;
+ * 法令的点数由 World 现算好传进来(edictHullHpAdd),默认 0 = 未持有,既有调用一字不改。
  *
  * **不特判 SUP_ARMOR_BAY,一律读表里的 hullHp 字段** —— 哪天 GDD §5.3 后半张表的维修机库也带几点血,
  * 改 data/supports 的一个数就够了,本文件一个字不用动(06 号验收:改数据即可调平衡)。
@@ -238,14 +240,14 @@ export function cellFireRateMul(cell: DeckCell, edgePenalty: readonly number[]):
  * **不再问一遍 content**:同一件事两处各判一次,迟早有一处漏掉 —— 而 12 号拆掉一格甲板时,
  * 加成当帧回落靠的正是那条清理,再补一个 content 判据只会掩盖它哪天失效。
  *
- * **加法叠加**(两块 = +30):HP 是**点数**不是比例,这是本轮唯一一项加法 ——
+ * **加法叠加**(两块 = +30;法令点数同档):HP 是**点数**不是比例,这是本轮唯一一项加法 ——
  * 四个邻接倍率与下面的 edgeDamageMul 一律连乘,理由见 edgeDamageMul。
  * **不读 buff 缓存、当场遍历 cells**:于是与 recomputeSupportBuffs 的时机完全无关,
  * 放下去当帧就是新的(World.place 里那句 maxHp = hullMaxHp(deck) 因此不必等下一帧)。
  * 每次现读 tuning 而不是模块加载时算死:shipHullHp 是面板上的旋钮,与 hullCoreHalfExtents 同口径。
  */
-export function hullMaxHp(deck: Deck): number {
-  let hp = tuning.shipHullHp;
+export function hullMaxHp(deck: Deck, edictHpAdd = 0): number {
+  let hp = tuning.shipHullHp + edictHpAdd;
   const cells = deck.cells;
   for (let i = 0; i < cells.length; i++) {
     hp += SUPPORTS[cells[i]!.supportType]?.hullHp ?? 0;

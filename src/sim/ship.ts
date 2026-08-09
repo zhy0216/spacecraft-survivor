@@ -82,12 +82,17 @@ export function createShip(): Ship {
  * 存上一帧 → 转向(有上限)→ 沿船头推力 → 柔化横向旧速度 → 夹巡航速度 /
  * 或纯阻尼 → 积分位置。五个 tuning 参数一律每帧现读 —— 这就是"面板拖动即时改变手感、
  * 无需重启"的唯一实现机制。
+ * @param turnRateDeg 实际转向速率 °/s,缺省 = tuning.shipTurnRate。由 World 现算传入
+ *   (扩建惩罚 + 18 号重心校准),与 tuning 同一条"面板/表改了就生效"的口径
+ * @param cruiseMul 巡航速度倍率(18 号巡航校准 = 1.1),缺省 1 = 未持有。
+ *   只放大巡航上限这一个数:推力与阻尼一个字都不碰 —— 法令是"跑得更快",不是"推得更猛"
  */
 export function stepShip(
   ship: Ship,
   desired: Vec2 | null,
   dt: number,
   turnRateDeg: number = tuning.shipTurnRate,
+  cruiseMul: number = 1,
 ): void {
   ship.px = ship.x;
   ship.py = ship.y;
@@ -121,9 +126,12 @@ export function stepShip(
     ship.vx = hx * forwardSpeed + sideX * grippedLateralSpeed;
     ship.vy = hy * forwardSpeed + sideY * grippedLateralSpeed;
 
+    // 巡航上限倍率先夹 0(负数会让上限变负、k 变负 = 速度反向;NaN 则顺着除法污染位置),
+    // 与 turnRateDeg 的 Math.max 同一道保护。未持有时 cruiseMul = 1,这一句逐位恒等
+    const cruise = tuning.shipCruiseSpeed * Math.max(0, cruiseMul);
     const sp = Math.hypot(ship.vx, ship.vy);
-    if (sp > tuning.shipCruiseSpeed) {
-      const k = tuning.shipCruiseSpeed / sp;
+    if (sp > cruise) {
+      const k = cruise / sp;
       ship.vx *= k;
       ship.vy *= k;
     }

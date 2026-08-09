@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
 import {
   OFFER_WEIGHT_DECK,
+  OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
   REROLL_PRICE,
@@ -13,6 +14,7 @@ import {
   UPGRADE_CHOICE_COUNT,
 } from '../data/economy';
 import { DECK_PIECES } from '../data/deckPieces';
+import { EDICT_KIND_COUNT, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
 import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_CAPACITOR, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import {
@@ -32,6 +34,7 @@ import {
   canWeldPiece,
   isPlaceSuccess,
   PLACE_NO_CELL,
+  PLACE_OK,
   placeAt,
   WELD_OK,
 } from './deck';
@@ -40,6 +43,7 @@ import {
   OFFER_SUPPORT,
   OFFER_TOWER,
   OFFER_DECK,
+  OFFER_EDICT,
   optionContent,
   optionLabel,
   optionLegalCells,
@@ -200,6 +204,7 @@ describe('rollUpgradeOffer', () => {
       for (const opt of out) {
         if (opt.kind === OFFER_TOWER) expect(opt.type).toBeLessThan(TOWER_KIND_COUNT);
         else if (opt.kind === OFFER_SUPPORT) expect(opt.type).toBeLessThan(SUPPORTS.length);
+        else if (opt.kind === OFFER_EDICT) expect(opt.type).toBeLessThan(EDICT_KIND_COUNT);
         else expect(opt.type).toBeLessThan(DECK_PIECES.length);
       }
     }
@@ -215,8 +220,13 @@ describe('rollUpgradeOffer', () => {
     }
   });
 
-  it('类别轮盘按 45:25:15 解释并在法令缺席时按总和 85 归一化', () => {
-    expect([OFFER_WEIGHT_TOWER, OFFER_WEIGHT_SUPPORT, OFFER_WEIGHT_DECK]).toEqual([45, 25, 15]);
+  it('类别轮盘按 45:25:15:15 解释(四类之和恰为 100,无归一化过渡态)', () => {
+    expect([OFFER_WEIGHT_TOWER, OFFER_WEIGHT_SUPPORT, OFFER_WEIGHT_DECK, OFFER_WEIGHT_EDICT]).toEqual([
+      45,
+      25,
+      15,
+      15,
+    ]);
     const deck = createDeck();
     const out: UpgradeOption[] = [];
     rollUpgradeOffer(
@@ -224,17 +234,22 @@ describe('rollUpgradeOffer', () => {
       new CountingRng([0.1, 0, 0.6, 0, 0.95, 0]) as unknown as Rng,
       out,
     );
-    expect(out.map((o) => o.kind)).toEqual([OFFER_TOWER, OFFER_SUPPORT, OFFER_DECK]);
+    // 0.1×100 → 塔;0.6×100 → 支援;0.95×100 → 法令(最后 15% 区间)
+    expect(out.map((o) => o.kind)).toEqual([OFFER_TOWER, OFFER_SUPPORT, OFFER_EDICT]);
   });
 
-  it('战斗升级关闭甲板类别:掷中原甲板区间也只会回落到炮塔/支援', () => {
+  it('战斗升级关闭甲板类别:掷中原甲板区间也只会回落到炮塔/支援/法令', () => {
     const deck = createDeck();
     placeAt(deck, 0, 0, CELL_WEAPON, TOWER_AUTOCANNON);
     const out: UpgradeOption[] = [];
     const rng = new CountingRng([0.99, 0, 0.99, 0.5, 0.99, 0.99]);
     expect(rollUpgradeOffer(deck, rng as unknown as Rng, out, false)).toBeGreaterThan(0);
     expect(rng.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
-    expect(out.every((opt) => opt.kind === OFFER_TOWER || opt.kind === OFFER_SUPPORT)).toBe(true);
+    // 战斗升级允许的类别只有三类:塔 / 支援 / 法令 —— 甲板拼块专属于两分钟整备,
+    // 但法令(全船被动,不占格)照常出卡,甲板全满也不至于"三张都放不下"
+    expect(
+      out.every((opt) => opt.kind === OFFER_TOWER || opt.kind === OFFER_SUPPORT || opt.kind === OFFER_EDICT),
+    ).toBe(true);
   });
 
   it('支援死卡过滤:没有同节流系的在线塔,散热器/电容组不进候选;放上对应塔就恢复出卡', () => {
@@ -280,6 +295,46 @@ describe('rollUpgradeOffer', () => {
     expect(a.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
     expect(b.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
   });
+
+  it('法令剔已持有:候选绝不出现已持有的法令,且 rng 消耗次数一个字不变', () => {
+    // 18 号:法令不叠级 —— "重复抽到已持有法令"必须从候选生成这一层就消失(结构上),
+    // 而不是靠 ui 事后弹一句"重复无效"。heldEdicts 只改可选表内容,与支援死卡过滤同构
+    const deck = createDeck();
+    // 没持有时的全表可达性:逐型喂掷值(kind 0.99 = 法令区间,index = (t+0.5)/6 ⇒ 必掷中 t),
+    // 比扫一批 seed 攒覆盖更确定 —— 6 条都要能进候选,一条都不许被埋
+    for (let t = 0; t < EDICT_KIND_COUNT; t++) {
+      const out: UpgradeOption[] = [];
+      const rng = new CountingRng([0.99, (t + 0.5) / EDICT_KIND_COUNT]);
+      rollUpgradeOffer(deck, rng as unknown as Rng, out);
+      expect(out[0]).toEqual({ kind: OFFER_EDICT, type: t, level: 0 });
+    }
+
+    // 全持有 = 法令池被剔空:类别回退到塔/支援/甲板(0.9 落在法令区间 [0.85, 1),掷中即回退),
+    // 照样弹满三张,2 次 rng 一次不少
+    const allHeld = (1 << EDICT_KIND_COUNT) - 1;
+    const full: UpgradeOption[] = [];
+    const heldRng = new CountingRng([0.9, 0, 0.9, 0, 0.9, 0]);
+    expect(rollUpgradeOffer(deck, heldRng as unknown as Rng, full, true, allHeld)).toBe(
+      UPGRADE_CHOICE_COUNT,
+    );
+    expect(heldRng.calls).toBe(UPGRADE_CHOICE_COUNT * 2);
+    expect(full.some((o) => o.kind === OFFER_EDICT)).toBe(false);
+
+    // 只持有一条:它绝不出现在任何候选里,其余五条照常
+    const held = edictMask(EDICT_TRACER);
+    for (let seed = 0; seed < 60; seed++) {
+      const o: UpgradeOption[] = [];
+      rollUpgradeOffer(deck, new Rng(seed), o, true, held);
+      for (const opt of o) {
+        if (opt.kind === OFFER_EDICT) {
+          expect(opt.type).not.toBe(EDICT_TRACER);
+          expect(opt.type).toBeLessThan(EDICT_KIND_COUNT);
+        }
+      }
+    }
+    // 名字也能取到(卡片照常印"曳光协议"而不是未知法令)
+    expect(optionLabel({ kind: OFFER_EDICT, type: EDICT_TRACER, level: 0 })).toBe(EDICTS[EDICT_TRACER]!.name);
+  });
 });
 
 const WORLD_TUNING = { stressSpawn: true, stressEnemies: 0 };
@@ -312,17 +367,26 @@ describe('World 三选一经济接线', () => {
     expect(offers).toBe(1); // 候选没结算前不重掷、不重响
   });
 
-  it('合法放置才扣费、upgrades++、清 offer;被拒时三笔账原样不动', () => {
+  it('合法放置才扣费、upgrades++、清 offer;被拒时三笔账原样不动;法令直接授予', () => {
     const w = offerWorld(11);
     const beforeScrap = w.scrap;
     const beforeOffer = w.offer.map((o) => ({ ...o }));
-    expect(w.takeUpgrade(0, 99, 99)).toBe(PLACE_NO_CELL);
-    expect(w.scrap).toBe(beforeScrap);
-    expect(w.upgrades).toBe(0);
-    expect(w.offer).toEqual(beforeOffer);
 
+    // 非法格放置:挑一张非法令卡做拒绝断言(法令不占格,压根没有"放错格"这回事)
+    const placeChoice = w.offer.findIndex((o) => o.kind !== OFFER_EDICT);
+    if (placeChoice >= 0) {
+      expect(w.takeUpgrade(placeChoice, 99, 99)).toBe(PLACE_NO_CELL);
+      expect(w.scrap).toBe(beforeScrap);
+      expect(w.upgrades).toBe(0);
+      expect(w.offer).toEqual(beforeOffer);
+    }
+
+    // 把第一张卡结算掉:拼块走焊接、法令走直接授予、塔/设施走合法格
     const opt = w.offer[0]!;
-    if (opt.kind === OFFER_DECK) {
+    if (opt.kind === OFFER_EDICT) {
+      // 法令:不占格、不看 col/row —— 直接授予,按成功码回执
+      expect(w.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+    } else if (opt.kind === OFFER_DECK) {
       let welded = false;
       for (let row = -4; row <= 7 && !welded; row++) {
         for (let col = -4; col <= 6 && !welded; col++) {
@@ -358,7 +422,10 @@ describe('World 三选一经济接线', () => {
     expect([w.scrap, w.upgrades]).toEqual(snapshot);
   });
 
-  it('战斗内甲板全满且没有可叠级塔时自动跳过本档，不偷偷塞入甲板拼块', () => {
+  it('战斗内甲板全满且没有可叠级塔时:甲板拼块绝不偷偷入池,但法令照常弹卡', () => {
+    // 18 号改了这一档的语义:全满甲板上塔/支援都放不下,轮盘掷中这两类会回退到**法令**
+    // (全船被动、不占格,永远放得下)—— 于是不再整档自动跳过,而是弹出一手纯法令卡。
+    // "不偷偷塞入甲板拼块"那条承诺原样守住:拼块专属于两分钟整备,战斗升级碰都不碰
     Object.assign(tuning, WORLD_TUNING);
     const w = new World(13);
     for (const c of w.deck.cells) placeAt(w.deck, c.col, c.row, CELL_SUPPORT, 0, SUP_AMMO_BAY);
@@ -368,10 +435,11 @@ describe('World 三选一经济接线', () => {
     w.scrap = cost;
 
     w.step();
-    expect(w.offer).toEqual([]);
-    expect(offers).toBe(0);
-    expect(w.upgrades).toBe(1);
-    expect(w.scrap).toBe(skipRefundFor(cost));
+    expect(w.offer.length).toBeGreaterThan(0);
+    expect(offers).toBe(1);
+    expect(w.offer.every((o) => o.kind === OFFER_EDICT)).toBe(true);
+    expect(w.upgrades).toBe(0); // 弹卡本身不结算:等玩家选,不自动跳过
+    expect(w.scrap).toBe(cost);
   });
 
   it('局终之后不再生成升级候选', () => {

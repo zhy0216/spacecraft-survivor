@@ -24,6 +24,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
 import { REROLL_PRICE, UPGRADE_CHOICE_COUNT, UPGRADE_SKIP_FEE } from '../data/economy';
+import {
+  EDICT_COOLANT,
+  EDICT_CRUISE,
+  EDICT_GYRO,
+  EDICT_HULL,
+  EDICT_MAGNET,
+  EDICT_TRACER,
+  EDICTS,
+} from '../data/edicts';
 import { isEvolutionTower } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
@@ -49,7 +58,7 @@ import {
   WELD_OVERLAP,
 } from '../sim/deck';
 import type { Vec2 } from '../sim/ship';
-import { OFFER_DECK, OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_DECK, OFFER_EDICT, OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import type { World } from '../sim/world';
 import {
   cardDesc,
@@ -73,6 +82,10 @@ function supportOpt(type: number): UpgradeOption {
 }
 function deckOpt(type: number): UpgradeOption {
   return { kind: OFFER_DECK, type, level: 0 };
+}
+/** 法令候选:等级恒 0(法令不叠级,sim 侧根本不读它) */
+function edictOpt(type: number): UpgradeOption {
+  return { kind: OFFER_EDICT, type, level: 0 };
 }
 
 const DENY_CODES = [
@@ -166,15 +179,20 @@ describe('placedMessage', () => {
 });
 
 describe('cardTitle', () => {
-  it('标题 = 数值表里的名字(经 optionLabel),塔/设施/拼块均不串台', () => {
+  it('标题 = 数值表里的名字(经 optionLabel),塔/设施/拼块/法令均不串台', () => {
     const towers = TOWERS.map((def) => cardTitle(towerOpt(def.type)));
     expect(towers).toEqual(TOWERS.map((def) => def.name));
     const supports = SUPPORTS.map((def) => cardTitle(supportOpt(def.type)));
     expect(supports).toEqual(SUPPORTS.map((def) => def.name));
     const pieces = DECK_PIECES.map((def) => cardTitle(deckOpt(def.type)));
     expect(pieces).toEqual(DECK_PIECES.map((def) => def.name));
-    // 塔与设施同名 = 玩家分不出这张卡是一座炮还是一块砖
-    expect(new Set([...towers, ...supports]).size).toBe(TOWER_KIND_COUNT + SUPPORT_KIND_COUNT);
+    // 18 号法令:名字同样只存在 data/edicts 一份,卡片不抄第二份
+    const edicts = EDICTS.map((def) => cardTitle(edictOpt(def.type)));
+    expect(edicts).toEqual(EDICTS.map((def) => def.name));
+    // 四类同名 = 玩家分不出这张卡是一座炮还是一块砖还是一条法令
+    expect(new Set([...towers, ...supports, ...pieces, ...edicts]).size).toBe(
+      TOWER_KIND_COUNT + SUPPORT_KIND_COUNT + DECK_PIECES.length + EDICTS.length,
+    );
   });
 
   it('一律走 sim 的 optionLabel,ui 不抄第二份名字', () => {
@@ -187,15 +205,19 @@ describe('cardTitle', () => {
 });
 
 describe('cardIcon', () => {
-  it('塔/设施/拼块都有明确且互不串台的内建图标', () => {
+  it('塔/设施/拼块/法令都有明确且互不串台的内建图标', () => {
     // 17 号:进化塔只从配方来,升级卡池永远出不了它们(cardIcon 只会被可出卡的型号打到) ——
     // 图标断言跟着卡池口径走,不要求给永远出不了卡的型号画图标
     const offerableTowers = TOWERS.filter((def) => !isEvolutionTower(def.type));
     const towerIcons = offerableTowers.map((def) => cardIcon(towerOpt(def.type)));
     const supportIcons = SUPPORTS.map((def) => cardIcon(supportOpt(def.type)));
     const pieceIcons = DECK_PIECES.map((def) => cardIcon(deckOpt(def.type)));
-    const icons = [...towerIcons, ...supportIcons, ...pieceIcons];
-    expect(icons.length).toBe(offerableTowers.length + SUPPORT_KIND_COUNT + DECK_PIECES.length);
+    // 18 号法令:六条各一个符号,与塔/设施同一套"无外部资产"口径
+    const edictIcons = EDICTS.map((def) => cardIcon(edictOpt(def.type)));
+    const icons = [...towerIcons, ...supportIcons, ...pieceIcons, ...edictIcons];
+    expect(icons.length).toBe(
+      offerableTowers.length + SUPPORT_KIND_COUNT + DECK_PIECES.length + EDICTS.length,
+    );
     for (const icon of icons) {
       expect(icon.length).toBeGreaterThan(0);
       expect(icon).not.toBe('?');
@@ -210,6 +232,7 @@ describe('cardIcon', () => {
     expect(cardIcon(towerOpt(99))).toBe('?');
     expect(cardIcon(supportOpt(99))).toBe('?');
     expect(cardIcon(deckOpt(99))).toBe('?');
+    expect(cardIcon(edictOpt(99))).toBe('?');
   });
 });
 
@@ -282,10 +305,43 @@ describe('cardDesc', () => {
     }
   });
 
+  it('法令卡把它自己那几项非中性的数念出来,六条各不相同', () => {
+    const descs = EDICTS.map((def) => cardDesc(edictOpt(def.type)));
+    expect(new Set(descs).size).toBe(EDICTS.length);
+    // 全船被动:绝对不许出现"相邻"两个字 —— 法令不作用于任何一格,印了就是在承诺做不到的事
+    for (const d of descs) expect(d).not.toContain('相邻');
+    // 逐条点名:曳光念弹药射速、重心念转向、磁力念拾取半径、散热念过热上限、
+    // 结构加固念船体 HP、巡航念巡航速度 —— 数值与数据表同源,不抄第二份
+    expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('弹药系射速');
+    expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('1.1');
+    expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('转向');
+    expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('°/s');
+    expect(cardDesc(edictOpt(EDICT_MAGNET))).toContain('拾取半径');
+    expect(cardDesc(edictOpt(EDICT_COOLANT))).toContain('过热上限');
+    expect(cardDesc(edictOpt(EDICT_HULL))).toContain('船体 HP');
+    expect(cardDesc(edictOpt(EDICT_HULL))).toContain('+20');
+    expect(cardDesc(edictOpt(EDICT_CRUISE))).toContain('巡航速度');
+  });
+
+  it('法令描述从数值表现生成:改表里的数,卡片当场跟着变', () => {
+    // 与设施那一条同源(改数据即可调平衡):调数值卡片跟上,调回中性那一项自己消失
+    const def = EDICTS[EDICT_TRACER]!;
+    const before = def.ammoFireRateMul;
+    try {
+      def.ammoFireRateMul = 1.25;
+      expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('1.25');
+      def.ammoFireRateMul = 1;
+      expect(cardDesc(edictOpt(EDICT_TRACER))).not.toContain('弹药系射速');
+    } finally {
+      def.ammoFireRateMul = before;
+    }
+  });
+
   it('型号越界不静默兜底成第 0 种,而是把下标印出来', () => {
-    // 兜底的下场:玩家照着另一座塔的射程/射界下判断,点下去才发现放的是别的东西
+    // 兜底的下场:玩家照着另一条法令的加成下判断,点下去才发现生效的是别的东西
     expect(cardDesc(towerOpt(99))).toContain('99');
     expect(cardDesc(supportOpt(99))).toContain('99');
+    expect(cardDesc(edictOpt(99))).toContain('99');
   });
 });
 
@@ -313,6 +369,17 @@ describe('cardLevelText', () => {
       expect(text).toContain('不叠级');
       expect(text).toContain('新建');
       expect(text).not.toContain('未装备');
+    }
+  });
+
+  it('法令卡说明全船被动/不占格/不叠级,不拿 level 冒充等级', () => {
+    for (const def of EDICTS) {
+      const text = cardLevelText(edictOpt(def.type));
+      expect(text).toContain('全船被动');
+      expect(text).toContain('不占格');
+      expect(text).toContain('不叠级');
+      expect(text).not.toContain('未装备');
+      expect(text).not.toContain('Lv');
     }
   });
 
@@ -633,6 +700,21 @@ describe('createUpgradeFlow 两阶段状态机', () => {
     expect(resolved).toBe(1);
     expect(flow.active).toBe(false);
     expect(panelOf(dom).style.display).toBe('none');
+  });
+
+  it('法令卡:点卡即授予,不进放置阶段,结算一次', () => {
+    world = createStubWorld([edictOpt(EDICT_TRACER)]);
+    const flow = setup();
+    fire(cardsOf(dom).children[0]!, 'click');
+    // 法令不占格:col/row 一律无视,World 当场置位掩码并结算(world.ts 的 OFFER_EDICT 分支) ——
+    // UI 不搞"点个地方放下来"那套,整个放置阶段对法令卡直接跳过
+    expect(world.takeCalls).toEqual([[0, 0, 0]]);
+    expect(resolved).toBe(1);
+    expect(flow.active).toBe(false);
+    expect(panelOf(dom).style.display).toBe('none');
+    // 回执说人话:名字 + 全船被动,不挂"已放置"这种放置话术
+    expect(toastOf(dom).textContent).toContain('已生效');
+    expect(toastOf(dom).textContent).toContain(cardTitle(edictOpt(EDICT_TRACER)));
   });
 
   it('拼块卡进入焊接模式:可在甲板外拾取稳定逻辑格，R/按钮旋转后原样交给 World', () => {

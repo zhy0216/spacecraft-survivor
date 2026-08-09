@@ -3,6 +3,7 @@
  * 末尾的小 DOM 桩只守重开/时停这两条流程约束:单实例换 World,不重复挂节点或监听器。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { EDICT_GYRO, EDICT_HULL, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
 import { WAVE_SEGMENTS } from '../data/waves';
 import type { World } from '../sim/world';
 import { createHud, hudRatio, segmentReadout, THREAT_INTENSITY_MAX, threatVisual } from './hud';
@@ -158,6 +159,8 @@ interface StubWorld {
   threatIntensity: number;
   burstWarning(): { etaSeconds: number; dirRad: number } | null;
   enemies: { items: StubEnemy[] };
+  /** 已持有法令掩码(18 号):HUD 徽记按它逐位查名字 */
+  edicts: number;
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -172,6 +175,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     threatIntensity: THREAT_INTENSITY_MAX * 0.5,
     burstWarning: () => null,
     enemies: { items: [] },
+    edicts: 0,
     ...over,
   };
 }
@@ -202,8 +206,9 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
-    // 与屏下缘两根血条(精英 + Boss)以及星币读数,没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(7);
+    // 与屏下缘两根血条(精英 + Boss)、星币读数以及法令徽记(18 号),
+    // 没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(8);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -233,6 +238,28 @@ describe('createHud', () => {
 
     hud.setWorld(stubWorld({ starCoins: 4 }) as unknown as World);
     expect(value.textContent).toBe('4');
+  });
+
+  it('法令徽记:无法令时隐藏,持有后按掩码印出名字,setWorld 换世界同步更新', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const edicts = root.children[7]!;
+    expect(edicts.title).toBe('已生效法令');
+    // 简单口径:无法令整体隐藏(display:none),持有才亮
+    expect(edicts.style.display).toBe('none');
+
+    // 抽到曳光协议 + 结构加固:掩码两位置位,徽记按名字显示,未持有的不出现
+    hud.setWorld(
+      stubWorld({ edicts: edictMask(EDICT_TRACER) | edictMask(EDICT_HULL) }) as unknown as World,
+    );
+    expect(edicts.style.display).toBe('block');
+    expect(findText(root, EDICTS[EDICT_TRACER]!.name)).toBeDefined();
+    expect(findText(root, EDICTS[EDICT_HULL]!.name)).toBeDefined();
+    expect(findText(root, EDICTS[EDICT_GYRO]!.name)).toBeUndefined();
+
+    // 重开一局(新世界无法令):徽记当帧收起
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(edicts.style.display).toBe('none');
   });
 
   it('静音开关:默认有声,点击在开/关之间切换并同步文字与颜色', () => {

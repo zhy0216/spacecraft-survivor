@@ -92,11 +92,13 @@ export function cellTowerDef(cell: DeckCell): TowerDef | undefined {
  */
 
 /**
- * 这一格的实际射击间隔(秒/次)= 等级取值 ÷ 全局倍率 ÷ 受击惩罚 ÷ **邻接加成**。
- * 弹药库 fireRateMul = 1.25 ⇒ 机炮 0.4s → 0.32s。三个旋钮各除各的,理由见 effectiveFireInterval。
+ * 这一格的实际射击间隔(秒/次)= 等级取值 ÷ 全局倍率 ÷ 受击惩罚 ÷ **邻接加成** ÷ 法令倍率。
+ * 弹药库 fireRateMul = 1.25 ⇒ 机炮 0.4s → 0.32s。四个旋钮各除各的,理由见 effectiveFireInterval。
+ * @param edictMul 法令的弹药系射速倍率(18 号曳光协议 = 1.1),缺省 1 = 未持有。sim/turret.ts
+ *   按格上节流系挑好传入(非弹药系塔恒 1),本函数只认倍率、不认法令是谁。
  */
-export function cellFireInterval(cell: DeckCell, def: TowerDef, fireMul = 1): number {
-  return effectiveFireInterval(def, cell.level, fireMul, cell.fireRateMul);
+export function cellFireInterval(cell: DeckCell, def: TowerDef, fireMul = 1, edictMul = 1): number {
+  return effectiveFireInterval(def, cell.level, fireMul, cell.fireRateMul, edictMul);
 }
 
 /**
@@ -112,11 +114,13 @@ export function cellReload(cell: DeckCell, def: TowerDef): number {
 }
 
 /**
- * 这一格的实际过热上限 = 等级取值 × 邻接加成(散热器 1.5 = 能连烧半倍久)。
+ * 这一格的实际过热上限 = 等级取值 × 邻接加成 × 法令倍率。
  * 渲染层的热量条分母读的也是它:分子(cell.heat)夹在这个上限里,两边同源才不会画出框。
+ * @param edictMul 法令的过热上限倍率(18 号散热协议 = 1.2),缺省 1 = 未持有;
+ *   由 sim/turret.ts 按格上节流系挑好传入(非过热系塔恒 1)。
  */
-export function cellHeatMax(cell: DeckCell, def: TowerDef): number {
-  return towerHeatMax(def, cell.level) * cell.heatMaxMul;
+export function cellHeatMax(cell: DeckCell, def: TowerDef, edictMul = 1): number {
+  return towerHeatMax(def, cell.level) * cell.heatMaxMul * edictMul;
 }
 
 /**
@@ -149,9 +153,15 @@ export function cellChargeTime(cell: DeckCell, def: TowerDef): number {
  * 那一刻正在走的这一轮冷却当场变短** —— 不夹的话"射速 +25%"要等这一发的旧冷却走完才看得见,
  * 而放置正是玩家最盯着看反馈的那一帧。
  */
-function stepCooldown(cell: DeckCell, def: TowerDef, dt: number, fireMul: number): void {
+function stepCooldown(
+  cell: DeckCell,
+  def: TowerDef,
+  dt: number,
+  fireMul: number,
+  edictMul: number,
+): void {
   if (cell.cooldown <= 0) return;
-  const max = cellFireInterval(cell, def, fireMul);
+  const max = cellFireInterval(cell, def, fireMul, edictMul);
   if (cell.cooldown > max) cell.cooldown = max;
   cell.cooldown -= dt;
   if (cell.cooldown <= THROTTLE_EPS) cell.cooldown = 0;
@@ -163,13 +173,21 @@ function stepCooldown(cell: DeckCell, def: TowerDef, dt: number, fireMul: number
  * 调用方(sim/turret.ts)先按 isTurretCell 挡掉离线塔:离线塔一切冻结(与 04 号炮管同口径),
  * 所以本函数不认识 online —— 它只管"这一帧的时间过去了,状态该走到哪"。
  * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞。见 effectiveFireInterval 那段。
+ * @param edictMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。只进射击间隔:
+ *   装填/降温/蓄力那几条腿一个字都不碰 —— 法令是"打得快",不是"装得快/凉得快"。
  */
-export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul = 1): void {
+export function stepThrottle(
+  cell: DeckCell,
+  def: TowerDef,
+  dt: number,
+  fireMul = 1,
+  edictMul = 1,
+): void {
   switch (def.throttle) {
     case THR_AMMO: {
       // 冷却与装填**并行**推进:装填完毕那一帧就该能开火,不再叠一层射击间隔。
-      // (reload 1.5s 远长于 fireInterval,冷却早就归 0 了;并行只是为了这条语义不依赖数值大小)
-      stepCooldown(cell, def, dt, fireMul);
+      // (reload 1.5s 远长于 fireInterval,并行只是为了这条语义不依赖数值大小)
+      stepCooldown(cell, def, dt, fireMul, edictMul);
       if (cell.reloadLeft > 0) {
         // 剩余装填每帧现夹在**当前**装填时长之内,理由与 stepCooldown 那道夹取一字同源:
         // 放下弹药库,正在走的这一轮装填当场变短;不夹的话"装填 -30%"要等这一轮 1.5s 走完
@@ -190,7 +208,7 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul 
     case THR_HEAT: {
       // 惩罚只作用在射击间隔上,降温与锁死那两条腿一个字都不改:
       // 挨一下就连降温也变慢的话,被撞舷的过热塔会越挨越打不动 —— 那正是"死亡螺旋"本身
-      stepCooldown(cell, def, dt, fireMul);
+      stepCooldown(cell, def, dt, fireMul, edictMul);
       // 降温**任何时候都在跑**,含强制冷却期间:UI 的热量条因此一直在往下走,
       // 玩家看得见"还剩多久能打",而不是锁死期间冻在顶上、解锁那一刻突然归零。
       if (cell.heat > 0) {
@@ -236,7 +254,7 @@ export function stepThrottle(cell: DeckCell, def: TowerDef, dt: number, fireMul 
 
     default:
       // 未知节流(数值表被改坏)退化成纯冷却:这样的塔至少还打得响,便于当场看出是表填错了
-      stepCooldown(cell, def, dt, fireMul);
+      stepCooldown(cell, def, dt, fireMul, edictMul);
       break;
   }
 }
@@ -272,14 +290,25 @@ export function canFire(cell: DeckCell, def: TowerDef): boolean {
  * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞。**只进射击间隔**:
  *   惩罚期内挨的这一发照常扣一发弹药/一份热量,不多不少 —— 惩罚是"下一发慢一点",
  *   不是"这一发更贵",否则被撞舷会连带更快见底/更快过热,那就成了死亡螺旋。
+ * @param edictMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。与 fireMul 同一条
+ *   "只进射击间隔"的口径:法令是打得快,不是更省弹药/更不发热。
+ * @param heatMaxEdictMul 法令的过热上限倍率(18 号散热协议),缺省 1 = 未持有。
+ *   只进热上限(cellHeatMax):抬的是"能连烧多久",单发的代价一个字不变。
  */
-export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 1): void {
+export function onFired(
+  cell: DeckCell,
+  def: TowerDef,
+  shots: number,
+  fireMul = 1,
+  edictMul = 1,
+  heatMaxEdictMul = 1,
+): void {
   // 至少算一发:调用点就是"确实开火了"那一处,传 0/NaN 进来会让弹夹永不见底 = 节流形同虚设
   const n = shots > 1 ? Math.floor(shots) : 1;
 
   switch (def.throttle) {
     case THR_AMMO: {
-      cell.cooldown = cellFireInterval(cell, def, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul, edictMul);
       cell.ammo -= n;
       if (cell.ammo <= 0) {
         cell.ammo = 0; // 夹 0:UI 直接把这个整数印出来,不能出现 -1 发
@@ -298,11 +327,11 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
     }
 
     case THR_HEAT: {
-      cell.cooldown = cellFireInterval(cell, def, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul, edictMul);
       cell.heat += def.heatPerShot * n;
       // 散热器抬的是**上限**(cellHeatMax),不是每发热量:于是"能连烧多久"变长,
       // 而单发的代价一个字不变 —— 与 GDD §5.3 那行"过热上限 +50%"逐字对应
-      const max = cellHeatMax(cell, def);
+      const max = cellHeatMax(cell, def, heatMaxEdictMul);
       if (cell.heat >= max) {
         // 夹到上限而不是让它冲过头:热量条是 heat / heatMax,超过 1 的条会画到框外面去
         cell.heat = max;
@@ -321,7 +350,7 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
       break;
 
     default:
-      cell.cooldown = cellFireInterval(cell, def, fireMul);
+      cell.cooldown = cellFireInterval(cell, def, fireMul, edictMul);
       break;
   }
 }
@@ -341,10 +370,13 @@ export function onFired(cell: DeckCell, def: TowerDef, shots: number, fireMul = 
  *   再读一次 tuning —— 本文件对甲板只剩类型依赖(见文件头),更不该反过来认识 World。
  * @param buffMul **邻接加成**倍率(06 号 T2:弹药库 1.25 = 快两成半),缺省 1 = 相邻没有生效的设施。
  *   正常调用方一律不直接传它 —— 走 cellFireInterval 从格上取,免得"加成"在第二处被算一遍。
+ * @param edictMul **法令倍率**(18 号曳光协议 = 1.1,弹药系射速 +10%),缺省 1 = 未持有。
+ *   与 buffMul 同一条路:sim/turret.ts 按格上节流系挑好传入(非弹药系恒 1),
+ *   本函数只认倍率、不认法令是谁 —— 与 tuning 同一档"改数据即可调平衡"。
  *
- * 三个旋钮**各除各的、各自过一遍 safeScale**,而不是先乘成一个数再除:它们分别是数值面板、
- * 船体状态、甲板布局的函数,合并之后任何一边被填坏(0/NaN)都会顺着乘法把另外两边一起吞掉
- * (NaN × 有限数还是 NaN),而下限保护也只剩一道、护不住各自的量级。
+ * 四个旋钮**各除各的、各自过一遍 safeScale**,而不是先乘成一个数再除:它们分别是数值面板、
+ * 船体状态、甲板布局、法令集合的函数,合并之后任何一边被填坏(0/NaN)都会顺着乘法把另外
+ * 三边一起吞掉(NaN × 有限数还是 NaN),而下限保护也只剩一道、护不住各自的量级。
  * 射速的唯一去处就是这一条式子:另开一份"加成后的间隔"必然与 stepCooldown 那道夹取错开口径。
  */
 export function effectiveFireInterval(
@@ -352,12 +384,14 @@ export function effectiveFireInterval(
   level: number,
   fireMul = 1,
   buffMul = 1,
+  edictMul = 1,
 ): number {
   return (
     towerFireInterval(def, level) /
     safeScale(tuning.towerFireRateScale) /
     safeScale(fireMul) /
-    safeScale(buffMul)
+    safeScale(buffMul) /
+    safeScale(edictMul)
   );
 }
 

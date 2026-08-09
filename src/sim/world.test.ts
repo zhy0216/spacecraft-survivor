@@ -30,6 +30,18 @@ import {
 } from '../data/economy';
 import { DECK_PIECE_SQUARE } from '../data/deckPieces';
 import {
+  EDICT_COOLANT,
+  EDICT_CRUISE,
+  EDICT_GYRO,
+  EDICT_HULL,
+  EDICT_MAGNET,
+  EDICT_TRACER,
+  edictAmmoFireRateMul,
+  edictHeatMaxMul,
+  edictHullHpAdd,
+  edictMask,
+} from '../data/edicts';
+import {
   ENEMIES,
   KIND_BEETLE,
   KIND_BOSS,
@@ -48,6 +60,8 @@ import {
   TOWER_LASER,
   TOWER_MAX_LEVEL,
   towerArcDeg,
+  towerFireInterval,
+  towerHeatMax,
   towerMagazine,
   TOWERS,
 } from '../data/towers';
@@ -78,6 +92,7 @@ import {
   cellWorldPos,
   DECK_COLS,
   DECK_ROWS,
+  deckTurnRate,
   EDGE_BOW,
   EDGE_COUNT,
   EDGE_PORT,
@@ -105,8 +120,16 @@ import {
 } from './enemy';
 import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
+import { cellFireInterval, cellHeatMax } from './tower';
 import { waveDirAt } from './waves';
-import { optionHasLegalPlacement, UPGRADE_NO_OFFER } from './upgrade';
+import {
+  optionHasLegalPlacement,
+  optionLegalCells,
+  OFFER_EDICT,
+  OFFER_TOWER,
+  type UpgradeOption,
+  UPGRADE_NO_OFFER,
+} from './upgrade';
 import {
   ENEMY_FALLBEHIND_RADIUS,
   ENEMY_REJOIN_RADIUS,
@@ -3334,5 +3357,225 @@ describe('星币与重摇(16 号:账目、rerollOffer、确定性)', () => {
 
     a.starCoins += 500; // 余额只是序列的读数(重摇消耗的 rng 本身在序列里):不进 checksum
     expect(a.checksum()).toBe(b.checksum());
+  });
+});
+
+/**
+ * 法令(18 号):授予路径、六个现读点、不占格与确定性。表级不变量在 data/edicts.test.ts 钉,
+ * 这里钉的是"World 把法令接对没有"—— 授予当帧各现读点的读数就变,未持有逐位恒等。
+ */
+describe('法令接线(18 号:授予、现读点、确定性)', () => {
+  /** 空压测场:step() 全程不掷 rng,只有 settleUpgrade 那 6 次 —— offer 的账才好数 */
+  const EMPTY = { stressSpawn: true, stressEnemies: 0 };
+  const CRUISE_BEFORE = tuning.shipCruiseSpeed;
+
+  afterEach(() => {
+    tuning.shipCruiseSpeed = CRUISE_BEFORE;
+  });
+
+  /** 把当前 offer 强制替换成一张指定法令卡,再走 takeUpgrade 的真实授予路径 */
+  function grantEdict(w: World, type: number): void {
+    w.offer.splice(0, w.offer.length, { kind: OFFER_EDICT, type, level: 0 });
+    expect(w.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+    expect(w.upgrades).toBe(1);
+    expect(w.offer).toEqual([]);
+  }
+
+  it('曳光协议:授予后弹药塔射速 +10%(cellFireInterval 读数变化),非弹药系塔一字不碰', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(1);
+    expect(w.place(0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(w.place(1, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    const gun = cellAt(w.deck, 0, 1)!;
+    const gunDef = TOWERS[TOWER_AUTOCANNON]!;
+    const laser = cellAt(w.deck, 1, 0)!;
+    const laserDef = TOWERS[TOWER_LASER]!;
+    w.scrap = w.upgradeCost;
+    w.step(); // 弹一档 offer,把授予路径接上(消耗 2×count 次 rng,与读表无关)
+
+    // 未持有:聚合倍率恒 1,读数与既有链路逐位一致
+    expect(edictAmmoFireRateMul(w.edicts)).toBe(1);
+    expect(cellFireInterval(gun, gunDef, 1, edictAmmoFireRateMul(w.edicts))).toBe(0.4);
+
+    grantEdict(w, EDICT_TRACER);
+
+    // 抽到曳光协议:弹药塔间隔 0.4 → 0.4/1.1(面板读数变化正是这条 effective* 链路)
+    expect(edictAmmoFireRateMul(w.edicts)).toBe(1.1);
+    expect(cellFireInterval(gun, gunDef, 1, edictAmmoFireRateMul(w.edicts))).toBeCloseTo(0.4 / 1.1, 12);
+    // 激光(过热系)不受"弹药系射速 +10%"影响:倍率只按格上节流系折进弹药塔 ——
+    // turret.stepTurrets 对非弹药系传的恒是 1(cellFireInterval 是纯函数,给什么除什么)
+    expect(cellFireInterval(laser, laserDef, 1, 1)).toBeCloseTo(towerFireInterval(laserDef, 1), 12);
+  });
+
+  it('法令不占格:授予不改甲板任何一格,也不参与邻接加成与放置合法性', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(2);
+    expect(w.place(0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(w.place(1, 1, CELL_SUPPORT, TOWER_AUTOCANNON, SUP_AMMO_BAY)).toBe(PLACE_OK);
+    w.scrap = w.upgradeCost;
+    w.step();
+    const deckBefore = w.deck.cells.map((c) => ({
+      occupied: c.occupied,
+      content: c.content,
+      towerType: c.towerType,
+      supportType: c.supportType,
+      level: c.level,
+      fireRateMul: c.fireRateMul,
+    }));
+    const probe: UpgradeOption = { kind: OFFER_TOWER, type: TOWER_AUTOCANNON, level: 1 };
+    const cells: number[] = [];
+    const legalBefore = optionLegalCells(w.deck, probe, cells);
+    const turnBefore = w.turnRate;
+    const hpBefore = w.ship.maxHp;
+
+    grantEdict(w, EDICT_TRACER);
+
+    // 甲板一行未动:occupied/content/towerType/supportType/level/邻接缓存全同 ——
+    // 法令不占格、不参与邻接 buff,连放一张卡对 deck 的可见影响都没有
+    w.deck.cells.forEach((c, i) => {
+      const b = deckBefore[i]!;
+      expect(c.occupied).toBe(b.occupied);
+      expect(c.content).toBe(b.content);
+      expect(c.towerType).toBe(b.towerType);
+      expect(c.supportType).toBe(b.supportType);
+      expect(c.level).toBe(b.level);
+      expect(c.fireRateMul).toBe(b.fireRateMul);
+    });
+    // 放置合法性(optionLegalCells)与转向/HP 上限的读数也一字不变(那张卡不是这几样法令)
+    expect(optionLegalCells(w.deck, probe, cells)).toBe(legalBefore);
+    expect(w.turnRate).toBe(turnBefore);
+    expect(w.ship.maxHp).toBe(hpBefore);
+  });
+
+  it('重心/散热/结构/巡航/磁力的现读点:授予当帧读数就变,未持有逐位恒等', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(3);
+    expect(w.place(0, 1, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    expect(w.place(1, 0, CELL_WEAPON, TOWER_LASER)).toBe(PLACE_OK);
+    const laser = cellAt(w.deck, 1, 0)!;
+    const laserDef = TOWERS[TOWER_LASER]!;
+
+    // 重心校准:world.turnRate getter 一处(扩建惩罚之上加点)
+    expect(w.turnRate).toBe(deckTurnRate(w.deck));
+    w.edicts |= edictMask(EDICT_GYRO);
+    expect(w.turnRate).toBe(deckTurnRate(w.deck) + 10);
+    w.edicts &= ~edictMask(EDICT_GYRO);
+    expect(w.turnRate).toBe(deckTurnRate(w.deck));
+
+    // 散热协议:过热上限 ×1.2(激光是过热系;默认参数 = 未持有,原样)
+    expect(cellHeatMax(laser, laserDef)).toBe(towerHeatMax(laserDef, 1));
+    w.edicts |= edictMask(EDICT_COOLANT);
+    expect(cellHeatMax(laser, laserDef, edictHeatMaxMul(w.edicts))).toBeCloseTo(
+      towerHeatMax(laserDef, 1) * 1.2,
+      12,
+    );
+    w.edicts &= ~edictMask(EDICT_COOLANT);
+
+    // 结构加固:船体 HP 上限 +20(现读点 = 帧首重算,授予当帧的下一次 step 就生效)
+    expect(edictHullHpAdd(w.edicts)).toBe(0);
+    w.edicts |= edictMask(EDICT_HULL);
+    expect(edictHullHpAdd(w.edicts)).toBe(20);
+    w.step(); // 帧首 maxHp = hullMaxHp(deck, +20)
+    expect(w.ship.maxHp).toBe(tuning.shipHullHp + 20);
+    w.edicts &= ~edictMask(EDICT_HULL);
+
+    // 巡航校准:巡航上限 ×1.1(stepShip 的巡航夹取;照 turnRateDeg 的先例由 World 传入)
+    tuning.shipCruiseSpeed = 200;
+    const a = new World(4);
+    const b = new World(4);
+    b.edicts |= edictMask(EDICT_CRUISE);
+    const cmd: ShipCommand = { desiredHeading: { x: 1, y: 0 } };
+    for (let f = 0; f < 180; f++) {
+      a.step(cmd);
+      b.step(cmd);
+    }
+    expect(Math.hypot(a.ship.vx, a.ship.vy)).toBeCloseTo(200, 6);
+    expect(Math.hypot(b.ship.vx, b.ship.vy)).toBeCloseTo(220, 6);
+
+    // 磁力过载:拾取半径 ×1.3(world 帧首 magnetMul 连乘,stepDrops 只认倍率)。
+    // 无输入、船停在 (0,0):残骸摆在 200 之外、200×1.3=260 之内 —— 没抽到够不着,抽到必收
+    tuning.dropMagnetRadius = 200;
+    const m = new World(5);
+    const d = m.drops.spawn();
+    d.x = d.px = 260;
+    d.y = d.py = 0;
+    d.value = 1;
+    m.step();
+    expect(m.scrap).toBe(0); // 未持有:260 > 200,吸不到
+    m.edicts |= edictMask(EDICT_MAGNET);
+    for (let f = 0; f < 60; f++) m.step();
+    expect(m.scrap).toBe(1); // 持有:起吸半径拉到 260(含边界),锁上就收
+  });
+
+  it('同 seed 同操作序列(含法令授予):出牌序列与 checksum 逐位可复现', () => {
+    const play = (): string => {
+      Object.assign(tuning, EMPTY);
+      const w = new World(20260818);
+      const trace: string[] = [];
+      for (let round = 0; round < 6; round++) {
+        w.scrap = w.upgradeCost;
+        w.step(); // 弹一档 offer(消费 2×count 次 rng)
+        trace.push(w.offer.map((o) => `${o.kind}:${o.type}:${o.level}`).join('|'));
+        // 固定策略:第一张法令就授予,否则跳过 —— 两局在同一帧做同一件事
+        const edictAt = w.offer.findIndex((o) => o.kind === OFFER_EDICT);
+        if (edictAt >= 0) {
+          w.offer.splice(0, w.offer.length, w.offer[edictAt]!);
+          expect(w.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+        } else {
+          expect(w.skipUpgrade()).toBe(true);
+        }
+        for (let f = 0; f < UPGRADE_OFFER_COOLDOWN * SIM_HZ + 1; f++) w.step(); // 冲掉 5s 弹卡冷却
+      }
+      trace.push(w.checksum());
+      return trace.join(';');
+    };
+    expect(play()).toBe(play()); // 类别数 3→4 后 rng 消耗与出牌序列仍逐位可复现
+  });
+
+  it('法令进 checksum:一边授予一边不授予就分叉,补上同一张又合流', () => {
+    Object.assign(tuning, EMPTY);
+    const a = new World(77);
+    const b = new World(77);
+    a.scrap = b.scrap = a.upgradeCost;
+    a.step();
+    b.step();
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 授予不消耗 rng(与 place 同一条"外部输入"口径):两边的随机流一步都没错开,
+    // 分叉只可能来自法令集合 —— 漏了 acc(this.edicts),这一条当场合流,回归就跑不掉了
+    a.offer.splice(0, a.offer.length, { kind: OFFER_EDICT, type: EDICT_TRACER, level: 0 });
+    expect(a.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+    expect(a.checksum()).not.toBe(b.checksum());
+
+    b.offer.splice(0, b.offer.length, { kind: OFFER_EDICT, type: EDICT_TRACER, level: 0 });
+    expect(b.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+    expect(a.checksum()).toBe(b.checksum());
+
+    // 掩码位翻转同样分叉(不是"恰好某一位没进哈希"的假合流)
+    const before = a.checksum();
+    a.edicts ^= edictMask(EDICT_TRACER);
+    expect(a.checksum()).not.toBe(before);
+  });
+
+  it('重复法令不出现:抽到并授予后,后续候选绝不再弹同一张(候选剔掉已持有)', () => {
+    Object.assign(tuning, EMPTY);
+    const w = new World(20260819);
+    const granted = new Set<number>();
+    for (let round = 0; round < 14; round++) {
+      w.scrap = w.upgradeCost;
+      w.step();
+      const edictAt = w.offer.findIndex((o) => o.kind === OFFER_EDICT);
+      if (edictAt >= 0) {
+        const type = w.offer[edictAt]!.type;
+        expect(granted.has(type), `已授予的法令 ${type} 不该再进候选`).toBe(false);
+        w.offer.splice(0, w.offer.length, w.offer[edictAt]!);
+        expect(w.takeUpgrade(0, 0, 0)).toBe(PLACE_OK);
+        granted.add(type);
+      } else {
+        expect(w.skipUpgrade()).toBe(true);
+      }
+      for (let f = 0; f < UPGRADE_OFFER_COOLDOWN * SIM_HZ + 1; f++) w.step();
+    }
+    expect(granted.size).toBeGreaterThan(0); // 这一局的固定 seed 真的抽到过法令,断言不空转
   });
 });

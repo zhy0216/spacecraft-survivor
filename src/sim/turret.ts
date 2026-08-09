@@ -32,6 +32,8 @@ import {
   FX_CHAIN,
   FX_LANCE,
   FX_MORTAR,
+  THR_AMMO,
+  THR_HEAT,
   type TowerDef,
   towerArcDeg,
   towerBurst,
@@ -92,6 +94,11 @@ function towerOutreach(def: TowerDef, level: number): number {
  *   **传 null = 没有受击这回事**(04/05 那批用例与任何不关心受击的调用方走这条),逐塔恒 1 倍。
  *   舷向归属由 cellFireRateMul 按**暴露边**判(角落格同时属于两舷),不按格心方位角 ——
  *   规则与 world.sink.fired 的 broadside 统计同一条,只此一份(见 sim/damage.ts)。
+ * @param edictAmmoMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。
+ *   **只折进弹药系塔**(def.throttle === THR_AMMO):"曳光协议:所有弹药系射速 +10%"的
+ *   "弹药系"三个字就在这一句按节流系落地,其余两系一行都不碰。
+ * @param edictHeatMaxMul 法令的过热上限倍率(18 号散热协议),缺省 1 = 未持有。
+ *   只折进过热系塔(THR_HEAT),且只进 onFired 的热上限(cellHeatMax)。
  *
  * 三条性能口径(1000 敌 + 满甲板塔是 01 号压测场景的常态):
  *   一、没有一座在线武器塔就**直接返回** —— 压测场景默认空甲板,不该为它白掏一次查询;
@@ -118,6 +125,8 @@ export function stepTurrets(
   dt: number,
   sink: FireSink | null,
   edgePenalty: readonly number[] | null = null,
+  edictAmmoMul: number = 1,
+  edictHeatMaxMul: number = 1,
 ): void {
   const cells = deck.cells;
   // 一趟扫出两件事:有没有在线塔、全甲板最大射程是多少。
@@ -154,11 +163,14 @@ export function stepTurrets(
     // 这一格的受击射速惩罚(09 号 T3):它任一条暴露边所在舷正在惩罚中就变慢。
     // 逐塔现算而不是逐舷预先算一遍:角落格同时属于两舷,预先按舷分组反而要处理重复归属
     const fireMul = edgePenalty ? cellFireRateMul(cell, edgePenalty) : 1;
+    // 18 号法令按节流系挑倍率:曳光协议只折弹药系(射速),散热协议只折过热系(热上限),
+    // 其余两系走恒 1 —— 未持有时两个倍率都是 1,与既有链路逐位一字不差
+    const edictMul = def.throttle === THR_AMMO ? edictAmmoMul : 1;
 
     // 节流**有没有目标都要推进**:装填、降温、蓄力都在这里,只在有目标时跑的话,
     // 弹药塔会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
     // 惩罚跟着一起进节流(而不是只在开火那一刻扣):蓄力也要慢下来,否则充能系对受击免疫
-    stepThrottle(cell, def, dt, fireMul);
+    stepThrottle(cell, def, dt, fireMul, edictMul);
 
     if (!cellArc(cell, ship.heading, towerArcDeg(def, level), arc)) continue;
     cellWorldPos(deck, ship, cell.col, cell.row, muzzle);
@@ -202,7 +214,8 @@ export function stepTurrets(
     sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
     // 与 stepThrottle 传同一个 fireMul:写进 cooldown 的那个间隔和逐帧夹取它的那个上限
     // 必须同源,否则惩罚期内写进去的长冷却会被下一帧按基准间隔夹回去,惩罚静默失效
-    onFired(cell, def, shots, fireMul);
+    //(edictMul 同理:onFired 与 stepThrottle 拿到的必须是同一个法令倍率)
+    onFired(cell, def, shots, fireMul, edictMul, def.throttle === THR_HEAT ? edictHeatMaxMul : 1);
     sink.fired(cell);
   }
 

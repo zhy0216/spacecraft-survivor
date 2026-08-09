@@ -38,6 +38,16 @@
 import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
 import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
 import {
+  EDICT_COOLANT,
+  EDICT_CRUISE,
+  EDICT_GYRO,
+  EDICT_HULL,
+  EDICT_MAGNET,
+  EDICT_TRACER,
+  type EdictDef,
+  EDICTS,
+} from '../data/edicts';
+import {
   SUP_AMMO_BAY,
   SUP_ARMOR_BAY,
   SUP_CAPACITOR,
@@ -91,6 +101,7 @@ import {
   OFFER_SUPPORT,
   OFFER_TOWER,
   OFFER_DECK,
+  OFFER_EDICT,
   optionContent,
   optionLabel,
   optionSupportType,
@@ -258,6 +269,26 @@ export function cardTitle(opt: UpgradeOption): string {
  */
 export function cardIcon(opt: UpgradeOption): string {
   if (opt.kind === OFFER_DECK) return DECK_PIECES[opt.type]?.icon ?? '?';
+  if (opt.kind === OFFER_EDICT) {
+    // 18 号法令:六条各给一个简明的几何符号(与塔/设施同一套"无外部资产"口径,
+    // 不按卡名做字符串猜测)。HUD 的法令徽记另印名字 —— 徽记可识、卡面可读,两不耽误
+    switch (opt.type) {
+      case EDICT_TRACER:
+        return '▸';
+      case EDICT_GYRO:
+        return '⟲';
+      case EDICT_MAGNET:
+        return '✧';
+      case EDICT_COOLANT:
+        return '❄';
+      case EDICT_HULL:
+        return '▣';
+      case EDICT_CRUISE:
+        return '➤';
+      default:
+        return '?';
+    }
+  }
   if (opt.kind === OFFER_TOWER) {
     switch (optionTowerType(opt)) {
       case TOWER_AUTOCANNON:
@@ -367,6 +398,26 @@ function supportDesc(def: SupportDef): string {
 }
 
 /**
+ * 法令卡的一句话 = 把它数值表里那几项非中性的字段念出来(与 supportDesc 同一条口径,
+ * 中性值 = 这一档用不上,于是调回中性那一项自己就消失)。
+ * **没有 supportDesc 那个"相邻塔"前缀**:法令是**全船被动**(GDD §7),不作用于任何一格,
+ * 印"相邻"就是在承诺一个它做不到的事 —— 于是哪条生效、生效多少,只看掩码,不看甲板。
+ */
+function edictDesc(def: EdictDef): string {
+  const parts: string[] = [];
+  if (def.ammoFireRateMul !== 1) parts.push(`弹药系射速 ×${num(def.ammoFireRateMul)}`);
+  if (def.turnRateAdd !== 0) {
+    parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
+  }
+  if (def.magnetRadiusMul !== 1) parts.push(`拾取半径 ×${num(def.magnetRadiusMul)}`);
+  if (def.heatMaxMul !== 1) parts.push(`过热上限 ×${num(def.heatMaxMul)}`);
+  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
+  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
+  // 与 supportDesc 同一条兜底口径:六项全中性 = 数值表把这一条调成了一张白卡,不许印空串
+  return parts.length > 0 ? parts.join(' · ') : '这一条在数值表里没有任何效果';
+}
+
+/**
  * 表面 DPS(当前档现算)—— "伤害是随等级/加成一直在变的数"这条老顾虑的解法就是**现算不缓存**:
  * 卡片弹出那一刻按数值表 + 等级算一遍,升一级重算一遍,永远不会印出过期的数。
  * "表面" = 单目标持续输出的上限:含 Lv3 的多管跳变,不含装填/过热的停火窗与链跳/AoE 的
@@ -413,6 +464,11 @@ export function cardDesc(opt: UpgradeOption): string {
     const cells = deckPieceCellCount(opt.type);
     return `${cells} 格 · 可旋转 · 焊到任意外边缘 · 转向 -${cells}°/s`;
   }
+  if (opt.kind === OFFER_EDICT) {
+    const def = EDICTS[opt.type];
+    if (!def) return `数值表里查不到这条法令(型号 ${opt.type})`;
+    return edictDesc(def);
+  }
   if (opt.kind === OFFER_TOWER) {
     const def = TOWERS[optionTowerType(opt)];
     if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
@@ -437,6 +493,9 @@ export function cardDesc(opt: UpgradeOption): string {
 export function cardLevelText(opt: UpgradeOption): string {
   if (opt.kind === OFFER_DECK) return '确认即焊死 · 局内不可拆/不可挪';
   if (opt.kind === OFFER_SUPPORT) return '设施不叠级 · 本次新建';
+  // 18 号法令:不占格、不叠级 —— 没有"Lv"这回事,等级行改说它的身份:
+  // 不写清楚的话,玩家会拿"又抽到同一张 = 更强的同名卡"的直觉去理解重复,而那是错的
+  if (opt.kind === OFFER_EDICT) return '法令 · 全船被动 · 不占格 · 不叠级';
   const lv = opt.level;
   if (!(lv >= 1)) return '未装备';
   if (lv >= TOWER_MAX_LEVEL) return `Lv${TOWER_MAX_LEVEL}(满级,只能新建)`;
@@ -742,6 +801,21 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     const opt = world.offer[index];
     // 越界/空卡:候选比卡片少时那张卡本就是藏起来的,这一句是拦网
     if (!opt) return;
+    // 18 号法令:不占格、没有"放哪"这回事 —— 点卡即授予,整个放置阶段对法令卡直接跳过。
+    // World.takeUpgrade 对 OFFER_EDICT 当场置位掩码并结算(col/row 一律无视,见 world.ts),
+    // 这里只做一件事:把"选卡"直接翻译成"调 takeUpgrade 并结算",高亮/放大/落格一概不参与。
+    // 待选没了(重开、已被别处结算)照 confirm 的 UPGRADE_NO_OFFER 同一条口径放行
+    if (opt.kind === OFFER_EDICT) {
+      const code = world.takeUpgrade(index, 0, 0);
+      if (code === UPGRADE_NO_OFFER) {
+        flash(denyMessage(code), DENY_COLOR);
+      } else {
+        flash(`已生效:${cardTitle(opt)} · 全船被动,不占格`, OK_COLOR);
+        audioBus.playPlace();
+      }
+      resolve();
+      return;
+    }
     chosen = index;
     // 三个字段照候选原样填,ui 不在这里分岔 —— 渲染层的合法格高亮读的就是它们,
     // 与 world.takeUpgrade 最终交给 place 的是同一套值(高亮 = 规则,03 号立下的口径)

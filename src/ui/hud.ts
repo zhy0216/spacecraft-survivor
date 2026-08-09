@@ -7,6 +7,7 @@
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
+import { EDICTS, edictMask } from '../data/edicts';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
 import type { Enemy, World } from '../sim/world';
@@ -55,6 +56,14 @@ const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
  * vitals 将来加行需同步改这里。
  */
 const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:140px;`;
+
+/**
+ * 法令徽记(18 号):与星币读数同族的面板,叠在它正下方(top 140 + 面板高 ≈ 34 + 间距 14 = 188),
+ * 一行印出**已持有**法令的名字 —— "所见即所得":抽到哪条,这里立刻多出哪个名字
+ * (与支援连线的同级口径:画面即真相,不另开菜单去翻)。
+ * 名字直取 data/edicts(ui 不抄第二份);无法令时整体隐藏(display:none),持有才亮。
+ */
+const EDICTS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:188px;display:none;`;
 
 /**
  * 精英血条(14 号):屏下缘居中的短条。与静音开关同一套罗盘通道边距(bottom:48px),
@@ -317,7 +326,21 @@ export function createHud(opts: { world: World }): HudUi {
   starRow.append(starLabel, starValue);
   starCoins.appendChild(starRow);
 
-  root.append(top, threat, warn, muteBtn, elite, boss, starCoins);
+  // 法令徽记(18 号):一行"法令"标签 + 已持有名单;节点只建一次,每帧按掩码改写文本
+  const edicts = document.createElement('div');
+  edicts.style.cssText = EDICTS_CSS;
+  edicts.title = '已生效法令';
+  const edictsRow = document.createElement('div');
+  edictsRow.style.cssText = LABEL_ROW_CSS;
+  const edictsLabel = document.createElement('span');
+  edictsLabel.style.cssText = LABEL_CSS;
+  edictsLabel.textContent = '法令';
+  const edictsValue = document.createElement('span');
+  edictsValue.style.cssText = `${VALUE_CSS}color:${OK_COLOR};`;
+  edictsRow.append(edictsLabel, edictsValue);
+  edicts.appendChild(edictsRow);
+
+  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -333,6 +356,19 @@ export function createHud(opts: { world: World }): HudUi {
 
     const coins = finiteOrZero(world.starCoins);
     starValue.textContent = String(Math.max(0, Math.round(coins)));
+
+    // 法令徽记(18 号):每帧按 world.edicts 掩码现读已持有名单 —— 名字直取 data/edicts
+    // (ui 不抄第二份),无法令时整体隐藏;抽到 / 重开换世界,当帧跟上
+    const edictNames: string[] = [];
+    for (let i = 0; i < EDICTS.length; i++) {
+      if ((world.edicts & edictMask(i)) !== 0) edictNames.push(EDICTS[i]!.name);
+    }
+    if (edictNames.length > 0) {
+      edicts.style.display = 'block';
+      edictsValue.textContent = edictNames.join(' ');
+    } else {
+      edicts.style.display = 'none';
+    }
 
     timer.textContent = formatDuration(world.elapsed);
 

@@ -110,11 +110,20 @@ function upgrade(p: Placed): void {
  * 与 sim/turret.ts 的每帧顺序同口径:节流先推进(有没有目标都跑),再问节流放不放行。
  * @param fireMul 受击射速惩罚倍率(09 号 T3),缺省 1 = 没被撞 —— 与 stepThrottle/onFired 的缺省一致,
  *   于是上面那批既有用例连一个参数都不用补,读到的仍是今天这条链路
+ * @param edictMul 法令弹药系射速倍率(18 号),缺省 1 = 未持有 —— 同 fireMul 一条"缺省即恒等"的口径
+ * @param heatMaxEdictMul 法令过热上限倍率(18 号),缺省 1 = 未持有,只进 onFired 的热上限
  */
-function tick(p: Placed, hasTarget: boolean, shots = 1, fireMul = 1): boolean {
-  stepThrottle(p.cell, p.def, SIM_DT, fireMul);
+function tick(
+  p: Placed,
+  hasTarget: boolean,
+  shots = 1,
+  fireMul = 1,
+  edictMul = 1,
+  heatMaxEdictMul = 1,
+): boolean {
+  stepThrottle(p.cell, p.def, SIM_DT, fireMul, edictMul);
   if (!hasTarget || !canFire(p.cell, p.def)) return false;
-  onFired(p.cell, p.def, shots, fireMul);
+  onFired(p.cell, p.def, shots, fireMul, edictMul, heatMaxEdictMul);
   return true;
 }
 
@@ -124,9 +133,10 @@ function run(
   frames: number,
   hasTarget: (f: number) => boolean = () => true,
   fireMul = 1,
+  edictMul = 1,
 ): number[] {
   const at: number[] = [];
-  for (let f = 1; f <= frames; f++) if (tick(p, hasTarget(f), 1, fireMul)) at.push(f);
+  for (let f = 1; f <= frames; f++) if (tick(p, hasTarget(f), 1, fireMul, edictMul)) at.push(f);
   return at;
 }
 
@@ -845,5 +855,57 @@ describe('邻接加成 cell*(06 号 T2:四个包装是全仓唯一的取值链�
       );
       tuning.towerFireRateScale = 1;
     }
+  });
+});
+
+describe('法令倍率 edictMul(18 号:曳光协议 / 散热协议)', () => {
+  it('第 5 参 edictMul:缺省恒等,传 1.1 = 间隔 0.4/1.1,与另外三个旋钮各除各的', () => {
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    expect(effectiveFireInterval(def, 1, 1, 1, 1)).toBe(effectiveFireInterval(def, 1)); // 缺省 = 传 1
+    expect(effectiveFireInterval(def, 1, 1, 1, 1.1)).toBeCloseTo(0.4 / 1.1, 12); // 曳光协议:射速 +10%
+    // 受击惩罚 / 邻接加成 / 法令倍率各除各的,谁都不吞掉谁(与 buffMul 那组同一条口径)
+    expect(effectiveFireInterval(def, 1, 0.5, 1, 1.1)).toBeCloseTo(0.4 / 0.5 / 1.1, 12);
+    expect(effectiveFireInterval(def, 1, 1, 1.25, 1.1)).toBeCloseTo(0.4 / 1.25 / 1.1, 12);
+
+    for (const bad of [0, -1, NaN]) {
+      // 法令倍率是 World 按表算出来的,但保护照给(与 fireMul/buffMul 同一道下限)
+      const interval = effectiveFireInterval(def, 1, 1, 1, bad);
+      expect(Number.isFinite(interval), `edictMul ${bad}`).toBe(true);
+      expect(interval).toBeGreaterThan(0);
+    }
+  });
+
+  it('cellFireInterval 第 4 参透传:弹药塔拿到 1.1 后帧距 24 → 22,开火手感真的变密', () => {
+    const p = place(TOWER_AUTOCANNON);
+    const normal = gapFrames(cellFireInterval(p.cell, p.def, 1, 1));
+    const fast = gapFrames(cellFireInterval(p.cell, p.def, 1, 1.1));
+    expect(normal).toBe(24); // 0.4s
+    expect(fast).toBe(22); // 0.4/1.1 ≈ 0.3636s → 21.8 帧 → 22 帧
+    // 与既有 0.4s 逐位一致(缺省 edictMul = 1,这一句就是"未持有时既有行为一字不变"的机械形式)
+    expect(cellFireInterval(p.cell, p.def)).toBe(0.4);
+    // stepThrottle/onFired 同传 edictMul:写进 cooldown 的间隔与逐帧夹取它的上限同源
+    expect(gaps(run(p, 200, () => true, 1, 1.1)).slice(0, 5)).toEqual(new Array(5).fill(fast));
+  });
+
+  it('onFired 的热上限吃 heatMaxEdictMul:散热协议 1.2 让激光多烧几发才锁死', () => {
+    const def = TOWERS[TOWER_LASER]!;
+    expect(cellHeatMax(place(TOWER_LASER).cell, def, 1)).toBe(cellHeatMax(place(TOWER_LASER).cell, def));
+
+    // 无加成:每发 +1.6、上限 24 → ceil(24/1.6) = 第 15 发才锁死
+    const p = place(TOWER_LASER);
+    const noEdict = Math.ceil(def.heatMax / def.heatPerShot);
+    expect(noEdict).toBe(15);
+    for (let i = 0; i < noEdict; i++) onFired(p.cell, def, 1);
+    expect(p.cell.coolLock).toBeGreaterThan(0);
+
+    // 散热协议:上限 24×1.2 = 28.8 → 第 18 发(28.8)才锁死,前 17 发照常连烧
+    const q = place(TOWER_LASER);
+    const withEdict = Math.ceil((def.heatMax * 1.2) / def.heatPerShot);
+    expect(withEdict).toBe(noEdict + 3);
+    for (let i = 0; i < withEdict - 1; i++) onFired(q.cell, def, 1, 1, 1, 1.2);
+    expect(q.cell.coolLock).toBe(0); // 上限抬了,罚的那一档也跟着后移
+    onFired(q.cell, def, 1, 1, 1, 1.2);
+    expect(q.cell.coolLock).toBeGreaterThan(0);
+    expect(q.cell.heat).toBeLessThanOrEqual(cellHeatMax(q.cell, def, 1.2)); // 夹在加成后的上限里
   });
 });
