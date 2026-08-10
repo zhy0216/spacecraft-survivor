@@ -50,6 +50,8 @@ interface FxLog {
   y1: number;
   radius: number;
   towerType: number;
+  damage: number;
+  dmgRatio: number;
 }
 interface QueryLog {
   x: number;
@@ -76,6 +78,8 @@ interface Harness {
  * query 故意用**线性扫描**而不是真的空间哈希:哈希只是粗筛(按 cell 返回超集),
  * 精筛是 stepBullets 自己的活 —— 喂它一个"全世界都是候选"的最坏输入,才钉得住精筛这条规则。
  * damage 真的调 applyDamage:于是"本帧已被打死的不再吃伤害"这条能在同一套夹具里验。
+ * 顺带照 World.damageEnemy 的口径把 lastHit 写给敌对象:飘字(FXV_IMPACT 的 damage 参数)
+ * 读的就是它 —— 不写的话假 sink 里永远飘不出数字,这条链路在单测里就是死的。
  */
 function harness(...enemies: Enemy[]): Harness {
   const bullets = new Pool<Bullet>(createBullet, resetBullet);
@@ -88,10 +92,11 @@ function harness(...enemies: Enemy[]): Harness {
     spawnBullet: () => bullets.spawn(),
     damage: (e, amount) => {
       damages.push({ e, amount });
+      e.lastHit = amount; // 与 World.damageEnemy 同一条"实际结算量写给敌对象"的口径
       return applyDamage(e, amount);
     },
-    fx: (kind, x0, y0, x1, y1, radius, towerType) => {
-      fxs.push({ kind, x0, y0, x1, y1, radius, towerType });
+    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0) => {
+      fxs.push({ kind, x0, y0, x1, y1, radius, towerType, damage, dmgRatio });
     },
     query: (x, y, r, out) => {
       queries.push({ x, y, r });
@@ -169,6 +174,9 @@ describe('直射弹命中(每帧最多一只 = 最近的那一只)', () => {
     expect(h.damages[0]!.e).toBe(near);
     expect(h.damages[0]!.amount).toBe(6); // 伤害 = 发射那一刻定死的 b.damage,不回查塔
     expect(h.fxs.map((fx) => fx.kind)).toEqual([FXV_IMPACT]);
+    // 飘字携带实际结算伤害与相对满血的比例(渲染层配色用):与 damage 同量、ratio = 6/maxHp
+    expect(h.fxs[0]!.damage).toBe(6);
+    expect(h.fxs[0]!.dmgRatio).toBeCloseTo(6 / near.maxHp, 9);
     expect(far.hp).toBe(far.maxHp);
     expect(side.hp).toBe(side.maxHp);
     expect(h.bullets.size).toBe(0); // 不穿透 → 命中即回收

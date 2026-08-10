@@ -86,6 +86,13 @@ export interface Bullet {
    * 塔被拆掉也不该改变已经出膛的这一发的"伤害类型"。
    */
   throttle: number;
+  /**
+   * 点防拦截弹标记(22 号):true = 这颗弹只认敌方弹丸、**绝不命中敌人**(见 hitDirect 的分支)。
+   * 拦截是点防的第二职责,拦截弹若半路被虫群吃掉,"击落弹幕"这条承诺就形同虚设;
+   * 且它与普通弹共用池,不挂标记的话 stepInterceptHits 会把每一颗普通弹都拿去比弹丸。
+   * 发射那一刻定死;普通开火路径恒 false(reset 清回)。
+   */
+  intercept: boolean;
 }
 
 /** 池 factory:字段在这里一次性声明齐,之后只被赋值、绝不新增 */
@@ -106,6 +113,7 @@ export function createBullet(): Bullet {
     aoeDamage: 0,
     towerType: 0,
     throttle: 0, // 0 = THR_AMMO(机炮系);直射弹与抛射弹都只在开火时被覆写
+    intercept: false,
   };
 }
 
@@ -131,6 +139,7 @@ export function resetBullet(b: Bullet): void {
   b.aoeDamage = 0;
   b.towerType = 0;
   b.throttle = 0; // 漏清:上一发的能量系节流会原样带给下一发(抗性判定认的就是它)
+  b.intercept = false; // 漏清:上一发的拦截标记会原样带给下一发,普通弹凭空变成只打弹丸
 }
 
 /**
@@ -175,6 +184,11 @@ export function stepBullets(bullets: Pool<Bullet>, dt: number, sink: FireSink): 
  * @returns 弹丸是否还活着(命中且穿透用光 = false,由调用方回收)
  */
 function hitDirect(b: Bullet, sink: FireSink): boolean {
+  // 拦截弹(22 号)只认敌方弹丸、绝不命中敌人:命中判定在 sim/intercept.ts 的
+  // stepInterceptHits,这里整段跳过 —— 拦截弹半路被虫群吃掉,"击落弹幕"承诺就形同虚设。
+  // 注意它仍会被 stepBullets 正常积分/到期,只是不参与敌人的碰撞
+  if (b.intercept) return true;
+
   // 查询半径 = 弹半径 + 最大敌半径(精英按体型放大,enemyRadius 的上界 = ENEMY_RADIUS_MAX × ELITE.scale)。
   // 1.5 倍率下 ≈ 25px < 一个 cell(28px):守住 GDD §13
   // "查询半径不超过一个 cell"—— 那是 3×3 邻域必然覆盖的前提,破了它哈希就会开始漏人
@@ -203,7 +217,20 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
 
   // 带节流系进伤害结算:词缀抗性(装甲/相位)在 World.damageEnemy 那一处按它判定
   sink.damage(best, b.damage, b.throttle);
-  sink.fx(FXV_IMPACT, b.x, b.y, b.x, b.y, 0, b.towerType);
+  // 命中飘字带**实际结算**的伤害与相对满血的比例:抗性在 damageEnemy 里折算过,
+  // 只有 Enemy.lastHit 是那一份真相(见 enemy.ts 的 lastHit 注释);它恰好在这一发刚
+  // 结算完,读到的一定是本发 —— 不是上一发留下的脏值
+  sink.fx(
+    FXV_IMPACT,
+    b.x,
+    b.y,
+    b.x,
+    b.y,
+    0,
+    b.towerType,
+    best.lastHit,
+    best.maxHp > 0 ? best.lastHit / best.maxHp : 0,
+  );
   if (b.pierce <= 0) return false;
   b.pierce--;
   return pushPast(b, best, b.radius + bestRadius);

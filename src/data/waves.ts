@@ -19,7 +19,7 @@
  *
  * 当前结构固定为 **4 段 × 120s**:每两分钟敌群升级一次，同时给玩家一次甲板整备。
  */
-import { KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from './enemies';
+import { KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from './enemies';
 
 /**
  * 主压怪流:整段**持续**出的那一股,方向就是当时的主压方向。
@@ -132,9 +132,9 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 48s / 3 只(畅玩性调整,原 35s / 4 只):挪到第一次升级(前三档特价后约 20s 内见卡)
       // 大概率落地之后 —— 首秀从"裸装配考试"变成"刚拿到新塔正好试刀";总血量 80→60,
       // 一次处理不当也不再是 30-40% 船体的挫败源(整局无回血,教学段的坑要浅)
-      { at: 48, offsetDeg: 90, spreadDeg: 12, counts: [0, 3, 0, 0] },
+      { at: 48, offsetDeg: 90, spreadDeg: 12, counts: [0, 3, 0, 0, 0] },
       // 换到左舷:两次方向相反,玩家才会明白侧压不是固定一边(否则第一段就学歪了)
-      { at: 80, offsetDeg: -90, spreadDeg: 12, counts: [0, 4, 0, 0] },
+      { at: 80, offsetDeg: -90, spreadDeg: 12, counts: [0, 4, 0, 0, 0] },
     ],
     elites: [],
   },
@@ -152,10 +152,13 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_STRAFER, rate0: 0.25, rate1: 0.6, spreadDeg: 35 },
     ],
     bursts: [
-      { at: 30, offsetDeg: 90, spreadDeg: 14, counts: [6, 3, 0, 0] },
+      { at: 30, offsetDeg: 90, spreadDeg: 14, counts: [6, 3, 0, 0, 0] },
       // 尾随蛆首秀,而且是从背后来的:船尾没塔的甲板会在这一下吃到教训
-      { at: 62, offsetDeg: 180, spreadDeg: 20, counts: [0, 0, 4, 0] },
-      { at: 96, offsetDeg: -90, spreadDeg: 14, counts: [8, 4, 0, 0] },
+      { at: 62, offsetDeg: 180, spreadDeg: 20, counts: [0, 0, 4, 0, 0] },
+      { at: 96, offsetDeg: -90, spreadDeg: 14, counts: [8, 4, 0, 0, 0] },
+      // 孢子炮手首秀:一小队从右舷斜后方压来 —— 它们一进 300px 就锚定喷吐,
+      // 玩家第一次见识"得脱离航线过去杀"的远程威胁(下一段才进流,见文件头编排口径 2)
+      { at: 108, offsetDeg: 90, spreadDeg: 20, counts: [0, 0, 0, 0, 3] },
     ],
     elites: [
       // 首只精英:侧掠者 + 狂热光环/装甲 —— "这只不一样"的教学时刻:
@@ -175,14 +178,16 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_STRAFER, rate0: 0.6, rate1: 1.0, spreadDeg: 35 },
       // 尾随蛆进流:它只驻留不冲锋,压力是"持续咬着尾巴"而不是突发,适合当背景噪声
       { kind: KIND_TRAILER, rate0: 0.3, rate1: 0.6, spreadDeg: 25 },
+      // 孢子炮手进流(首秀在上一段侧压):占比 ~8%,锚定后是"必须绕路过去拆"的持续远程压力
+      { kind: KIND_SPORE, rate0: 0.3, rate1: 0.45, spreadDeg: 30 },
     ],
     bursts: [
-      { at: 25, offsetDeg: 90, spreadDeg: 14, counts: [8, 4, 0, 0] },
-      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 6, 0] },
+      { at: 25, offsetDeg: 90, spreadDeg: 14, counts: [8, 4, 0, 0, 0] },
+      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 6, 0, 0] },
       // 冲撞甲虫首秀:只有一只,而且从侧面来 —— 0.9s 前摇看得清,躲一次就学会了
-      { at: 95, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 1] },
+      { at: 95, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 1, 0] },
       // 斜后方 135°:既不是纯侧也不是纯背,逼玩家在"转过去接"和"跑开"之间选
-      { at: 110, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0] },
+      { at: 110, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0, 0] },
     ],
     elites: [
       // 相位蜂群蛭:能量系(激光/电弧/磁轨/迫击炮)对它减半,机炮/点防反而才是正解 ——
@@ -205,14 +210,16 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_TRAILER, rate0: 0.5, rate1: 0.9, spreadDeg: 25 },
       // 冲撞甲虫进流,速率压得极低:它单只 40 HP、撞一下 18 伤,再多就不是"考转向"而是刷血条了
       { kind: KIND_BEETLE, rate0: 0.15, rate1: 0.35, spreadDeg: 20 },
+      // 孢子炮手随密度爬升到 ~10%:远程压力跟着虫潮一起加码,点防的作用窗口越来越值钱
+      { kind: KIND_SPORE, rate0: 0.5, rate1: 0.9, spreadDeg: 30 },
     ],
     bursts: [
-      { at: 25, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 2] },
-      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 8, 0] },
-      { at: 95, offsetDeg: 90, spreadDeg: 14, counts: [12, 6, 0, 0] },
-      { at: 108, offsetDeg: -135, spreadDeg: 25, counts: [0, 4, 4, 3] },
+      { at: 25, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 2, 0] },
+      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 8, 0, 0] },
+      { at: 95, offsetDeg: 90, spreadDeg: 14, counts: [12, 6, 0, 0, 0] },
+      { at: 108, offsetDeg: -135, spreadDeg: 25, counts: [0, 4, 4, 3, 0] },
       // 终局正面压上(offset 0 = 主压方向本身):脚本的最后一口气,活过它就是胜利
-      { at: 116, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4] },
+      { at: 116, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4, 0] },
     ],
     elites: [
       // 狂热光环侧掠者:收尾段怪最密,光环的收益最大 —— 它活着,整片虫潮都在加速

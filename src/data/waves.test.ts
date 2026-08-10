@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { tuning } from '../sim/config';
 import { AFFIX_COUNT } from './affixes';
-import { ENEMIES, ENEMY_KIND_COUNT, KIND_BEETLE, KIND_STRAFER, KIND_SWARM } from './enemies';
+import { ENEMIES, ENEMY_KIND_COUNT, KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM } from './enemies';
 import {
   SPAWN_RADIUS,
   SPAWN_RADIUS_BAND,
@@ -396,5 +396,47 @@ describe('解锁精英事件(19 号)—— 独立槽位,不碰既有段脚本的
     }
     // 槽位表的存在不影响单局总时长:它不占段,也不在 WAVE_TOTAL_TIME 的口径里
     expect(WAVE_TOTAL_TIME).toBe(WAVE_SEGMENTS.reduce((s, seg) => s + seg.duration, 0));
+  });
+
+  it('孢子炮手:教学段不出现,从第 2 段起先侧压首秀、下一段才进流', () => {
+    // 与"敌型逐段解锁"同一条编排口径(见该用例):孢子也是"先在侧压事件里露一次面,
+    // 下一段才进流" —— 它的一次齐射威胁必须看得见、认得出来,而不是混进流里悄悄刷
+    expect(WAVE_SEGMENTS[0]!.bursts.every((b) => b.counts[KIND_SPORE]! === 0)).toBe(true);
+    expect(
+      WAVE_SEGMENTS[0]!.streams.every((s) => s.kind !== KIND_SPORE),
+    ).toBe(true);
+    // 孢子必须真的在脚本里出现过(设计了却一局都见不到的敌型等于没做)
+    const anySpore = WAVE_SEGMENTS.some(
+      (seg) =>
+        seg.streams.some((s) => s.kind === KIND_SPORE) ||
+        seg.bursts.some((b) => b.counts[KIND_SPORE]! > 0),
+    );
+    expect(anySpore).toBe(true);
+    // 首秀在侧压事件里、且早于它的第一条流(第 2 段的流不算数,首秀必须在更早的段)
+    const firstStreamAt = WAVE_SEGMENTS.findIndex((seg) =>
+      seg.streams.some((s) => s.kind === KIND_SPORE),
+    );
+    const firstBurstAt = WAVE_SEGMENTS.findIndex((seg) =>
+      seg.bursts.some((b) => b.counts[KIND_SPORE]! > 0),
+    );
+    expect(firstBurstAt).toBeGreaterThan(0); // 不在教学段
+    expect(firstBurstAt).toBeLessThan(firstStreamAt); // 先侧压露面,后进流
+  });
+
+  it('孢子炮手:流速率随密度爬升,接缝不掉压(与既有流的密度曲线同一条口径)', () => {
+    const rates: { seg: number; r0: number; r1: number }[] = [];
+    for (let i = 0; i < WAVE_SEGMENTS.length; i++) {
+      for (const s of WAVE_SEGMENTS[i]!.streams) {
+        if (s.kind !== KIND_SPORE) continue;
+        expect(s.rate1).toBeGreaterThanOrEqual(s.rate0); // 段内只涨不落
+        rates.push({ seg: i, r0: s.rate0, r1: s.rate1 });
+      }
+    }
+    // 多段都有孢子流时,段尾速率 ≤ 下一段段首(换段不掉压)
+    for (let i = 0; i + 1 < rates.length; i++) {
+      expect(rates[i + 1]!.r0, `第 ${rates[i]!.seg} → ${rates[i + 1]!.seg} 段孢子流`).toBeGreaterThanOrEqual(
+        rates[i]!.r1,
+      );
+    }
   });
 });

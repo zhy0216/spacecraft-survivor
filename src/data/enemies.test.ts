@@ -10,12 +10,15 @@ import { tuning } from '../sim/config';
 import {
   BH_SEEK,
   BH_SEEK_CHARGE,
+  BH_SPORE,
   BH_STRAFE,
   BH_STRAFE_CHARGE,
   ENEMIES,
   ENEMY_KIND_COUNT,
   ENEMY_RADIUS_MAX,
   KIND_BEETLE,
+  KIND_BOSS,
+  KIND_SPORE,
   KIND_STRAFER,
   KIND_SWARM,
   KIND_TRAILER,
@@ -131,5 +134,67 @@ describe('敌人数值表', () => {
     // 冻表会让后续验证"前摇时长可配"的用例无从下手
     ENEMIES[KIND_BEETLE]!.chargeWindup = 0.2;
     expect(ENEMIES[KIND_BEETLE]!.chargeWindup).toBe(0.2);
+  });
+
+  it('孢子炮手:编号追加在末尾、下标 === kind,旧四型的 kind 一字没动', () => {
+    expect(KIND_SPORE).toBe(ENEMY_KIND_COUNT - 1); // 追加位:表尾
+    expect(ENEMIES[KIND_SPORE]!.kind).toBe(KIND_SPORE);
+    expect(ENEMIES[KIND_SPORE]!.name).toBe('孢子炮手');
+    // 既有四型的下标与编号必须原样(其它 agent 的用例按 0-3 钉死)
+    expect(ENEMIES[KIND_SWARM]!.kind).toBe(0);
+    expect(ENEMIES[KIND_STRAFER]!.kind).toBe(1);
+    expect(ENEMIES[KIND_TRAILER]!.kind).toBe(2);
+    expect(ENEMIES[KIND_BEETLE]!.kind).toBe(3);
+  });
+
+  it('Boss 标记恒在表外:KIND_BOSS 不许与任何表内 kind 撞车', () => {
+    // 22 号把表长从 4 推到 5 时,Boss 标记(原 4)必须让位 —— 撞车的症状是
+    // "孢子被当 Boss 召唤/缩放",这类 bug 只在特定 seed 下露馅,极难查
+    expect(KIND_BOSS).toBe(ENEMY_KIND_COUNT); // 越界哨兵 = 表长,天然落在表外
+    for (const def of ENEMIES) {
+      expect(def.kind).not.toBe(KIND_BOSS);
+    }
+  });
+
+  it('孢子炮手:远程字段自洽 —— 行为是 BH_SPORE、不冲锋、弹幕参数齐全且为正', () => {
+    const spore = ENEMIES[KIND_SPORE]!;
+    expect(spore.behavior).toBe(BH_SPORE);
+    // 远程型不冲锋:冲锋段全 0(渲染层的前摇指示不会对着它闪)
+    expect(spore.chargeRange).toBe(0);
+    expect(spore.chargeWindup).toBe(0);
+    expect(spore.chargeSpeed).toBe(0);
+    expect(spore.chargeDuration).toBe(0);
+    expect(spore.chargeRecover).toBe(0);
+    // 弹幕参数必须齐全:少了任何一个,状态机/发射侧读到的就是 0(静默哑火,最难查)
+    expect(spore.sporeRange).toBeGreaterThan(0);
+    expect(spore.sporeMinRange).toBeGreaterThan(0);
+    expect(spore.sporeMinRange).toBeLessThan(spore.sporeRange); // 距离带下界 < 上界,带才有宽度
+    expect(spore.sporeInterval).toBeGreaterThan(0);
+    expect(spore.sporeWarnTime).toBeGreaterThan(0);
+    expect(spore.sporeSpeed).toBeGreaterThan(0);
+    expect(spore.sporeDamage).toBeGreaterThan(0);
+    expect(Number.isInteger(spore.sporeSalvoCount)).toBe(true);
+    expect(spore.sporeSalvoCount).toBeGreaterThanOrEqual(1);
+    expect(spore.sporeSpreadDeg).toBeGreaterThanOrEqual(0);
+    // 非远程型:弹幕字段全 0(不留残值,渲染层的蓄力环不会对着它们画)
+    for (const def of ENEMIES) {
+      if (def.behavior === BH_SPORE) continue;
+      expect(def.sporeRange).toBe(0);
+      expect(def.sporeMinRange).toBe(0);
+      expect(def.sporeInterval).toBe(0);
+      expect(def.sporeWarnTime).toBe(0);
+      expect(def.sporeSpeed).toBe(0);
+      expect(def.sporeDamage).toBe(0);
+      expect(def.sporeSalvoCount).toBe(0);
+      expect(def.sporeSpreadDeg).toBe(0);
+    }
+  });
+
+  it('孢子炮手的 tint 也在红紫暖色域内(GDD §12 敌我色域分离)', () => {
+    const spore = ENEMIES[KIND_SPORE]!;
+    const r = (spore.tint >> 16) & 0xff;
+    const g = (spore.tint >> 8) & 0xff;
+    expect(r).toBeGreaterThanOrEqual(0xb0);
+    expect(g).toBeLessThanOrEqual(0x8c);
   });
 });

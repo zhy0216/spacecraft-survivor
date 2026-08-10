@@ -899,3 +899,50 @@ describe('单帧出怪上限(数据写坏时不卡死一帧)', () => {
     expect(r.list.every((e) => e.kind === 0)).toBe(true); // 已超上限,怪流这一帧一只都不出
   });
 });
+
+describe('孢子炮手(KIND_SPORE,22 号)', () => {
+  it('运行器对第 5 型一视同仁:侧压事件按 counts 下标升序出,孢子在队列末尾', () => {
+    useScript(
+      segment({
+        duration: 10,
+        streams: [],
+        bursts: [burst({ at: 0, counts: [1, 2, 0, 0, 3] })], // 孢子 = 下标 4
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    stepWaves(s, SIM_DT, new Rng(1), r);
+    expect(r.list.map((e) => e.kind)).toEqual([0, 1, 1, 4, 4, 4]); // 逐型升序,孢子最后
+  });
+
+  it('孢子流走主压流通道:debt 小数账照常攒、速率/方向与既有流同一条插值口径', () => {
+    useScript(
+      segment({
+        duration: 10,
+        streams: [stream({ kind: 4, rate0: 2, rate1: 2, spreadDeg: 10 })],
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    stepWaves(s, 0.5, new Rng(1), r); // dt = 0.5 → 每帧整 1 只
+    expect(r.list).toHaveLength(1);
+    expect(r.list[0]!.kind).toBe(4);
+    expect(Math.abs(r.list[0]!.angle - s.dirRad)).toBeLessThanOrEqual(10 * DEG2RAD);
+  });
+
+  it('每出一只孢子恰好消耗一次 rng(与型号无关):同 seed 序列不因第 5 型而移位', () => {
+    useScript(
+      segment({
+        duration: 10,
+        streams: [stream({ kind: 0, rate0: 4, rate1: 4 }), stream({ kind: 4, rate0: 4, rate1: 4 })],
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    const rng = new CountingRng(7);
+    stepWaves(s, 0.5, rng, r); // dt = 0.5 → 两条流各出 2 只
+    expect(r.list).toHaveLength(4);
+    expect(r.list.map((e) => e.kind)).toEqual([0, 0, 4, 4]); // 按 streams 数组顺序出
+    expect(rng.calls).toBe(4); // 每只恰一次,孢子不多不少
+  });
+});

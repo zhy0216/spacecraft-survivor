@@ -16,6 +16,7 @@ import type { Rng } from '../core/rng';
 import { ELITE } from '../data/affixes';
 import {
   BH_SEEK_CHARGE,
+  BH_SPORE,
   BH_STRAFE,
   BH_STRAFE_CHARGE,
   BOSS,
@@ -36,6 +37,10 @@ export const ST_WINDUP = 1;
 export const ST_DASH = 2;
 /** 硬直:不出力,靠惯性滑出去 = 侧掠者的"啃咬后脱离" */
 export const ST_RECOVER = 3;
+/** 孢子炮手锚定(22 号 GDD §6.2):钉在原地,按 sporeInterval 倒计时下一轮齐射 */
+export const ST_ANCHOR = 4;
+/** 孢子炮手蓄力:钉在原地倒计时 sporeWarnTime,渲染层画收缩预警环,到时置位 sporeFire */
+export const ST_SPORE_WINDUP = 5;
 
 /**
  * 侧掠者起手的方位容差:绕到离目标方位(舷侧)30° 以内才允许进前摇。
@@ -53,6 +58,14 @@ const WINDUP_BEARING_TOL = 30 * DEG2RAD;
  * 前摇时长这个最敏感的旋钮才是真可配的(单测按帧数钉)。
  */
 const TIMER_EPS = 1e-9;
+
+/**
+ * 受击闪白的存续秒(畅玩性:中弹那一下闪白)。**纯表现,不进 checksum**:
+ * 闪白不参与任何判定,且完全由伤害输入决定(命中即置满、逐帧线性衰减)= 派生量 ——
+ * 与 animSeed 同一条"渲染只读、sim 白送"的口径;它决定不了世界的下一帧,混进哈希
+ * 只会让"调一下闪白时长"看起来像一次确定性回归。占位待调
+ */
+export const ENEMY_HIT_FLASH = 0.08;
 
 /** px/py = 上一逻辑帧位置(铁律 2);字段一次性声明齐,运行期不新增 */
 export interface Enemy {
@@ -100,6 +113,29 @@ export interface Enemy {
   hitCd: number;
   /** 本帧被打死,step 末尾统一回收(遍历中就地删会踩 swap-remove 的下标坑) */
   dead: boolean;
+  /**
+   * 受击闪白剩余秒(畅玩性)。命中即置满 ENEMY_HIT_FLASH、由 World 逐帧减 dt 夹 0,
+   * 渲染层读它把剪影朝白色混合 —— "这一发打中了"在蜂群里唯一看得见的回执。
+   * **纯表现字段,不进 checksum**(理由见 ENEMY_HIT_FLASH 的注释;衰减与 timer 同口径)。
+   */
+  hitFlash: number;
+  /**
+   * 最近一次实际结算的伤害(词缀抗性折算后,见 World.damageEnemy)。**不回池不生效**:
+   * 只有"这一发打没打中"的两处表现出口读它 —— 直射弹的命中飘字(FXV_IMPACT)与
+   * 死亡爆点飘字(FXV_KILL,reap 在回池前当场读走)。它不是逐帧演化的状态:
+   * 伤害输入(amount × 抗性)一旦确定它就是确定值 = 派生量,故**不进 checksum**,
+   * 与 maxHp 同一条"哈它只是把同一件事哈两遍"的口径。
+   */
+  lastHit: number;
+  /**
+   * 孢子炮手的"本帧开火"闩(22 号):状态机在蓄力到期的**那一帧**置 true,World 在敌人循环里
+   * 当场读走并发射齐射、随即清回 false —— 发射弹丸是副作用,状态机(纯"期望速度 + 追随系数"
+   * 契约,见文件头)不碰池,只把"该打了"这件事递出去。
+   * **零 rng**:发射时刻完全由锚定后的计时器决定,不掷随机,同 seed 逐帧可复现。
+   * 它是闩不是状态:同帧必然被消费,跨帧恒 false,故不进 checksum(与 lastHit 同一条"非状态"口径,
+   * 但它也不是派生量 —— 它是状态机→世界的单向信号,消费即消失,重放时由同一段确定代码重建)。
+   */
+  sporeFire: boolean;
 }
 
 /** 池 factory:字段在这里一次性声明齐,之后只被赋值、绝不新增 */
@@ -123,6 +159,9 @@ export function createEnemy(): Enemy {
     animSeed: 0,
     hitCd: 0,
     dead: false,
+    hitFlash: 0,
+    lastHit: 0,
+    sporeFire: false,
   };
 }
 
@@ -151,6 +190,9 @@ export function resetEnemy(e: Enemy): void {
   e.animSeed = 0;
   e.hitCd = 0;
   e.dead = false;
+  e.hitFlash = 0; // 漏清:上一命受击的闪白会原样带给新出生的怪,无端闪一下
+  e.lastHit = 0;
+  e.sporeFire = false; // 漏清:上一命的"该开火"闩会原样带给新出生的怪,凭空喷一轮
 }
 
 /**
@@ -207,6 +249,9 @@ export function initEnemy(
   // 给它一个初始冷却只会让"生在船脸上"这类将来的出怪规则悄悄免掉第一口伤害
   e.hitCd = 0;
   e.dead = false;
+  e.hitFlash = 0; // 出生姿态干净:新怪不继承上一命的闪白
+  e.lastHit = 0;
+  e.sporeFire = false; // 出生姿态干净:新怪不继承上一命的开火闩
 }
 
 /**
@@ -234,6 +279,9 @@ export function initSplit(e: Enemy, parent: Enemy, elapsedSec: number): void {
   e.animSeed = enemyAnimSeed(parent.x, parent.y);
   e.hitCd = 0;
   e.dead = false;
+  e.hitFlash = 0; // 分裂体与父体同一帧出生,不带父体的闪白
+  e.lastHit = 0;
+  e.sporeFire = false; // 分裂体只继承父体的位置/型号/side,不继承开火闩
 }
 
 /**
@@ -296,6 +344,35 @@ function shouldWindup(e: Enemy, def: EnemyDef, ship: Ship): boolean {
 }
 
 /**
+ * 船距孢子炮手是否在射程带之外(22 号):> sporeRange = 太远(玩家逃了),
+ * < sporeMinRange = 贴脸(玩家冲进来了)。带本身自带迟滞:在带内锚定时,
+ * 船在带边缘小幅漂移不会让它反复起锚 —— "保持距离带"的机制全部来源,
+ * 锚定/蓄力两态都靠它决定"要不要放弃当前姿态回去重新就位"。
+ */
+function sporeOutOfBand(e: Enemy, ship: Ship, def: EnemyDef): boolean {
+  const dx = e.x - ship.x;
+  const dy = e.y - ship.y;
+  const d2 = dx * dx + dy * dy;
+  const hi = def.sporeRange * def.sporeRange;
+  if (d2 > hi) return true;
+  const lo = def.sporeMinRange * def.sporeMinRange;
+  return d2 < lo;
+}
+
+/**
+ * 孢子的接近段寻路:太远朝船压、贴脸背船退 —— 就是"距离带"在速度上的样子。
+ * 带内永远走不到这一支(进带当帧就转锚定),兜底朝船走只是防坏数据的护栏,不是另一种行为。
+ */
+function sporeSeek(e: Enemy, ship: Ship, def: EnemyDef, speed: number, out: Vec2): void {
+  const dx = ship.x - e.x;
+  const dy = ship.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const away = dist < def.sporeMinRange ? -1 : 1;
+  out.x = (dx / dist) * speed * away;
+  out.y = (dy / dist) * speed * away;
+}
+
+/**
  * 推进一只敌人的行为一帧:把期望速度写进 out,返回追随系数 follow ∈ (0, 1]。
  * 调用方(World)负责 `v += (desired - v) * follow` 与积分位置 —— 本函数不碰位置。
  *
@@ -308,6 +385,7 @@ function shouldWindup(e: Enemy, def: EnemyDef, ship: Ship): boolean {
  */
 export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): number {
   const def = ENEMIES[e.kind]!;
+  const isSpore = def.behavior === BH_SPORE;
 
   switch (e.state) {
     case ST_WINDUP:
@@ -331,7 +409,43 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
         e.timer = 0;
       }
       break;
+    case ST_ANCHOR:
+      // 锚定中玩家逃出射程带:放弃锚定回去重新就位(太远就追、贴脸就退 —— 见 sporeSeek)
+      if (sporeOutOfBand(e, ship, def)) {
+        e.state = ST_APPROACH;
+        e.timer = 0;
+        break;
+      }
+      e.timer -= dt;
+      if (e.timer <= TIMER_EPS) {
+        e.state = ST_SPORE_WINDUP;
+        e.timer = def.sporeWarnTime;
+      }
+      break;
+    case ST_SPORE_WINDUP:
+      // 蓄力中玩家逃出射程带:这一轮当场取消 —— "预警 = 即将发生的事"这条承诺
+      // 只对仍然成立的情形有效,对着打不到人的方向把预警演完是浪费
+      if (sporeOutOfBand(e, ship, def)) {
+        e.state = ST_APPROACH;
+        e.timer = 0;
+        break;
+      }
+      e.timer -= dt;
+      if (e.timer <= TIMER_EPS) {
+        e.state = ST_ANCHOR;
+        e.timer = def.sporeInterval;
+        e.sporeFire = true; // 闩:世界侧读它发射齐射(发射是副作用,见 sporeFire 字段注释)
+      }
+      break;
     default:
+      if (isSpore) {
+        // 孢子的接近段没有"冲锋起手"这回事:只看距离带,进带即锚定
+        if (!sporeOutOfBand(e, ship, def)) {
+          e.state = ST_ANCHOR;
+          e.timer = def.sporeInterval;
+        }
+        break;
+      }
       // 接近段没有时限,只看条件够不够起手。方向在这一刻一次性锁死:
       // 之后无论船怎么跑,冲刺都只沿这条线走 —— 这是玩家躲得掉的唯一依据。
       // 借 out 当暂存:下面 WINDUP 分支会把它覆盖成零向量,不多占一个模块级 Vec2。
@@ -364,9 +478,17 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
       out.x = 0;
       out.y = 0;
       return Math.min(1, def.accel * dt * 0.5);
+    case ST_ANCHOR:
+    case ST_SPORE_WINDUP:
+      // 锚定/蓄力:钉在原地(期望速度归零 + 双倍追随系数),与冲锋前摇同一档"停得住"的手感
+      out.x = 0;
+      out.y = 0;
+      return Math.min(1, def.accel * dt * 2);
     default: {
       const speed = def.speed * tuning.enemySpeedScale;
-      if (def.behavior === BH_STRAFE || def.behavior === BH_STRAFE_CHARGE) {
+      if (isSpore) {
+        sporeSeek(e, ship, def, speed, out);
+      } else if (def.behavior === BH_STRAFE || def.behavior === BH_STRAFE_CHARGE) {
         // offsetRad 带上 e.side:同一型的两半分别从左右舷压过来,不会挤成一条线
         const offsetRad = def.strafeOffsetDeg * DEG2RAD * e.side;
         strafe(e.x, e.y, ship.x, ship.y, ship.heading, offsetRad, def.strafeRadius, speed, out);
@@ -387,6 +509,10 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
 export function applyDamage(e: Enemy, amount: number): boolean {
   if (e.dead) return false;
   e.hp -= amount;
+  // 受击闪白(畅玩性):只要这一发真的扣了血(抗性折算后可能归零)就亮起,
+  // 致死的那一发也照置 —— 尸体当帧就被 reap 回收,闪不闪得到由渲染层自己判断。
+  // 置满而不是叠加:连续命中就是整段 0.08s 的重置,不追求"闪得更久"
+  if (amount > 0) e.hitFlash = ENEMY_HIT_FLASH;
   if (e.hp > 0) return false;
   e.hp = 0; // 夹到 0:血条/HUD 不必各自再兜一次负数
   e.dead = true;

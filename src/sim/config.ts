@@ -79,6 +79,9 @@ export const tuning = {
   // 它与下面那个倍率合起来才是"蜂群贴脸掉血速率可控可调"的两根旋钮;占位待调
   enemyHitInterval: 0.6,
   enemyContactDamageScale: 1, // 全局撞击伤害倍率(各型的 contactDamage 在 src/data/enemies.ts)
+  // 全局**敌方弹幕**伤害倍率(22 号孢子炮手):与 enemyContactDamageScale 同一条"面板旋钮"口径,
+  // 但走独立的一根 —— 接触与弹幕是两个伤害来源,测试/压测要能只关其中一个
+  enemySporeDamageScale: 1,
   hitFireRateMul: 0.75, // 被撞舷的塔在惩罚期内的射速倍率(<1 = 变慢);轻微,不制造死亡螺旋
   hitPenaltyTime: 0.5, // GDD §4.6 锁定:被撞舷闪红 + 射速惩罚的时长(秒),两者共用这一个计时器
 

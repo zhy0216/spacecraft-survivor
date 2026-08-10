@@ -21,7 +21,7 @@ import {
   AFFIX_MAGNETIC,
   ELITE,
 } from '../data/affixes';
-import { ENEMIES, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { ENEMIES, KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import { tuning } from './config';
 import {
   affixMask,
@@ -29,15 +29,18 @@ import {
   createEnemy,
   type Enemy,
   enemyAnimSeed,
+  ENEMY_HIT_FLASH,
   enemyRadius,
   hasAffix,
   hpScaleAt,
   initEnemy,
   initSplit,
   resetEnemy,
+  ST_ANCHOR,
   ST_APPROACH,
   ST_DASH,
   ST_RECOVER,
+  ST_SPORE_WINDUP,
   ST_WINDUP,
   stepEnemyBehavior,
 } from './enemy';
@@ -145,6 +148,20 @@ describe('initEnemy(出生)', () => {
     // 起手 0 = 一出生就能咬(09 号的无敌帧)。出生点在船外几百 px,给初始冷却只会让将来
     // "生在船脸上"那类出怪规则悄悄免掉第一口伤害
     expect(e.hitCd).toBe(0);
+  });
+
+  it('hitFlash / lastHit 出生归零:新怪不继承上一命的受击闪白与伤害账(池复用才会脏)', () => {
+    const e = createEnemy();
+    e.hitFlash = 5;
+    e.lastHit = 99;
+    initEnemy(e, KIND_BEETLE, 7, 9, 0, new Rng(42));
+    expect(e.hitFlash).toBe(0);
+    expect(e.lastHit).toBe(0);
+
+    const s = createEnemy();
+    initSplit(s, e, 0);
+    expect(s.hitFlash).toBe(0); // 分裂体与父体同帧出生,不带父体的闪白
+    expect(s.lastHit).toBe(0);
   });
 
   it('固定消耗 1 次 rng(出怪的随机序列不因敌型逻辑变动而移位),左右舷都出得来', () => {
@@ -556,6 +573,28 @@ describe('applyDamage(05 号 issue 的唯一伤害入口)', () => {
     expect(applyDamage(e, e.maxHp * 10)).toBe(true);
     expect(e.hp).toBe(0);
   });
+
+  it('受击闪白:真扣血的那一发置满 ENEMY_HIT_FLASH,0 伤害不闪(抗性折算后可能归零)', () => {
+    const e = spawn(KIND_SWARM, 0, 0);
+    applyDamage(e, 5);
+    expect(e.hitFlash).toBe(ENEMY_HIT_FLASH);
+    expect(e.hp).toBe(e.maxHp - 5);
+
+    const zero = spawn(KIND_SWARM, 0, 0);
+    applyDamage(zero, 0);
+    expect(zero.hitFlash).toBe(0); // 没掉血 = 没挨打,不给闪白(那会误导"打中了")
+  });
+
+  it('致死的那一发也置闪白(尸体当帧回收,闪不闪得到由渲染层判断);已死不再重闪', () => {
+    const e = spawn(KIND_SWARM, 0, 0);
+    expect(applyDamage(e, e.hp)).toBe(true);
+    expect(e.hitFlash).toBe(ENEMY_HIT_FLASH);
+    expect(e.dead).toBe(true);
+
+    e.hitFlash = 0; // 尸体在池里待到帧尾:再来的伤害不许把它点亮
+    expect(applyDamage(e, 999)).toBe(false);
+    expect(e.hitFlash).toBe(0);
+  });
 });
 
 describe('全局敌速倍率', () => {
@@ -593,3 +632,110 @@ describe('零分配约定', () => {
     }
   });
 });
+
+describe('孢子炮手(BH_SPORE,22 号 GDD §6.2)', () => {
+  // 孢子数值:进带锚定、蓄力、喷吐、按间隔循环 —— 断言里的帧数全靠这几个数算得清
+  const SPORE = ENEMIES[KIND_SPORE]!;
+
+  it('接近段:进射程带(≤ sporeRange)即锚定,锚定帧不扣蓄力计时(刚进入不扣帧)', () => {
+    const ship = shipAt(0, 0);
+    // 船在 (0,0),孢子从射程带外开始压进
+    const e = spawn(KIND_SPORE, SPORE.sporeRange + 50, 0);
+    driveTo(e, ship, ST_ANCHOR);
+    expect(Math.hypot(e.x, e.y)).toBeLessThanOrEqual(SPORE.sporeRange + 1);
+    expect(e.timer).toBeCloseTo(SPORE.sporeInterval, 9); // 锚定当帧计时还没开始扣
+    // 锚定 = 期望速度恒零(惯性滑行是 World 的 v 积分,单帧看不完,钉的是"不再出力"这件事)
+    const out = v();
+    stepEnemyBehavior(e, ship, SIM_DT, out);
+    expect(out.x).toBe(0);
+    expect(out.y).toBe(0);
+  });
+
+  it('锚定 → 蓄力:sporeInterval 秒后进 ST_SPORE_WINDUP,蓄力期间也钉在原地', () => {
+    const ship = shipAt(0, 0);
+    const e = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    driveTo(e, ship, ST_ANCHOR);
+    const frames = driveTo(e, ship, ST_SPORE_WINDUP);
+    // 锚定持续 sporeInterval/SIM_DT 帧(±1:进入当帧不扣计时,与其它状态机同口径)
+    expect(frames).toBeGreaterThanOrEqual(SPORE.sporeInterval / SIM_DT - 1);
+    expect(frames).toBeLessThanOrEqual(SPORE.sporeInterval / SIM_DT + 1);
+    expect(e.timer).toBeCloseTo(SPORE.sporeWarnTime, 9); // 蓄力倒计时 = 预警窗
+  });
+
+  it('蓄力到期:sporeFire 置位(世界侧据此发射齐射)并回到锚定,下一轮间隔重新起算', () => {
+    const ship = shipAt(0, 0);
+    const e = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    driveTo(e, ship, ST_ANCHOR);
+    driveTo(e, ship, ST_SPORE_WINDUP);
+    e.sporeFire = false; // 模拟世界侧上一轮已消费
+    // 蓄力走满 sporeWarnTime 回到锚定的那一帧 = 开火帧(与"刚进入某状态不扣计时"同口径)
+    driveTo(e, ship, ST_ANCHOR);
+    expect(e.sporeFire).toBe(true); // 闩:世界侧当场读走
+    expect(e.state).toBe(ST_ANCHOR);
+    expect(e.timer).toBeCloseTo(SPORE.sporeInterval, 9); // 下一轮间隔从开火当帧重新起算
+  });
+
+  it('蓄力全程零 rng:sporeFire 只由计时器决定,掷不掷随机都不影响齐射时刻', () => {
+    const ship = shipAt(0, 0);
+    // 同一帧推进两只同位置孢子:没有 rng 参与,它们的状态机必须逐帧一字不差
+    const a = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    const b = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    for (let i = 0; i < 300; i++) {
+      stepOnce(a, ship);
+      stepOnce(b, ship);
+      expect(a.state).toBe(b.state);
+      expect(a.timer).toBeCloseTo(b.timer, 12);
+      expect(a.sporeFire).toBe(b.sporeFire);
+    }
+  });
+
+  it('船逃出射程带:锚定/蓄力都放弃,回去重新就位(重新就位 = 接近段)', () => {
+    const ship = shipAt(0, 0);
+    const e = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    driveTo(e, ship, ST_ANCHOR);
+    // 船瞬间开到带外(距孢子 > sporeRange):下一帧孢子就该放弃锚定
+    ship.x = e.x + SPORE.sporeRange + 100;
+    stepOnce(e, ship);
+    expect(e.state).toBe(ST_APPROACH);
+    // 蓄力中逃跑同样取消:预警不该对着打不到人的方向演完
+    ship.x = 0;
+    driveTo(e, ship, ST_ANCHOR);
+    driveTo(e, ship, ST_SPORE_WINDUP);
+    ship.x = e.x + SPORE.sporeRange + 100;
+    stepOnce(e, ship);
+    expect(e.state).toBe(ST_APPROACH);
+    expect(e.sporeFire).toBe(false); // 取消的那一轮不许开火
+  });
+
+  it('船贴脸(进 sporeMinRange 内):后撤保持距离带,退回到带内再重新锚定', () => {
+    const ship = shipAt(0, 0);
+    const e = spawn(KIND_SPORE, SPORE.sporeRange, 0);
+    driveTo(e, ship, ST_ANCHOR);
+    // 船瞬移到孢子脸上:锚定作废,接近段背船退
+    ship.x = e.x - 10;
+    ship.y = e.y;
+    const beforeX = e.x;
+    stepOnce(e, ship);
+    expect(e.state).toBe(ST_APPROACH);
+    expect(e.x).toBeGreaterThan(beforeX); // 朝远离船的方向退
+    // 退到带内(≥ sporeMinRange)自动重新锚定
+    driveTo(e, ship, ST_ANCHOR);
+    expect(Math.hypot(e.x - ship.x, e.y - ship.y)).toBeGreaterThanOrEqual(
+      SPORE.sporeMinRange - 1,
+    );
+  });
+
+  it('非远程型永远不进孢子状态(sporeFire 恒 false)', () => {
+    const ship = shipAt(0, 0);
+    for (const kind of [KIND_SWARM, KIND_STRAFER, KIND_TRAILER, KIND_BEETLE]) {
+      const e = spawn(kind, 300, 0);
+      for (let i = 0; i < 120; i++) {
+        stepOnce(e, ship);
+        expect(e.sporeFire).toBe(false);
+      }
+      expect(e.state).not.toBe(ST_ANCHOR);
+      expect(e.state).not.toBe(ST_SPORE_WINDUP);
+    }
+  });
+});
+

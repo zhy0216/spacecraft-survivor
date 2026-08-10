@@ -73,9 +73,25 @@ export interface FxEvent {
   towerType: number;
   /** 剩余存续秒。初值取 data/towers 的 FX_LIFE_*,由 World 每帧扣 dt */
   life: number;
+  /**
+   * 本次事件携带的伤害量(畅玩性:飘字)。只对 FXV_IMPACT / FXV_KILL / FXV_HULL_HIT 三种填非 0:
+   * 其余 kind 恒 0 = 不飘字。与 life 同一条**纯表现、不进 checksum** 口径 ——
+   * 伤害数字是画给玩家看的,不参与任何判定;少飘一个字不改变世界的下一帧。
+   * 单位 = 实际结算后的伤害(词缀抗性已折算,见 World.damageEnemy 的 lastHit)。
+   */
+  damage: number;
+  /**
+   * 伤害 / 该敌满血(0..1 量级)。渲染层照它给飘字配色(小伤害白、大伤害黄):
+   * 数字本身带不出"这一发相对敌人多痛",而颜色要的就是这个比例 ——
+   * 比例在 sim 侧算好带过来,渲染层不必回查敌人(它可能已经死了、也可能已回池)。
+   * FXV_HULL_HIT 不用它(船体飘字恒红),填 0。
+   */
+  dmgRatio: number;
   /** 渲染层一次性消费锁，避免高刷新率或时停期间重复播放表现。 */
   audioPlayed: boolean;
   juicePlayed: boolean;
+  /** 飘字的一次性消费锁:与 audioPlayed/juicePlayed 各管各的(飘字生命周期比事件长,见渲染层) */
+  dmgPlayed: boolean;
 }
 
 /** 池的 factory:字段一次性声明齐,运行期绝不新增 */
@@ -89,8 +105,11 @@ export function createFxEvent(): FxEvent {
     radius: 0,
     towerType: 0,
     life: 0,
+    damage: 0,
+    dmgRatio: 0,
     audioPlayed: false,
     juicePlayed: false,
+    dmgPlayed: false,
   };
 }
 
@@ -107,8 +126,11 @@ export function resetFxEvent(e: FxEvent): void {
   e.radius = 0;
   e.towerType = 0;
   e.life = 0;
+  e.damage = 0; // 漏清:上一发的伤害会原样带进下一次开火,飘出一个凭空的大数字
+  e.dmgRatio = 0;
   e.audioPlayed = false;
   e.juicePlayed = false;
+  e.dmgPlayed = false; // 漏清:飘字消费锁会一直锁着,这一种 kind 从此再也不出数字
 }
 
 /**
@@ -137,6 +159,10 @@ export interface FireSink {
     y1: number,
     radius: number,
     towerType: number,
+    /** 飘字伤害量:非 0 才飘字(仅 FXV_IMPACT/KILL/HULL_HIT 填)。缺省 0 = 既有调用方语义原样成立 */
+    damage?: number,
+    /** 伤害 / 该敌满血,渲染层配色用(见 FxEvent.dmgRatio)。缺省 0 */
+    dmgRatio?: number,
   ): void;
   /** 邻域查询(复用 World 的空间哈希,绝不线性扫全场),结果写进 out */
   query(x: number, y: number, r: number, out: Enemy[]): void;

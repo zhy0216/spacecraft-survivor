@@ -16,6 +16,9 @@ import { RESULT_WIN, World } from './world';
 const before = {
   stressSpawn: tuning.stressSpawn,
   enemyContactDamageScale: tuning.enemyContactDamageScale,
+  // 22 号孢子炮手的弹幕伤害:与接触伤害同一条"关掉免得操作水平污染结果"的口径 ——
+  // 静止的自动玩家躲不开弹幕,这条用例量的是经济循环,不是远程威胁
+  enemySporeDamageScale: tuning.enemySporeDamageScale,
 };
 
 afterEach(() => Object.assign(tuning, before));
@@ -91,6 +94,7 @@ it(
   () => {
     tuning.stressSpawn = false;
     tuning.enemyContactDamageScale = 0;
+    tuning.enemySporeDamageScale = 0;
     const a = new World(20260802);
     const b = new World(20260802);
     applyStartingLoadout(a.deck);

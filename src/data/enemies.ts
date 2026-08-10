@@ -18,20 +18,23 @@ export const KIND_SWARM = 0; // 蜂群蛭
 export const KIND_STRAFER = 1; // 侧掠者
 export const KIND_TRAILER = 2; // 尾随蛆
 export const KIND_BEETLE = 3; // 冲撞甲虫
-export const ENEMY_KIND_COUNT = 4;
-export type EnemyKind = 0 | 1 | 2 | 3;
+export const KIND_SPORE = 4; // 孢子炮手(远程:锚定喷吐弹幕,点防阵列的存在理由)
+export const ENEMY_KIND_COUNT = 5;
+export type EnemyKind = 0 | 1 | 2 | 3 | 4;
 
 /**
  * Boss 的专用 kind 标记(15 号 T1)。**刻意不进 ENEMIES 表、不占 ENEMY_KIND_COUNT**:
  * 表长被"侧压 counts 长度 = ENEMY_KIND_COUNT"与"ENEMIES.length = ENEMY_KIND_COUNT"
  * 两条表级不变量钉死(waves.test.ts / enemies.test.ts),Boss 用独立常量 + 独立数值块
  * (下面那个 BOSS)承载,本表一行都不用动。
- * 塔/子弹/渲染对越界 kind 的兜底("kind 越界只是不打这一只")就是它的安全网:
+ * 取值 = **表长**(= 首个表外下标):22 号孢子炮手把表长从 4 推到 5,标记跟着让位成 5 ——
+ * 它是"越界哨兵",必须永远落在 ENEMIES 之外,与表长撞车(Boss 被当普通型/普通型被当 Boss)
+ * 是这一类最阴的 bug。塔/子弹/渲染对越界 kind 的兜底("kind 越界只是不打这一只")就是它的安全网:
  * 瞬时判定塔(激光/电弧)照常伤害它,弹道塔在渲染侧跟进前对它的越界兜底是"穿过去"。
  * **绝不用 affixes 位**:affixes ≠ 0 是 14 号精英的血条扫描与 ELITE 缩放的判据,
  * 撞上去 Boss 会被当成精英放大、还挂进精英血条。
  */
-export const KIND_BOSS = 4;
+export const KIND_BOSS = ENEMY_KIND_COUNT;
 
 /** Boss 数值块(15 号 T1):Boss = **放大的四型之一**,底座见 baseKind,所有数字都是
  * 底座值的倍率或直接给秒数 —— 改平衡只改这里,sim/boss.ts 一行都不动。
@@ -103,9 +106,10 @@ export const BH_SEEK = 0; // 直线追船
 export const BH_STRAFE = 1; // 绕到指定方位角驻留
 export const BH_STRAFE_CHARGE = 2; // 绕到侧向 →(短)前摇 → 冲刺穿过 → 脱离
 export const BH_SEEK_CHARGE = 3; // 直线接近 → 进射程(长)前摇 → 冲刺
+export const BH_SPORE = 4; // 孢子炮手:接近 → 进射程带锚定 → 蓄力预警 → 喷吐弹幕 → 按间隔循环
 
 /** 灰盒剪影形状:渲染层据此选纹理,sim 不关心 */
-export type EnemyShape = 'circle' | 'arrow' | 'capsule' | 'hex';
+export type EnemyShape = 'circle' | 'arrow' | 'capsule' | 'hex' | 'spore';
 
 export interface EnemyDef {
   kind: EnemyKind;
@@ -141,6 +145,23 @@ export interface EnemyDef {
   chargeDuration: number;
   /** 冲完的硬直 s:靠惯性滑出去 = "啃咬后脱离" */
   chargeRecover: number;
+  // —— 远程喷吐(GDD §6.2 孢子炮手);其余型填 0 ——
+  /** 进入射程带的上界:距船 ≤ 它就该锚定;离开它(船逃出)就重新就位 */
+  sporeRange: number;
+  /** 射程带的下界:距船 < 它说明玩家贴脸了,后撤保持距离带(否则锚定就退化成白白挨打) */
+  sporeMinRange: number;
+  /** 两轮齐射之间的间隔 s。**时间驱动、零 rng**:齐射时刻只由锚定后的计时器决定,不掷随机 */
+  sporeInterval: number;
+  /** 开火前的前摇 s:渲染层据此画收缩预警环("环合拢即开火") */
+  sporeWarnTime: number;
+  /** 弹丸飞行速度 px/s */
+  sporeSpeed: number;
+  /** 单发弹丸伤害(命中走 world.damageShip,与接触伤害同一入口) */
+  sporeDamage: number;
+  /** 一轮齐射几发(1–3) */
+  sporeSalvoCount: number;
+  /** 齐射扇面的半展宽(度):多发弹丸固定错开,不掷随机 */
+  sporeSpreadDeg: number;
   /** 渲染色(GDD §12:敌方红紫暖色域,与冷色船体完全分离,色盲安全) */
   tint: number;
   shape: EnemyShape;
@@ -167,6 +188,14 @@ export const ENEMIES: EnemyDef[] = [
     chargeSpeed: 0,
     chargeDuration: 0,
     chargeRecover: 0, // 不冲锋,冲锋段全 0
+    sporeRange: 0,
+    sporeMinRange: 0,
+    sporeInterval: 0,
+    sporeWarnTime: 0,
+    sporeSpeed: 0,
+    sporeDamage: 0,
+    sporeSalvoCount: 0,
+    sporeSpreadDeg: 0, // 非远程型,整段填 0
     tint: 0xff4d6d, // 占位待调
     shape: 'circle',
   },
@@ -187,6 +216,14 @@ export const ENEMIES: EnemyDef[] = [
     chargeSpeed: 220, // GDD §14 锁定
     chargeDuration: 1.1, // 占位待调(够穿过船身)
     chargeRecover: 1.2, // 占位待调(硬直里靠惯性滑出去 = "啃咬后脱离")
+    sporeRange: 0,
+    sporeMinRange: 0,
+    sporeInterval: 0,
+    sporeWarnTime: 0,
+    sporeSpeed: 0,
+    sporeDamage: 0,
+    sporeSalvoCount: 0,
+    sporeSpreadDeg: 0, // 非远程型,整段填 0
     tint: 0xff8c42, // 占位待调
     shape: 'arrow',
   },
@@ -212,6 +249,14 @@ export const ENEMIES: EnemyDef[] = [
     chargeSpeed: 0,
     chargeDuration: 0,
     chargeRecover: 0, // 不冲锋,冲锋段全 0
+    sporeRange: 0,
+    sporeMinRange: 0,
+    sporeInterval: 0,
+    sporeWarnTime: 0,
+    sporeSpeed: 0,
+    sporeDamage: 0,
+    sporeSalvoCount: 0,
+    sporeSpreadDeg: 0, // 非远程型,整段填 0
     // 暖绯红而不是高蓝紫：敌纹理还会乘灰底；原紫色在绿色盲模拟下会与我方靛蓝塔合流。
     tint: 0xd42844, // 占位待调；色盲合成审计见 render/palette.test.ts
     shape: 'capsule',
@@ -235,8 +280,49 @@ export const ENEMIES: EnemyDef[] = [
     chargeSpeed: 380, // 占位待调
     chargeDuration: 1.0, // 占位待调
     chargeRecover: 1.5, // 占位待调(冲完长硬直 = 反打窗口)
+    sporeRange: 0,
+    sporeMinRange: 0,
+    sporeInterval: 0,
+    sporeWarnTime: 0,
+    sporeSpeed: 0,
+    sporeDamage: 0,
+    sporeSalvoCount: 0,
+    sporeSpreadDeg: 0, // 非远程型,整段填 0
     tint: 0xff1f4b, // 占位待调
     shape: 'hex',
+  },
+  {
+    kind: KIND_SPORE,
+    name: '孢子炮手',
+    // GDD §6.2 的远程型:锚定喷吐弹幕,逼玩家脱离航线过去杀它 —— 点防阵列(TOWER_PD)
+    // 存在的全部理由。HP 卡在尾随蛆与甲虫之间:它是"放着不管就会持续掉血"的威胁,
+    // 但本身不该像甲虫那样要集火半天(玩家还得在炮火里飞过去打它)
+    hp: 26, // 占位待调
+    contactDamage: 2, // 占位待调(远程型几乎不贴脸;留着 2 是给"被虫群挤到船上"这类边角情形一个兜底)
+    scrap: 3, // 占位待调,平衡口径见 data/economy.ts(比尾随蛆多一颗:逼你绕路的那份操作成本)
+    speed: 60, // 占位待调(接近段慢:它是炮台不是猎手,压力全在喷吐上)
+    accel: 5, // 占位待调(锚定/重新就位时转向迟钝些,给玩家贴脸的机会)
+    radius: 8, // 占位待调(体型介于蜂群蛭与侧掠者之间:远程型的判定体不该太大,否则太好打)
+    behavior: BH_SPORE, // 接近 → 射程带锚定 → 蓄力 → 喷吐,状态机见 sim/enemy.ts
+    strafeOffsetDeg: 0,
+    strafeRadius: 0,
+    chargeRange: 0,
+    chargeWindup: 0,
+    chargeSpeed: 0,
+    chargeDuration: 0,
+    chargeRecover: 0, // 不冲锋,冲锋段全 0
+    // 射程带 = [sporeMinRange, sporeRange]:进带锚定、出带重新就位,带本身自带迟滞,
+    // 船在带边缘小幅漂移不会让它反复起锚(机制在 sim/enemy.ts,这里只给两个数)
+    sporeRange: 300, // 占位待调(锚定距离 > 点防射程 210:弹幕有 ~0.4s 的拦截窗口,够点防表态又不白给)
+    sporeMinRange: 180, // 占位待调(玩家贴进这个圈它就后撤 —— "贴脸换掉炮台"必须真的可行)
+    sporeInterval: 2.2, // 占位待调(两轮齐射间隔;**零 rng**:齐射时刻由锚定后计时器决定,同 seed 逐帧可复现)
+    sporeWarnTime: 0.8, // 占位待调(蓄力预警:0.8s 够玩家看清"这只要喷了"并开始转舷)
+    sporeSpeed: 220, // 占位待调(慢于点防弹速 560 一半以上:拦截弹追得上,玩家转舵也躲得开)
+    sporeDamage: 8, // 占位待调(单发 ≈ 1.6 只蜂群蛭的咬伤:三发全中很疼,但每一发都看得见、躲得开)
+    sporeSalvoCount: 3, // 占位待调(一轮三发 = "齐射"的读数,一发一发地喷就退化成普通怪了)
+    sporeSpreadDeg: 12, // 占位待调(三发固定错开的扇面半展宽:不叠成一根"大弹",也不散到全躲得掉)
+    tint: 0xff5f9e, // 占位待调(暖洋红紫:GDD §12 红紫暖色域,绿分量被压住)
+    shape: 'spore', // 带刺球:与圆型蜂群蛭(纯圆)同族但多一圈尖刺,色相之外的第二条辨识通道
   },
 ];
 
