@@ -4,6 +4,8 @@
  * 与普通升级彻底分开：本流程不消费残骸、不生成炮塔/支援，也没有任何战斗中可调用的移动入口。
  */
 import { DECK_PIECES, deckPieceCellCount } from '../data/deckPieces';
+import { DOCK_EDICT_COUNT, DOCK_EDICT_PRICE, DOCK_REPAIR_FRACTION, DOCK_REPAIR_PRICE } from '../data/economy';
+import { EDICTS } from '../data/edicts';
 import { ENEMIES } from '../data/enemies';
 import { evolutionOf } from '../data/evolutions';
 import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
@@ -38,7 +40,7 @@ import {
 import { findEvolutionPairs } from '../sim/evolve';
 import type { Vec2 } from '../sim/ship';
 import { audioBus } from '../render/audio';
-import { REFIT_ALREADY_WELDED, REFIT_NOT_ACTIVE, type World } from '../sim/world';
+import { REFIT_ALREADY_WELDED, REFIT_NOT_ACTIVE, DOCK_EDICT_SOLD, DOCK_HP_FULL, DOCK_NO_STARCOINS, type World } from '../sim/world';
 
 const OK_COLOR = '#9adcff';
 const DENY_COLOR = '#ff7a6b';
@@ -84,6 +86,18 @@ const CARDS_CSS = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
 const CARD_CSS =
   `min-height:104px;padding:11px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
   'background:rgba(18,29,45,.72);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);' +
+  `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;transition:border-color 100ms,background 100ms,opacity 100ms;`;
+// 星币区(21 号):与免费甲板区共用同一组货架视觉,但一行一卡、更矮 ——
+// 法令没有图标格,信息只有"名字 + 效果 + 价",给满格卡片是浪费侧栏的垂直空间
+const STAR_CSS =
+  'display:flex;flex-direction:column;gap:8px;padding-top:14px;' +
+  `border-top:1px solid ${LINE_COLOR};`;
+const STAR_HEAD_CSS =
+  'display:flex;align-items:flex-end;justify-content:space-between;gap:10px;';
+const STAR_TITLE_CSS = `color:${OK_COLOR};font-size:13px;letter-spacing:.1em;`;
+const EDICT_ROW_CSS =
+  `width:100%;padding:8px 10px;border:1px solid ${LINE_COLOR};border-radius:6px;` +
+  'background:rgba(18,29,45,.72);' +
   `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;transition:border-color 100ms,background 100ms,opacity 100ms;`;
 const BTN_CSS =
   `width:100%;padding:9px 12px;border:1px solid ${LINE_COLOR};border-radius:6px;` +
@@ -209,9 +223,34 @@ export function refitDenyMessage(code: number): string {
       return `只有满级 Lv${TOWER_MAX_LEVEL} 的炮塔才能进化`;
     case EVOLVE_NO_RECIPE:
       return '这一对模块没有进化配方（进化不可逆）';
+    case DOCK_EDICT_SOLD:
+      return '这张法令已经售出';
+    case DOCK_NO_STARCOINS:
+      return '星币不足，无法购买';
+    case DOCK_HP_FULL:
+      return '船体已满血，无需修复';
     default:
       return `整备操作被拒绝(理由码 ${code})`;
   }
+}
+
+/**
+ * 一张法令的效果文案 —— **逐字取自数值表**(EDICTS 的中性填档:乘法 1、加法 0),
+ * ui 不许抄第二份(与 upgrade.ts 的 optionLabel 同一条口径)。全中性的守卫只是
+ * 数据表写坏的兜底,正常七条至少有一档非中性。
+ */
+export function dockEdictEffect(type: number): string {
+  const def = EDICTS[type];
+  if (!def) return '未知法令';
+  const parts: string[] = [];
+  if (def.ammoFireRateMul !== 1) parts.push(`弹药射速 ×${round(def.ammoFireRateMul)}`);
+  if (def.turnRateAdd !== 0) parts.push(`转向 +${round(def.turnRateAdd)}°/s`);
+  if (def.magnetRadiusMul !== 1) parts.push(`拾取半径 ×${round(def.magnetRadiusMul)}`);
+  if (def.heatMaxMul !== 1) parts.push(`过热上限 ×${round(def.heatMaxMul)}`);
+  if (def.hullHpAdd !== 0) parts.push(`船体 HP +${def.hullHpAdd}`);
+  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${round(def.cruiseSpeedMul)}`);
+  if (parts.length === 0) return '全船被动';
+  return parts.join(' · ');
 }
 
 function moduleName(world: World, index: number): string {
@@ -327,6 +366,35 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shopNote.style.cssText = SHOP_NOTE_CSS;
   const cards = document.createElement('div');
   cards.style.cssText = CARDS_CSS;
+
+  // 星币区(21 号):免费甲板下方的付费货架 —— 法令卡(即时生效,无放置)+ 付费修复。
+  // 与卡片同一条"只建一次、整局复用"的生命周期:每次 syncStarShop 只改文案与置灰态,
+  // 不重建 DOM(理由与 pieceButtons 那段一字同源)。
+  const starSection = document.createElement('div');
+  starSection.style.cssText = STAR_CSS;
+  const starHead = document.createElement('div');
+  starHead.style.cssText = STAR_HEAD_CSS;
+  const starTitle = document.createElement('div');
+  starTitle.style.cssText = STAR_TITLE_CSS;
+  starTitle.textContent = '星币商店';
+  const starBalance = document.createElement('div');
+  starBalance.style.cssText = QUOTA_CSS;
+  starHead.append(starTitle, starBalance);
+  starSection.appendChild(starHead);
+  const edictRows: HTMLButtonElement[] = [];
+  for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
+    const row = document.createElement('button');
+    row.style.cssText = EDICT_ROW_CSS;
+    row.addEventListener('click', () => buyDockEdict(i));
+    starSection.appendChild(row);
+    edictRows.push(row);
+  }
+  const repairBtn = document.createElement('button');
+  repairBtn.style.cssText = BTN_CSS;
+  repairBtn.textContent = `修复船体 +${Math.round(DOCK_REPAIR_FRACTION * 100)}% HP · ${DOCK_REPAIR_PRICE} ★`;
+  repairBtn.addEventListener('click', buyRepair);
+  starSection.appendChild(repairBtn);
+
   const actions = document.createElement('div');
   actions.style.cssText = ACTIONS_CSS;
   const skipWeld = document.createElement('button');
@@ -342,7 +410,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   finish.style.cssText = PRIMARY_BTN_CSS;
   finish.textContent = '完成装配 · 开始下一波';
   actions.append(skipWeld, back, rotate, finish);
-  shop.append(shopHead, threat, shopNote, cards, actions);
+  shop.append(shopHead, threat, shopNote, cards, starSection, actions);
   root.append(workspace, shop);
 
   const toast = document.createElement('div');
@@ -484,6 +552,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
 
   function syncPanel(): void {
     syncEvolve();
+    syncStarShop();
     cards.style.display = 'grid';
     skipWeld.style.display = phase === PHASE_PICK ? 'block' : 'none';
     rotate.style.display = phase === PHASE_WELD ? 'block' : 'none';
@@ -542,6 +611,79 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     } else {
       help.textContent = '重排阶段：点击一座炮塔或支援设施，再点击目标空格。\n炮塔只能落在边缘格；支援可落在任意空甲板格。';
     }
+  }
+
+  /**
+   * 星币区的置灰态与文案,挂在 syncPanel 顶部 —— 与 syncEvolve 同一条"一切变更都经过
+   * syncPanel"的刷新路径:买过一张卡/修过一次血/换过阶段,当场重刷余额与货架。
+   * 置灰只认两条 UI 读数:货架已售出(disabled)、船满血(disabled) —— **星币不足不置灰**,
+   * 那是点击时的 deny 反馈(见 buyDockEdict / buyRepair):整备期间余额随时可能被另一张
+   * 卡花掉,置灰态会过期,真正的裁决始终以 world 的返回码为准(照 upgradeFlow 的 syncRerollState
+   * 同一条口径,只是把"不足"那半边留给了点击反馈,让玩家能看到"买不起"这句话)。
+   */
+  function syncStarShop(): void {
+    starBalance.textContent = `★ ${world.starCoins}`;
+    for (let i = 0; i < edictRows.length; i++) {
+      const row = edictRows[i]!;
+      const type = world.dockEdictOffers[i];
+      const sold = type === undefined || type < 0;
+      row.disabled = sold;
+      row.style.opacity = sold ? '.34' : '1';
+      row.style.cursor = sold ? 'not-allowed' : 'pointer';
+      if (sold) {
+        row.innerHTML =
+          `<span style="display:block;color:${MUTED_COLOR};font-size:12px">` +
+          `${type === undefined ? '本轮无货' : '已售出'}</span>`;
+      } else {
+        row.innerHTML =
+          `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
+          `<span>${EDICTS[type]?.name ?? `未知法令(${type})`}</span><span>${DOCK_EDICT_PRICE} ★</span></span>` +
+          `<span style="color:${MUTED_COLOR};font-size:11px">${dockEdictEffect(type)}</span>`;
+      }
+    }
+    const full = world.ship.hp >= world.ship.maxHp;
+    repairBtn.disabled = full;
+    repairBtn.style.opacity = full ? '.34' : '1';
+    repairBtn.style.cursor = full ? 'not-allowed' : 'pointer';
+  }
+
+  /**
+   * 买第 index 张法令卡(21 号):**即时生效、无放置** —— 法令是全船被动,点一下就是买,
+   * 不存在"买完再摆"这回事(与升级里的法令卡同一条授予语义)。
+   * 成功:World 已扣费/置掩码/下架,这里重刷货架并报回执;失败(星币不足/已售出/整备已结束):
+   * refitDenyMessage 说人话,失败原子不动账 —— 按钮置灰态只在"售出/满血"两处给,
+   * 星币不足正是靠这一支的 toast 反馈(见 syncStarShop 那段)。
+   */
+  function buyDockEdict(index: number): void {
+    if (phase === PHASE_OFF) return;
+    const row = edictRows[index];
+    if (!row || row.disabled) return; // 置灰(已售出)自守:真 DOM 不会点穿 disabled,桩会
+    const type = world.dockEdictOffers[index];
+    const code = world.buyDockEdict(index);
+    if (code < 0) {
+      flash(refitDenyMessage(code), DENY_COLOR);
+      syncStarShop();
+      return;
+    }
+    // 成功路径上 type 必然 ≥ 0(刚被世界扣费授予),这里只是把 undefined 收窄掉
+    const name = type !== undefined && type >= 0 ? (EDICTS[type]?.name ?? '法令') : '法令';
+    flash(`已购入：${name}`, OK_COLOR);
+    audioBus.playPlace();
+    syncPanel();
+  }
+
+  /** 买一次付费修复(21 号):可重复购买、满血时置灰(灰态由 syncStarShop 管,这里只认返回码)。 */
+  function buyRepair(): void {
+    if (phase === PHASE_OFF || repairBtn.disabled) return; // 满血置灰自守(理由同上)
+    const code = world.buyDockRepair();
+    if (code < 0) {
+      flash(refitDenyMessage(code), DENY_COLOR);
+      syncStarShop();
+      return;
+    }
+    flash(`已修复船体 +${Math.round(DOCK_REPAIR_FRACTION * 100)}%`, OK_COLOR);
+    audioBus.playPlace();
+    syncPanel();
   }
 
   function choosePiece(pieceType: number): void {
