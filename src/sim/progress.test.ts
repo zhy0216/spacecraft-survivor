@@ -244,7 +244,20 @@ describe('unlockMask 编码与 sim/upgrade.ts 的位约定一致', () => {
       if (u.condition.kind === COND_KILLS) run.kills = u.condition.target;
       if (u.condition.kind === COND_ELITE_KILLS) run.eliteKills = u.condition.target;
       const r = evaluateRun(createProgress(), run);
-      const others = (1 << UNLOCKS.length) - 1 & ~(1 << i) & ~collectBit;
+      // 20 号起同一读数上允许出现多条阈值(单局击杀 150/300):喂第 i 条阈值时,
+      // 同族里阈值更低(≤)的兄弟必然跟着开 —— 那是条件本身蕴涵的,不算误开。
+      // 只把这些蕴涵位让出来,其余位仍然一个都不许多开(隔离断言的强度不变)
+      let implied = 0;
+      for (let j = 0; j < UNLOCKS.length; j++) {
+        const s = UNLOCKS[j]!;
+        if (j === i || s.condition.kind !== u.condition.kind) continue;
+        if (u.condition.kind === COND_KILLS || u.condition.kind === COND_ELITE_KILLS) {
+          if (s.condition.target <= u.condition.target) implied |= 1 << j;
+        } else {
+          implied |= 1 << j; // 非阈值族(首次胜利/无条件):同 kind 即同时达标
+        }
+      }
+      const others = (1 << UNLOCKS.length) - 1 & ~(1 << i) & ~collectBit & ~implied;
       expect(r.newUnlocks & (1 << i), `${u.id} 的解锁位不是 1<<${i}`).not.toBe(0);
       expect(r.newUnlocks & others, `${u.id} 误开了别的锁`).toBe(0);
     }

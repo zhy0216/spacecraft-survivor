@@ -13,17 +13,23 @@
  * 判定是纯函数(unlockMet):progress 由存档侧(sim/progress.ts,后续 issue)每局结算喂进来,
  * 失败局同样推进(条件达成即记,不因失败回滚 —— 19 号验收口径,本表只认"到没到",不认胜负)。
  *
+ * 20 号追加 UNLOCK_LOADOUT 类(起手配置,见表尾两条):**下标只增不改** ——
+ * progress.unlockMask 的位 i = UNLOCKS[i],旧存档的掩码指到哪条就永远是哪条;
+ * 新条目一律追加到末尾,不许插入/重排(progress.test 与 saves 都钉着这条编码)。
+ *
  * 与确定性的关系:解锁状态只收窄候选集合(少掷中未解锁项),不移动 rng 消耗次数 ——
  * 卡池过滤在 sim/upgrade.ts 的 collectTypes 里与 offerLegal 同位置落地(后续 issue),
  * 本表只声明"哪一号内容被哪一条条件挡着"。
  */
 import { EDICT_RAPID } from './edicts';
+import { LOADOUT_BOMBARD, LOADOUT_SNIPER } from './loadout';
 import { TOWER_MISSILE_NEST } from './towers';
 
 export const UNLOCK_TOWER = 0; // 解锁塔入池(三选一候选)
 export const UNLOCK_EDICT = 1; // 解锁法令(18 号,三选一候选)
 export const UNLOCK_ELITE = 2; // 解锁精英事件(词缀更高的脚本事件,waves.ts 的 WAVE_LOCKED_ELITES)
 export const UNLOCK_COLLECT = 3; // 图鉴收藏(每局结算自动存船形剪影,无条件,见 COND_NONE)
+export const UNLOCK_LOADOUT = 4; // 解锁起手配置(20 号:开跑前可选,data/loadout.ts 的下标)
 
 export const COND_FIRST_WIN = 0; // 首次胜利(wins ≥ 1)
 export const COND_KILLS = 1; // 单局击杀数阈值(单局内累计)
@@ -99,6 +105,24 @@ export const UNLOCKS: UnlockEntry[] = [
     kind: UNLOCK_COLLECT,
     type: 0, // 收藏类没有内容下标,恒 0
     condition: { kind: COND_NONE, target: 0 }, // 无条件:第一局起就生效
+  },
+  // —— 20 号:起手配置解锁(首批四条之外的追加,下标只增不改)。type = data/loadout.ts 的 LOADOUTS 下标;
+  // 条件刻意选与既有条目不同的读数档位(见上),让"下一把的新理由"散落在不同的里程碑上:
+  // 累计精英击杀 5 ≈ 头一两局的量;单局击杀 150 ≈ 中盘前段(比 edict-rapid 的 300 早半程)。
+  // 两条都在局内 toast 判定范围内(单局击杀 / 累计精英击杀是唯二有"达成瞬间"的条件),跨过阈值当场弹。
+  {
+    id: 'loadout-bombard',
+    name: '炮击开局',
+    kind: UNLOCK_LOADOUT,
+    type: LOADOUT_BOMBARD, // 双迫击炮一艏一艉;累计精英击杀 5 ≈ 头一两局,占位待调
+    condition: { kind: COND_ELITE_KILLS, target: 5 },
+  },
+  {
+    id: 'loadout-sniper',
+    name: '狙击开局',
+    kind: UNLOCK_LOADOUT,
+    type: LOADOUT_SNIPER, // 双磁轨炮并踞船艏两角;单局击杀 150 ≈ 中盘前段,占位待调
+    condition: { kind: COND_KILLS, target: 150 },
   },
 ];
 
