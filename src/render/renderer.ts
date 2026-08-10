@@ -79,6 +79,7 @@ import {
   ParticleContainer,
   Rectangle,
   Sprite,
+  Text,
   type Texture,
 } from 'pixi.js';
 import { ELITE } from '../data/affixes';
@@ -87,6 +88,7 @@ import {
   ENEMIES,
   KIND_BEETLE,
   KIND_BOSS,
+  KIND_SPORE,
   KIND_STRAFER,
   KIND_SWARM,
   KIND_TRAILER,
@@ -138,7 +140,7 @@ import {
   WELD_OK,
 } from '../sim/deck';
 import type { Drop } from '../sim/drop';
-import { enemyRadius, ST_WINDUP } from '../sim/enemy';
+import { ENEMY_HIT_FLASH, enemyRadius, ST_SPORE_WINDUP, ST_WINDUP } from '../sim/enemy';
 import { BOSS_WINDUP, bossRadius } from '../sim/boss';
 import {
   FX_LIFE_HULL_HIT,
@@ -160,7 +162,7 @@ import { lerpAngle, type Vec2 } from '../sim/ship';
 import { supportLinks } from '../sim/support';
 import { cellHeatMax, cellReload } from '../sim/tower';
 import { peekNextElite, type ElitePeek } from '../sim/waves';
-import type { Bullet, Enemy, World } from '../sim/world';
+import type { Bullet, Enemy, EnemyBullet, World } from '../sim/world';
 import { audioBus } from './audio';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
@@ -497,6 +499,115 @@ const FX_KILL_RAY = 1.4;
 const FX_KILL_RAY_WIDTH = 1.6;
 const FX_KILL_DIRS = [1, 0, 0, 1, -1, 0, 0, -1];
 
+// —— 伤害飘字(畅玩性)——
+/** 飘字池容量 = 同屏上限。环形复用(见 dmgCursor 的注释),池满顶掉最旧,绝不 new */
+const DMG_POOL_SIZE = 64;
+/** 飘字存续秒。短促是要点:它是"这一发多痛"的一瞥,不是战场字幕 */
+const DMG_LIFE = 0.6; // 占位待调
+/** 上飘速度(世界 px/s):0.6s 飘 ~8 世界 px ≈ 一两个身形,数字留在命中点附近 */
+const DMG_RISE = 14;
+/** 字号(世界 px)。战斗缩放 ≈ 屏高/750,1080p 下 10px 字 ≈ 14 屏幕 px —— 小到不挡战场、大到读得出 */
+const DMG_FONT_SIZE = 10; // 占位待调
+/** 每帧最多新飘几个:迫击炮一圈炸 10 只也只飘 6 个,超出的本帧静默跳过 —— 蜂群不会堆成数字墙 */
+const DMG_SPAWN_CAP = 6;
+/** 同帧同点事件(一圈 AoE 炸一片)的落点错开:固定 8 向、半径 3 世界 px —— 定死不掷随机,
+ *  与 FX_KILL_DIRS 同一条口径(渲染层掷随机 = 在 sim 之外又开一条随机源,同 seed 画面不复现) */
+const DMG_JITTER_DIRS = [3, 0, 2.12, 2.12, 0, 3, -2.12, 2.12, -3, 0, -2.12, -2.12, 0, -3, 2.12, -2.12];
+/** 船体真伤害的红字:与 FXV_HULL_HIT 圆环同一支暖红,"掉的是自己的血"只靠色相喊 */
+const DMG_COLOR_HULL = 0xff5a48;
+/** 击杀的暖黄:死亡是这一局的正反馈节拍,颜色要比普通命中亮一档 */
+const DMG_COLOR_KILL = 0xffc46b;
+/** 命中飘字按"伤害/满血"插值的黄端 */
+const DMG_COLOR_HIT_YELLOW = 0xffd35c;
+/** 命中飘字从白变黄的阈值带:伤害占比 < 0.08 = 白(蹭血),> 0.25 = 黄(重创) */
+const DMG_RATIO_WHITE = 0.08;
+const DMG_RATIO_YELLOW = 0.25;
+
+// —— 沉船爆炸(畅玩性)——
+/** 演出总时长(秒)。main 侧读同一份常量推迟结算界面,让爆炸读得完(见 main.ts) */
+export const SHIP_DEATH_FX_TIME = 0.9; // 占位待调
+/** 扩散环:三条错峰起手、各自 0.5s 从 R0 扩到 R1 并淡出 —— 波次感 = 船在解体 */
+const DEATH_RING_COUNT = 3;
+const DEATH_RING_DELAYS = [0, 0.12, 0.24];
+const DEATH_RING_DURATION = 0.5;
+const DEATH_RING_R0 = 8;
+const DEATH_RING_R1 = 64;
+const DEATH_RING_WIDTHS = [3.5, 2.5, 2];
+const DEATH_RING_ALPHAS = [0.95, 0.8, 0.65];
+/** 环色:冷白爆闪 → 我方冷蓝(船的颜色)→ 暖红火舌(全游戏唯一一次"我方色域被烧"的画面) */
+const DEATH_RING_COLORS = [FX_CORE_COLOR, 0x9adcff, HULL_HIT_COLOR];
+/** 碎片:20 块 3px 见方、全向飞散 + 空间拖拽减速 + 自旋,寿命比演出短一截(炸完先散完) */
+const DEATH_DEBRIS_COUNT = 20;
+const DEATH_DEBRIS_SPEED = 70; // 世界 px/s 基准
+const DEATH_DEBRIS_LIFE = 0.7;
+const DEATH_DEBRIS_DRAG = 1.6; // 1/s,速度衰减系数
+
+/** 飘字池里的一格:Text 复用 + 自己的生命周期,字段在构造时一次声明齐(运行期绝不新增) */
+interface DmgSlot {
+  text: Text;
+  active: boolean;
+  x: number;
+  y: number;
+  life: number;
+  full: number;
+}
+
+/** 沉船爆炸的一块碎片:小方块 Graphics + 运动学,构造时一次建齐(演出是触发式的,但不现造对象) */
+interface DeathDebris {
+  g: Graphics;
+  vx: number;
+  vy: number;
+  spin: number;
+  life: number;
+  full: number;
+}
+
+/**
+ * 飘字文本:伤害取整 —— 溅射的零头不印小数点,扫一眼读得出才是飘字的本分
+ */
+export function dmgNumberText(damage: number): string {
+  return String(Math.round(damage));
+}
+
+/**
+ * 飘字配色(纯函数,便于单测):船体真伤害恒红;击杀恒暖黄;直射命中按"伤害/满血"
+ * 从白到黄插值 —— 小伤害 = "蹭到了"的白,大伤害 = "重创"的黄,颜色即力度。
+ */
+export function dmgNumberColor(kind: number, ratio: number): number {
+  if (kind === FXV_HULL_HIT) return DMG_COLOR_HULL;
+  if (kind === FXV_KILL) return DMG_COLOR_KILL;
+  const t = (ratio - DMG_RATIO_WHITE) / (DMG_RATIO_YELLOW - DMG_RATIO_WHITE);
+  return lerpColor(0xffffff, DMG_COLOR_HIT_YELLOW, clamp01(t));
+}
+
+/**
+ * 两个 0xRRGGBB 颜色按 k ∈ [0,1] 逐通道线性插值(飘字配色与受击闪白共用)。
+ * 逐通道 Math.round(而不是位运算截断):k=0.5 的黑白中点恰好是 0x808080,插值是对称的。
+ * 走 clamp01 的防御口径:NaN 被 `!(k > 0)` 接住,数值表被改坏也画不出 NaN 颜色
+ */
+export function lerpColor(a: number, b: number, k: number): number {
+  const t = clamp01(k);
+  const ar = (a >> 16) & 0xff;
+  const ag = (a >> 8) & 0xff;
+  const ab = a & 0xff;
+  const br = (b >> 16) & 0xff;
+  const bg = (b >> 8) & 0xff;
+  const bb = b & 0xff;
+  return (
+    (Math.round(ar + (br - ar) * t) << 16) |
+    (Math.round(ag + (bg - ag) * t) << 8) |
+    Math.round(ab + (bb - ab) * t)
+  );
+}
+
+/**
+ * 受击闪白的强度 0..1(剩余秒 / 满值)。渲染层拿它把敌剪影朝白色混合:
+ * 刚命中的一帧最白,随 0.08s 衰减淡回本色(纯表现,不进 checksum)
+ */
+export function hitFlashMix(hitFlash: number): number {
+  return clamp01(hitFlash / ENEMY_HIT_FLASH);
+}
+
 // —— broadside 反馈(05 号 issue T5 可选项)——
 /** 触发门槛:与 sim 的口径一致(world.broadsideCount ≥ 3 = 单舷齐射) */
 const BROADSIDE_MIN = 3;
@@ -696,6 +807,20 @@ function buildEnemyShape(def: EnemyDef): Graphics {
       g.poly(pts);
       break;
     }
+    case 'spore': {
+      // 带刺球:交替 2r 个顶点在"判定圆"与"1.35r 刺尖"之间往返 —— 与圆型蜂群蛭同族,
+      // 但多一圈尖刺作为色相之外的第二条辨识通道。刺尖不出判定圆太多(箭头是 1.2r,它 1.35r),
+      // 别让"看得见的身位"骗人 —— 灰盒阶段视觉 = 判定那条口径
+      const spikes = 8;
+      const pts: number[] = [];
+      for (let i = 0; i < spikes * 2; i++) {
+        const a = (i / (spikes * 2)) * Math.PI * 2;
+        const rr = i % 2 === 0 ? r : r * 1.35;
+        pts.push(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      g.poly(pts);
+      break;
+    }
   }
   // 描边宽度随体型缩放:固定宽度会把 r=7 的蜂群蛭糊成一个亮点,形状通道就废了
   return g
@@ -738,6 +863,8 @@ const ENEMY_ANIM: readonly EnemyAnim[] = [
   { freq: 4.5, breatheAmp: 0.06, wobbleAmp: 0.15, spin: 0 }, // KIND_STRAFER 侧掠者
   { freq: 3.0, breatheAmp: 0.1, wobbleAmp: 0.25, spin: 0 }, // KIND_TRAILER 尾随蛆
   { freq: 6.0, breatheAmp: 0.05, wobbleAmp: 0.08, spin: 0 }, // KIND_BEETLE 冲撞甲虫
+  // 孢子炮手:中频小幅呼吸 + 轻微摆动,读作"炮台在鼓胀蓄能";不自转(它是锚定的,不飘)
+  { freq: 2.4, breatheAmp: 0.09, wobbleAmp: 0.12, spin: 0 }, // KIND_SPORE 孢子炮手
 ];
 
 /** 动画读数的模块级 scratch:syncParticles 热循环每帧重写,绝不 new(与 localPos 同一条零分配纪律) */
@@ -784,6 +911,21 @@ function buildBulletShape(def: TowerDef): Graphics {
     .circle(0, 0, r)
     .fill(0xffffff)
     .stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
+}
+
+/**
+ * 敌方弹丸的剪影(22 号):发光的孢子球 —— 实心圆 + 一圈半透明外晕。
+ * 形状与 my 直射弹同族(都是圆),色相却取 enemyTint(KIND_SPORE) 的暖红紫:
+ * GDD §12 敌我色域分离靠的就是这一条,形状通道不必再为它另开一档
+ * (孢子球不是箭形/胶囊/六边里的任何一型,圆是唯一不与敌型剪影撞车的形状)。
+ * 半径取碰撞半径(灰盒阶段视觉 = 判定,与子弹纹理同一口径)。
+ */
+function buildSporeBulletShape(): Graphics {
+  const r = 5;
+  return new Graphics()
+    .circle(0, 0, r)
+    .fill(0xffffff)
+    .stroke({ width: 2, color: 0xffffff, alpha: 0.45 });
 }
 
 /**
@@ -906,6 +1048,14 @@ export class Renderer {
   private dropParticles: Particle[] = [];
   private dropTexture: Texture;
   /**
+   * 敌方弹丸(22 号)。与残骸同款"一个容器就够":全场只有孢子一种弹,
+   * 形状(发光球)与 tint(enemyTint(KIND_SPORE) 暖红紫)都只有一份,
+   * 不必分桶 —— 池的 items 本就是致密数组,整池直接喂给 syncParticles。
+   */
+  private sporeBulletPc: ParticleContainer;
+  private sporeBulletParticles: Particle[] = [];
+  private sporeBulletTexture: Texture;
+  /**
    * 开火光效层(05 号 T5)。挂在 **worldLayer** 而不是 deckG:FxEvent 的坐标是**世界坐标**
    * (命中点在敌人身上,不在船上),挂进甲板局部空间会让整条光束跟着船转 —— 船一转,
    * 上一帧打出去的光束就会甩到别处去。
@@ -913,6 +1063,28 @@ export class Renderer {
   private fxG = new Graphics();
   /** 炮口闪专层：压在甲板之上；其余命中/弹道 FX 仍在甲板之下，不能反过来糊住自己的船。 */
   private muzzleFxG = new Graphics();
+  /**
+   * 伤害飘字层(畅玩性)。挂在 **worldLayer**、世界坐标:命中点在哪字就飘在哪,
+   * 甲板视图(镜头整体拉近)里照样渲染 —— 升级放大时玩家该看到自己刚才打出的数字。
+   */
+  private dmgG = new Container();
+  /** 飘字池:Text 是昂贵视图(一个 = 一张离屏画布),64 格构造时一次建齐、环形复用 ——
+   *  命中路上绝不 new(铁律 3);数组序 = 生成序,环形游标绕一圈正好先碰到最旧的 */
+  private dmgSlots: DmgSlot[] = [];
+  /** 飘字环形游标:下一格写哪。池满时顶掉游标所指的那格 = 全场最旧的一格 */
+  private dmgCursor = 0;
+  /** 本渲染帧已新飘的个数,drawFx 开头清零:每帧 DMG_SPAWN_CAP 封顶(8 杀/秒也不堆字) */
+  private dmgSpawnedThisFrame = 0;
+  /** 沉船爆炸演出剩余秒;>0 = 演出中,逐渲染帧减 dt(纯表现,main 侧读 SHIP_DEATH_FX_TIME 延迟结算) */
+  private deathLeft = 0;
+  private deathFull = SHIP_DEATH_FX_TIME;
+  /** 爆炸锚点(世界坐标):触发那一刻的船心,整场演出钉死不动(沉船帧后世界即冻结) */
+  private deathX = 0;
+  private deathY = 0;
+  /** 爆炸层:扩散环(Graphics)+ 碎片池,整局复用,演出外整层隐藏(与 dmgG 同为最高层读数) */
+  private deathLayer = new Container();
+  private deathG = new Graphics();
+  private deathDebris: DeathDebris[] = [];
   private telegraphG: Graphics;
   /** 甲板容器:子层几何全在船体局部空间,它自己每帧只吃插值位姿(见文件头) */
   private deckG = new Container();
@@ -1114,11 +1286,14 @@ export class Renderer {
     // 分容器的代价只是多 3 个 draw call,GPU 侧可忽略。故:dynamicProperties 保持只有 position
     // 是动态的,每帧只重传位置,tint 与纹理都退化成建粒子时上传一次的静态属性。
     //
-    // 敌人容器例外两项(程序化动画,取舍见 ENEMY_ANIM 的注释):
+    // 敌人容器例外三项(程序化动画,取舍见 ENEMY_ANIM 的注释):
     //   vertex: true —— 呼吸 = 逐帧改 scaleX/scaleY,scale 烤在四角顶点里,不重传就看不见;
-    //   rotation: true —— 摆动/自转逐帧改角度(其余三型本来就要按速度转向,圆型蜂群蛭这次也要自转)。
-    // 旧注释那句"这些值一辈子不变"的反对不成立:它们是这一帧就要变的数,不重传 = 动画不存在。
-    // 子弹/残骸仍是原样(纯静态属性),四型敌人多付出的只是两个本就逐帧上传的缓冲。
+    //   rotation: true —— 摆动/自转逐帧改角度(其余三型本来就要按速度转向,圆型蜂群蛭这次也要自转);
+    //   color: true —— 受击闪白(畅玩性)要逐粒子改 tint,不开这一项 tint 只在建粒子时上传一次。
+    //   旧注释那句"这些值一辈子不变"的反对不成立:位置/角度/缩放是这一帧就要变的数,
+    //   闪白让颜色也变成"有时会变"的数 —— 每帧多传的颜色缓冲与位置缓冲同量级(~16KB),
+    //   换来的是一千只虫里任意一只能单独闪白,而不是整桶一起闪(后者的代价才是没法接受的)。
+    // 子弹/残骸仍是原样(纯静态属性),四型敌人多付出的只是本就逐帧上传的缓冲。
     for (let k = 0; k < ENEMIES.length; k++) {
       const def = ENEMIES[k]!;
       const generatedTexture = generatedArt.enemies[k] ?? null;
@@ -1137,8 +1312,9 @@ export class Renderer {
       // 显式把纹理绑在容器上(而不是听任它取第一个粒子的):让"一容器一纹理"这条约束写在明面上
       this.enemyPcs.push(
         new ParticleContainer({
-          // 蜂群蛭也要自转(口器绕圈 = 活着),故敌人容器一律开 rotation + vertex(见上注释)
-          dynamicProperties: { ...dyn, rotation: true, vertex: true },
+          // 蜂群蛭也要自转(口器绕圈 = 活着),故敌人容器一律开 rotation + vertex(见上注释);
+          // color 供受击闪白逐粒子改 tint(见上注释)
+          dynamicProperties: { ...dyn, rotation: true, vertex: true, color: true },
           boundsArea: bounds,
           texture: tex,
         }),
@@ -1148,7 +1324,7 @@ export class Renderer {
       // 精英容器与普通型同纹理同 dynamicProperties,唯一差别是 sync 时传进去的静态缩放
       this.elitePcs.push(
         new ParticleContainer({
-          dynamicProperties: { ...dyn, rotation: true, vertex: true },
+          dynamicProperties: { ...dyn, rotation: true, vertex: true, color: true },
           boundsArea: bounds,
           texture: tex,
         }),
@@ -1168,7 +1344,7 @@ export class Renderer {
     this.bossTextureScale = (bossRadius() * 2) / Math.max(bossTex.width, bossTex.height);
     this.bossRotationOffset = this.enemyRotationOffsets[BOSS.baseKind]!;
     this.bossPc = new ParticleContainer({
-      dynamicProperties: { ...dyn, rotation: true, vertex: true },
+      dynamicProperties: { ...dyn, rotation: true, vertex: true, color: true },
       boundsArea: bounds,
       texture: bossTex,
     });
@@ -1210,6 +1386,19 @@ export class Renderer {
       dynamicProperties: dyn,
       boundsArea: bounds,
       texture: this.dropTexture,
+    });
+
+    // 敌方弹丸:同一套粒子做法,单容器就够(理由见 sporeBulletPc 字段注释)。
+    // 2x 分辨率 + 抗锯齿:发光球只有 5px 出头,1x 画布上不这么烤就糊成一个亮点
+    this.sporeBulletTexture = app.renderer.generateTexture({
+      target: buildSporeBulletShape(),
+      resolution: 2,
+      antialias: true,
+    });
+    this.sporeBulletPc = new ParticleContainer({
+      dynamicProperties: dyn,
+      boundsArea: bounds,
+      texture: this.sporeBulletTexture,
     });
 
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变)
@@ -1257,8 +1446,45 @@ export class Renderer {
     // Boss 容器压在一切敌剪影之上:它是这一战最大的个体,任何虫群都不许啃它的边
     this.worldLayer.addChild(this.bossPc);
     this.worldLayer.addChild(this.dropPc);
+    this.worldLayer.addChild(this.sporeBulletPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     this.worldLayer.addChild(this.fxG, this.deckG, this.muzzleFxG);
+    // 飘字与爆炸层压在一切世界层之上(包括甲板与炮口闪):"这一发多痛 / 船没了"是
+    // 场上优先级最高的两类读数 —— 甲板视图放大时它们照样渲染(世界坐标,随镜头走)
+    this.worldLayer.addChild(this.dmgG, this.deathLayer);
+
+    // —— 伤害飘字池:Text 昂贵(建一个 = 一张离屏画布),故 64 格一次建齐、整局复用,
+    // 命中时只改 text/tint/position(铁律 3)。共享同一份样式(白 fill),颜色走 tint 乘出来 ——
+    // tint 是逐格属性,改一格不影响其它格(改 style.fill 则是共享样式,一格变色全池变色)
+    for (let i = 0; i < DMG_POOL_SIZE; i++) {
+      const text = new Text({
+        text: '',
+        anchor: 0.5,
+        resolution: 2, // 2x 离屏渲染:字号只有 10 世界 px,1x 会被镜头放大成马赛克
+        style: {
+          fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+          fontSize: DMG_FONT_SIZE,
+          fontWeight: 'bold',
+          fill: 0xffffff,
+          stroke: { color: 0x000000, width: 2 }, // 黑描边:数字压在虫潮上也要读得出
+        },
+      });
+      text.visible = false;
+      this.dmgG.addChild(text);
+      this.dmgSlots.push({ text, active: false, x: 0, y: 0, life: 0, full: DMG_LIFE });
+    }
+
+    // —— 沉船爆炸层:环 + 碎片全部预建,触发时只改状态(演出是一次性事件,但对象绝不现造) ——
+    this.deathLayer.addChild(this.deathG);
+    for (let i = 0; i < DEATH_DEBRIS_COUNT; i++) {
+      // 碎片取船体本色(明面/亮边交替):炸出去的就是自己的船,颜色 = 残骸的语汇
+      const g = new Graphics().rect(-1.6, -1.6, 3.2, 3.2).fill(i % 2 === 0 ? SHIP_FILL : SHIP_EDGE);
+      g.visible = false;
+      this.deathLayer.addChild(g);
+      this.deathDebris.push({ g, vx: 0, vy: 0, spin: 0, life: 0, full: DEATH_DEBRIS_LIFE });
+    }
+    this.deathLayer.visible = false;
+
     // 闪光片挂在 stage 最上层(屏幕空间),不进 worldLayer —— 理由见 flashG 的字段注释
     this.flashG.visible = false;
     if (this.backgroundSprite) app.stage.addChild(this.backgroundSprite);
@@ -1327,6 +1553,10 @@ export class Renderer {
     } else {
       this.stepShake(dt);
     }
+    // 飘字与爆炸演出都是渲染层自持的计时(与 stepBroadside/stepShake 同一份 dt):
+    // 时停/结算期间照走 —— 死亡爆炸要的就是"世界冻住、碎片继续飞"的反差
+    this.stepDmgNumbers(dt);
+    this.stepDeathFx(dt);
     if (this.assemblyView && this.flashG.visible) this.flashG.visible = false;
     const viewportWidth = Math.max(1, screen.width - this.deckViewRightInset);
     const posX = viewportWidth / 2 + this.broadsideDirX * broadsideKick + this.shakeX;
@@ -1372,6 +1602,7 @@ export class Renderer {
         rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
         anim: ENEMY_ANIM[k]!,
         alpha,
+        flashBase: this.enemyTextureTints[k]!,
       });
       // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
       // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
@@ -1383,11 +1614,16 @@ export class Renderer {
         rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
         anim: ENEMY_ANIM[k]!,
         alpha,
+        flashBase: this.enemyTextureTints[k]!,
       });
       // 前摇指示按型共享配额:精英与普通怪同型,合起来不能超过一型的预算
       let budget = TELEGRAPH_MAX_PER_KIND;
       budget = this.drawTelegraph(bucket, def, alpha, budget);
       this.drawTelegraph(eliteBucket, def, alpha, budget);
+      // 孢子蓄力预警(22 号)与冲锋前摇共用同一块 telegraphG 与同一份配额:
+      // 两种"环合拢即发作"的读数在画面上互斥共存,不该各自无上限地画
+      budget = this.drawSporeTelegraph(bucket, def, alpha, budget);
+      this.drawSporeTelegraph(eliteBucket, def, alpha, budget);
     }
     // Boss:底座型同纹理同 tint,静态缩放使剪影外接半径 = bossRadius()(构造时算好)——
     // 与普通型分桶同一条 syncParticles 路径,判定体多大画多大
@@ -1398,6 +1634,7 @@ export class Renderer {
       rotationOffset: this.bossRotationOffset,
       anim: ENEMY_ANIM[BOSS.baseKind]!,
       alpha,
+      flashBase: this.enemyTextureTints[BOSS.baseKind]!,
     });
     this.drawBossTelegraph(alpha);
 
@@ -1418,6 +1655,14 @@ export class Renderer {
         alpha,
       });
     }
+
+    // 敌方弹丸(22 号):整池直接喂(池的 items 是致密数组,不必分桶,与残骸同款)。
+    // 与敌人粒子同一套 alpha 插值:弹丸 220px/s,60Hz 逻辑帧在 144Hz 屏上不插值就是顿挫
+    this.syncParticles(this.sporeBulletParticles, this.sporeBulletPc, this.world.enemyBullets.items, {
+      texture: this.sporeBulletTexture,
+      tint: enemyTint(KIND_SPORE), // 暖红紫:与冷色我方弹道一眼分家(GDD §12)
+      alpha,
+    });
 
     // 残骸掉落物:整池直接喂进去(池的 items 本就是致密数组,不必像敌/弹那样先分桶),
     // 与它们同一套 syncParticles ⇒ 一并吃 alpha 插值:磁吸段每秒 300px,不插值就是一串跳点
@@ -1556,6 +1801,9 @@ export class Renderer {
     for (let i = 0; i < this.bulletPcs.length; i++) this.bulletPcs[i]!.visible = showBattle;
     this.fxG.visible = showBattle;
     this.muzzleFxG.visible = showBattle;
+    // 飘字与爆炸演出是战斗读数,不进装配界面(装配期间世界照跑,击杀事件照常产生 ——
+    // 数字仍会入池消费,只是看不见,回到战斗自动恢复)
+    this.dmgG.visible = showBattle;
     if (on) {
       // 装配界面不应把进入前那一下齐射的镜头顿挫带到下一波恢复战斗之后。
       this.broadsideLeft = 0;
@@ -1629,6 +1877,18 @@ export class Renderer {
     this.setAssemblyView(false);
     this.deckZoom = 1;
     this.deckZoomTarget = 1;
+    // 飘字与爆炸演出是**上一局**的表现,换世界当场清空(与 broadside 那一组同一条口径 ——
+    // 新船不带上一局的数字与碎片;尤其沉船爆炸,新一局的船好好的,不许再炸一遍)
+    for (let i = 0; i < this.dmgSlots.length; i++) {
+      const s = this.dmgSlots[i]!;
+      s.active = false;
+      s.life = 0;
+      s.text.visible = false;
+    }
+    this.dmgCursor = 0;
+    this.deathLeft = 0;
+    this.deathLayer.visible = false;
+    this.deathG.clear();
   }
 
   /**
@@ -2640,6 +2900,8 @@ export class Renderer {
     g.clear();
     const muzzleG = this.muzzleFxG;
     muzzleG.clear();
+    // 每帧飘字配额清零:同帧的事件再多也只新飘 DMG_SPAWN_CAP 个(见 spawnDmgNumber)
+    this.dmgSpawnedThisFrame = 0;
     // 放置时停会冻结 FxEvent 寿命;甲板视图里也不该有一枚寿命冻结的闪光常亮在炮口上。
     // 恢复时 target 先回 1、镜头缩放还在缓动:阈值取 1.05 而不是贴死 1 ——
     // 指数缓动的尾巴(1.05 → 1.002)还要拖 ~0.25s,而 1.05 档的缩放差在闪光半径(7 世界 px)
@@ -2655,6 +2917,12 @@ export class Renderer {
       // 节流值从甲板反查(事件不带 throttle),音频引擎自带同族限流,蜂群贴脸不糊成一片
       const playAudio = !e.audioPlayed;
       if (playAudio) e.audioPlayed = true;
+      // 飘字:一次性消费锁与音频/震屏各管各的 —— 飘字生命周期(0.6s)比事件(0.1-0.25s)长,
+      // 必须在事件还活着时取出;同帧重复采样(120Hz 屏)也由这把锁挡住,一个字只飘一次
+      if (!e.dmgPlayed) {
+        e.dmgPlayed = true;
+        if (e.damage > 0) this.spawnDmgNumber(e.kind, e.x0, e.y0, e.damage, e.dmgRatio);
+      }
       const family = this.shootFamily(e.kind);
       if (playAudio && family) audioBus.playShoot(family, def ? this.shootThrottle(e.towerType, def) : 1);
       const color = def ? def.tint : FX_TINT_FALLBACK;
@@ -2874,6 +3142,126 @@ export class Renderer {
     return Math.cos((1 - k) * BROADSIDE_CYCLES * Math.PI * 2) * k * BROADSIDE_SHAKE_PX;
   }
 
+  /**
+   * 伤害飘字入池(畅玩性,drawFx 消费 FxEvent 时调用)。环形游标复用 DMG_POOL_SIZE 格:
+   * 池满顶掉最旧(数组序 = 生成序,游标绕一圈正好先碰到最旧的);每帧 DMG_SPAWN_CAP 封顶 ——
+   * 迫击炮一圈炸 10 只也只飘 6 个,8 杀/秒更不会在屏幕上堆成数字墙。
+   * 同帧同点的多个事件按固定 8 向错开落点(定死不掷随机,与 FX_KILL_DIRS 同一条口径)。
+   */
+  private spawnDmgNumber(kind: number, x: number, y: number, damage: number, ratio: number): void {
+    if (this.dmgSpawnedThisFrame >= DMG_SPAWN_CAP) return;
+    this.dmgSpawnedThisFrame++;
+    const slot = this.dmgSlots[this.dmgCursor]!;
+    this.dmgCursor = (this.dmgCursor + 1) % this.dmgSlots.length;
+    const j = (this.dmgCursor * 2) % DMG_JITTER_DIRS.length;
+    slot.active = true;
+    slot.x = x + DMG_JITTER_DIRS[j]!;
+    slot.y = y + DMG_JITTER_DIRS[j + 1]!;
+    slot.life = slot.full = DMG_LIFE;
+    const t = slot.text;
+    t.text = dmgNumberText(damage);
+    t.tint = dmgNumberColor(kind, ratio);
+    t.alpha = 1;
+    t.visible = true;
+    t.position.set(slot.x, slot.y);
+  }
+
+  /**
+   * 飘字逐渲染帧推进:上飘 + 淡出。渲染层自持计时(与 stepBroadside 同一份 dt)—— 时停、
+   * 甲板视图里照走,于是升级放大时刚打出的数字照样读完(世界冻结不影响表现层)。
+   * 只改已激活的格,数组扫描 64 格是常数开销,热路径无分配。
+   */
+  private stepDmgNumbers(dt: number): void {
+    for (let i = 0; i < this.dmgSlots.length; i++) {
+      const slot = this.dmgSlots[i]!;
+      if (!slot.active) continue;
+      slot.life -= dt;
+      if (slot.life <= 0) {
+        slot.active = false;
+        slot.text.visible = false;
+        continue;
+      }
+      slot.y -= DMG_RISE * dt;
+      slot.text.position.set(slot.x, slot.y);
+      // 前 40% 满亮、后 60% 线性淡出:数字要"先看清、再消失",而不是一出生就开始褪色
+      const t = slot.life / slot.full;
+      slot.text.alpha = t > 0.6 ? 1 : t / 0.6;
+    }
+  }
+
+  /**
+   * 沉船爆炸演出(畅玩性,main.ts 的 onShipDestroyed 接线):扩散环 + 船色碎片 + 重震 + 爆炸音。
+   * **纯表现**:一个 sim 字段都不动、不进 checksum —— 世界只负责说"船没了",怎么炸是渲染层的事。
+   * 演出总时长 = SHIP_DEATH_FX_TIME,main 侧读同一份常量推迟结算界面,让这一下读得完。
+   */
+  playShipDeathExplosion(): void {
+    this.deathLeft = this.deathFull = SHIP_DEATH_FX_TIME;
+    // 锚点 = 船的上一帧位置:沉船那一帧世界随即冻结(loop.halt → alpha 归零),
+    // 画面上船停在插值后的 px/py,爆炸就从那一点炸开,碎片与残骸不会错位
+    this.deathX = this.world.ship.px;
+    this.deathY = this.world.ship.py;
+    for (let i = 0; i < this.deathDebris.length; i++) {
+      const d = this.deathDebris[i]!;
+      const a = (i / this.deathDebris.length) * Math.PI * 2;
+      // 速度/自旋走固定表散布(定死不掷随机,与 FX_KILL_DIRS 同一条口径):
+      // 每场爆炸形状一致可复现,20 块各飞各的不重叠
+      const speed = DEATH_DEBRIS_SPEED * (0.65 + (0.35 * ((i * 7) % 3)) / 2);
+      d.g.position.set(this.deathX, this.deathY);
+      d.g.rotation = a;
+      d.g.alpha = 1;
+      d.g.visible = true;
+      d.vx = Math.cos(a) * speed;
+      d.vy = Math.sin(a) * speed;
+      d.spin = ((i % 5) - 2) * 4;
+      d.life = d.full = DEATH_DEBRIS_LIFE;
+    }
+    // 重震:沉船是全场最重的一次反馈 —— 震屏直接拉满,让既有衰减曲线接管后面那 ~0.5s
+    this.shakeTrauma = SHAKE_MAX_TRAUMA;
+    audioBus.playExplosion();
+  }
+
+  /** 爆炸演出逐渲染帧推进(渲染层自持计时,与 stepBroadside 同一份 dt):环扩散 + 碎片飞散 */
+  private stepDeathFx(dt: number): void {
+    if (this.deathLeft <= 0) {
+      if (this.deathLayer.visible) {
+        this.deathLayer.visible = false;
+        this.deathG.clear();
+        for (const d of this.deathDebris) d.g.visible = false;
+      }
+      return;
+    }
+    this.deathLeft = Math.max(0, this.deathLeft - dt);
+    this.deathLayer.visible = !this.assemblyView;
+    const elapsed = this.deathFull - this.deathLeft;
+    // 扩散环:三条错峰起手(0/0.12/0.24s)、各自 0.5s 从 R0 扩到 R1 并淡出 ——
+    // 环的"波次感"读作船在解体,而不是一次性画一个圈
+    const g = this.deathG;
+    g.clear();
+    for (let k = 0; k < DEATH_RING_COUNT; k++) {
+      const t = (elapsed - DEATH_RING_DELAYS[k]!) / DEATH_RING_DURATION;
+      if (t <= 0 || t >= 1) continue;
+      g.circle(this.deathX, this.deathY, DEATH_RING_R0 + (DEATH_RING_R1 - DEATH_RING_R0) * t).stroke({
+        width: DEATH_RING_WIDTHS[k]!,
+        color: DEATH_RING_COLORS[k]!,
+        alpha: DEATH_RING_ALPHAS[k]! * (1 - t),
+      });
+    }
+    // 碎片:直线飞出 + 空间拖拽减速 + 自旋 + 淡出 —— 世界冻住它们照样飞(表现层自持计时)
+    for (let i = 0; i < this.deathDebris.length; i++) {
+      const d = this.deathDebris[i]!;
+      if (d.life <= 0) continue;
+      d.life -= dt;
+      const drag = Math.exp(-Math.max(0, dt) * DEATH_DEBRIS_DRAG);
+      d.vx *= drag;
+      d.vy *= drag;
+      d.g.x += d.vx * dt;
+      d.g.y += d.vy * dt;
+      d.g.rotation += d.spin * dt;
+      d.g.alpha = Math.max(0, d.life / d.full);
+      if (d.life <= 0) d.g.visible = false;
+    }
+  }
+
   private stepShake(dt: number): void {
     const items = this.world.fx.items;
     for (let i = 0; i < items.length; i++) {
@@ -3005,6 +3393,43 @@ export class Renderer {
     if (drawn > 0) {
       g.stroke({ width: TELEGRAPH_WIDTH, color: tint, alpha: TELEGRAPH_ALPHA });
     }
+  }
+
+  /**
+   * 孢子炮手的蓄力预警(22 号):锚定后进蓄力的那 sporeWarnTime 秒里,在炮手身上画一圈
+   * 随剩余时间收缩的环 —— 与冲锋前摇的收缩环同一语言("环合拢即开火",见 drawTelegraph),
+   * 颜色取该型 tint。数据驱动地跳过:sporeWarnTime <= 0 的型永远进不了 ST_SPORE_WINDUP
+   * (与 drawTelegraph 的 chargeWindup 跳过同款)。
+   * @returns 剩余配额(精英与普通桶同型共享,见 sync 的调用处)
+   */
+  private drawSporeTelegraph(
+    bucket: readonly Enemy[],
+    def: EnemyDef,
+    alpha: number,
+    budget: number,
+  ): number {
+    if (def.sporeWarnTime <= 0 || budget <= 0) return budget;
+    const g = this.telegraphG;
+    let drawn = 0;
+    for (let i = 0; i < bucket.length; i++) {
+      if (budget <= 0) break;
+      const e = bucket[i]!;
+      if (e.state !== ST_SPORE_WINDUP) continue;
+      budget--;
+      drawn++;
+      // 位置与粒子同口径插值,否则预警环会比炮手本体晚一帧(与 drawTelegraph 同一条)
+      const x = e.px + (e.x - e.px) * alpha;
+      const y = e.py + (e.y - e.py) * alpha;
+      // 夹住 [0,1]:面板/单测改 sporeWarnTime 时正在蓄力的那几只不至于画出巨环
+      const t = Math.max(0, Math.min(1, e.timer / def.sporeWarnTime)); // 1 → 0:越近开火越紧
+      // 环径走 enemyRadius:精英的判定体已被 sim 放大(×ELITE.scale),环必须收到**放大的**
+      // 体型上才合得上"合拢即开火"的承诺(与 drawTelegraph 的精英口径同一条)
+      g.circle(x, y, enemyRadius(e) * (1 + TELEGRAPH_RING_GROWTH * t));
+    }
+    if (drawn > 0) {
+      g.stroke({ width: TELEGRAPH_WIDTH, color: enemyTint(def.kind), alpha: TELEGRAPH_ALPHA });
+    }
+    return budget;
   }
 
   /**
@@ -3188,7 +3613,7 @@ export class Renderer {
   private syncParticles(
     particles: Particle[],
     pc: ParticleContainer,
-    entities: readonly (Enemy | Bullet | Drop)[],
+    entities: readonly (Enemy | Bullet | Drop | EnemyBullet)[],
     opts: {
       texture: Texture;
       tint: number;
@@ -3197,6 +3622,12 @@ export class Renderer {
       rotationOffset?: number;
       /** 程序化动画参数:只在敌人/精英/Boss 容器传入,子弹/残骸不付这个分支 */
       anim?: EnemyAnim;
+      /**
+       * 受击闪白的基础色:只在敌人/精英/Boss 容器传入(它们开了 color: true 动态属性)——
+       * 每帧按 hitFlash 剩余量在基础色与白之间插值,其余帧原样重写基础色。
+       * 子弹/残骸不传 = 走静态 tint,一条分支都不进(热路径不白付)
+       */
+      flashBase?: number;
     },
   ): void {
     // 扩容:tint/texture 是静态属性,增粒子后需 pc.update() 重传。
@@ -3259,6 +3690,17 @@ export class Renderer {
               Math.atan2(vy, vx) +
               (opts.rotationOffset ?? 0) +
               (anim && frame ? frame.wobble : 0);
+          }
+        }
+        // 受击闪白:把剪影朝白色按剩余强度混合(容器开了 color:true,这一格每帧都要重写 tint)。
+        // 绝大帧数 hitFlash = 0,只写基础色;闪白的 0.08s 里才付一次 lerp
+        if (opts.flashBase !== undefined) {
+          const base = opts.flashBase;
+          if (entity && 'hitFlash' in entity) {
+            const flash = (entity as { hitFlash: number }).hitFlash;
+            p.tint = flash > 0 ? lerpColor(base, 0xffffff, hitFlashMix(flash)) : base;
+          } else {
+            p.tint = base;
           }
         }
       } else {

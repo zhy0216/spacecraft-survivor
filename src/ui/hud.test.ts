@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EDICT_GYRO, EDICT_HULL, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
+import { KIND_BOSS } from '../data/enemies';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import type { World } from '../sim/world';
@@ -229,8 +230,8 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
     // 与屏下缘两根血条(精英 + Boss)、星币读数、法令徽记(18 号)、解锁 toast
-    // 与图鉴读数(19 号),没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(10);
+    // 与图鉴读数(19 号)以及低血量红晕(畅玩性),没有按敌人数增长的节点或中央遮罩
+    expect(root.children.length).toBe(11);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -394,7 +395,7 @@ describe('createHud', () => {
 
     // Boss(kind 4,affixes 恒 0)进场:血条亮出,比例钉 Boss 本体的 hp/maxHp
     hud.setWorld(
-      stubWorld({ enemies: { items: [{ kind: 4, affixes: 0, hp: 240, maxHp: 480 }] } }) as unknown as World,
+      stubWorld({ enemies: { items: [{ kind: KIND_BOSS, affixes: 0, hp: 240, maxHp: 480 }] } }) as unknown as World,
     );
     expect(boss.style.display).toBe('block');
     expect(findText(root, '240 / 480')).toBeDefined();
@@ -412,7 +413,7 @@ describe('createHud', () => {
         enemies: {
           items: [
             { affixes: 0b001, hp: 30, maxHp: 200 },
-            { kind: 4, affixes: 0, hp: 240, maxHp: 480 },
+            { kind: KIND_BOSS, affixes: 0, hp: 240, maxHp: 480 },
           ],
         },
       }) as unknown as World,

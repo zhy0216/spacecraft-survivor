@@ -21,19 +21,23 @@ import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
-import { Renderer } from './render/renderer';
+import { Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
 import { applyStartingLoadout } from './sim/loadout';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
-import { RESULT_WIN, World } from './sim/world';
+import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
 import { createHud, type HudUi } from './ui/hud';
+import { createLoadoutFlow } from './ui/loadoutFlow';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
+
+/** 击杀 hitstop 的冻结时长(ms):40-60ms 的一记顿挫,再长就是卡顿(占位待调) */
+const HITSTOP_MS = 45;
 
 async function boot(): Promise<void> {
   const input = new Input();
@@ -56,9 +60,18 @@ async function boot(): Promise<void> {
   //  loop 同理,tick 是这一局的帧号,而 checksum 与面板读数全挂在它上面)。
   // 下面所有闭包(loop 的 step、ticker、结算回调)读的都是这两个变量本身,故换引用一次就够。
   let runIndex = 0;
+  // 一局的流水号(畅玩性):startRun 每次 +1,沉船爆炸的延迟结算回调比对它 ——
+  // 延迟期间重开过,旧局的结算作废(见 onGameOver 的 setTimeout 守卫)
+  let runToken = 0;
   // **本局**的种子。restart 换种子时更新,retry(同 seed 重试)原样再用 ——
   // 没有它的话被特定波次组合打死后想"再试同一局"只能手改 URL ?seed= 刷新页面
   let runSeed = seed;
+  // **本局**的起手配置(LOADOUTS 下标,20 号)。与 runSeed 同一条纪律:
+  // 它是**开跑前输入** —— restart 经选择界面更新,retry 原样沿用(同 seed 重试 = 连起手一起重来);
+  // 选择发生在 World 构造之前,故同 seed + 同配置 → 同一条轨迹(选择本身不碰 rng)
+  let loadoutIndex = 0;
+  // 首局标记:boot 里预建的 World 还没装配过 —— 选择界面回调用它分辨"送预建 World"与"新建 World"
+  let firstRun = true;
   // 元进度存档(19 号):页载时读一次,此后每局结算(onGameOver)写一次。
   // World 构造时注入 unlockMask(卡池过滤与解锁精英门控读它);掩码 0 = 全未解锁,首局就是这么起步的。
   // 局内不写 —— 解锁状态只在"一局结束"这一个点入档(progress.ts 的口径,见 onGameOver)
@@ -66,7 +79,10 @@ async function boot(): Promise<void> {
   // 首局的 World 得先建出来:Renderer.create 建层时就要读甲板。建完原样交给 startRun,
   // 于是**首局与重开走的是同一条装配流程** —— 两条路各写一份的话,重开那条永远会比首局少接一样东西
   let world = new World(runSeed, progress.unlockMask);
-  let loop: FixedStepLoop;
+  // 首局先给 loop 一个初始值而不是留 undefined:首局的选择界面弹出时 ticker 已经挂上,
+  // 它每帧都会读 loop(alpha/tick/advance),缺了这一个值首帧就崩 ——
+  // 这个初始 loop 从不会被 advance(run.paused 挡着),startRun 会立刻用本局的替换掉它
+  let loop: FixedStepLoop = new FixedStepLoop(() => world.step(cmd));
   const renderer = await Renderer.create(world);
 
   // 战斗 HUD 同样整页只建一次:固定屏幕空间的血条/残骸/计时/航段与威胁箭头都只改已有 DOM。
@@ -156,6 +172,10 @@ async function boot(): Promise<void> {
   let lastChecksumTick = -SIM_HZ;
   // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)
   let lastScrap = 0;
+  // 击杀 hitstop(畅玩性):上一帧已消费的击杀数(与 lastScrap 同一条增量检测写法)与
+  // 冻结截止的墙钟时刻 —— performance.now() < hitstopUntil 时跳过 loop.advance(见 ticker)
+  let lastKills = 0;
+  let hitstopUntil = 0;
   // 本局已 toast 过的解锁位掩码(19 号):与 progress.unlockMask 同编码。局内检测跨过阈值
   // 就置位,防止同一局里"300 杀达标"这类条件每帧弹一次 —— 置位过的不再重复提示
   let announcedMask = 0;
@@ -170,10 +190,14 @@ async function boot(): Promise<void> {
    * 面板读数不复位 → checksum/tick 还挂在上一局的数上,"同 seed 可复现"当场没法验。
    */
   function startRun(next: World): void {
+    // 一局的流水号(畅玩性,沉船爆炸的延迟结算用):换一局就 +1 —— 延迟回调里比对它,
+    // 期间重开过的旧局结算直接作废,不会在"新一局"头上弹"上一局"的卡片
+    runToken++;
     world = next;
-    // 正式开局才套用固定舷位起手塔。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空甲板,
+    // 正式开局才套用起手配置。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空甲板,
     // 而「这一局怎么开场」是 data/loadout.ts 的数值配置,经 sim/loadout 逐条走 placeAt 唯一入口。
-    applyStartingLoadout(world.deck);
+    // 20 号:套哪一套由 loadoutIndex 定(开局选择界面选完才走到这里,retry 原样沿用上一局的)
+    applyStartingLoadout(world.deck, loadoutIndex);
     loop = new FixedStepLoop(() => {
       // 必须在每个逻辑帧边界重新取样:一帧一采才让"按住 A 的时长"精确对应转过的角度,
       // 掉帧补步时也照样一步一次,手感不随渲染帧率漂移。
@@ -181,6 +205,13 @@ async function boot(): Promise<void> {
       cmd.desiredHeading = input.desiredHeading();
       world.step(cmd);
     });
+
+    // 沉船那一刻的表现(畅玩性):爆炸演出 + 重震 + 爆炸音。**纯表现** —— 渲染层不碰 sim
+    // 任何字段;这一帧稍后的 onGameOver 才暂停世界、推迟弹结算(见下面那句 setTimeout)。
+    // 只接"船沉了"(onShipDestroyed)而不接 onGameOver:胜利时没有爆炸,结算就该立刻弹
+    world.onShipDestroyed = () => {
+      renderer.playShipDeathExplosion();
+    };
 
     // 局终(胜利 = 脚本走完 / 失败 = HP 归零,判定与优先级全在 World.settleOutcome)。
     // **sim 当场停下要 run.paused + loop.halt() 两句**(与弹卡那一处一字同源,理由见下):
@@ -215,7 +246,9 @@ async function boot(): Promise<void> {
       for (let i = 0; i < UNLOCKS.length; i++) {
         if ((evalResult.newUnlocks & (1 << i)) !== 0) newUnlockIdx.push(i);
       }
-      gameOver.show({
+      // 结算数据在这一刻全部取走(世界此后不再动):延迟弹出用的就是这份快照,
+      // 期间重开换掉 world 引用也不影响它 —— 见下面 setTimeout 的 runToken 守卫
+      const summary = {
         result,
         survivedSec: world.elapsed,
         kills: world.kills,
@@ -232,7 +265,20 @@ async function boot(): Promise<void> {
         // progressStats = 结算后的元进度,图鉴读它 —— 两字段定义在 ui/gameOver.ts 的 RunSummary
         newUnlocks: newUnlockIdx,
         progressStats: progress,
-      });
+      };
+      // 失败 = 沉船:结算**推迟 SHIP_DEATH_FX_TIME** 秒再弹,让爆炸演出读得完
+      // (爆炸是渲染层自持的,run.paused 冻结世界但不冻结它)。胜利没有爆炸,当场弹。
+      // 延迟用墙钟 setTimeout + runToken 守卫:延迟期间玩家从调参面板重开/重试,
+      // startRun 已把 runToken +1,旧局的这张卡片直接作废 —— 不会在新一局头上弹"上一局"的结算
+      if (result === RESULT_LOSE) {
+        const token = runToken;
+        window.setTimeout(() => {
+          if (token !== runToken) return;
+          gameOver.show(summary);
+        }, SHIP_DEATH_FX_TIME * 1000);
+      } else {
+        gameOver.show(summary);
+      }
     };
 
     // 攒够残骸 → 三选一(10 号 issue T4)。**时停就是这三句**:run.paused 挡住下一次 advance,
@@ -282,6 +328,10 @@ async function boot(): Promise<void> {
     stats.scrap = 0;
     // 新局基准 = 新世界的 scrap(当前为 0):首帧增量检测零出发,不会误响拾取音
     lastScrap = world.scrap;
+    // hitstop 的增量基准与冻结窗同样属于上一局:新局清零,首帧击杀照常触发一记顿挫
+    // (留着旧基准会以为"新局第一秒就杀了一只",或把上一局的冻结窗带进新局)
+    lastKills = 0;
+    hitstopUntil = 0;
     // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
     announcedMask = 0;
     stats.upgrades = 0;
@@ -308,6 +358,7 @@ async function boot(): Promise<void> {
       refitFlow,
       hud,
       gameOver,
+      loadoutFlow,
       restart,
       retry,
     };
@@ -317,17 +368,23 @@ async function boot(): Promise<void> {
    * 「再来一局」的换种子入口(结算界面的按钮/Enter 与调参面板的重开按钮共用)。
    * 种子 = seed + 局数:`?seed=` 仍然能复现**第一局**(01 号的确定性口径),
    * 而重开不会每局一模一样 —— 同一份怪潮打第二遍就没什么可玩的了。
+   * 20 号起**先弹起手配置选择界面**:玩家挑完这一局怎么开场,onSelect 才真正装配新局。
+   * 选择期间世界必须冻着:结算/时停进来时 run.paused 本来就是 true,这一句兜住
+   * 调参面板在战斗中点重开的路径(那个瞬间 run.paused 还是 false)。
    * 函数声明(而不是 const)是为了给上面的 createGameOverUi / createDebugPanel 提前引用:
    * 这两个面板都只建一次,而它们建的时候这一局还没开始装配。
    */
   function restart(): void {
     runIndex++;
     runSeed = seed + runIndex;
-    startRun(new World(runSeed, progress.unlockMask));
+    run.paused = true;
+    loadoutFlow.show(progress.unlockMask);
   }
 
   /**
    * 「再试这一局」的同 seed 入口(畅玩性调整):runSeed 不动、runIndex 不消耗,
+   * **loadoutIndex 也不动** —— 同 seed 重试连起手配置一起原样重来,不弹选择界面
+   * (20 号口径:起手是"这一局"的一部分,想换起手请走「再来一局」)。
    * 新 World 拿到的就是刚打完那一局的种子 —— 确定性口径("同 seed + 同输入 → 同轨迹")
    * 天然支撑它:35s 侧压从哪边来、哪一段最凶,死过一次就都是可用的知识。
    * 它同时修复了调参面板那条"验不了同 seed 可复现"的遗留(面板现在两个按钮都有)。
@@ -336,13 +393,48 @@ async function boot(): Promise<void> {
     startRun(new World(runSeed, progress.unlockMask));
   }
 
-  // 首局:把已经交给渲染层的那个 World 原样送进同一条装配流程
-  startRun(world);
+  // 起手配置选择界面(20 号)—— 只建一次,重开走 show/hide(与结算界面同一条教训)。
+  // onSelect 是"玩家挑完了"的唯一去处:收界面 → 决定装配哪一艘 World →
+  // 交给 startRun 那一条**与重开完全相同的装配流程**(首局与重开不许各写一份,那会漏接线)。
+  // 首局送的是 boot 里预建、渲染层已按其甲板建好层的那个 World;重开则新建 ——
+  // 由 firstRun 分辨,换种子(retry 外的所有来路)在 restart 里已先算好 runSeed
+  const loadoutFlow = createLoadoutFlow({
+    onSelect: (index) => {
+      loadoutIndex = index;
+      loadoutFlow.hide();
+      if (firstRun) {
+        firstRun = false;
+        startRun(world);
+      } else {
+        startRun(new World(runSeed, progress.unlockMask));
+      }
+    },
+  });
+
+  // 首局:起手配置选择界面先行(GDD §10「起手配置…可在开局选择」)。
+  // 首局也走选择界面而不是静默默认「标准起手」:解锁行军从第一把起就看得见
+  // ("下一把的新理由"与主流程同屏),且首局与重开从此共用同一条装配路径。
+  // 选择不消耗 rng、不推进 sim —— 挑多久都不影响「?seed= 复现第一局」的确定性口径。
+  // **先冻结再弹**:此刻 ticker 已挂上(见 boot 末尾),run.paused 挡住 loop.advance,
+  // 选择期间世界停在首帧,选完 startRun 收尾时一并恢复
+  run.paused = true;
+  loadoutFlow.show(progress.unlockMask);
 
   renderer.app.ticker.add((ticker) => {
+    // 击杀 hitstop(畅玩性):击杀数爬升的那一帧立一个 ~50ms 的冻结窗。
+    // 窗内跳过 loop.advance —— 世界冻住、画面冻住,就是那一记"顿一下"的打击感;
+    // sync/HUD 照常跑(表现层自持的飘字/震屏/爆炸不受影响)。**时停/结算期间不触发**:
+    // 那两个状态 run.paused = true,世界本来就不动,再立冻结窗只会把恢复战斗的时间点往后推。
+    // 封顶两道:同帧多杀(kills 一次跳 N)只算一次(增量检测);冻结窗内再杀不续窗
+    // (`>= hitstopUntil` 挡住了) —— 8 杀/秒也不会变成永久慢动作
+    if (!run.paused && world.kills > lastKills && performance.now() >= hitstopUntil) {
+      hitstopUntil = performance.now() + HITSTOP_MS;
+    }
+    lastKills = world.kills;
     // 结算弹出后 run.paused = true,于是这一句不再推进 sim,世界冻在结算那一帧上;
-    // 下面的 sync 照常跑 —— 结算界面背后是一张静止的战场,而不是黑屏
-    if (!run.paused) loop.advance(ticker.elapsedMS * run.timeScale);
+    // 下面的 sync 照常跑 —— 结算界面背后是一张静止的战场,而不是黑屏。
+    // hitstop 冻结同理:窗内跳过 advance,世界停在击杀那一帧,插值 alpha 也停住 = 画面定格
+    if (!run.paused && performance.now() >= hitstopUntil) loop.advance(ticker.elapsedMS * run.timeScale);
     // 按住 Tab 叠加显示各塔射界(GDD §4.2:**按住**,不是 toggle,所以这里每帧灌"此刻是否按着"
     // 而不是监听一次按键事件)。按渲染帧采样即可 —— 它纯是可视化开关,不进 World.step,
     // 也就不参与确定性回放;放在 sync 之前是为了同一帧内先定开关再画,不留一帧迟滞。

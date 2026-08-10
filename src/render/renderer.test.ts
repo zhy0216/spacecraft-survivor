@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { BOSS } from '../data/enemies';
+import { FXV_HULL_HIT, FXV_IMPACT, FXV_KILL } from '../sim/fx';
 import type { ElitePeek } from '../sim/waves';
 import {
   bossSummonWarnActive,
   bossSummonWarnFraction,
   bossWarnOnEnter,
+  dmgNumberColor,
+  dmgNumberText,
   ELITE_WARN_LEAD,
   eliteWarnActive,
   eliteWarnKey,
   enemyAnimFrame,
+  hitFlashMix,
   type EnemyAnim,
+  lerpColor,
 } from './renderer';
 
 /**
@@ -158,5 +163,56 @@ describe('enemyAnimFrame(动画读数)', () => {
     expect(enemyAnimFrame(breathing, 0, 0.1, 1).scale).not.toBe(
       enemyAnimFrame(breathing, 0, 0.9, 1).scale,
     );
+  });
+});
+
+describe('dmgNumberText(飘字文本)', () => {
+  it('取整:小数伤害(溅射)不印小数点,零/负数兜住', () => {
+    expect(dmgNumberText(6)).toBe('6');
+    expect(dmgNumberText(6.7)).toBe('7');
+    expect(dmgNumberText(0)).toBe('0');
+    expect(dmgNumberText(-3)).toBe('-3');
+  });
+});
+
+describe('dmgNumberColor(飘字配色)', () => {
+  it('船体真伤害恒红、击杀恒暖黄,不看比例', () => {
+    const hull = dmgNumberColor(FXV_HULL_HIT, 0);
+    const kill = dmgNumberColor(FXV_KILL, 0);
+    expect(hull).not.toBe(kill);
+    expect(dmgNumberColor(FXV_HULL_HIT, 1)).toBe(hull); // 比例不影响红字
+    expect(dmgNumberColor(FXV_KILL, 1)).toBe(kill);
+  });
+
+  it('直射命中:小伤害白 → 大伤害黄,阈值带内线性过渡', () => {
+    const white = dmgNumberColor(FXV_IMPACT, 0.01);
+    const yellow = dmgNumberColor(FXV_IMPACT, 0.5);
+    expect(white).toBe(0xffffff); // 比例低于白端阈值 = 纯白
+    expect(yellow).toBe(0xffd35c); // 高于黄端阈值 = 纯黄
+    expect(dmgNumberColor(FXV_IMPACT, 0.2)).not.toBe(white); // 阈值带内:介于白黄之间
+    expect(dmgNumberColor(FXV_IMPACT, 0.2)).not.toBe(yellow);
+  });
+});
+
+describe('lerpColor(颜色插值)', () => {
+  it('k=0 得 a、k=1 得 b、k=0.5 得通道中点', () => {
+    expect(lerpColor(0x000000, 0xffffff, 0)).toBe(0x000000);
+    expect(lerpColor(0x000000, 0xffffff, 1)).toBe(0xffffff);
+    expect(lerpColor(0x000000, 0xffffff, 0.5)).toBe(0x808080);
+  });
+
+  it('越界/NaN 被夹住:不产出越界颜色', () => {
+    expect(lerpColor(0x000000, 0xffffff, -1)).toBe(0x000000);
+    expect(lerpColor(0x000000, 0xffffff, 2)).toBe(0xffffff);
+    expect(lerpColor(0x000000, 0xffffff, Number.NaN)).toBe(0x000000);
+  });
+});
+
+describe('hitFlashMix(受击闪白强度)', () => {
+  it('满值 = 1(刚命中那一帧最白),0 = 熄灭,线性衰减', () => {
+    expect(hitFlashMix(0.08)).toBe(1);
+    expect(hitFlashMix(0)).toBe(0);
+    expect(hitFlashMix(0.04)).toBeCloseTo(0.5, 12);
+    expect(hitFlashMix(-1)).toBe(0); // 防御:负数夹 0
   });
 });

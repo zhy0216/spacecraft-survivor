@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { audioBus, masterVolume } from './audio';
+import { audioBus, killStreakPitch, masterVolume } from './audio';
 
 /**
  * Node 环境没有 AudioContext,用 stub 全局 AudioContext 的假实现验证:
@@ -137,6 +137,7 @@ describe('audioBus 合成器', () => {
       'playBroadside',
       'playEliteWarn',
       'playBossWarn',
+      'playExplosion',
       'setAmbience',
     ];
     for (const n of names) {
@@ -229,5 +230,27 @@ describe('audioBus 合成器', () => {
     audioBus.setMasterVolume(-1);
     expect(masterVolume.value).toBe(0);
     audioBus.setMasterVolume(0.8);
+  });
+});
+
+describe('killStreakPitch(连杀音高,纯函数)', () => {
+  it('第 1 层 = 基准音高(倍率 1),此后每层 +2 半音(×2^(2/12))', () => {
+    const step = Math.pow(2, 2 / 12);
+    expect(killStreakPitch(1)).toBeCloseTo(1, 12);
+    expect(killStreakPitch(2)).toBeCloseTo(step, 12);
+    expect(killStreakPitch(3)).toBeCloseTo(step * step, 12);
+    expect(killStreakPitch(4)).toBeCloseTo(Math.pow(2, 6 / 12), 12);
+  });
+
+  it('封顶 +10 半音:第 6 层起不再爬(连杀声不嘶叫成警报)', () => {
+    const cap = Math.pow(2, 10 / 12);
+    expect(killStreakPitch(6)).toBeCloseTo(cap, 12);
+    expect(killStreakPitch(20)).toBeCloseTo(cap, 12);
+  });
+
+  it('0/负数/NaN 退回基准音高(防御,不除 0)', () => {
+    expect(killStreakPitch(0)).toBe(1);
+    expect(killStreakPitch(-3)).toBe(1);
+    expect(killStreakPitch(Number.NaN)).toBe(1);
   });
 });

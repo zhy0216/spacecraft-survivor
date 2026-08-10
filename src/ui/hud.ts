@@ -90,6 +90,23 @@ const TOAST_CSS =
 const UNLOCK_TOAST_MS = 2600;
 
 /**
+ * 低血量警告的屏边红晕(畅玩性)。满屏径向渐变(中心透明 → 边缘暖红),pointer-events:none
+ * 绝不挡点击;透明度由 sync 按血量脉冲 —— 血量 ≥25% 恒 0(隐藏),<25% 在 0.15~0.4 间呼吸。
+ * 它是 HUD 根节点的一个子层,于是 setPaused 的整层淡出(setPaused 改 root 的 opacity)自动带上它。
+ */
+const VIGNETTE_CSS =
+  'position:absolute;inset:0;pointer-events:none;' +
+  'background:radial-gradient(ellipse at center,transparent 52%,rgba(255,44,34,0.6) 100%);' +
+  'opacity:0;';
+/** 亮起阈值:血量掉到 25% 以下才开始警告(半血就闪会让人以为船快没了) */
+const VIGNETTE_HP_RATIO = 0.25;
+/** 呼吸周期(ms):1.2s 一呼一吸,节奏是"心跳"不是"警报灯" */
+const VIGNETTE_CYCLE_MS = 1200;
+/** 呼吸的透明度下限/上限:0.15 是"还在渗血",0.4 是"快撑不住了" —— 不给满,不糊住战场 */
+const VIGNETTE_ALPHA_MIN = 0.15;
+const VIGNETTE_ALPHA_MAX = 0.4;
+
+/**
  * 精英血条(14 号):屏下缘居中的短条。与静音开关同一套罗盘通道边距(bottom:48px),
  * 面板/轨道/描边复用上沿既有样式 —— 精英一亮就按"既有血条"的读法读它。
  * 默认 display:none,有精英才亮(与 burst 预警箭头同一条显示/隐藏口径)。
@@ -405,7 +422,13 @@ export function createHud(opts: { world: World }): HudUi {
     }, UNLOCK_TOAST_MS);
   }
 
-  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection);
+  // 低血量红晕:铺满全屏的警告层,长在 HUD 根里 —— 时停淡出(setPaused 改 root opacity)
+  // 自动带上它,点击穿透继承根的 pointer-events:none
+  const vignette = document.createElement('div');
+  vignette.style.cssText = VIGNETTE_CSS;
+  vignette.title = '船体受损';
+
+  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection, vignette);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -413,6 +436,18 @@ export function createHud(opts: { world: World }): HudUi {
     const hpNow = finiteOrZero(world.ship.hp);
     hp.value.textContent = `${Math.max(0, Math.round(hpNow))} / ${Math.max(0, Math.round(hpMax))}`;
     hp.fill.style.width = `${hudRatio(hpNow, hpMax) * 100}%`;
+
+    // 低血量警告(畅玩性):血量 <25% 才亮,透明度按墙钟呼吸(0.15→0.4)。
+    // 走 performance.now 而不是 sim 时间:红晕是给"玩家正被压着打"的屏幕反馈,
+    // 时停/结算里 HUD 整层淡出,这里继续呼吸也无妨(看不见的部分由 setPaused 兜着)
+    const hpRatio = hudRatio(hpNow, hpMax);
+    if (hpRatio < VIGNETTE_HP_RATIO) {
+      const phase = (performance.now() % VIGNETTE_CYCLE_MS) / VIGNETTE_CYCLE_MS;
+      const pulse = 0.5 + 0.5 * Math.sin(phase * Math.PI * 2); // 0..1,一周期一呼一吸
+      vignette.style.opacity = String(VIGNETTE_ALPHA_MIN + (VIGNETTE_ALPHA_MAX - VIGNETTE_ALPHA_MIN) * pulse);
+    } else {
+      vignette.style.opacity = '0';
+    }
 
     const cost = finiteOrZero(world.upgradeCost);
     const scrapNow = finiteOrZero(world.scrap);

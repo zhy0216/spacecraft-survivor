@@ -21,6 +21,34 @@ const MAX_VOICES = 20;
 /** 底噪层音量上限(压到最小,只给画面垫一层"还活着"的震动感) */
 const AMBIENCE_VOLUME = 0.09;
 
+// —— 击杀连段的音高爬升(畅玩性)——
+// 击杀是割草游戏的正反馈节拍器:连杀 = 音高逐级上扬,玩家听得出"这一波杀疯了"。
+// 音频在 sim 之外(纯表现,不受确定性约束),故窗口计时走 performance.now() 墙钟 ——
+// 与限流闸(throttled)同一只钟,渲染层每帧调用多少次都不影响它。
+/** 连杀窗口(ms):窗口内再来一次击杀 = 叠一层;超过 = 连杀断掉、从头数 */
+const KILL_COMBO_WINDOW_MS = 1500; // 占位待调
+/** 每叠一层升的半音数;频率倍率 = 2^(半音/12)(十二平均律) */
+const KILL_COMBO_SEMITONES_PER_STACK = 2;
+/** 音高爬升封顶(半音):叠到 6 层就不再升,免得连杀声嘶叫成警报 */
+const KILL_COMBO_MAX_SEMITONES = 10;
+/** 连杀层数(模块级状态,重开/换局自然被窗口清掉,不必单独 reset) */
+let killStreak = 0;
+/** 上一次真正出声的击杀时刻(performance.now());0 = 还没杀过 */
+let lastKillAt = 0;
+
+/**
+ * 连杀层数 → 音高倍率(纯函数,便于单测):第 1 层恒 1.0(基准音),此后每层 +2 半音、
+ * 封顶 +10 半音。0/负数/NaN 一律退回 1.0(防御:NaN 一路传染进 Math.pow 会产出 NaN 频率)
+ */
+export function killStreakPitch(stacks: number): number {
+  if (!(stacks > 0)) return 1;
+  const semis = Math.min(
+    KILL_COMBO_MAX_SEMITONES,
+    (stacks - 1) * KILL_COMBO_SEMITONES_PER_STACK,
+  );
+  return Math.pow(2, semis / 12);
+}
+
 /** 一个可复用 voice:gain 与 filter 可无限复用,source 是一次性耗材 */
 interface Voice {
   gain: GainNode;
@@ -63,6 +91,7 @@ const MIN_INTERVAL: Record<string, number> = {
   place: 0.05,
   upgrade: 0.08,
   broadside: 0.22,
+  explosion: 0.8,
   'warn:elite': 0.5,
   'warn:boss': 0.8,
 };
@@ -296,11 +325,30 @@ export function playShoot(kind: string, throttle: number): void {
   playVoice(spec);
 }
 
-/** 击杀:短促爆点 —— 低频方波砸下去 + 噪声冲击。连杀音高爬升留给后续接线,这里只占位 */
+/**
+ * 击杀:短促爆点 —— 低频方波砸下去 + 噪声冲击。连杀时音高逐级上扬:
+ * 只在**真正出声**的那次叠层(限流丢掉的击杀不数 —— 那是同帧的重复采样,不是第二次击杀),
+ * 于是音高的节奏与耳朵听到的爆点一一对应,不会出现"没听到声、音高却爬了"的错位。
+ */
 export function playKill(): void {
   if (!throttled('kill')) return;
-  playVoice({ type: 'square', freq: 180, freqEnd: 88, attack: 0.002, decay: 0.07, peak: 0.2 });
+  const now = performance.now();
+  killStreak = now - lastKillAt <= KILL_COMBO_WINDOW_MS ? killStreak + 1 : 1;
+  lastKillAt = now;
+  const pitch = killStreakPitch(killStreak);
+  playVoice({ type: 'square', freq: 180 * pitch, freqEnd: 88 * pitch, attack: 0.002, decay: 0.07, peak: 0.2 });
   playVoice({ noise: true, filterType: 'bandpass', filterFreq: 700, filterQ: 0.7, attack: 0.002, decay: 0.05, peak: 0.16 });
+}
+
+/**
+ * 沉船爆炸(畅玩性:死亡演出的一记重锤)。低频正弦沉底 + 低通噪声冲击,比普通受击
+ * (playHurt 'hull')长一倍、峰值更高 —— 它是"船没了"这整场演出唯一的音效落点,
+ * 与扩散环/碎片/震屏共用同一个触发点(renderer.playShipDeathExplosion),一次且仅一次。
+ */
+export function playExplosion(): void {
+  if (!throttled('explosion')) return;
+  playVoice({ type: 'sine', freq: 120, freqEnd: 32, attack: 0.004, decay: 0.5, peak: 0.4 });
+  playVoice({ noise: true, filterType: 'lowpass', filterFreq: 900, filterQ: 0.5, attack: 0.002, decay: 0.34, peak: 0.32 });
 }
 
 /**
@@ -408,5 +456,6 @@ export const audioBus = {
   playBroadside,
   playEliteWarn,
   playBossWarn,
+  playExplosion,
   setAmbience,
 };
