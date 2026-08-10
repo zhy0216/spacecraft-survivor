@@ -483,10 +483,9 @@ async function boot(): Promise<void> {
 
     stats.fps = Math.round(renderer.app.ticker.FPS);
     stats.enemies = world.enemies.size;
-    // 背景底噪:存活敌人数 ÷ WAVE_MAX_ALIVE(同屏保险丝上限)→ 0..1 密度比。
-    // Boss 战(15 号):Boss 在场时怪可能很少,底噪却该最沉 —— 取密度比与 0.35 的较大者,
-    // 用既有 setAmbience 通道做"Boss 战变奏"(13 音频的 Boss 主题暂缺,先以底噪压沉代替)。
-    // setAmbience 每帧只写一条 gain 缓动(setTargetAtTime),便宜到可以每帧灌
+    // 音乐威胁强度:存活敌人数 ÷ WAVE_MAX_ALIVE(同屏保险丝上限)→ 0..1 密度比。
+    // Boss 在场时怪可能很少,配乐仍需保持压力 —— 取密度比与 0.35 的较大者。
+    // setAmbience 会平滑调整 genmedia 背景音乐的音量/低通开度,便宜到可以每帧灌。
     const bossRumble = world.bossPhase === 1 ? 0.35 : 0;
     audioBus.setAmbience(
       Math.min(1, Math.max(0, world.enemies.size / WAVE_MAX_ALIVE, bossRumble)),

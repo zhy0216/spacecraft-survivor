@@ -114,7 +114,7 @@ class MockAudioContext {
 /** 累计起过声的源节点数(振荡器/噪声源才算) */
 const started = () => mock!.nodes.reduce((s, n) => s + n.started, 0);
 
-describe('audioBus 合成器', () => {
+describe('audioBus(无素材解码能力时的合成兜底)', () => {
   beforeEach(() => {
     vi.stubGlobal('AudioContext', MockAudioContext);
   });
@@ -215,7 +215,7 @@ describe('audioBus 合成器', () => {
     expect(started()).toBeGreaterThan(startedBefore); // 但源重新起声
   });
 
-  it('setAmbience 随 ratio 驱动底噪 gain,ratio=0 归零', async () => {
+  it('无 decodeAudioData 时 setAmbience 仍用 ratio 驱动兜底底噪', async () => {
     await audioBus.resume();
     audioBus.setAmbience(1);
     const amb = mock!.gains[mock!.gains.length - 1]!;
