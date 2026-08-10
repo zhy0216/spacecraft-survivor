@@ -30,11 +30,20 @@ import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPane
 import { createGameOverUi } from './ui/gameOver';
 import { createHud, type HudUi } from './ui/hud';
 import { createLoadoutFlow } from './ui/loadoutFlow';
+import { createPauseMenu } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
+
+/**
+ * 玩家模式 / 开发模式(畅玩性):URL 带 ?debug 时挂 Tweakpane 调参面板,
+ * 否则挂玩家暂停菜单(Esc)并让 HUD/罗盘用到整条屏幕 —— 默认是玩家形态。
+ * 标题随之切换:正式页签 "STARWRECK 星骸",开发模式追加 "· dev" 提醒自己在调参。
+ */
+const DEBUG = new URLSearchParams(location.search).has('debug');
+if (DEBUG) document.title = 'STARWRECK 星骸 · dev';
 
 /** 击杀 hitstop 的冻结时长(ms):40-60ms 的一记顿挫,再长就是卡顿(占位待调) */
 const HITSTOP_MS = 45;
@@ -88,7 +97,8 @@ async function boot(): Promise<void> {
   // 战斗 HUD 同样整页只建一次:固定屏幕空间的血条/残骸/计时/航段与威胁箭头都只改已有 DOM。
   // 重开走 setWorld,升级时停与结算的淡出则每渲染帧照 run.paused 同步,不另挂事件监听器。
   // 放在升级/结算面板之前创建,后两者弹出时自然盖在它上面;HUD 本身 pointer-events:none。
-  const hud = createHud({ world });
+  // rightGutter:玩家模式 0(罗盘/顶栏用到整条屏幕),开发模式 288(给 Tweakpane 让位)。
+  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0 });
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -165,9 +175,32 @@ async function boot(): Promise<void> {
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
   const gameOver = createGameOverUi({ onRestart: restart, onRetry: retry });
 
-  // 调参面板也只建一次:它绑的是 stats/run/tuning 这几个**跨局复用**的对象,
-  // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)
-  createDebugPanel(stats, run, { restart, retry });
+  // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
+  // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)。
+  // 开发模式(?debug)挂 Tweakpane;玩家模式挂 Esc 暂停菜单 —— 战斗中的暂停/换局入口
+  // 在玩家模式下只能从这里进,调试面板的暂停勾选与两个重开按钮玩家看不到(畅玩性)。
+  if (DEBUG) {
+    createDebugPanel(stats, run, { restart, retry });
+  } else {
+    createPauseMenu({
+      canPause: () => !run.paused,
+      onPause: () => {
+        // 暂停 = 下一次 advance 被挡住;本次没有 step 回调在跑(回调只在 ticker 的
+        // advance 里),不必 loop.halt() —— 与升级/结算时停同一套口径,只多一行
+        run.paused = true;
+      },
+      onResume: () => {
+        run.paused = false;
+      },
+      onRestart: () => {
+        // restart 会先置 run.paused = true 再弹起手选择,菜单自己关掉即可
+        restart();
+      },
+      onRetry: () => {
+        retry();
+      },
+    });
+  }
 
   let lastChecksumTick = -SIM_HZ;
   // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)

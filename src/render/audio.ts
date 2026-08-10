@@ -259,6 +259,11 @@ export function setMuted(m: boolean): void {
   }
 }
 
+/** 只读静音状态:HUD 与暂停菜单共用同一枚开关,各自画按钮文字时读它对齐 */
+export function isMuted(): boolean {
+  return muted;
+}
+
 export function setMasterVolume(v: number): void {
   masterVolume.value = Math.min(1, Math.max(0, v));
 }
@@ -446,6 +451,7 @@ export function setAmbience(ratio: number): void {
 export const audioBus = {
   resume,
   setMuted,
+  isMuted,
   setMasterVolume,
   playShoot,
   playKill,

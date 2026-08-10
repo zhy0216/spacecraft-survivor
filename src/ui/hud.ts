@@ -27,12 +27,19 @@ const ROOT_CSS =
   'position:fixed;inset:0;pointer-events:none!important;user-select:none;opacity:1;' +
   'transition:opacity 140ms ease;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;';
 
-/** 三块读数贴上沿排开;中间只有一枚窄计时器,不会盖住中央交战区 */
-const TOP_CSS =
-  // 四周先留一条 48px 的罗盘通道:箭头贴边走,不会压在 HP/计时/航段文字上
-  // 右侧额外给开发期常驻的 Tweakpane 留位;正式 HUD 不应被调参工具盖住。
-  'position:absolute;left:48px;right:300px;top:48px;display:grid;' +
-  'grid-template-columns:minmax(150px,300px) 1fr minmax(150px,300px);gap:18px;align-items:start;';
+/**
+ * 顶栏布局(玩家模式默认全宽;开发期 ?debug 时右侧给常驻 Tweakpane 留位)。
+ * 四周留一条 48px 的罗盘通道:箭头贴边走,不会压在 HP/计时/航段文字上。
+ * 右侧 gutter 由 createHud 的 rightGutter 决定(玩家模式 0,开发模式 288)——
+ * 正式 HUD 不应被调参工具盖住,玩家模式整条屏幕都属于战场。
+ */
+function topCss(rightGutter: number): string {
+  const right = rightGutter > 0 ? `right:${rightGutter + 12}px` : 'right:48px';
+  return (
+    `position:absolute;left:48px;${right};top:48px;display:grid;` +
+    'grid-template-columns:minmax(150px,300px) 1fr minmax(150px,300px);gap:18px;align-items:start;'
+  );
+}
 
 const PANEL_CSS =
   `padding:8px 10px;border:1px solid ${LINE_COLOR};border-radius:7px;` +
@@ -218,15 +225,22 @@ export interface ThreatVisual {
 /**
  * 世界绝对角 → 屏幕边缘交点。0 = 右、π/2 = 下,与 World/画布的 y 向下一致。
  * 强度同时驱动箭头尺寸/线宽与透明度/亮度,低压仍保留常驻轮廓。
+ * rightGutter 默认 288(开发期 Tweakpane 占位);玩家模式传 0 让罗盘用到整条右缘。
  */
-export function threatVisual(direction: number, intensity: number, width: number, height: number): ThreatVisual {
+export function threatVisual(
+  direction: number,
+  intensity: number,
+  width: number,
+  height: number,
+  rightGutter: number = HUD_RIGHT_GUTTER,
+): ThreatVisual {
   const angle = Number.isFinite(direction) ? direction : 0;
   const viewportW = Number.isFinite(width) && width > 0 ? width : 1;
   const viewportH = Number.isFinite(height) && height > 0 ? height : 1;
   const cx = viewportW * 0.5;
   const cy = viewportH * 0.5;
   const margin = Math.min(22, Math.max(16, Math.min(viewportW, viewportH) * 0.025));
-  const rightEdge = Math.max(cx, viewportW - HUD_RIGHT_GUTTER);
+  const rightEdge = Math.max(cx, viewportW - (rightGutter > 0 ? rightGutter : 0));
   const halfWRight = Math.max(0, rightEdge - cx);
   const halfWLeft = Math.max(0, cx - margin);
   const halfH = Math.max(0, cy - margin);
@@ -287,14 +301,15 @@ function createBar(parent: HTMLElement, labelText: string, color: string): BarEl
   return { value, fill };
 }
 
-export function createHud(opts: { world: World }): HudUi {
+export function createHud(opts: { world: World; rightGutter?: number }): HudUi {
   let world = opts.world;
   let paused = false;
+  const rightGutter = opts.rightGutter ?? HUD_RIGHT_GUTTER;
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
   const top = document.createElement('div');
-  top.style.cssText = TOP_CSS;
+  top.style.cssText = topCss(rightGutter);
 
   const vitals = document.createElement('div');
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
@@ -485,7 +500,13 @@ export function createHud(opts: { world: World }): HudUi {
     segmentBar.value.textContent = seg.label;
     segmentBar.fill.style.width = `${seg.ratio * 100}%`;
 
-    const visual = threatVisual(world.threatDirection, world.threatIntensity, window.innerWidth, window.innerHeight);
+    const visual = threatVisual(
+      world.threatDirection,
+      world.threatIntensity,
+      window.innerWidth,
+      window.innerHeight,
+      rightGutter,
+    );
     threat.style.left = `${visual.x}px`;
     threat.style.top = `${visual.y}px`;
     threat.style.width = `${visual.sizePx}px`;
@@ -505,7 +526,13 @@ export function createHud(opts: { world: World }): HudUi {
     const burst = world.burstWarning();
     if (burst && burst.etaSeconds <= BURST_WARNING_WINDOW) {
       const closeness = 1 - burst.etaSeconds / BURST_WARNING_WINDOW;
-      const wv = threatVisual(burst.dirRad, THREAT_INTENSITY_MAX * (0.4 + 0.6 * closeness), window.innerWidth, window.innerHeight);
+      const wv = threatVisual(
+        burst.dirRad,
+        THREAT_INTENSITY_MAX * (0.4 + 0.6 * closeness),
+        window.innerWidth,
+        window.innerHeight,
+        rightGutter,
+      );
       const blink = 0.55 + 0.45 * Math.abs(Math.sin(burst.etaSeconds * Math.PI * 3));
       warn.style.display = 'block';
       warn.style.left = `${wv.x}px`;
