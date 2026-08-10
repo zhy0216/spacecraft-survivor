@@ -65,7 +65,7 @@ async function boot(): Promise<void> {
   const cmd: ShipCommand = { desiredHeading: null };
 
   // 这一局的世界与循环。两个都是 **let**:重开 = 换一个新 World + 一个新 FixedStepLoop
-  // (World 不加 reset()/restart():池、rng、tick、甲板全是新的,才谈得上"同 seed 可复现";
+  // (World 不加 reset()/restart():池、rng、tick、槽位全是新的,才谈得上"同 seed 可复现";
   //  loop 同理,tick 是这一局的帧号,而 checksum 与面板读数全挂在它上面)。
   // 下面所有闭包(loop 的 step、ticker、结算回调)读的都是这两个变量本身,故换引用一次就够。
   let runIndex = 0;
@@ -85,7 +85,7 @@ async function boot(): Promise<void> {
   // World 构造时注入 unlockMask(卡池过滤与解锁精英门控读它);掩码 0 = 全未解锁,首局就是这么起步的。
   // 局内不写 —— 解锁状态只在"一局结束"这一个点入档(progress.ts 的口径,见 onGameOver)
   let progress: Progress = loadProgress();
-  // 首局的 World 得先建出来:Renderer.create 建层时就要读甲板。建完原样交给 startRun,
+  // 首局的 World 得先建出来:Renderer.create 建层时就要读它的槽位。建完原样交给 startRun,
   // 于是**首局与重开走的是同一条装配流程** —— 两条路各写一份的话,重开那条永远会比首局少接一样东西
   let world = new World(runSeed, progress.unlockMask);
   // 首局先给 loop 一个初始值而不是留 undefined:首局的选择界面弹出时 ticker 已经挂上,
@@ -126,50 +126,29 @@ async function boot(): Promise<void> {
 
   // 三选一升级流程(10 号 issue T4,取代了 03 号那条灰盒放置入口 ui/placement.ts ——
   // 删而不是留一个 debug 开关的理由见 ui/upgradeFlow.ts 的文件头)。
-  // 两阶段:选卡 → 放置,时停期间的一切交互都在它那一侧;这里只负责"接线"。
-  // 拾格子走渲染层的 screenToDeckLocal 而不是 screenToWorld:甲板放大 30% 之后,
-  // 只有它算得出与画面上那个高亮框同一格(镜头/缩放公式只在渲染层存一份,ui 不复制第二份,
-  // 也就不 import pixi —— 铁律 1)。状态对象交给渲染层画高亮:两边共享同一个对象,
-  // ui 就地改字段,渲染层下一帧自然读到。
-  // **只建一次**,重开只换它认的那个 World(见 upgradeFlow.setWorld):
+  // 选卡 → 点卡即结算(改版:槽位制没有"放置"这一阶段),时停期间的一切交互都在它那一侧;
+  // 这里只负责"接线"。**只建一次**,重开只换它认的那个 World(见 upgradeFlow.setWorld):
   // 重建一份就等于每局多一份 window 监听器、多一块面板。
   // 类型标注不能省:onResolved 的闭包里回头引用了 upgradeFlow 自己,不标就是一处循环推导。
   const upgradeFlow: UpgradeFlowUi = createUpgradeFlow({
     world,
-    canvas: renderer.app.canvas,
-    screenToDeckLocal: (sx, sy, out) => renderer.screenToDeckLocal(sx, sy, out),
-    // 这一次升级结算完了(放好了 / 跳过了):收卡、甲板缩回去、战斗继续。
+    // 这一次升级结算完了(点卡 / 跳过了):收卡、战斗继续。
     // **恢复战斗只有这一条路** —— World 与 ui 都不认识"游戏流程",run.paused 只在 main 这一层动
     onResolved: () => {
       upgradeFlow.hide();
-      renderer.setPlacement(upgradeFlow);
-      renderer.setDeckZoom(false);
       run.paused = false;
     },
   });
-  renderer.setPlacement(upgradeFlow);
 
-  // 每两分钟的航段整备：与普通升级共用甲板拾格/高亮接口，但流程和权限完全独立。
-  // 它只允许焊一块甲板、搬运现有炮塔与支援；新增/升级模块仍只走普通升级。
+  // 每两分钟的航段整备：改版后只逛星币商店（买武器 / 法令 / 付费修复 / 刷新货架），
+  // 新增/升级模块仍只走普通升级。
   const refitFlow: RefitFlowUi = createRefitFlow({
     world,
-    canvas: renderer.app.canvas,
-    screenToDeckLocal: (sx, sy, out) => renderer.screenToDeckLocal(sx, sy, out),
-    // 右侧商店宽度随窗口变化；渲染器用它把飞船始终居中在左侧装配区，而不是压在商店下面。
-    onLayout: (rightInset) => renderer.setDeckViewRightInset(rightInset),
     onResolved: () => {
       refitFlow.hide();
-      renderer.setAssemblyView(false);
-      renderer.setPlacement(upgradeFlow);
-      renderer.setDeckZoom(false);
       run.paused = false;
     },
   });
-  // 渲染器只接一个 PlacementUiState；两套流程各自 inactive 时同步悬停是空操作。
-  const syncPlacementHover = (): void => {
-    upgradeFlow.syncHover();
-    refitFlow.syncHover();
-  };
 
   // 结算界面同样**只建一次**(理由同上:每局多挂一份 Enter 监听器 = 一次回车重开好几局),
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
@@ -218,7 +197,7 @@ async function boot(): Promise<void> {
    * 先换 world/loop 与挂钩(它们是这一局的本体),再把吃 World 引用的地方指过去
    * (渲染层的脏标记缓存 / 升级流程认的甲板 / HUD 读数 / 结算界面收起来),最后复位调试读数。
    * 漏一样的后果各不相同、但都要等真人重开第二局才看得见:
-   * 渲染层留着上一局的 deckRevision → 新船上还画着上一局的塔;
+   * 渲染层留着上一局的脏标记 → 新船上还画着上一局的塔;
    * 升级流程留着旧 world → 点下去落进上一局那艘沉船,画面上什么都不发生;
    * 面板读数不复位 → checksum/tick 还挂在上一局的数上,"同 seed 可复现"当场没法验。
    */
@@ -227,10 +206,10 @@ async function boot(): Promise<void> {
     // 期间重开过的旧局结算直接作废,不会在"新一局"头上弹"上一局"的卡片
     runToken++;
     world = next;
-    // 正式开局才套用起手配置。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空甲板,
-    // 而「这一局怎么开场」是 data/loadout.ts 的数值配置,经 sim/loadout 逐条走 placeAt 唯一入口。
+    // 正式开局才套用起手配置。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
+    // 而「这一局怎么开场」是 data/loadout.ts 的数值配置,经 sim/loadout 逐条填槽的唯一入口。
     // 20 号:套哪一套由 loadoutIndex 定(开局选择界面选完才走到这里,retry 原样沿用上一局的)
-    applyStartingLoadout(world.deck, loadoutIndex);
+    applyStartingLoadout(world, loadoutIndex);
     loop = new FixedStepLoop(() => {
       // 必须在每个逻辑帧边界重新取样:一帧一采才让"按住 A 的时长"精确对应转过的角度,
       // 掉帧补步时也照样一步一次,手感不随渲染帧率漂移。
@@ -259,7 +238,6 @@ async function boot(): Promise<void> {
       loop.halt();
       upgradeFlow.hide();
       refitFlow.hide();
-      renderer.setAssemblyView(false);
       // 剪影在渲染层只截一次,存档与结算界面共用同一张(渲染层抓不到就是 null,此时不入图鉴)
       const silhouette = renderer.captureShipSilhouette();
       // 19 号:一局结束 → 结算进元进度。**条件达成即记,不看胜负**:失败局照常入档
@@ -316,15 +294,11 @@ async function boot(): Promise<void> {
 
     // 攒够残骸 → 三选一(10 号 issue T4)。**时停就是这三句**:run.paused 挡住下一次 advance,
     // loop.halt() 让**本次** advance 当场停手并丢掉剩余累积时间(回调是在 step 里响的,
-    // 不 halt 的话这一帧还会补跑最多 4 步 = 时停"漏"了 66ms),setDeckZoom 把甲板放大 30%
-    // (GDD §11)。World 自己不暂停、不动 loop —— 它连"这一局要不要停"都不知道。
-    // 回调只在候选生成那一帧响一次,故这里不必自己去重
+    // 不 halt 的话这一帧还会补跑最多 4 步 = 时停"漏"了 66ms)。World 自己不暂停、不动 loop
+    // —— 它连"这一局要不要停"都不知道。回调只在候选生成那一帧响一次,故这里不必自己去重
     world.onUpgradeOffer = () => {
       run.paused = true;
       loop.halt();
-      renderer.setAssemblyView(false);
-      renderer.setPlacement(upgradeFlow);
-      renderer.setDeckZoom(true);
       upgradeFlow.show();
     };
 
@@ -333,23 +307,18 @@ async function boot(): Promise<void> {
     world.onRefitOffer = (segmentIndex) => {
       run.paused = true;
       loop.halt();
-      renderer.setAssemblyView(true);
-      renderer.setPlacement(refitFlow);
-      renderer.setDeckZoom(true);
       refitFlow.show(segmentIndex);
     };
 
     // 吃 World 引用的地方(渲染层的脏标记缓存 / 升级流程 / HUD),各自的理由见它们自己那边。
-    // setWorld 会把上一局那张还开着的卡片一并收掉,但**不恢复战斗** —— 那一步在下面的 run.paused;
-    // 甲板缩放同理由渲染层的 setWorld 当场吸附回 1(时停中点重开按钮时,不复位就会带着放大开出去)
+    // setWorld 会把上一局那张还开着的卡片一并收掉,但**不恢复战斗** —— 那一步在下面的 run.paused
     renderer.setWorld(world);
     upgradeFlow.setWorld(world);
     refitFlow.setWorld(world);
-    renderer.setPlacement(upgradeFlow);
     hud.setWorld(world);
     gameOver.hide();
 
-    // UI 读数复位。**不动 tuning、不动 run.timeScale、不动放置模式的开关**:
+    // UI 读数复位。**不动 tuning、不动 run.timeScale**:
     // 那些是玩家自己拖出来的调参状态,重开一局不该顺手替他复原
     stats.tick = 0;
     stats.checksum = '—';
@@ -429,7 +398,7 @@ async function boot(): Promise<void> {
   // 起手配置选择界面(20 号)—— 只建一次,重开走 show/hide(与结算界面同一条教训)。
   // onSelect 是"玩家挑完了"的唯一去处:收界面 → 决定装配哪一艘 World →
   // 交给 startRun 那一条**与重开完全相同的装配流程**(首局与重开不许各写一份,那会漏接线)。
-  // 首局送的是 boot 里预建、渲染层已按其甲板建好层的那个 World;重开则新建 ——
+  // 首局送的是 boot 里预建、渲染层已按其槽位建好层的那个 World;重开则新建 ——
   // 由 firstRun 分辨,换种子(retry 外的所有来路)在 restart 里已先算好 runSeed
   const loadoutFlow = createLoadoutFlow({
     onSelect: (index) => {
@@ -468,14 +437,11 @@ async function boot(): Promise<void> {
     // 下面的 sync 照常跑 —— 结算界面背后是一张静止的战场,而不是黑屏。
     // hitstop 冻结同理:窗内跳过 advance,世界停在击杀那一帧,插值 alpha 也停住 = 画面定格
     if (!run.paused && performance.now() >= hitstopUntil) loop.advance(ticker.elapsedMS * run.timeScale);
-    // 按住 Tab 叠加显示各塔射界(GDD §4.2:**按住**,不是 toggle,所以这里每帧灌"此刻是否按着"
+    // 按住 Tab 叠加显示各武器槽射界(GDD §4.2:**按住**,不是 toggle,所以这里每帧灌"此刻是否按着"
     // 而不是监听一次按键事件)。按渲染帧采样即可 —— 它纯是可视化开关,不进 World.step,
     // 也就不参与确定性回放;放在 sync 之前是为了同一帧内先定开关再画,不留一帧迟滞。
     renderer.setArcOverlay(input.isDown('Tab'));
-    // 船动了、光标没动,悬停格也得跟着重算;时停期间船虽不动,甲板放大还在缓动。
-    // 同步点由 renderer 卡在「本帧 deckG 变换已更新、高亮尚未绘制」的位置调用,
-    // 于是看到的框、screenToDeckLocal 与点击确认一帧都不会走散。直接传稳定方法引用,不按帧造闭包。
-    renderer.sync(loop.alpha, syncPlacementHover);
+    renderer.sync(loop.alpha);
     // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
     // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。
     hud.setPaused(run.paused);
@@ -496,8 +462,8 @@ async function boot(): Promise<void> {
     stats.turnRate = world.turnRate;
     // 船体 HP 同时进正式 HUD 与调参面板；面板保留数值精度，便于对比撞击伤害倍率 / 无敌帧。
     stats.hp = world.ship.hp;
-    // 上限每帧现读(06 号 issue):它是甲板的派生量,放一块装甲舱当帧 +15、12 号拆掉当帧回落 ——
-    // 装甲舱是四种设施里唯一不画邻接连线的那种,这个数跳一下就是它生效的肉眼落点
+    // 上限每帧现读(改版 06 号):它是支援槽的派生量,买下装甲舱当帧 +15 ——
+    // 这个数跳一下就是它生效的肉眼落点
     stats.maxHp = world.ship.maxHp;
     stats.tick = loop.tick;
     // 波次读数与常驻 HUD / 威胁罗盘同源；调参面板额外保留精确值供脚本核对。

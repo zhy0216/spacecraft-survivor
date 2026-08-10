@@ -1,5 +1,5 @@
 /**
- * 残骸掉落物与磁吸拾取(10 号 issue T1)—— 纯逻辑。
+ * 残骸掉落物与磁吸拾取(改版 10 号 —— 甲板删除后的小改)—— 纯逻辑。
  * 铁律 1:本目录永不 import pixi/DOM,也不用 Math.random —— 掉落**一次 rng 都不掷**
  *   (每只必掉、价值按型取自 data/enemies 的 scrap),于是战斗打得好不好反过来扰动不到出怪的
  *   随机序列,08 号那条"同 seed 同出怪序列"照旧成立;磁吸本身全是"速度 × dt"的确定性积分。
@@ -18,13 +18,15 @@
  *   二、锁定后**匀速直追船心**,不加速、不带惯性:加速度模型下残骸会被移动中的船拖出一条
  *     追不上的弧线,而匀速追击只要 dropMagnetSpeed 显著大于船速就必然收敛(tuning 那三行写了这笔账)。
  *
- * 本文件对世界零依赖(比 bullet.ts 的 FireSink 还少一道缝):喂一个池 + 一块甲板 + 船心坐标
- * 就能在 Node 里把每一条规则钉死(见 drop.test.ts)。World 只负责两件它才知道的事 ——
- * 敌人死了往池里放一颗、把本函数返回的那笔账记进 scrap。
+ * —— 甲板删除后的小改(用户设计会)——
+ * 旧签名带着 deck(起吸半径的占位钩子);现在起吸半径 = tuning.dropMagnetRadius × magnetMul
+ * 直接在函数里算(磁力干扰词缀与磁力过载法令的倍率由 World 合好传进来),
+ * deck 参数删除。新增 xpMul(经验增幅器支援的倍率):**返回值 × xpMul** 才是进账 ——
+ * 经验增幅器"每颗经验掉落价值更高"的承诺就在这一句落地(见 data/supports.ts)。
+ * 本文件对世界零依赖:喂一个池 + 船心坐标就能在 Node 里把每一条规则钉死(见 drop.test.ts)。
  */
 import type { Pool } from '../core/pool';
 import { tuning } from './config';
-import type { Deck } from './deck';
 
 /** px/py = 上一逻辑帧位置(铁律 2);字段一次性声明齐,运行期不新增 */
 export interface Drop {
@@ -40,8 +42,9 @@ export interface Drop {
   vx: number;
   vy: number;
   /**
-   * 收下时进账多少残骸。**掉落那一刻定死**(= 该敌型的 scrap),与子弹的 damage 同口径:
-   * 飞行途中绝不回查敌人(那只早就回池、甚至已经变成了另一只),也绝不随时间衰减。
+   * 收下时进账多少残骸。**掉落那一刻定死**(= 该敌型的 scrap 面值 × 档位倍率,见 World.spawnDrop),
+   * 与子弹的 damage 同口径:飞行途中绝不回查敌人(那只早就回池、甚至已经变成了另一只),
+   * 也绝不随时间衰减。
    */
   value: number;
   /**
@@ -85,18 +88,6 @@ export function resetDrop(d: Drop): void {
 }
 
 /**
- * 起吸半径(px)—— 做成**甲板的派生量**而不是让调用方直接读 tuning,
- * 是给 GDD §5.3 那块磁力收集器("拾取半径 +30%")留的唯一挂钩:届时只填本函数体,
- * stepDrops 与将来渲染层画的那个吸取圈都一个字不用改(与 damage.hullMaxHp / edgeDamageMul
- * 在 MVP 恒返回基准值是同一条口径 —— 调用点今天就接好)。
- * MVP 甲板上还没有那种设施,故 deck 眼下用不上,恒返回旋钮本身。
- * 每次现读 tuning 而不是模块加载时算死:它是面板上"拖一下看体感"的那根旋钮(验收标准第四条)。
- */
-export function magnetRadius(deck: Deck): number {
-  return tuning.dropMagnetRadius;
-}
-
-/**
  * 残骸的离场半径(px):离船超过这一档的**未锁定**残骸回池,并**折半入账**(见 DROP_CULL_REFUND)。
  * 地图无限之后,被玩家开过去不捡的残骸会永远躺在身后 —— DROP_MAX_ALIVE(data/economy)
  * 那道保险丝挡得住内存,挡不住"老残骸占满池、新掉落全被丢弃"的经济死账:
@@ -119,10 +110,12 @@ export const DROP_CULL_REFUND = 0.5;
  * 推进全场残骸一逻辑帧:起吸判定 → 积分 → 收取。
  * @param shipX @param shipY 船心世界坐标(调用方传本帧**积分之后**的位置:残骸追的是船现在在哪,
  *   晚一帧的话高速航行时整串残骸会恒定拖在船身后)
- * @param magnetMul 起吸半径的修正倍率(14 号的磁力干扰词缀,缺省 1 = 无干扰):
- *   修正挂在**读 dropMagnetRadius 的这一处** —— 干扰携带者在场,玩家拾取半径整体 ×pickupMul,
- *   翻译"谁在场"是 World 的事,本文件只认倍率。
- * @returns **本帧收到的残骸总量**(收下的 value 之和 + 离场残骸的折半回收,没收到就是 0)——
+ * @param magnetMul 起吸半径的修正倍率(14 号的磁力干扰词缀 × 18 号磁力过载法令,由 World 合好,
+ *   缺省 1 = 无修正):修正挂在**读 dropMagnetRadius 的这一处** ——
+ *   磁吸半径 = tuning.dropMagnetRadius × magnetMul(旧 magnetRadius() 占位钩子已删,半径现算)。
+ * @param xpMul 经验获取倍率(改版 06 号经验增幅器的聚合,缺省 1 = 无增幅):
+ *   **返回值整体 × 它** —— 经验增幅器"每颗经验掉落价值更高"的唯一落地(连乘,两座 = ×1.5²)。
+ * @returns **本帧收到的残骸总量 × xpMul**(收下的 value 之和 + 离场残骸的折半回收,没收到就是 0)——
  *   调用方直接 `scrap += stepDrops(...)`。不由本函数去写 World 的字段:掉落这一层不认识"经济",
  *   正如 bullet.ts 不认识"击杀数"。
  *
@@ -132,19 +125,19 @@ export const DROP_CULL_REFUND = 0.5;
  */
 export function stepDrops(
   drops: Pool<Drop>,
-  deck: Deck,
   shipX: number,
   shipY: number,
   dt: number,
   magnetMul = 1,
+  xpMul = 1,
 ): number {
   const items = drops.items;
   // 三根旋钮**每帧现读一次**并 hoist 出循环(与 world.step 里 hoist enemySeparation 同口径):
   // 面板拖动照样即时生效,而一帧之内全场残骸必须用同一套数 —— 循环里逐颗现读的话,
   // 面板恰好在两颗残骸之间改了值,这一帧就会分裂成"前一半按旧半径、后一半按新半径"。
-  // 磁力干扰(14 号)的倍率与旋钮同一个位置现乘:干扰携带者活着的那几帧,全场残骸
-  // 用的是同一套缩小后的半径,不存在"半场被干扰、半场没被"的割裂帧
-  const magnetR = magnetRadius(deck) * magnetMul;
+  // 磁力干扰(14 号)与磁力过载(18 号)的倍率与旋钮同一个位置现乘:干扰携带者活着的那几帧,
+  // 全场残骸用的是同一套缩小后的半径,不存在"半场被干扰、半场没被"的割裂帧
+  const magnetR = tuning.dropMagnetRadius * magnetMul;
   const magnetR2 = magnetR * magnetR;
   const speed = tuning.dropMagnetSpeed;
   const collectR = tuning.dropCollectRadius;
@@ -210,5 +203,7 @@ export function stepDrops(
       drops.despawnAt(i);
     }
   }
-  return got;
+  // 经验增幅器的进账倍率(连乘)收在**返回前最后一处**:收下的与折半回收的都按同一倍率放大,
+  // 于是"每颗经验掉落价值更高"对全场掉落一视同仁,不会出现半颗按倍率、半颗不按的割裂
+  return got * xpMul;
 }

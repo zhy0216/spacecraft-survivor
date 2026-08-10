@@ -126,6 +126,14 @@ export interface EnemyDef {
    * 一起决定,单看这里任何一个数都没有意义。
    */
   scrap: number;
+  /**
+   * 死了进账多少**星币**(用户设计会:星币总是获得,击杀单位就有,精英/Boss 更多)。
+   * 与 scrap 同一条口径:**必掉、面额按型定死、击杀当场直接进账 World.starCoins**,
+   * 不造掉落物、不掷随机(与残骸的"掉落物 + 磁吸拾取"不同 —— 星币直接进账)。
+   * 普通怪 1-4 按敌型(虫群 1 / 侧掠 2 / 尾随 2 / 甲虫 4 / 孢子 3),占位待调;
+   * 精英/Boss 的面额在 ELITE.starCoins / BOSS.starCoins,不进本表。
+   */
+  starCoins: number;
   /** 接近段基础速度 px/s;实际速度还要乘 tuning.enemySpeedScale */
   speed: number;
   /** 期望速度的追随系数 1/s(转向力寻路,GDD §13 无 A*);越大越"贴脸咬得死" */
@@ -177,6 +185,7 @@ export const ENEMIES: EnemyDef[] = [
     // 占位待调,平衡口径见 data/economy.ts。1 = 最小面额:它是场上最多、最好打的口粮型,
     // 一局的残骸大头本来就该由"打了很多只"而不是"每只值很多"堆出来
     scrap: 1,
+    starCoins: 1, // 占位待调:场上最多的口粮型,面额给最小档(用户设计会:击杀即有)
     speed: 80, // GDD §14 锁定
     accel: 6, // 占位待调(= 01 号压测里 SEEK_ACCEL 的推广,四型的基准手感)
     radius: 7, // 占位待调
@@ -205,6 +214,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 20, // GDD §14 锁定
     contactDamage: 10, // GDD §14 锁定
     scrap: 2, // 占位待调,平衡口径见 data/economy.ts(血厚一倍多、还要抓它切进来的那一下,给两颗)
+    starCoins: 2, // 占位待调:与 scrap 同档(侧掠者)
     speed: 150, // 占位待调(接近段速度;GDD §14 锁的 220 是下面的冲刺速)
     accel: 8, // 占位待调
     radius: 9, // 占位待调
@@ -235,6 +245,7 @@ export const ENEMIES: EnemyDef[] = [
     // 占位待调,平衡口径见 data/economy.ts。与侧掠者同档:它血没那么厚,但赖在船尾死角上,
     // 玩家得转舵把火力送过去才拿得到 —— 那份操作成本也该算进价钱里
     scrap: 2,
+    starCoins: 2, // 占位待调:与 scrap 同档(尾随蛆)
     speed: 125, // 占位待调(必须快过船的巡航 130 的大半,否则永远绕不到尾)
     accel: 7, // 占位待调
     radius: 8, // 占位待调
@@ -267,6 +278,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 40, // 占位待调
     contactDamage: 18, // 占位待调
     scrap: 4, // 占位待调,平衡口径见 data/economy.ts(全场最硬、最疼的一型,打掉它该有一次看得见的进账)
+    starCoins: 4, // 占位待调:最硬的一型给最大档(冲撞甲虫)
     speed: 70, // 占位待调(接近段慢,压力全在冲锋那一下)
     accel: 4, // 占位待调(转向迟钝,绕开它是有解的)
     radius: 14, // 占位待调,但它同时钉着 ENEMY_RADIUS_MAX = 14 → 空间哈希 cell 与今天一致
@@ -300,6 +312,7 @@ export const ENEMIES: EnemyDef[] = [
     hp: 26, // 占位待调
     contactDamage: 2, // 占位待调(远程型几乎不贴脸;留着 2 是给"被虫群挤到船上"这类边角情形一个兜底)
     scrap: 3, // 占位待调,平衡口径见 data/economy.ts(比尾随蛆多一颗:逼你绕路的那份操作成本)
+    starCoins: 3, // 占位待调:远程炮台逼你绕路,面额卡在甲虫之下(孢子炮手)
     speed: 60, // 占位待调(接近段慢:它是炮台不是猎手,压力全在喷吐上)
     accel: 5, // 占位待调(锚定/重新就位时转向迟钝些,给玩家贴脸的机会)
     radius: 8, // 占位待调(体型介于蜂群蛭与侧掠者之间:远程型的判定体不该太大,否则太好打)

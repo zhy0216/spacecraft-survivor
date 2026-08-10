@@ -37,11 +37,9 @@ import {
   stepBossBehavior,
 } from './boss';
 import { tuning } from './config';
-import { classifyHit, HIT_CORE } from './damage';
 import { createEnemy, enemyAnimSeed, type Enemy, hpScaleAt, initEnemy } from './enemy';
 import { createShip, type Vec2 } from './ship';
-import { RESULT_RUNNING, RESULT_WIN, World } from './world';
-import { CELL_WEAPON, PLACE_OK } from './deck';
+import { ACQUIRE_OK, RESULT_RUNNING, RESULT_WIN, World } from './world';
 import { TOWER_AUTOCANNON, TOWERS } from '../data/towers';
 
 /** 测试用小规模,与 world.test.ts 同口径:有用例会拖字段,跑完必须还原 */
@@ -382,7 +380,6 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     const full = w.ship.hp;
 
     w.step();
-    expect(classifyHit(w.ship, w.deck, boss.x, boss.y, bossRadius())).toBe(HIT_CORE);
     expect(bossContactDamage()).toBeGreaterThan(ENEMIES[KIND_BEETLE]!.contactDamage);
     expect(w.ship.hp).toBe(full - bossContactDamage());
     expect(boss.dead).toBe(false); // 撞完不击退、不消灭(09 口径,巨型个体压着继续磨)
@@ -390,7 +387,8 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
 
   it('弹道塔能命中 Boss:表外 kind 不挡子弹(直射/光矛的命中判定把 Boss 当合法目标)', () => {
     const w = bossWorld(13);
-    expect(w.place(0, 2, CELL_WEAPON, TOWER_AUTOCANNON)).toBe(PLACE_OK);
+    w.ship.heading = w.ship.pheading = 0;
+    expect(w.acquireWeapon(TOWER_AUTOCANNON)).toBe(ACQUIRE_OK);
     const boss = w.enemies.items.find((e) => e.kind === KIND_BOSS)!;
     const hp = boss.hp;
     // 钉在炮口射程内正前方:Boss 判定体走 enemyRadius → 底座 radius × BOSS.scale

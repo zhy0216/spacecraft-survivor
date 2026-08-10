@@ -1,7 +1,7 @@
 /**
- * 点防拦截(22 号,GDD §5.2"击落弹幕"的落地)—— 纯逻辑,与 sim/turret.ts 同一条"接线与裁决"分工。
+ * 点防拦截(改版 22 号 —— 甲板删除后的重写)—— 纯逻辑,与 sim/turret.ts 同一条"接线与裁决"分工。
  * 铁律 1:本目录永不 import pixi/DOM,也不用 Math.random —— 拦哪一颗、提前量怎么算,
- * 全由"甲板 + 船位姿 + 弹丸列表"决定,同 seed 必然复现;本文件**一次 rng 都不掷**,
+ * 全由"槽位 + 船位姿 + 弹丸列表"决定,同 seed 必然复现;本文件**一次 rng 都不掷**,
  * 于是拦截一步都不会移动出怪/召唤的随机序列。
  *
  * 为什么不做进 sim/turret.ts:stepTurrets 是"塔 × 敌人"的既有裁决处,弹丸不在它的空间哈希里,
@@ -10,6 +10,11 @@
  *   一帧里弹丸与敌人同时在射界内时,点防先把这一发打给弹丸(拦截一发 = 免掉一次 sporeDamage),
  *   弹丸不存在/够不着时,onFired 没被调用、cooldown 闸门放行,stepTurrets 照常打敌人 ——
  *   "拦截不挤掉反虫群本分"这句话由 cooldown 闸门机械保证,不需要任何优先级标记。
+ *
+ * —— 甲板格 → 武器槽的迭代替换(与 sim/turret.ts 同一条)——
+ * 旧版遍历 deck.cells 按 isTurretCell 挡离线塔;新版遍历 WEAPON_SLOT_COUNT 个武器槽,
+ * 空槽(type = -1)跳过,只筛 interceptsProjectiles 旗子的塔(点防与荆棘壁垒)。
+ * 炮位 = slotMuzzleWorld,射界 = slotArc,开火代价走 slot 版 onFired。
  *
  * 拦截弹是**真子弹**(走 my 子弹池、标记 intercept):从炮口飞向**一阶提前量**算出的交点,
  * 飞行途中由 stepInterceptHits 每帧做线段 × 圆判定 —— 打没打中由几何定,不搞"开火即必中"。
@@ -21,20 +26,20 @@
  */
 import type { Pool } from '../core/pool';
 import { SIM_DT } from '../core/loop';
-import { THR_AMMO, THR_HEAT, towerArcDeg, towerPierce, towerRange } from '../data/towers';
+import { THR_AMMO, THR_HEAT, towerArcDeg, towerPierce, towerRange, TOWERS } from '../data/towers';
+import { type Arc, slotArc } from './arc';
+import { type WeaponSlot, WEAPON_SLOT_COUNT, slotMuzzleWorld } from './armory';
 import { BK_DIRECT } from './bullet';
-import { cellFireRateMul } from './damage';
-import { cellWorldPos, type Deck } from './deck';
-import { cellArc, isTurretCell } from './arc';
-import { cellTowerDef, canFire, effectiveDamage, onFired } from './tower';
 import { type EnemyBullet } from './enemyBullet';
 import { type FireSink, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, wrapAngle } from './ship';
+import type { SupportBuffs } from './support';
+import { canFire, effectiveDamage, onFired } from './tower';
 import type { Bullet } from './bullet';
 
 /** 当前这座塔的射界。逐塔覆写,不跨调用留值(与 turret.ts 同款暂存) */
-const arc = { center: 0, half: 0 };
-/** 当前这座塔的炮位(格心世界坐标) */
+const arc: Arc = { center: 0, half: 0 };
+/** 当前这座塔的炮位(硬点世界坐标) */
 const muzzle = { x: 0, y: 0 };
 
 /**
@@ -44,12 +49,12 @@ const muzzle = { x: 0, y: 0 };
 const PROJ_DIST2_EPS = 1e-6;
 
 /**
- * 点防拦截通行证:遍历"拦截旗子"的塔格(interceptsProjectiles = true,现在只有点防与荆棘壁垒),
+ * 点防拦截通行证:遍历"拦截旗子"的武器槽(interceptsProjectiles = true,现在只有点防与荆棘壁垒),
  * 找射界 + 射程内、**朝船接近**、**距船最近**的那颗弹丸,转向它并在转到位 + 节流放行时开火。
  *
  * 目标选择的三条判据(定死,单测按此钉):
  *   1. **朝船接近**(dot(弹丸速度, 船 - 弹丸) > 0):已经掠过船身的弹丸不浪费弹药;
- *   2. 在塔的射界 + 射程内(与 stepTurrets 同一套几何,cellArc / towerRange);
+ *   2. 在塔的射界 + 射程内(与 stepTurrets 同一套几何,slotArc / towerRange);
  *   3. 多颗并存取**距船最近**的那颗(它最先到船,拦截的紧迫性最高);
  *      同距严格 `<` 才替换 = 保留池序先到者,与 findArcTarget 的索敌同一口径,结果确定。
  *
@@ -59,39 +64,38 @@ const PROJ_DIST2_EPS = 1e-6;
  * **不推进节流**:stepThrottle 由 stepTurrets 在下一段统一推进,这里只读 canFire、写 onFired ——
  * 同一帧内拦截先开火会把 cooldown 写满,stepTurrets 的 canFire 当场被闸住,天然不会双射。
  *
+ * @param weapons World.weapons(长度 = WEAPON_SLOT_COUNT 的槽位数组;type = -1 的空槽跳过)
  * @param projectiles 场上全部敌方弹丸(World.enemyBullets.items)。弹丸数量级是几十,
  *   逐塔线性扫是常数开销,不为它单开空间哈希
+ * @param supportBuffs 本帧的支援聚合:传给 onFired 的节流包装(热上限/射击间隔的倍率来源)
  */
 export function stepInterception(
-  deck: Deck,
+  weapons: readonly WeaponSlot[],
   ship: Ship,
   projectiles: readonly EnemyBullet[],
   dt: number,
   sink: FireSink,
-  edgePenalty: readonly number[] | null = null,
+  supportBuffs: SupportBuffs,
   edictAmmoMul: number = 1,
   edictHeatMaxMul: number = 1,
 ): void {
   // 场上没有弹丸 = 没有可拦的东西:一趟扫描都省了(点防的"本分"交给 stepTurrets)
   if (projectiles.length === 0) return;
-  const cells = deck.cells;
 
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i]!;
-    // 离线塔(被 12 号扩建焊成内脏位)在这里被 isTurretCell 一并挡掉:与 stepTurrets 同一条
-    if (!isTurretCell(cell)) continue;
-    const def = cellTowerDef(cell);
+  for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+    const slot = weapons[i]!;
+    if (slot.type < 0) continue; // 空槽:与 stepTurrets 同一条跳过判据
+    const def = TOWERS[slot.type];
     if (!def) continue;
     // 拦截旗子:data/towers 的 interceptsProjectiles,荆棘壁垒与点防同筛(见该字段注释)
     if (!def.interceptsProjectiles) continue;
-    const level = cell.level;
+    const level = slot.level;
 
-    // 这一格的受击射速惩罚与法令倍率,与 stepTurrets 逐字同款(角落格同时属于两舷)
-    const fireMul = edgePenalty ? cellFireRateMul(cell, edgePenalty) : 1;
+    // 法令倍率与 stepTurrets 逐字同款(按节流系挑;未持有时恒 1)
     const edictMul = def.throttle === THR_AMMO ? edictAmmoMul : 1;
 
-    if (!cellArc(cell, ship.heading, towerArcDeg(def, level), arc)) continue;
-    cellWorldPos(deck, ship, cell.col, cell.row, muzzle);
+    slotArc(i, ship.heading, towerArcDeg(def, level), arc);
+    slotMuzzleWorld(ship, i, muzzle);
     const range = towerRange(def, level);
     const range2 = range * range;
 
@@ -123,15 +127,15 @@ export function stepInterception(
     const want = Math.max(-arc.half, Math.min(arc.half, wrapAngle(bearing - arc.center)));
     // 与 stepShip 追随期望航向同一套:先折回最短弧,再以每帧上限夹取,绝不瞬间对齐
     const maxTurn = def.turnRate * DEG2RAD * dt;
-    const diff = wrapAngle(want - cell.turretOffset);
-    cell.turretOffset = wrapAngle(cell.turretOffset + Math.max(-maxTurn, Math.min(maxTurn, diff)));
+    const diff = wrapAngle(want - slot.turretOffset);
+    slot.turretOffset = wrapAngle(slot.turretOffset + Math.max(-maxTurn, Math.min(maxTurn, diff)));
 
     // —— 开火门槛两道(节流之外不重复 stepTurrets 的"有目标"门槛)——
-    const aim = wrapAngle(arc.center + cell.turretOffset);
+    const aim = wrapAngle(arc.center + slot.turretOffset);
     // 第一道:炮口没对准弹丸不开火(与 stepTurrets 的 aimTol 门槛逐字同款)
     if (Math.abs(wrapAngle(bearing - aim)) > def.aimTolDeg * DEG2RAD) continue;
     // 第二道:节流放不放行(弹夹/热量/充能,规则全在 sim/tower.ts)
-    if (!canFire(cell, def)) continue;
+    if (!canFire(slot, def)) continue;
     // 弹速非正的塔打不出拦截弹(数据被改坏的兜底,与 fireBullets 同款哑火)
     if (!(def.bulletSpeed > 0)) continue;
 
@@ -159,10 +163,10 @@ export function stepInterception(
     b.throttle = def.throttle;
     b.intercept = true; // 拦截弹:只认弹丸,不认敌人(见 hitDirect 的分支与文件头)
 
-    // 与 stepTurrets 同款:炮口闪、记节流代价、投 broadside 票(拦截也算"这一舷开火了")
+    // 与 stepTurrets 同款:炮口闪、记节流代价、投一次"这座塔开火"的票
     sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
-    onFired(cell, def, 1, fireMul, edictMul, def.throttle === THR_HEAT ? edictHeatMaxMul : 1);
-    sink.fired(cell);
+    onFired(slot, def, 1, supportBuffs, edictMul, def.throttle === THR_HEAT ? edictHeatMaxMul : 1);
+    sink.fired(i);
   }
 }
 

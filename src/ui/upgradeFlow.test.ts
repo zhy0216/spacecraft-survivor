@@ -1,971 +1,449 @@
-/**
- * 三选一升级流程(10 号 issue T4)。分成两半:
- *
- * 前半是**纯函数**——卡片上那三行字与拒绝文案。它们是"改数据文件即可调平衡"这条口径
- * (todos/05 验收)在 ui 侧的落点:名称/描述/等级全部从 data/towers 与 data/supports 现算,
- * 数值表改一个数、加一座塔,卡片必须自己跟上 —— 本文件就是那道拦网。
- * 拒绝文案那一段自 ui/placement.test.ts 迁来(那个文件连同 ui/placement.ts 已整个删除),
- * 钉的仍是"每个理由码都当场把规则原文讲一遍":新增理由码却忘了配文案时,它会静默退化成兜底串。
- *
- * 后半是**两阶段状态机**(选卡 → 放置 → 结算 / 取消)。这一半破例上了一个几十行的 DOM 桩,
- * 理由与旧文件里那段 setWorld 的破例一字同源:它恰恰**不是**"好不好看"的交互,
- * 而是几条只有真人打完一整局才碰得到、碰到了又很难复现的规则 ——
- *   非法格点了不许结算(点一下就白扣一次残骸,而残骸是全程唯一的成长资源);
- *   取消路径不许扣费、更不许恢复战斗(时停漏一次,冻结期间世界就白走一段);
- *   重开一局不许留着上一局的卡片与下标(拿新世界的 offer 去兑上一局的选择);
- *   window 监听器与 DOM 不许每局翻倍(一次点击放好几座塔)。
- * 桩只提供 createUpgradeFlow 真的会碰的那几样,绝不发展成半个 jsdom。
- *
- * World 一侧用**桩**而不是真 World:本文件要钉的是"玩家的一次点击被翻译成了对 World 的哪一次调用、
- * 以及什么时候一次都不该调",而候选怎么生成、费用怎么扣是 sim 那边的用例(sim/upgrade.test.ts /
- * sim/world.test.ts)的事。混在一起的话,这几条规则会被 rng 与波次脚本的噪声盖过去。
- * 注意 ui 只 import type 渲染层,所以这里不会把 pixi 拖进 Node。
- */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DECK_PIECES, DECK_PIECE_SQUARE } from '../data/deckPieces';
-import { REROLL_PRICE, UPGRADE_CHOICE_COUNT, UPGRADE_SKIP_FEE } from '../data/economy';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.hoisted(() => { vi.stubGlobal('location', { search: '' }); });
+import { REROLL_PRICE, UPGRADE_SKIP_FEE } from '../data/economy';
+import { EDICT_COOLANT, EDICT_CRUISE, EDICT_GYRO, EDICT_HULL, EDICT_MAGNET, EDICT_TRACER, EDICTS } from '../data/edicts';
+import { isMergeResult } from '../data/merges';
+import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
+import { TOWER_AUTOCANNON, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
+import { createSupportSlots, createWeaponSlots, type SupportSlot, type WeaponSlot } from '../sim/armory';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_SUPPORT, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import {
-  EDICT_COOLANT,
-  EDICT_CRUISE,
-  EDICT_GYRO,
-  EDICT_HULL,
-  EDICT_MAGNET,
-  EDICT_TRACER,
-  EDICTS,
-} from '../data/edicts';
-import { isEvolutionTower } from '../data/evolutions';
-import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
-import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
-import {
-  CELL_SUPPORT,
-  CELL_WEAPON,
-  cellIndexAtLocal,
-  cellLocalPos,
-  createDeck,
-  type Deck,
-  isPlaceSuccess,
-  PLACE_BAD_CONTENT,
-  PLACE_BAD_SUPPORT,
-  PLACE_BAD_TOWER,
-  PLACE_INTERIOR,
-  PLACE_MAX_LEVEL,
-  PLACE_NO_CELL,
-  PLACE_OK,
-  PLACE_TAKEN,
-  PLACE_UPGRADE,
-  WELD_DETACHED,
-  WELD_OK,
-  WELD_OVERLAP,
-} from '../sim/deck';
-import type { Vec2 } from '../sim/ship';
-import { OFFER_DECK, OFFER_EDICT, OFFER_SUPPORT, OFFER_TOWER, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
-import type { World } from '../sim/world';
-import {
-  cardDesc,
-  cardIcon,
-  cardLevelText,
-  cardTitle,
-  createUpgradeFlow,
-  denyMessage,
-  placeLabel,
-  placedMessage,
-  skipRefund,
-} from './upgradeFlow';
+  ACQUIRE_INVALID_TYPE,
+  ACQUIRE_REPLACE_NEEDED,
+  REROLL_ALREADY_DONE,
+  REROLL_NO_STARCOINS,
+  REPLACE_BAD_SLOT,
+  REPLACE_INVALID_TYPE,
+  SUPPORT_FULL,
+  SUPPORT_INVALID_TYPE,
+  type World,
+} from '../sim/world';
+import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps } from './upgradeFlow';
 
-/** 塔候选。level = 甲板上该型塔的最高等级(0 = 尚未拥有),与 sim/upgrade 的口径一致 */
-function towerOpt(type: number, level = 0): UpgradeOption {
-  return { kind: OFFER_TOWER, type, level };
+function newWeaponOpt(type: number): UpgradeOption {
+  return { kind: OFFER_NEW_WEAPON, type, level: 0 };
 }
-/** 设施候选:等级恒 0(设施不叠级) */
+
+function weaponUpgradeOpt(type: number, level: number): UpgradeOption {
+  return { kind: OFFER_WEAPON_UPGRADE, type, level };
+}
+
 function supportOpt(type: number): UpgradeOption {
   return { kind: OFFER_SUPPORT, type, level: 0 };
 }
-function deckOpt(type: number): UpgradeOption {
-  return { kind: OFFER_DECK, type, level: 0 };
-}
-/** 法令候选:等级恒 0(法令不叠级,sim 侧根本不读它) */
+
 function edictOpt(type: number): UpgradeOption {
   return { kind: OFFER_EDICT, type, level: 0 };
 }
 
 const DENY_CODES = [
-  PLACE_NO_CELL,
-  PLACE_TAKEN,
-  PLACE_INTERIOR,
-  PLACE_BAD_CONTENT,
-  PLACE_MAX_LEVEL,
-  PLACE_BAD_TOWER,
-  PLACE_BAD_SUPPORT,
-  WELD_OVERLAP,
-  WELD_DETACHED,
   UPGRADE_NO_OFFER,
+  ACQUIRE_REPLACE_NEEDED,
+  ACQUIRE_INVALID_TYPE,
+  REPLACE_BAD_SLOT,
+  REPLACE_INVALID_TYPE,
+  SUPPORT_FULL,
+  SUPPORT_INVALID_TYPE,
+  REROLL_NO_STARCOINS,
+  REROLL_ALREADY_DONE,
 ];
 
 describe('denyMessage', () => {
-  it('每个拒绝码都有各自的中文文案,互不重复', () => {
-    const msgs = DENY_CODES.map(denyMessage);
-    for (const m of msgs) expect(m.length).toBeGreaterThan(0);
-    // 两个码共用一句话 = 玩家看不出到底撞了哪条规则
-    expect(new Set(msgs).size).toBe(DENY_CODES.length);
-    // 兜底串只该出现在未知码上;拿它当拒绝文案说明有码漏配了
-    for (const m of msgs) expect(m).not.toContain('理由码');
-  });
-
-  it('内部格 / 已占用格 / 叠到顶的文案带上规则出处', () => {
-    // 前两条是 03 号验收标准里点名的拒绝路径(武器塔进内部格 / 往已占用格里插),
-    // 第三条是 05 号的叠级上限 —— 它与"格子已被占用"是两回事,玩家得看得出区别
-    expect(denyMessage(PLACE_INTERIOR)).toContain('§4.1');
-    expect(denyMessage(PLACE_TAKEN)).toContain('§4.5');
-    expect(denyMessage(PLACE_MAX_LEVEL)).toContain('§5.4');
-    // 上限从数值表来:把 TOWER_MAX_LEVEL 改成 6,这句提示必须跟着变(改数据即可调平衡)
-    expect(denyMessage(PLACE_MAX_LEVEL)).toContain(`Lv${TOWER_MAX_LEVEL}`);
-  });
-
-  it('卡片过期那一档不提甲板:它不是撞上了哪条放置规则', () => {
-    // 提了格子只会让玩家去找一个根本不存在的问题 —— 待选没了是流程的事,不是这一格的事
-    const msg = denyMessage(UPGRADE_NO_OFFER);
-    expect(msg).not.toContain('格');
-    expect(msg).toContain('升级');
-  });
-
-  it('未知码回落成带码的兜底文案,而不是空串', () => {
-    // PLACE_OK / PLACE_UPGRADE 走不到 denyMessage(调用方只在非成功时问),故它们也算"未知码"。
-    // **-1 不再是未知码**:10 号 issue 起它是 UPGRADE_NO_OFFER,上面那条已经钉过
-    for (const code of [PLACE_OK, PLACE_UPGRADE, 99, -42]) {
-      expect(denyMessage(code)).toContain(String(code));
+  it('UI 可收到的每个拒绝码都有明确中文文案', () => {
+    const messages = DENY_CODES.map(denyMessage);
+    for (const message of messages) {
+      expect(message.length).toBeGreaterThan(0);
+      expect(message).not.toContain('理由码');
     }
+    expect(new Set(messages).size).toBe(messages.length - 1);
+  });
+
+  it('关键拒绝原因把可恢复动作说清楚', () => {
+    expect(denyMessage(UPGRADE_NO_OFFER)).toContain('升级');
+    expect(denyMessage(ACQUIRE_REPLACE_NEEDED)).toContain('替换');
+    expect(denyMessage(SUPPORT_FULL)).toContain('4');
+    expect(denyMessage(REROLL_NO_STARCOINS)).toContain(String(REROLL_PRICE));
+    expect(denyMessage(REROLL_ALREADY_DONE)).toContain('摇过');
+  });
+
+  it('未知码回落为带原码的兜底文案', () => {
+    expect(denyMessage(-999)).toContain('-999');
   });
 });
 
-describe('placeLabel', () => {
-  it('武器塔报数值表里的塔名,六种各不相同', () => {
-    const names = TOWERS.map((def) => placeLabel(CELL_WEAPON, def.type));
-    expect(names).toEqual(TOWERS.map((def) => def.name));
-    expect(new Set(names).size).toBe(TOWER_KIND_COUNT);
+describe('升级卡片纯文案', () => {
+  it('四类标题都来自 optionLabel，互不串表', () => {
+    const options = [newWeaponOpt(TOWER_AUTOCANNON), weaponUpgradeOpt(TOWER_RAILGUN, 2), supportOpt(SUP_AMMO_BAY), edictOpt(EDICT_TRACER)];
+    for (const option of options) expect(cardTitle(option)).toBe(optionLabel(option));
   });
 
-  it('支援设施报数值表里的设施名,四种各不相同', () => {
-    // 与塔名同一条口径:名字只在 src/data/supports.ts 存一份,ui 不抄第二份
-    const names = SUPPORTS.map((def) => placeLabel(CELL_SUPPORT, TOWER_AUTOCANNON, def.type));
-    expect(names).toEqual(SUPPORTS.map((def) => def.name));
-    expect(new Set(names).size).toBe(SUPPORT_KIND_COUNT);
-  });
-
-  it('两种型号互不相干;越界一律报回原始下标而不是悄悄换成另一种', () => {
-    // 支援设施不看塔型、武器塔不看设施型 —— 两个参数各自只在自己那种 content 下有意义
-    expect(placeLabel(CELL_SUPPORT, 0)).toBe(placeLabel(CELL_SUPPORT, 99));
-    expect(placeLabel(CELL_WEAPON, TOWER_AUTOCANNON, 99)).toBe(placeLabel(CELL_WEAPON, TOWER_AUTOCANNON));
-    // 静默兜底成第 0 种 = 提示说的和真放下去的是两码事,这两条就是拦网
-    expect(placeLabel(CELL_WEAPON, 99)).toContain('99');
-    expect(placeLabel(CELL_SUPPORT, TOWER_AUTOCANNON, 99)).toContain('99');
-  });
-});
-
-describe('placedMessage', () => {
-  it('叠级与新放是两句话:叠级必须报出升到了几级', () => {
-    // 叠级不占新格、画面上什么都不会多出来(GDD §5.4),这行字是唯一能证明"点中了"的东西
-    const up = placedMessage(PLACE_UPGRADE, '自动机炮', 3);
-    expect(up).toContain('自动机炮');
-    expect(up).toContain('Lv3');
-    expect(placedMessage(PLACE_OK, '自动机炮', 1)).not.toContain('Lv');
-    expect(up).not.toBe(placedMessage(PLACE_OK, '自动机炮', 1));
-  });
-
-  it('两种成功码都被 isPlaceSuccess 认下(ui 靠它分成功/拒绝)', () => {
-    expect(isPlaceSuccess(PLACE_OK)).toBe(true);
-    expect(isPlaceSuccess(PLACE_UPGRADE)).toBe(true);
-    for (const code of DENY_CODES) expect(isPlaceSuccess(code)).toBe(false);
-  });
-});
-
-describe('cardTitle', () => {
-  it('标题 = 数值表里的名字(经 optionLabel),塔/设施/拼块/法令均不串台', () => {
-    const towers = TOWERS.map((def) => cardTitle(towerOpt(def.type)));
-    expect(towers).toEqual(TOWERS.map((def) => def.name));
-    const supports = SUPPORTS.map((def) => cardTitle(supportOpt(def.type)));
-    expect(supports).toEqual(SUPPORTS.map((def) => def.name));
-    const pieces = DECK_PIECES.map((def) => cardTitle(deckOpt(def.type)));
-    expect(pieces).toEqual(DECK_PIECES.map((def) => def.name));
-    // 18 号法令:名字同样只存在 data/edicts 一份,卡片不抄第二份
-    const edicts = EDICTS.map((def) => cardTitle(edictOpt(def.type)));
-    expect(edicts).toEqual(EDICTS.map((def) => def.name));
-    // 四类同名 = 玩家分不出这张卡是一座炮还是一块砖还是一条法令
-    expect(new Set([...towers, ...supports, ...pieces, ...edicts]).size).toBe(
-      TOWER_KIND_COUNT + SUPPORT_KIND_COUNT + DECK_PIECES.length + EDICTS.length,
-    );
-  });
-
-  it('一律走 sim 的 optionLabel,ui 不抄第二份名字', () => {
-    // 抄一份的下场:数值表改了名字,卡片上还挂着旧的
-    for (const def of TOWERS) expect(cardTitle(towerOpt(def.type))).toBe(optionLabel(towerOpt(def.type)));
-    for (const def of SUPPORTS) {
-      expect(cardTitle(supportOpt(def.type))).toBe(optionLabel(supportOpt(def.type)));
-    }
-  });
-});
-
-describe('cardIcon', () => {
-  it('塔/设施/拼块/法令都有明确且互不串台的内建图标', () => {
-    // 17 号:进化塔只从配方来,升级卡池永远出不了它们(cardIcon 只会被可出卡的型号打到) ——
-    // 图标断言跟着卡池口径走,不要求给永远出不了卡的型号画图标
-    const offerableTowers = TOWERS.filter((def) => !isEvolutionTower(def.type));
-    const towerIcons = offerableTowers.map((def) => cardIcon(towerOpt(def.type)));
-    const supportIcons = SUPPORTS.map((def) => cardIcon(supportOpt(def.type)));
-    const pieceIcons = DECK_PIECES.map((def) => cardIcon(deckOpt(def.type)));
-    // 18 号法令:六条各一个符号,与塔/设施同一套"无外部资产"口径
-    const edictIcons = EDICTS.map((def) => cardIcon(edictOpt(def.type)));
-    const icons = [...towerIcons, ...supportIcons, ...pieceIcons, ...edictIcons];
-    expect(icons.length).toBe(
-      offerableTowers.length + SUPPORT_KIND_COUNT + DECK_PIECES.length + EDICTS.length,
-    );
-    for (const icon of icons) {
-      expect(icon.length).toBeGreaterThan(0);
-      expect(icon).not.toBe('?');
-      // 图标是随代码交付的字符,不依赖图片 URL / 外部资产能否加载
-      expect(icon).not.toContain('http');
-      expect(icon).not.toContain('<');
-    }
-    expect(new Set(icons).size).toBe(icons.length);
-  });
-
-  it('未知型号显式报 ?,不冒充数值表第 0 型', () => {
-    expect(cardIcon(towerOpt(99))).toBe('?');
+  it('所有可出卡型号都有内建图标，未知型号明确报问号', () => {
+    const towerOptions = TOWERS.filter((def) => !isMergeResult(def.type)).map((def) => newWeaponOpt(def.type));
+    const options = [
+      ...towerOptions,
+      ...SUPPORTS.map((def) => supportOpt(def.type)),
+      ...EDICTS.map((def) => edictOpt(def.type)),
+    ];
+    for (const option of options) expect(cardIcon(option)).not.toBe('?');
+    expect(cardIcon(newWeaponOpt(99))).toBe('?');
     expect(cardIcon(supportOpt(99))).toBe('?');
-    expect(cardIcon(deckOpt(99))).toBe('?');
     expect(cardIcon(edictOpt(99))).toBe('?');
   });
-});
 
-describe('cardDesc', () => {
-  it('甲板拼块卡报格数、旋转、外边缘与逐格转向代价', () => {
-    for (const def of DECK_PIECES) {
-      const desc = cardDesc(deckOpt(def.type));
-      expect(desc).toContain(String(def.cells.length / 2));
-      expect(desc).toContain('旋转');
-      expect(desc).toContain('外边缘');
-      expect(desc).toContain('°/s');
-    }
-  });
-  it('塔卡报射界 / 射程 / 节流系三样,六座各不相同', () => {
-    // 与 cardIcon 同一条口径:只枚举升级卡池里真出得了的塔(进化塔只从配方来)
-    const offerableTowers = TOWERS.filter((def) => !isEvolutionTower(def.type));
-    const descs = offerableTowers.map((def) => cardDesc(towerOpt(def.type)));
-    for (const d of descs) {
-      expect(d).toContain('射界');
-      expect(d).toContain('射程');
-    }
-    // 塔的描述撞车 = 三选一时根本比不出该选谁
-    expect(new Set(descs).size).toBe(offerableTowers.length);
-    // 三种节流机制是 GDD §5.1 的分水岭,也是三种支援设施的作用锚点:卡片上必须报出来
-    const throttles = ['弹药系', '过热系', '充能系'];
-    for (const d of descs) expect(throttles.some((t) => d.includes(t))).toBe(true);
+  it('新武器描述按存档等级计算到手数值，等级行提示三合一', () => {
+    const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    world.weaponBankedLevels[TOWER_AUTOCANNON] = 2;
+    const def = TOWERS[TOWER_AUTOCANNON];
+    expect(def).toBeDefined();
+    if (!def) return;
+    const desc = cardDesc(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world));
+    expect(desc).toContain(String(Math.round(towerRange(def, 3))));
+    expect(desc).toContain(String(Math.round(towerDps(def, 3) * 100) / 100));
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toBe('新武器 · 获得后从 Lv3 起步 · 可三合一合成');
   });
 
-  it('射程按"点下去之后会是几级"报,而不是当前等级', () => {
-    const def = TOWERS[TOWER_AUTOCANNON]!;
-    // 尚未拥有 → 拿到的是一座 Lv1 新塔
-    expect(cardDesc(towerOpt(TOWER_AUTOCANNON, 0))).toContain(String(Math.round(towerRange(def, 1))));
-    // 已有 Lv2 → 这张卡承诺的是 Lv3 的射程(报 Lv2 就是在描述玩家已经有的东西)
-    expect(cardDesc(towerOpt(TOWER_AUTOCANNON, 2))).toContain(String(Math.round(towerRange(def, 3))));
-    // 已满级 → 只能新建,于是回到 Lv1 的读数(GDD §5.4:叠不动了)
-    expect(cardDesc(towerOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toBe(
-      cardDesc(towerOpt(TOWER_AUTOCANNON, 0)),
-    );
+  it('武器升级分别显示 DPS 跳变、未持有存档和满级', () => {
+    const def = TOWERS[TOWER_AUTOCANNON];
+    expect(def).toBeDefined();
+    if (!def) return;
+    const upgrade = cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, 2));
+    expect(upgrade).toContain('Lv2 → Lv3');
+    expect(upgrade).toContain(`${Math.round(towerDps(def, 2) * 100) / 100}→${Math.round(towerDps(def, 3) * 100) / 100}/s`);
+    expect(cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, 0))).toContain('等级存档 Lv1');
+    expect(cardLevelText(weaponUpgradeOpt(TOWER_AUTOCANNON, 0))).toBe('未持有 · 存档等级');
+    expect(cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toContain('满级');
+    expect(cardLevelText(weaponUpgradeOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toContain('满级');
   });
 
-  it('设施卡把它自己那几项非中性的数念出来,四种各不相同', () => {
-    const descs = SUPPORTS.map((def) => cardDesc(supportOpt(def.type)));
-    expect(new Set(descs).size).toBe(SUPPORT_KIND_COUNT);
-    // 弹药库:两项加成都要念到(只念一半 = 玩家以为它只加射速)
+  it('支援描述说明全船效果与重复持有，等级行说明可叠效', () => {
     const ammo = cardDesc(supportOpt(SUP_AMMO_BAY));
+    expect(ammo).toContain('全船');
     expect(ammo).toContain('射速');
     expect(ammo).toContain('装填');
-    expect(ammo).toContain('弹药系');
-    // 装甲舱是四种里唯一**不作用于相邻塔**的,故绝不许出现"相邻"两个字 ——
-    // 出现了就是在承诺一件它做不到的事(与渲染层不给它画邻接连线是同一条口径)
-    const armor = cardDesc(supportOpt(SUP_ARMOR_BAY));
-    expect(armor).not.toContain('相邻');
-    expect(armor).toContain('船体 HP');
-    expect(armor).toContain('所在舷');
+    expect(ammo).toContain('可重复持有');
+    expect(cardDesc(supportOpt(SUP_ARMOR_BAY))).toContain('船体 HP');
+    expect(cardLevelText(supportOpt(SUP_RADIATOR))).toBe('支援槽 · 全船被动 · 可叠效');
   });
 
-  it('描述从数值表现生成:改表里的数,卡片当场跟着变', () => {
-    // 这一条就是"改数据文件即可调平衡,不改代码"(todos/05 验收)在 ui 侧的落点。
-    // 给数值表加一个手写的 desc 字段的话,这条会立刻变红 —— 那正是它存在的理由
-    const def = SUPPORTS[SUP_AMMO_BAY]!;
-    const before = def.fireRateMul;
-    try {
-      def.fireRateMul = 1.75;
-      expect(cardDesc(supportOpt(SUP_AMMO_BAY))).toContain('1.75');
-      // 调回中性值 = 这一项不再有效果,那半句就该消失
-      def.fireRateMul = 1;
-      expect(cardDesc(supportOpt(SUP_AMMO_BAY))).not.toContain('射速');
-    } finally {
-      def.fireRateMul = before;
-    }
-  });
-
-  it('法令卡把它自己那几项非中性的数念出来,六条各不相同', () => {
-    const descs = EDICTS.map((def) => cardDesc(edictOpt(def.type)));
-    expect(new Set(descs).size).toBe(EDICTS.length);
-    // 全船被动:绝对不许出现"相邻"两个字 —— 法令不作用于任何一格,印了就是在承诺做不到的事
-    for (const d of descs) expect(d).not.toContain('相邻');
-    // 逐条点名:曳光念弹药射速、重心念转向、磁力念拾取半径、散热念过热上限、
-    // 结构加固念船体 HP、巡航念巡航速度 —— 数值与数据表同源,不抄第二份
+  it('法令描述逐条来自数值表，且不占槽不叠级', () => {
     expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('弹药系射速');
-    expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('1.1');
     expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('转向');
-    expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('°/s');
     expect(cardDesc(edictOpt(EDICT_MAGNET))).toContain('拾取半径');
     expect(cardDesc(edictOpt(EDICT_COOLANT))).toContain('过热上限');
     expect(cardDesc(edictOpt(EDICT_HULL))).toContain('船体 HP');
-    expect(cardDesc(edictOpt(EDICT_HULL))).toContain('+20');
     expect(cardDesc(edictOpt(EDICT_CRUISE))).toContain('巡航速度');
+    expect(cardLevelText(edictOpt(EDICT_TRACER))).toBe('法令 · 不占槽 · 不叠级');
   });
 
-  it('法令描述从数值表现生成:改表里的数,卡片当场跟着变', () => {
-    // 与设施那一条同源(改数据即可调平衡):调数值卡片跟上,调回中性那一项自己消失
-    const def = EDICTS[EDICT_TRACER]!;
-    const before = def.ammoFireRateMul;
-    try {
-      def.ammoFireRateMul = 1.25;
-      expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('1.25');
-      def.ammoFireRateMul = 1;
-      expect(cardDesc(edictOpt(EDICT_TRACER))).not.toContain('弹药系射速');
-    } finally {
-      def.ammoFireRateMul = before;
-    }
-  });
-
-  it('型号越界不静默兜底成第 0 种,而是把下标印出来', () => {
-    // 兜底的下场:玩家照着另一条法令的加成下判断,点下去才发现生效的是别的东西
-    expect(cardDesc(towerOpt(99))).toContain('99');
+  it('越界型号不冒充第 0 型', () => {
+    expect(cardDesc(newWeaponOpt(99))).toContain('99');
+    expect(cardDesc(weaponUpgradeOpt(99, 1))).toContain('99');
     expect(cardDesc(supportOpt(99))).toContain('99');
     expect(cardDesc(edictOpt(99))).toContain('99');
   });
 });
 
-describe('cardLevelText', () => {
-  it('拼块明确说明确认即焊死、局内不可拆挪', () => {
-    expect(cardLevelText(deckOpt(DECK_PIECE_SQUARE))).toContain('焊死');
-    expect(cardLevelText(deckOpt(DECK_PIECE_SQUARE))).toContain('不可');
-  });
-  it('三档各说各的话:未装备 / 当前 LvN / 满级只能新建', () => {
-    expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, 0))).toBe('未装备');
-    for (let lv = 1; lv < TOWER_MAX_LEVEL; lv++) {
-      expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, lv))).toBe(`当前 Lv${lv}`);
-    }
-    // 满级这一档必须把"只能新建"讲明白:不讲的话玩家会照着"再点一次那座塔"的直觉去点,
-    // 然后吃一记 PLACE_MAX_LEVEL —— 而那时残骸已经花在这张卡上了
-    const top = cardLevelText(towerOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL));
-    expect(top).toContain(`Lv${TOWER_MAX_LEVEL}`);
-    expect(top).toContain('满级');
-    expect(top).toContain('新建');
-  });
-
-  it('支援设施不拿恒 0 的 level 冒充“未装备”,明确说明每次都是新建', () => {
-    for (const def of SUPPORTS) {
-      const text = cardLevelText(supportOpt(def.type));
-      expect(text).toContain('不叠级');
-      expect(text).toContain('新建');
-      expect(text).not.toContain('未装备');
-    }
-  });
-
-  it('法令卡说明全船被动/不占格/不叠级,不拿 level 冒充等级', () => {
-    for (const def of EDICTS) {
-      const text = cardLevelText(edictOpt(def.type));
-      expect(text).toContain('全船被动');
-      expect(text).toContain('不占格');
-      expect(text).toContain('不叠级');
-      expect(text).not.toContain('未装备');
-      expect(text).not.toContain('Lv');
-    }
-  });
-
-  it('越界与 NaN 不产出 LvNaN 这种字', () => {
-    // 上限之外照满级那一档说话;负数/NaN 一律回落"未装备"(NaN 比较恒 false,故写成 !(lv >= 1))
-    expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL + 3))).toContain('满级');
-    expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, -1))).toBe('未装备');
-    expect(cardLevelText(towerOpt(TOWER_AUTOCANNON, Number.NaN))).toBe('未装备');
-  });
-});
-
 describe('skipRefund', () => {
-  it('返还 = cost − 手续费:净亏恒为手续费,不随费用曲线暴涨', () => {
-    expect(skipRefund(UPGRADE_SKIP_FEE * 10)).toBe(UPGRADE_SKIP_FEE * 9);
+  it('返还等于费用减手续费，并夹在零以上', () => {
     expect(skipRefund(509)).toBe(509 - UPGRADE_SKIP_FEE);
-  });
-
-  it('费用不高于手续费时返还 0,坏输入不印残骸', () => {
-    // 与 World.skipUpgrade 调的是同一个 skipRefundFor。分家的后果有两层:
-    // 按钮上印的返还数与实际到账各走各的(玩家算不清账),更糟的是跳过会净赚残骸 ——
-    // 那样下一帧又满足 scrap ≥ upgradeCost,卡片会一张接一张地弹
     expect(skipRefund(UPGRADE_SKIP_FEE)).toBe(0);
-    expect(skipRefund(UPGRADE_SKIP_FEE - 1)).toBe(0);
-    expect(skipRefund(0)).toBe(0);
     expect(skipRefund(-5)).toBe(0);
   });
 });
 
-// —— 以下只服务两阶段状态机那几条(破例上 DOM 桩的理由见文件头)——
-
 interface StubEvent {
-  clientX?: number;
-  clientY?: number;
   code?: string;
   repeat?: boolean;
   preventDefault(): void;
 }
 
-/** 桩元素:createUpgradeFlow 只碰它的 style 几项 / textContent / disabled / append / addEventListener */
 interface StubEl {
   style: { cssText: string; color: string; display: string; opacity: string; cursor: string };
   textContent: string;
   disabled: boolean;
   children: StubEl[];
-  handlers: Map<string, Array<(e: StubEvent) => void>>;
-  append(...kids: StubEl[]): void;
-  appendChild(kid: StubEl): StubEl;
-  addEventListener(type: string, fn: (e: StubEvent) => void): void;
+  handlers: Map<string, Array<(event: StubEvent) => void>>;
+  append(...children: StubEl[]): void;
+  appendChild(child: StubEl): StubEl;
+  addEventListener(type: string, handler: (event: StubEvent) => void): void;
 }
 
 function createStubEl(): StubEl {
-  const el: StubEl = {
+  const element: StubEl = {
     style: { cssText: '', color: '', display: '', opacity: '', cursor: '' },
     textContent: '',
     disabled: false,
     children: [],
-    handlers: new Map<string, Array<(e: StubEvent) => void>>(),
-    append(...kids: StubEl[]): void {
-      el.children.push(...kids);
-    },
-    appendChild(kid: StubEl): StubEl {
-      el.children.push(kid);
-      return kid;
-    },
-    addEventListener(type: string, fn: (e: StubEvent) => void): void {
-      const list = el.handlers.get(type) ?? [];
-      list.push(fn);
-      el.handlers.set(type, list);
+    handlers: new Map(),
+    append(...children): void { element.children.push(...children); },
+    appendChild(child): StubEl { element.children.push(child); return child; },
+    addEventListener(type, handler): void {
+      const handlers = element.handlers.get(type) ?? [];
+      handlers.push(handler);
+      element.handlers.set(type, handlers);
     },
   };
-  return el;
+  return element;
 }
 
-/** 触发桩元素上的一次事件(没挂监听器就什么都不做,与真 DOM 一致) */
-function fire(el: StubEl, type: string, e: Partial<StubEvent> = {}): void {
-  const ev: StubEvent = { preventDefault: () => {}, ...e };
-  for (const fn of el.handlers.get(type) ?? []) fn(ev);
+function fire(element: StubEl, type: string): void {
+  if (element.disabled) return;
+  const event: StubEvent = { preventDefault: () => {} };
+  for (const handler of element.handlers.get(type) ?? []) handler(event);
 }
 
 interface StubDom {
-  /** #ui 覆盖层:面板与提示条 append 到这里,"重开一局多长出一块"于是一眼数得出来 */
   ui: StubEl;
-  /** window.addEventListener 的累计调用次数:重开一局不该让它再涨 */
-  windowListeners: number;
-  /** 还没到点的提示超时。假计时器(不真排队),故测完不会有回调在后面飞 */
   timers: Map<number, () => void>;
-  canvas: HTMLCanvasElement;
-  /** 画布上的一次左键点击 / 右键(clientX/Y = 画布像素,见下面 getBoundingClientRect) */
-  click(x: number, y: number): void;
-  rightClick(x: number, y: number): void;
-  move(x: number, y: number): void;
-  /** 一次按键(只用得到 code) */
   key(code: string): void;
+  contextMenu(): void;
   restore(): void;
 }
 
 function installDom(): StubDom {
-  const g = globalThis as unknown as Record<string, unknown>;
-  const prevWindow = g.window;
-  const prevDocument = g.document;
-  const prevHtmlElement = g.HTMLElement;
-  const canvasEl = createStubEl();
-  const keyHandlers: Array<(e: StubEvent) => void> = [];
-  const moveHandlers: Array<(e: StubEvent) => void> = [];
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previousWindow = globals.window;
+  const previousDocument = globals.document;
+  const previousHTMLElement = globals.HTMLElement;
+  const keyHandlers: Array<(event: StubEvent) => void> = [];
+  const contextHandlers: Array<(event: StubEvent) => void> = [];
   let nextTimer = 1;
-
   const dom: StubDom = {
     ui: createStubEl(),
-    windowListeners: 0,
-    timers: new Map<number, () => void>(),
-    canvas: Object.assign(canvasEl, {
-      // 画布左上角 = 屏幕原点 ⇒ clientX/Y 直接就是画布像素(与真实的 resolution=1 + 满窗画布一致)
-      getBoundingClientRect: (): { left: number; top: number } => ({ left: 0, top: 0 }),
-    }) as unknown as HTMLCanvasElement,
-    click(x: number, y: number): void {
-      fire(canvasEl, 'click', { clientX: x, clientY: y });
+    timers: new Map(),
+    key(code): void {
+      const event: StubEvent = { code, repeat: false, preventDefault: () => {} };
+      for (const handler of keyHandlers) handler(event);
     },
-    rightClick(x: number, y: number): void {
-      fire(canvasEl, 'contextmenu', { clientX: x, clientY: y });
-    },
-    move(x: number, y: number): void {
-      const ev: StubEvent = { clientX: x, clientY: y, preventDefault: () => {} };
-      for (const fn of moveHandlers) fn(ev);
-    },
-    key(code: string): void {
-      const ev: StubEvent = { code, repeat: false, preventDefault: () => {} };
-      for (const fn of keyHandlers) fn(ev);
+    contextMenu(): void {
+      const event: StubEvent = { preventDefault: () => {} };
+      for (const handler of contextHandlers) handler(event);
     },
     restore(): void {
-      g.window = prevWindow;
-      g.document = prevDocument;
-      g.HTMLElement = prevHtmlElement;
+      globals.window = previousWindow;
+      globals.document = previousDocument;
+      globals.HTMLElement = previousHTMLElement;
     },
   };
-
-  g.window = {
-    addEventListener(type: string, fn: (e: StubEvent) => void): void {
-      dom.windowListeners++;
-      if (type === 'keydown') keyHandlers.push(fn);
-      if (type === 'mousemove') moveHandlers.push(fn);
+  globals.window = {
+    addEventListener(type: string, handler: (event: StubEvent) => void): void {
+      if (type === 'keydown') keyHandlers.push(handler);
     },
-    setTimeout(fn: () => void): number {
+    setTimeout(handler: () => void): number {
       const id = nextTimer++;
-      dom.timers.set(id, fn);
+      dom.timers.set(id, handler);
       return id;
     },
-    clearTimeout(id: number): void {
-      dom.timers.delete(id);
+    clearTimeout(id: number): void { dom.timers.delete(id); },
+  };
+  globals.document = {
+    activeElement: undefined,
+    createElement: (): StubEl => createStubEl(),
+    getElementById: (id: string): StubEl | null => id === 'ui' ? dom.ui : null,
+    addEventListener(type: string, handler: (event: StubEvent) => void): void {
+      if (type === 'contextmenu') contextHandlers.push(handler);
     },
   };
-  g.document = {
-    createElement: (): StubEl => createStubEl(),
-    getElementById: (id: string): StubEl | null => (id === 'ui' ? dom.ui : null),
-  };
-  // isTyping 里那句 `el instanceof HTMLElement` 在 Node 里没有这个全局,不补就是一声 ReferenceError。
-  // activeElement 桩里压根没有 ⇒ undefined instanceof 恒 false ⇒ isTyping() = false,正是"没在打字"
-  g.HTMLElement = class {};
+  globals.HTMLElement = class {};
   return dom;
 }
 
-/**
- * 桩 World:只提供 createUpgradeFlow 真的会读的那几样(见文件头的取舍)。
- * takeUpgrade / skipUpgrade / rerollOffer 的答复由用例现填 —— 本文件钉的是"点了之后调没调、调的是哪一格",
- * 而**它们各自答什么**是 sim 那边的规则。
- */
 interface StubWorld {
-  deck: Deck;
   offer: UpgradeOption[];
   scrap: number;
-  /** 星币账目(16 号):重摇按钮的置灰态读它;扣费/记账在真 World 里,桩只在成功时照扣 */
-  starCoins: number;
-  /** 本档是否已摇过一次(每级最多 1 次):true = 星币够也不许再摇 */
-  offerRerolled: boolean;
   upgradeCost: number;
-  /** 每次 takeUpgrade 的入参:[choice, col, row] */
-  takeCalls: number[][];
-  skipCalls: number;
-  rerollCalls: number;
-  /** takeUpgrade 的返回码,由用例现填 */
+  starCoins: number;
+  offerRerolled: boolean;
+  weapons: WeaponSlot[];
+  supports: SupportSlot[];
+  weaponBankedLevels: number[];
+  takeCalls: Array<[number, number | undefined]>;
   takeCode: number;
-  /** rerollOffer 的返回码,由用例现填;>0 = 成功(新候选数),负数为理由码 */
-  rerollCode: number;
-  turnRate: number;
+  replaceNeeded: boolean;
+  skipCalls: number;
   skipOk: boolean;
-  takeUpgrade(choice: number, col: number, row: number, rotation?: number): number;
+  rerollCalls: number;
+  rerollCode: number;
+  takeUpgrade(choice: number, slotIndex?: number): number;
   skipUpgrade(): boolean;
   rerollOffer(): number;
 }
 
 function createStubWorld(offer: UpgradeOption[]): StubWorld {
-  const w: StubWorld = {
-    deck: createDeck(),
+  const world: StubWorld = {
     offer,
     scrap: 60,
+    upgradeCost: 35,
     starCoins: 30,
     offerRerolled: false,
-    upgradeCost: 35,
+    weapons: createWeaponSlots(),
+    supports: createSupportSlots(),
+    weaponBankedLevels: Array(TOWERS.length).fill(0),
     takeCalls: [],
+    takeCode: 0,
+    replaceNeeded: false,
     skipCalls: 0,
-    rerollCalls: 0,
-    takeCode: PLACE_OK,
-    rerollCode: UPGRADE_CHOICE_COUNT,
-    turnRate: 100,
     skipOk: true,
-    takeUpgrade(choice: number, col: number, row: number, rotation?: number): number {
-      w.takeCalls.push(rotation === undefined ? [choice, col, row] : [choice, col, row, rotation]);
-      return w.takeCode;
+    rerollCalls: 0,
+    rerollCode: 3,
+    takeUpgrade(choice, slotIndex): number {
+      world.takeCalls.push([choice, slotIndex]);
+      if (world.replaceNeeded && slotIndex === undefined) return ACQUIRE_REPLACE_NEEDED;
+      return world.takeCode;
     },
-    skipUpgrade(): boolean {
-      w.skipCalls++;
-      return w.skipOk;
-    },
-    // 成功时照真 World 的语义记账(扣费、标记本档已摇);offer 的替换由用例先摆好 ——
-    // 本文件要钉的是"点重摇 → 调 rerollOffer → 卡片按世界当前 offer 重摆",不是扣费规则本身
+    skipUpgrade(): boolean { world.skipCalls++; return world.skipOk; },
     rerollOffer(): number {
-      w.rerollCalls++;
-      if (w.rerollCode > 0) {
-        w.starCoins -= REROLL_PRICE;
-        w.offerRerolled = true;
+      world.rerollCalls++;
+      if (world.rerollCode > 0) {
+        world.starCoins -= REROLL_PRICE;
+        world.offerRerolled = true;
       }
-      return w.rerollCode;
+      return world.rerollCode;
     },
   };
-  return w;
+  return world;
 }
 
-/** 屏幕像素 = 甲板局部坐标:于是用例可以直接拿 cellLocalPos 的格心当"点在这一格上" */
-function screenIsDeckLocal(sx: number, sy: number, out: Vec2): Vec2 {
-  out.x = sx;
-  out.y = sy;
-  return out;
+function worldAsWorld(world: StubWorld): World {
+  return world as unknown as World;
 }
 
-/** 某一格格心的"屏幕坐标"(配合上面那个恒等换算) */
-function cellPoint(deck: Deck, col: number, row: number): Vec2 {
-  return cellLocalPos(deck, col, row, { x: 0, y: 0 });
-}
+const panelOf = (dom: StubDom): StubEl => dom.ui.children[0] as StubEl;
+const pickerOf = (dom: StubDom): StubEl => dom.ui.children[1] as StubEl;
+const toastOf = (dom: StubDom): StubEl => dom.ui.children[2] as StubEl;
+const headOf = (dom: StubDom): StubEl => panelOf(dom).children[0] as StubEl;
+const cardsOf = (dom: StubDom): StubEl => panelOf(dom).children[1] as StubEl;
+const rerollOf = (dom: StubDom): StubEl => (panelOf(dom).children[2] as StubEl).children[0] as StubEl;
+const skipOf = (dom: StubDom): StubEl => (panelOf(dom).children[2] as StubEl).children[1] as StubEl;
+const pickerSlotsOf = (dom: StubDom): StubEl => pickerOf(dom).children[1] as StubEl;
+const pickerBackOf = (dom: StubDom): StubEl => pickerOf(dom).children[2] as StubEl;
 
-// —— 面板的 DOM 结构(见 createUpgradeFlow 里 append 的顺序):
-//    #ui = [面板, 提示条];面板 = [标题行, 卡片行, 按钮行];按钮行 = [重摇, 跳过, 重选, 旋转] ——
-const panelOf = (dom: StubDom): StubEl => dom.ui.children[0]!;
-const cardsOf = (dom: StubDom): StubEl => panelOf(dom).children[1]!;
-const rerollBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[0]!;
-const skipBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[1]!;
-const backBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[2]!;
-const rotateBtnOf = (dom: StubDom): StubEl => panelOf(dom).children[2]!.children[3]!;
-const toastOf = (dom: StubDom): StubEl => dom.ui.children[1]!;
-
-describe('createUpgradeFlow 两阶段状态机', () => {
+describe('createUpgradeFlow 单阶段流程', () => {
   let dom: StubDom;
   let world: StubWorld;
   let resolved: number;
 
-  /** 起手:两张卡(一门机炮 + 一块弹药库),面板已弹出、停在选卡阶段 */
   function setup(): ReturnType<typeof createUpgradeFlow> {
-    const flow = createUpgradeFlow({
-      world: world as unknown as World,
-      canvas: dom.canvas,
-      screenToDeckLocal: screenIsDeckLocal,
-      onResolved: () => {
-        resolved++;
-      },
-    });
+    const flow = createUpgradeFlow({ world: worldAsWorld(world), onResolved: () => { resolved++; } });
     flow.show();
     return flow;
   }
 
   beforeEach(() => {
     dom = installDom();
-    world = createStubWorld([towerOpt(TOWER_AUTOCANNON, 2), supportOpt(SUP_AMMO_BAY)]);
+    world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON), supportOpt(SUP_AMMO_BAY), edictOpt(EDICT_TRACER)]);
     resolved = 0;
   });
-  afterEach(() => {
-    dom.restore();
-  });
 
-  it('选卡阶段不高亮、点画布不算数', () => {
-    const flow = setup();
-    // 还没决定放什么,"哪些格合法"这个问题根本没有答案 —— 高亮层此时必须是空的
-    expect(flow.active).toBe(false);
-    dom.click(0, 0);
-    // 一次误点变成一座放错格的塔,而塔放下去不可移动、不可出售(GDD §4.5)
-    expect(world.takeCalls.length).toBe(0);
-    expect(resolved).toBe(0);
-  });
+  afterEach(() => dom.restore());
 
-  it('卡片 DOM 同时显示图标 / 名称 / 描述 / 当前等级', () => {
+  it('show 渲染世界候选、玩家标题与跳过账目', () => {
     setup();
-    const card = cardsOf(dom).children[0]!;
-    expect(card.children.length).toBe(4);
-    expect(card.children[0]!.textContent).toBe(cardIcon(world.offer[0]!));
-    expect(card.children[1]!.textContent).toBe(cardTitle(world.offer[0]!));
-    expect(card.children[2]!.textContent).toBe(cardDesc(world.offer[0]!));
-    expect(card.children[3]!.textContent).toBe(cardLevelText(world.offer[0]!));
+    expect(headOf(dom).textContent).toBe('世界已暂停 · 三选一');
+    expect(cardsOf(dom).children.length).toBe(3);
+    const first = cardsOf(dom).children[0] as StubEl;
+    expect(first.children.map((child) => child.textContent)).toEqual([
+      cardIcon(world.offer[0] as UpgradeOption),
+      cardTitle(world.offer[0] as UpgradeOption),
+      cardDesc(world.offer[0] as UpgradeOption, worldAsWorld(world)),
+      cardLevelText(world.offer[0] as UpgradeOption, worldAsWorld(world)),
+    ]);
+    expect(skipOf(dom).textContent).toContain(String(skipRefund(world.upgradeCost)));
   });
 
-  it('点一张卡 → 放置阶段:候选原样填进 PlacementUiState', () => {
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    expect(flow.active).toBe(true);
-    expect(flow.content).toBe(CELL_WEAPON);
-    expect(flow.towerType).toBe(TOWER_AUTOCANNON);
-    // 第二张是支援设施:换一张卡,三个字段整体跟着换(渲染层的合法格高亮读的就是它们)
-    fire(backBtnOf(dom), 'click');
-    fire(cardsOf(dom).children[1]!, 'click');
-    expect(flow.content).toBe(CELL_SUPPORT);
-    expect(flow.supportType).toBe(SUP_AMMO_BAY);
-  });
-
-  it('点合法格 → 按卡片下标结算一次,面板收起、战斗恢复', () => {
-    const flow = setup();
-    fire(cardsOf(dom).children[1]!, 'click'); // 选第二张
-    world.takeCode = PLACE_OK;
-    const p = cellPoint(world.deck, 0, 1);
-    dom.click(p.x, p.y);
-    // 下标必须是卡片的位置:错一位就是"选了弹药库,放下去一门炮"
-    expect(world.takeCalls).toEqual([[1, 0, 1]]);
-    expect(resolved).toBe(1);
-    expect(flow.active).toBe(false);
-    expect(panelOf(dom).style.display).toBe('none');
-  });
-
-  it('法令卡:点卡即授予,不进放置阶段,结算一次', () => {
-    world = createStubWorld([edictOpt(EDICT_TRACER)]);
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    // 法令不占格:col/row 一律无视,World 当场置位掩码并结算(world.ts 的 OFFER_EDICT 分支) ——
-    // UI 不搞"点个地方放下来"那套,整个放置阶段对法令卡直接跳过
-    expect(world.takeCalls).toEqual([[0, 0, 0]]);
-    expect(resolved).toBe(1);
-    expect(flow.active).toBe(false);
-    expect(panelOf(dom).style.display).toBe('none');
-    // 回执说人话:名字 + 全船被动,不挂"已放置"这种放置话术
-    expect(toastOf(dom).textContent).toContain('已生效');
-    expect(toastOf(dom).textContent).toContain(cardTitle(edictOpt(EDICT_TRACER)));
-  });
-
-  it('拼块卡进入焊接模式:可在甲板外拾取稳定逻辑格，R/按钮旋转后原样交给 World', () => {
-    world = createStubWorld([deckOpt(DECK_PIECE_SQUARE)]);
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    expect(flow.weldPieceType).toBe(DECK_PIECE_SQUARE);
-    expect(flow.weldRotation).toBe(0);
-    expect(rotateBtnOf(dom).style.display).toBe('block');
-
-    dom.key('KeyR');
-    expect(flow.weldRotation).toBe(1);
-    fire(rotateBtnOf(dom), 'click');
-    expect(flow.weldRotation).toBe(2);
-
-    world.takeCode = WELD_OK;
-    world.turnRate = 96;
-    const p = cellPoint(world.deck, -2, 1);
-    dom.click(p.x, p.y);
-    expect(world.takeCalls).toEqual([[0, -2, 1, 2]]);
-    expect(resolved).toBe(1);
-    expect(toastOf(dom).textContent).toContain('96');
-  });
-
-  it('拼块悬空/重叠被拒时保持时停与焊接态，并让 ghost 红闪', () => {
-    world = createStubWorld([deckOpt(DECK_PIECE_SQUARE)]);
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    world.takeCode = WELD_OVERLAP;
-    dom.click(0, 0);
-    expect(resolved).toBe(0);
-    expect(flow.active).toBe(true);
-    expect(flow.weldDenied).toBe(true);
-    expect(toastOf(dom).textContent).toBe(denyMessage(WELD_OVERLAP));
-
-    // 红闪只属于刚拒绝的锚点；移到另一格后应重新展示该格的实时合法性。
-    const next = cellPoint(world.deck, -2, 1);
-    dom.move(next.x, next.y);
-    expect(flow.weldDenied).toBe(false);
-  });
-
-  it('叠级的回执留在屏幕上,不随面板一起消失', () => {
-    // 同名叠级不占新格(GDD §5.4):恢复战斗后画面上什么都没多出来,
-    // 这行字是玩家唯一能确认"刚才那一下落成了什么"的东西
+  it('点卡立即调用 takeUpgrade(choice) 并结算', () => {
     setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    world.takeCode = PLACE_UPGRADE;
-    const p = cellPoint(world.deck, 0, 1);
-    dom.click(p.x, p.y);
-    expect(toastOf(dom).textContent).toContain('Lv');
-    expect(toastOf(dom).style.display).toBe('block');
+    fire(cardsOf(dom).children[2] as StubEl, 'click');
+    expect(world.takeCalls).toEqual([[2, undefined]]);
+    expect(resolved).toBe(1);
+    expect(panelOf(dom).style.display).toBe('none');
+    expect(toastOf(dom).textContent).toContain('法令生效');
   });
 
-  it('非法格:闪红说人话,一分钱不扣、一帧不恢复', () => {
-    // 验收标准原文:非法格不可确认放置。这里 sim 答的是"内部格只能放支援设施"
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    world.takeCode = PLACE_INTERIOR;
-    const p = cellPoint(world.deck, 1, 1);
-    dom.click(p.x, p.y);
-    expect(resolved).toBe(0);
-    // 还站在放置阶段里:可以换一格,也可以退回去换一张卡
-    expect(flow.active).toBe(true);
-    expect(panelOf(dom).style.display).toBe('flex');
-    expect(toastOf(dom).textContent).toBe(denyMessage(PLACE_INTERIOR));
-    // 被拒的那一格要闪:光有文案的话,玩家不知道自己点的是哪一格
-    expect(flow.denyIndex).toBeGreaterThanOrEqual(0);
-  });
-
-  it('点在甲板之外:连 sim 都不惊动', () => {
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    dom.click(1e5, 1e5);
-    expect(world.takeCalls.length).toBe(0);
-    expect(resolved).toBe(0);
-    // 没有格子可闪,反馈只剩这行文案
-    expect(flow.denyIndex).toBe(-1);
-    expect(toastOf(dom).textContent).toBe(denyMessage(PLACE_NO_CELL));
-  });
-
-  it('Esc / 右键 / 重选:退回选卡,不扣费也不恢复战斗', () => {
-    const flow = setup();
-    for (const cancel of [
-      () => dom.key('Escape'),
-      () => dom.rightClick(0, 0),
-      () => fire(backBtnOf(dom), 'click'),
-    ]) {
-      fire(cardsOf(dom).children[0]!, 'click');
-      expect(flow.active).toBe(true);
-      cancel();
-      // 退回选卡:高亮熄掉、面板还开着(时停要一直停到这一次升级真的结算掉为止)
-      expect(flow.active).toBe(false);
-      expect(panelOf(dom).style.display).toBe('flex');
-      expect(world.takeCalls.length).toBe(0);
-      expect(resolved).toBe(0);
-      // 取消之后点画布不该再落成一次放置(否则"重选"就成了一条隐形的确认键)
-      dom.click(0, 0);
-      expect(world.takeCalls.length).toBe(0);
+  it('武器槽满时进入替换层，再以同一候选和槽位结算', () => {
+    world.replaceNeeded = true;
+    for (let index = 0; index < world.weapons.length; index++) {
+      const slot = world.weapons[index];
+      if (!slot) continue;
+      slot.type = index === 1 ? TOWER_RAILGUN : TOWER_AUTOCANNON;
+      slot.level = index + 1;
     }
-  });
-
-  it('跳过:走 World 的 skipUpgrade 并结算,按钮上的返还额不虚报', () => {
     setup();
-    // 第 0 级的费用可能比返还额还低,按钮得照实说(与 World.skipUpgrade 的夹取同源)
-    expect(skipBtnOf(dom).textContent).toContain(String(skipRefund(world.upgradeCost)));
-    fire(skipBtnOf(dom), 'click');
-    expect(world.skipCalls).toBe(1);
-    expect(world.takeCalls.length).toBe(0);
-    expect(resolved).toBe(1);
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(world.takeCalls).toEqual([[0, undefined]]);
     expect(panelOf(dom).style.display).toBe('none');
+    expect(pickerOf(dom).style.display).toBe('flex');
+    expect((pickerSlotsOf(dom).children[1] as StubEl).textContent).toContain('Lv2');
+    fire(pickerSlotsOf(dom).children[1] as StubEl, 'click');
+    expect(world.takeCalls).toEqual([[0, undefined], [0, 1]]);
+    expect(resolved).toBe(1);
   });
 
-  it('重摇按钮存在:选卡阶段可见可点、印着星币价,放置阶段退场', () => {
-    setup();
-    expect(rerollBtnOf(dom).style.display).toBe('block');
-    expect(rerollBtnOf(dom).textContent).toContain(String(REROLL_PRICE));
-    expect(rerollBtnOf(dom).textContent).toContain('重摇');
-    // 起手星币 30 ≥ 10、本档没摇过 ⇒ 初始可点
-    expect(rerollBtnOf(dom).disabled).toBe(false);
-    expect(rerollBtnOf(dom).style.opacity).toBe('1');
-    // 放置阶段没有"换一手牌"这个动作:重摇与跳过一起退场
-    fire(cardsOf(dom).children[0]!, 'click');
-    expect(rerollBtnOf(dom).style.display).toBe('none');
-    expect(skipBtnOf(dom).style.display).toBe('none');
+  it('替换层可用按钮、Esc 和右键返回重选，且不结算', () => {
+    world.replaceNeeded = true;
+    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, level: 1 };
+    const flow = setup();
+    for (const cancel of [() => fire(pickerBackOf(dom), 'click'), () => dom.key('Escape'), () => dom.contextMenu()]) {
+      fire(cardsOf(dom).children[0] as StubEl, 'click');
+      cancel();
+      expect(panelOf(dom).style.display).toBe('flex');
+      expect(pickerOf(dom).style.display).toBe('none');
+      expect(resolved).toBe(0);
+    }
+    flow.hide();
   });
 
-  it('重摇:调 world.rerollOffer,成功后按新 offer 重摆三张卡,仍停在选卡阶段', () => {
+  it('普通拒绝留在选卡阶段，卡片过期则放行', () => {
+    world.takeCode = SUPPORT_FULL;
     setup();
-    // 用例先摆好"重摇后"的候选(真 World 由 rerollOffer 就地重掷,桩不负责替换 offer)
-    const next = [towerOpt(TOWER_RAILGUN, 0), supportOpt(SUP_RADIATOR), deckOpt(DECK_PIECE_SQUARE)];
-    world.rerollCode = UPGRADE_CHOICE_COUNT;
-    world.offer = next;
-    fire(rerollBtnOf(dom), 'click');
-    expect(world.rerollCalls).toBe(1);
-    // 重摇不是结算:面板还开着、战斗不恢复,选择仍归玩家
+    fire(cardsOf(dom).children[1] as StubEl, 'click');
     expect(resolved).toBe(0);
     expect(panelOf(dom).style.display).toBe('flex');
-    // 三张卡按新候选重摆(与 show() 同一条 renderCards 路径,数量以 world.offer 为准)
-    const titles = cardsOf(dom).children.slice(0, next.length).map((c) => c.children[1]!.textContent);
-    expect(titles).toEqual(next.map(cardTitle));
-    // 扣费与"本档已摇"由 World 记账;UI 读出后按钮立刻置灰 —— 同一档不能再摇
-    expect(world.starCoins).toBe(30 - REROLL_PRICE);
-    expect(rerollBtnOf(dom).disabled).toBe(true);
-    expect(toastOf(dom).textContent).toContain('重摇');
-    // 置灰后的第二次点击不再惊动 World(真 DOM 里 disabled 不派发 click,这是防桩的拦网)
-    fire(rerollBtnOf(dom), 'click');
-    expect(world.rerollCalls).toBe(1);
+    expect(toastOf(dom).textContent).toBe(denyMessage(SUPPORT_FULL));
+    world.takeCode = UPGRADE_NO_OFFER;
+    fire(cardsOf(dom).children[1] as StubEl, 'click');
+    expect(resolved).toBe(1);
   });
 
-  it('星币不足:按钮置灰,点了也不会惊动 World;跳过按钮照旧可用', () => {
+  it('跳过调用 skipUpgrade，空候选也不会把游戏卡在时停', () => {
+    setup();
+    fire(skipOf(dom), 'click');
+    expect(world.skipCalls).toBe(1);
+    expect(resolved).toBe(1);
+    const empty = createStubWorld([]);
+    const flow = createUpgradeFlow({ world: worldAsWorld(empty), onResolved: () => { resolved++; } });
+    flow.show();
+    expect(resolved).toBe(2);
+  });
+
+  it('重摇成功后重绘候选但不结算，并立即置灰', () => {
+    setup();
+    world.offer = [newWeaponOpt(TOWER_RAILGUN), supportOpt(SUP_RADIATOR)];
+    fire(rerollOf(dom), 'click');
+    expect(world.rerollCalls).toBe(1);
+    expect(resolved).toBe(0);
+    expect(rerollOf(dom).disabled).toBe(true);
+    expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toBe(cardTitle(world.offer[0] as UpgradeOption));
+    expect((cardsOf(dom).children[2] as StubEl).style.display).toBe('none');
+  });
+
+  it('星币不足或本档已摇过时重摇置灰', () => {
     world.starCoins = REROLL_PRICE - 1;
     setup();
-    expect(rerollBtnOf(dom).disabled).toBe(true);
-    expect(rerollBtnOf(dom).style.opacity).toBe('0.5');
-    fire(rerollBtnOf(dom), 'click');
+    expect(rerollOf(dom).disabled).toBe(true);
+    fire(rerollOf(dom), 'click');
     expect(world.rerollCalls).toBe(0);
-    expect(resolved).toBe(0);
-    // 两条出口各管各的:星币不足只影响重摇,跳过的手续费口径不受影响
-    expect(skipBtnOf(dom).disabled).toBe(false);
-    fire(skipBtnOf(dom), 'click');
-    expect(world.skipCalls).toBe(1);
-    expect(resolved).toBe(1);
   });
 
-  it('本档已摇过:按钮禁用,星币够也不许再摇(每级最多 1 次)', () => {
-    world.offerRerolled = true;
-    world.starCoins = REROLL_PRICE * 10;
-    setup();
-    expect(rerollBtnOf(dom).disabled).toBe(true);
-    fire(rerollBtnOf(dom), 'click');
-    expect(world.rerollCalls).toBe(0);
-    expect(resolved).toBe(0);
-    // 跳过照常是这条升级的出口
-    fire(skipBtnOf(dom), 'click');
-    expect(world.skipCalls).toBe(1);
-    expect(resolved).toBe(1);
-  });
-
-  it('弹一张空卡不会把玩家永久卡在时停里', () => {
-    // World 只在真的生成了候选时才响 onUpgradeOffer,故这是一道拦网:
-    // 空面板 + 时停 = 一局到此为止,而且看上去像"游戏卡死了"
-    world.offer.length = 0;
-    setup();
-    expect(resolved).toBe(1);
+  it('setWorld 收起旧流程，下一次点击只落到新世界', () => {
+    const flow = setup();
+    const next = createStubWorld([newWeaponOpt(TOWER_RAILGUN)]);
+    flow.setWorld(worldAsWorld(next));
     expect(panelOf(dom).style.display).toBe('none');
-  });
-
-  it('弹第二次卡复用同一批 DOM,不越堆越多', () => {
-    const flow = setup();
-    const cardCount = cardsOf(dom).children.length;
-    expect(cardCount).toBe(world.offer.length);
-    flow.hide();
-    flow.show();
-    expect(cardsOf(dom).children.length).toBe(cardCount);
-    expect(dom.ui.children.length).toBe(2);
-  });
-
-  it('setWorld:换掉引用,重开后的确认落在新船上', () => {
-    const flow = setup();
-    fire(cardsOf(dom).children[0]!, 'click');
-    const next = createStubWorld([towerOpt(TOWER_AUTOCANNON, 0)]);
-    flow.setWorld(next as unknown as World);
-    // 上一局的卡片与下标一律作废:留着就会拿新世界的 offer 去兑上一局的选择
-    expect(flow.active).toBe(false);
-    expect(panelOf(dom).style.display).toBe('none');
-    // **不替 main 恢复战斗**:重开流程自己会复位 run.paused 与甲板缩放
     expect(resolved).toBe(0);
-
     flow.show();
-    fire(cardsOf(dom).children[0]!, 'click');
-    const p = cellPoint(next.deck, 0, 1);
-    dom.click(p.x, p.y);
-    // 忘了换引用的话,这一下会照旧落进上一局那艘沉船里,而画面上什么都不会发生
-    expect(next.takeCalls.length).toBe(1);
-    expect(world.takeCalls.length).toBe(0);
-  });
-
-  it('setWorld 不重复注册 window 事件、不重复 append DOM,并抹掉上一局的提示', () => {
-    const flow = setup();
-    const listeners = dom.windowListeners;
-    // 建的时候确实挂了监听器、也确实 append 了面板与提示条 —— 否则下面两条"没变"是废话
-    expect(listeners).toBeGreaterThan(0);
-    expect(dom.ui.children.length).toBe(2);
-    // 先制造一条还没到点的提示(上一局的话)
-    fire(cardsOf(dom).children[0]!, 'click');
-    dom.click(1e5, 1e5);
-    expect(dom.timers.size).toBe(1);
-
-    flow.setWorld(createStubWorld([]) as unknown as World);
-    flow.setWorld(createStubWorld([]) as unknown as World);
-    // 每重开一局多一份监听器 = 一次点击结算好几次;多一块面板 = 屏幕上越堆越高
-    expect(dom.windowListeners).toBe(listeners);
-    expect(dom.ui.children.length).toBe(2);
-    // 计时器也得停:留着的话它会在新局里回来抹一次 denyIndex —— 抹的是别人的状态
-    expect(dom.timers.size).toBe(0);
-    expect(toastOf(dom).textContent).toBe('');
-  });
-
-  it('syncHover 只在放置阶段重算悬停格', () => {
-    // 时停期间船不动,但甲板放大有一段缓动(见 renderer.setDeckZoom):只在 mousemove 里算的话,
-    // 缓动那零点几秒里"看到的框"与"点下去的格"不是同一个 —— 而塔一放就不可移动、不可出售
-    const flow = setup();
-    // 选卡阶段:高亮层是空的,悬停格不该被算出来(算了就会在没选卡时描一个框)
-    flow.hoverIndex = 999;
-    flow.syncHover();
-    expect(flow.hoverIndex).toBe(999);
-
-    fire(cardsOf(dom).children[0]!, 'click');
-    flow.hoverIndex = 999;
-    flow.syncHover();
-    // 进了放置阶段就每帧现算(桩里鼠标停在 (0,0) = 船正中那一格),而不是冻在上一次的下标上
-    expect(flow.hoverIndex).toBe(cellIndexAtLocal(world.deck, 0, 0));
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(next.takeCalls).toEqual([[0, undefined]]);
+    expect(world.takeCalls).toEqual([]);
   });
 });

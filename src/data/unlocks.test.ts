@@ -10,8 +10,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EDICT_KIND_COUNT, EDICTS } from './edicts';
-import { isEvolutionTower } from './evolutions';
 import { LOADOUTS } from './loadout';
+import { isMergeResult } from './merges';
 import { TOWER_KIND_COUNT, TOWERS } from './towers';
 import {
   COND_ELITE_KILLS,
@@ -55,12 +55,10 @@ describe('条件式解锁表', () => {
     for (const u of UNLOCKS) {
       expect(UNLOCK_KINDS).toContain(u.kind);
       if (u.kind === UNLOCK_TOWER) {
-        // 进阶塔是"解锁后进三选一池"的型号:它必须落在塔表内,且不是进化塔
-        // (进化塔只从配方来,卡池闸门对它们恒关,再挂一把解锁锁是自相矛盾)
         expect(u.type).toBeGreaterThanOrEqual(0);
         expect(u.type).toBeLessThan(TOWER_KIND_COUNT);
         expect(TOWERS[u.type], `塔型 ${u.type} 没有塔`).toBeDefined();
-        expect(isEvolutionTower(u.type), `塔型 ${u.type} 是进化塔,不该走解锁入池`).toBe(false);
+        expect(isMergeResult(u.type), `塔型 ${u.type} 是合成结果,不该走解锁入池`).toBe(false);
       } else if (u.kind === UNLOCK_EDICT) {
         expect(u.type).toBeGreaterThanOrEqual(0);
         expect(u.type).toBeLessThan(EDICT_KIND_COUNT);

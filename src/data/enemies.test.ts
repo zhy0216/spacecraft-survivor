@@ -7,7 +7,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { tuning } from '../sim/config';
+import { ELITE } from './affixes';
 import {
+  BOSS,
   BH_SEEK,
   BH_SEEK_CHARGE,
   BH_SPORE,
@@ -122,6 +124,16 @@ describe('敌人数值表', () => {
     // 全 0 的表能通过上面每一条,却让整局一颗残骸都攒不出来 —— 升级流程从此永远不触发,
     // 而症状是"玩了十分钟没弹过卡",不会有任何一处报错
     expect(ENEMIES.some((def) => def.scrap > 0)).toBe(true);
+  });
+
+  it('普通敌人星币面额为 1/2/2/4/3,且所有面额都是非负整数', () => {
+    expect(ENEMIES.map((def) => def.starCoins)).toEqual([1, 2, 2, 4, 3]);
+    for (const def of ENEMIES) {
+      expect(Number.isInteger(def.starCoins)).toBe(true);
+      expect(def.starCoins).toBeGreaterThanOrEqual(0);
+    }
+    expect(ELITE.starCoins).toBe(10);
+    expect(BOSS.starCoins).toBe(30);
   });
 
   it('HP 时间缩放口径来自 GDD §14,单地图星区乘数固定 ×1', () => {

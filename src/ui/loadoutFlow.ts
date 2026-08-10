@@ -64,7 +64,7 @@ const KEY_BADGE_CSS =
   `display:inline-block;min-width:16px;text-align:center;margin-right:6px;` +
   `border:1px solid ${LINE_COLOR};border-radius:3px;color:${OK_COLOR};`;
 
-/** 格子示意图用的单字代号:塔/设施各一档,不认识的型号一律 '?'(数值表写坏时当场看得见) */
+/** 示意图用的单字代号:武器/支援各一档,不认识的型号一律 '?'(数值表写坏时当场看得见) */
 const TOWER_GLYPH: string[] = [
   '机', // TOWER_AUTOCANNON
   '光', // TOWER_LASER
@@ -72,50 +72,36 @@ const TOWER_GLYPH: string[] = [
   '轨', // TOWER_RAILGUN
   '防', // TOWER_PD
   '迫', // TOWER_MORTAR
-  '特', // TOWER_GATLING(进化塔,起手表不引用,占位)
-  '相', // TOWER_PHASE
-  '矛', // TOWER_PARTICLE
-  '冠', // TOWER_TESLA
-  '雨', // TOWER_FIRESTORM
-  '棘', // TOWER_THORN
+  '风', // TOWER_STORM_CANNON(合成武器,起手表不引用,占位)
+  '极', // TOWER_AURORA
+  '湮', // TOWER_ANNIHILATION
+  '雷', // TOWER_THUNDER
+  '焦', // TOWER_DELUGE
+  '荆', // TOWER_THORN
   '弹', // TOWER_MISSILE_NEST
 ];
-const SUPPORT_GLYPH: string[] = ['弹', '散', '容', '甲'];
+const SUPPORT_GLYPH: string[] = ['弹', '散', '容', '甲', '验', '磁'];
 
-function glyphFor(entry: {
-  content: number;
-  towerType: number;
-  supportType: number;
-}): string {
-  if (entry.content === 1) {
-    return entry.towerType >= 0 && entry.towerType < TOWER_KIND_COUNT
-      ? TOWER_GLYPH[entry.towerType]!
-      : '?';
-  }
-  if (entry.content === 2) {
-    return entry.supportType >= 0 && entry.supportType < SUPPORT_KIND_COUNT
-      ? SUPPORT_GLYPH[entry.supportType]!
-      : '?';
-  }
-  return '?';
+function glyphForTower(type: number): string {
+  return type >= 0 && type < TOWER_KIND_COUNT ? TOWER_GLYPH[type]! : '?';
+}
+
+function glyphForSupport(type: number): string {
+  return type >= 0 && type < SUPPORT_KIND_COUNT ? SUPPORT_GLYPH[type]! : '?';
 }
 
 /**
- * 甲板示意图:3 列 × 4 行的文本图,行 0 = 船头(与 sim/deck 的 row 约定一致)。
- * 每行 "[格][格][格]",空格用 '·' —— 一张图直接读出"炮在哪、哪边空着",
- * 角落位(行 0/3 × 列 0/2)是不是被用了也一眼可见。
+ * 起手配置示意图:两行文本 —— 武器槽(4 个)+ 支援槽(4 个),空格用 '·'。
+ * 一行直接读出"开局带几门炮、什么炮、几个支援",与槽位制的装配心智一致。
  */
 export function loadoutDiagram(def: LoadoutDef): string {
-  const grid: string[][] = [
-    ['·', '·', '·'],
-    ['·', '·', '·'],
-    ['·', '·', '·'],
-    ['·', '·', '·'],
-  ];
-  for (const e of def.entries) {
-    if (e.col >= 0 && e.col < 3 && e.row >= 0 && e.row < 4) grid[e.row]![e.col] = glyphFor(e);
-  }
-  const lines = grid.map((row) => `[${row.join('][')}]`);
+  const weapons = Array.from({ length: 4 }, (_, i) =>
+    i < def.weapons.length ? glyphForTower(def.weapons[i]!) : '·',
+  );
+  const supports = Array.from({ length: 4 }, (_, i) =>
+    i < def.supports.length ? glyphForSupport(def.supports[i]!) : '·',
+  );
+  const lines = [`武器 [${weapons.join('][')}]`, `支援 [${supports.join('][')}]`];
   lines.push('↑ 船头');
   return lines.join('\n');
 }

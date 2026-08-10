@@ -12,7 +12,6 @@
  * 混进哈希只会让"渲染改一下淡出时长"看起来像确定性回归。同理它**不做插值**(最多差一逻辑帧)。
  * 坐标一律**世界坐标**(不是甲板局部坐标):链电与磁轨的终点本就在船外,局部系表达不了。
  */
-import type { DeckCell } from './deck';
 import type { Enemy } from './enemy';
 import type { Bullet } from './bullet';
 
@@ -166,6 +165,10 @@ export interface FireSink {
   ): void;
   /** 邻域查询(复用 World 的空间哈希,绝不线性扫全场),结果写进 out */
   query(x: number, y: number, r: number, out: Enemy[]): void;
-  /** 记一次开火:broadside(单舷 ≥3 塔同帧开火)统计的唯一入口 */
-  fired(cell: DeckCell): void;
+  /**
+   * 记一次开火:槽位下标(WEAPON_SLOT_COUNT 内的编号)。
+   * 旧版的 broadside(单舷 ≥3 塔同帧开火)统计随甲板四舷删除,实现方(World)目前只收不记 ——
+   * 签名保留 slotIndex 是给将来 HUD 的"每槽开火计数"留的口子,也是"这座塔开火"的唯一事件通道。
+   */
+  fired(slotIndex: number): void;
 }

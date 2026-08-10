@@ -18,9 +18,14 @@ import {
   DOCK_EDICT_PRICE,
   DOCK_REPAIR_FRACTION,
   DOCK_REPAIR_PRICE,
+  DOCK_SHOP_REFRESH_PRICE,
+  DOCK_WEAPON_COUNT,
+  DOCK_WEAPON_PRICE,
   DROP_MAX_ALIVE,
+  OFFER_WEIGHT_EDICT,
+  OFFER_WEIGHT_NEW_WEAPON,
   OFFER_WEIGHT_SUPPORT,
-  OFFER_WEIGHT_TOWER,
+  OFFER_WEIGHT_WEAPON_UPGRADE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   skipRefundFor,
@@ -132,13 +137,15 @@ describe('三选一与跳过', () => {
     expect(Number.isInteger(UPGRADE_CHOICE_COUNT)).toBe(true);
   });
 
-  it('类别权重非负、和为正,且塔类占比更大(build 的主体长在甲板上)', () => {
-    expect(OFFER_WEIGHT_TOWER).toBeGreaterThanOrEqual(0);
-    expect(OFFER_WEIGHT_SUPPORT).toBeGreaterThanOrEqual(0);
-    // 和为 0 的表能通过上面每一条,却让类别轮盘无从掷起(sim/upgrade 那边会回落成塔类)
-    expect(OFFER_WEIGHT_TOWER + OFFER_WEIGHT_SUPPORT).toBeGreaterThan(0);
-    // GDD §7 的卡池比例里武器塔本就压过支援(45% vs 25%),裁剪成两类之后这条方向不该翻过来
-    expect(OFFER_WEIGHT_TOWER).toBeGreaterThan(OFFER_WEIGHT_SUPPORT);
+  it('四类权重固定为 5/25/35/35,总和为 100', () => {
+    const weights = [
+      OFFER_WEIGHT_NEW_WEAPON,
+      OFFER_WEIGHT_WEAPON_UPGRADE,
+      OFFER_WEIGHT_SUPPORT,
+      OFFER_WEIGHT_EDICT,
+    ];
+    expect(weights).toEqual([5, 25, 35, 35]);
+    expect(weights.reduce((sum, weight) => sum + weight, 0)).toBe(100);
   });
 
   it('跳过手续费是正整数,返还 = cost − 手续费夹在 [0, cost] —— 跳过永远净亏,不是印残骸的机器', () => {
@@ -170,6 +177,11 @@ describe('三选一与跳过', () => {
 });
 
 describe('船坞商店(21 号)', () => {
+  it('武器货架固定 2 把、单价 30、刷新价 10', () => {
+    expect(DOCK_WEAPON_COUNT).toBe(2);
+    expect(DOCK_WEAPON_PRICE).toBe(30);
+    expect(DOCK_SHOP_REFRESH_PRICE).toBe(10);
+  });
   it('法令货架张数是小正整数:2 张配 300–430px 的侧栏不挤,货架摆得下也读得完', () => {
     expect(Number.isInteger(DOCK_EDICT_COUNT)).toBe(true);
     expect(DOCK_EDICT_COUNT).toBeGreaterThan(0);

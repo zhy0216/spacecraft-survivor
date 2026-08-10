@@ -1,23 +1,25 @@
 /**
  * 敌方弹丸实体与推进(孢子炮手 GDD §6.2)—— 纯逻辑。
  * 铁律 1:本目录永不 import pixi/DOM,也不用 Math.random —— 弹丸是"速度 × dt"的确定性积分,
- *   命中判据是 damage.ts 的 classifyHit(与敌人接触结算共用同一份几何),同 seed 必然复现。
+ *   命中判据是"船体受击圆 + 弹丸半径"的圆判定(sim/damage 的 shipRadius 唯一口径),
+ *   同 seed 必然复现。
  * 铁律 2:每颗弹丸维护 px/py = 上一逻辑帧位置,渲染层按 alpha 插值(与 my 子弹同口径)。
  * 铁律 3:弹丸是对象池里的普通对象,字段在 createEnemyBullet 里一次性声明齐、运行期绝不新增。
  *
  * 与我方子弹(sim/bullet.ts)的分工是方向上的镜像:那边是"我方弹道 → 打敌人",
  * 这边是"敌方弹道 → 打船"。差异只有两处:
- *   一、目标判定不查空间哈希(敌人少、船只有一艘):直接对船体做 damage.ts 的三层判定
- *       (核心区真掉血 / 甲板轮廓只出火花 / 没碰上),与 settleHullDamage 的敌人接触同一套语义;
- *   二、伤害入口是 world.damageShip —— 09 号在注释里预留的"敌方弹幕伤害接口"今天第一次被真正使用。
+ *   一、目标判定不查空间哈希(敌人少、船只有一艘):直接对船体受击圆做判定 ——
+ *       **没有核心/擦碰分层**(改版 09 号:甲板三层判定随网格删除,命中即真掉血);
+ *   二、伤害入口是 world.damageShip —— 09 号在注释里预留的"敌方弹幕伤害接口",
+ *       实际结算量 = 弹丸伤害 × 支援聚合的 damageTakenMul(sim/damage 的 hullDamageTaken)。
  *
  * 本文件对世界只有一条**类型**依赖(EnemyBulletSink):扣血与记可视化事件全经那份契约,
  * 于是它能脱开整个世界单测(一个记账用的假 sink 就能钉住全部命中规则),
  * 也不会与 world 连成运行期循环依赖(与 sim/bullet.ts 的 FireSink 同一条理由)。
  */
 import type { Pool } from '../core/pool';
-import { classifyHit, HIT_CORE, HIT_GRAZE } from './damage';
-import type { Deck } from './deck';
+import { shipRadius } from './damage';
+import { tuning } from './config';
 import { type Ship } from './ship';
 
 /**
@@ -55,7 +57,7 @@ export interface EnemyBullet {
    * 与我方子弹同一条口径:时间是路程的度量,还顺带把"飞出世界边界"一并管了。
    */
   life: number;
-  /** 弹丸碰撞半径(渲染层画多大一个点的依据,判定时与船体判定区相加) */
+  /** 弹丸碰撞半径(渲染层画多大一个点的依据,判定时与船体受击圆相加) */
   radius: number;
 }
 
@@ -93,22 +95,20 @@ export function resetEnemyBullet(b: EnemyBullet): void {
 }
 
 /**
- * 开火的去处(与 sim/fx.ts 的 FireSink 同一条写法):弹丸命中只问"船掉血 + 记事件"两件事,
- * 实现方(World)负责 damageShip 的舷向减伤/受击惩罚与 FxEvent 的具体填法。
+ * 开火的去处(与 sim/fx.ts 的 FireSink 同一条写法):弹丸命中只问"船掉血 + 记事件"一件事,
+ * 实现方(World)负责 damageShip 的减伤(支援聚合的 damageTakenMul)与 FxEvent 的具体填法。
  */
 export interface EnemyBulletSink {
   /**
-   * 弹丸进核心区 = 真掉血。实现方必须走 world.damageShip(09 号预留的敌方弹幕伤害入口),
+   * 弹丸进船体受击圆 = 真掉血。实现方必须走 world.damageShip(09 号预留的敌方弹幕伤害入口),
    * 并按 settleHullDamage 同款口径推 FXV_HULL_HIT(飘字 = 实际结算伤害)。
-   * @param x @param y 命中点世界坐标(撞的是哪一舷由它相对船头的方位角定)
+   * @param x @param y 命中点世界坐标(飘字/爆炸表现画在哪,不再参与判定 —— 四舷已删)
    */
   hullHit(x: number, y: number, damage: number): void;
-  /** 蹭到核心区之外的甲板:只出火花,一分血都不结算(GDD §4.4,与敌人接触同口径) */
-  graze(x: number, y: number): void;
 }
 
 /**
- * 推进全场敌方弹丸一逻辑帧:积分 → 船体判定 → 回池。
+ * 推进全场敌方弹丸一逻辑帧:积分 → 船体受击圆判定 → 回池。
  * @param sink 弹丸的去处(World 实现):本函数经它扣血、记事件,不认识世界的内部结构
  *
  * **倒序遍历**:命中与到期都要当场回收,而 pool 的 despawnAt 是 swap-remove ——
@@ -117,21 +117,18 @@ export interface EnemyBulletSink {
  * **先判命中再判到期**(与 stepBullets 一字同源):这一帧的位移正是它飞完的最后一段,
  * 那段里撞上船的人不该白撞 —— 射程边界上的弹丸恰好该在边界上炸响。
  *
- * **擦边(甲板轮廓)只出火花、弹丸继续飞**:甲板轮廓是"接触"模型的概念 —— 敌人在甲板上
- * 蹭着是擦碰,弹丸从轮廓上空掠过不该被拦下;若擦边即消失,瞄着船心的齐射会在进核心区
- * 之前(轮廓恒包住核心区)全部白给,远程威胁整个失效。火花只在**进入**轮廓的那一帧响一次
- * (用上一帧的判定结果做边沿检测,零额外状态),读作"这一发擦着甲板过去了"。
- *
- * 全程零 rng、零分配:命中取哪一层完全由"船位姿 + 甲板 + 弹丸位置"决定。
+ * 全程零 rng、零分配:命中完全由"船位姿 + 弹丸位置"决定(受击圆半径现读 tuning)。
  */
 export function stepEnemyBullets(
   pool: Pool<EnemyBullet>,
   dt: number,
   ship: Ship,
-  deck: Deck,
   sink: EnemyBulletSink,
 ): void {
   const items = pool.items;
+  // 受击圆半径 = 船体半长 + 弹丸体型:弹丸的判定体与敌人接触粗筛同一条口径(damage.shipRadius),
+  // 判定圆的大小**由命中那一帧的弹丸半径**定,故 hoist 出循环的是船的那一半
+  const hullR = shipRadius(tuning.shipLength);
   for (let i = items.length - 1; i >= 0; i--) {
     const b = items[i]!;
     // 先存上一帧位置再积分(与 my 子弹、敌人循环同口径):渲染插值的两端由此成立
@@ -141,19 +138,14 @@ export function stepEnemyBullets(
     b.y += b.vy * dt;
     b.life -= dt;
 
-    // 船体三层判定(核心区 / 甲板轮廓 / 没碰上),与敌人接触结算共用同一份几何。
-    // 判定体 = 弹丸半径 + 船体判定区(核心恒按初始 3×4,扩建不把船变成更大的靶子,GDD §4.4)
-    const hit = classifyHit(ship, deck, b.x, b.y, b.radius);
-    if (hit === HIT_CORE) {
+    // 圆命中判定(含边界):圆心距 ≤ 船体受击半径 + 弹丸半径 = 打上船了。
+    // 旧版"先判核心后判轮廓"的三层几何随甲板删除 —— 命中即真掉血,没有擦碰层。
+    const dx = b.x - ship.x;
+    const dy = b.y - ship.y;
+    const hitR = hullR + b.radius;
+    if (dx * dx + dy * dy <= hitR * hitR) {
       sink.hullHit(b.x, b.y, b.damage);
       pool.despawnAt(i); // 命中即消失:弹丸不是穿透物,炸在船身上
-      continue;
-    }
-    if (hit === HIT_GRAZE) {
-      // 只在"上一帧还没擦、这一帧擦上"的边沿响一次火花,然后继续飞(理由见函数头)
-      if (classifyHit(ship, deck, b.px, b.py, b.radius) !== HIT_GRAZE) {
-        sink.graze(b.x, b.y);
-      }
       continue;
     }
     if (b.life <= LIFE_EPS) pool.despawnAt(i);

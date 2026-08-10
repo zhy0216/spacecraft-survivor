@@ -72,19 +72,24 @@ export function upgradeCost(upgrades: number): number {
 export const UPGRADE_CHOICE_COUNT = 3;
 
 /**
- * 三选一里"塔类 / 支援 / 甲板拼块 / 法令"的类别权重，恢复 GDD §7 的 45/25/15/15。
- * **四类之和恰为 100**(18 号落地后不再有归一化过渡态):甲板拼块专属于两分钟整备,
- * 战斗升级时 sim/upgrade.ts 把它的权重当场按 0 处理(同一条轮盘,不必改这四个数)。
+ * 三选一里"新武器 / 武器升级 / 支援 / 法令"的类别权重(用户设计会重写)。
+ * **四类之和恰为 100**:甲板拼块随甲板网格整类删除(见 GDD 改版),这里没有它的位置。
+ *
+ * 用户设计会的三条口径:
+ *   - **新武器只有 5%**:武器获得的主要通道是商店(整备期),升级三选一几乎不给新武器,
+ *     让"拿到新武器"永远是一件事而不是顺手的事;
+ *   - **武器升级 25%**:升级一张同名武器卡 = 该武器 +1 级(可对未拥有的武器先升级,
+ *     "存档等级"见 World.weaponBankedLevels —— 获得那把武器时从存档级起步);
+ *   - **支援 35% / 法令 35%**:两者是升级三选一的主体。支援可叠(全船被动),
+ *     经验增幅器/磁力收集器这两个新支援就是"支援可以加速升级"那一半的落地。
  *
  * 权重只决定"掷出来的那个数怎么解释",**不决定掷几次**:每个候选位恒定消耗 2 次 rng
- *(见 rollUpgradeOffer),于是改这四个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
+ * (见 rollUpgradeOffer),于是改这四个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
  */
-export const OFFER_WEIGHT_TOWER = 45;
-export const OFFER_WEIGHT_SUPPORT = 25;
-/** 甲板拼块(GDD §7 的 15% 占位;战斗升级关它)。 */
-export const OFFER_WEIGHT_DECK = 15;
-/** 法令(GDD §7 的 15% 占位;全船被动,不占格 —— 18 号)。 */
-export const OFFER_WEIGHT_EDICT = 15;
+export const OFFER_WEIGHT_NEW_WEAPON = 5;
+export const OFFER_WEIGHT_WEAPON_UPGRADE = 25;
+export const OFFER_WEIGHT_SUPPORT = 35;
+export const OFFER_WEIGHT_EDICT = 35;
 
 /**
  * 跳过一次升级的**手续费**(畅玩性调整,取代旧的"固定返还 15"):
@@ -110,11 +115,12 @@ export function skipRefundFor(cost: number): number {
 
 /**
  * 重摇一次三选一的**星币**价格(GDD §7「每次升级可花 10 星币重摇一次」,16 号 issue)。
- * 星币是第二货币:面额在 data/affixes.ts 的 ELITE.starCoins / data/enemies.ts 的
- * BOSS.starCoins(击杀直接进账 World.starCoins),MVP 内唯一的消费点就是本常量。
+ * 星币是第二货币:面额在 data/enemies.ts 的 ENEMIES[kind].starCoins(普通怪,用户设计会:
+ * **所有击杀都进账**,面额 1-4 按敌型)/ ELITE.starCoins / BOSS.starCoins
+ * (击杀直接进账 World.starCoins)。MVP 内的消费点是本常量 + 船坞商店(见下)。
  * 与 UPGRADE_SKIP_FEE 同一条"固定支出"口径:**单次固定、不随曲线浮动** ——
  * 否则"这一手值不值 10 星币"的取舍会随档位漂移,玩家没法建立直觉。
- * 两条出口各管各的、不互相抵扣:跳过退残骸(15)、重摇花星币(10)。
+ * 两条出口各管各的、不互相抵扣:跳过退经验(15)、重摇花星币(10)。
  */
 export const REROLL_PRICE = 10;
 
@@ -166,6 +172,33 @@ export const DOCK_REPAIR_PRICE = 25;
  * 比例修复不许因为舍入变成"回了个寂寞"。
  */
 export const DOCK_REPAIR_FRACTION = 0.4;
+
+/**
+ * —— 船坞商店的武器货架(用户设计会)——
+ * 商店出现武器、可刷新:整备期间花星币买武器,不满意就花星币刷新货架。
+ * 与 REROLL_PRICE / DOCK_EDICT_PRICE 同一条"固定支出"口径。
+ */
+
+/**
+ * 商店每次上架的武器卡张数(槽位上限 4,货架 2 张不拥挤)。
+ * 它是 rng 消耗次数:每次上架恰消耗本常量的 rng(World.rollShopWeapons),
+ * 与 DOCK_EDICT_COUNT 同一条"设计口径不是旋钮"的待遇。
+ */
+export const DOCK_WEAPON_COUNT = 2;
+
+/**
+ * 一把武器卡的星币价。口径:约等于一个航段(两分钟)的击杀收入 ——
+ * 普通怪按敌型 1-4、精英 10(BOSS 30),打得勤一个航段攒 30-50 星币。
+ * 30 的定位是"攒一个航段才买得起一把新武器":武器获得的主要通道是商店,
+ * 价定低了,升级三选一里那 5% 的新武器(几乎白给)就会反过来抢商店的生意。
+ */
+export const DOCK_WEAPON_PRICE = 30;
+
+/**
+ * 刷新商店货架的星币价。与 REROLL_PRICE 同档(10):刷新是"不满意这一手"的
+ * 止损动作,不该贵到舍不得按 —— 但也不许免费(免费 = 无限抽到满意为止)。
+ */
+export const DOCK_SHOP_REFRESH_PRICE = 10;
 
 /**
  * 两次弹卡之间的最小间隔(秒)。settleUpgrade 原本每帧尾只判 scrap >= cost:
