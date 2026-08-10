@@ -22,6 +22,9 @@ import {
   ELITE,
 } from '../data/affixes';
 import {
+  DOCK_EDICT_PRICE,
+  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_PRICE,
   DROP_MAX_ALIVE,
   REROLL_PRICE,
   skipRefundFor,
@@ -46,6 +49,7 @@ import {
   ENEMIES,
   KIND_BEETLE,
   KIND_BOSS,
+  KIND_SPORE,
   KIND_STRAFER,
   KIND_SWARM,
   KIND_TRAILER,
@@ -61,6 +65,7 @@ import {
   TOWER_LASER,
   TOWER_MAX_LEVEL,
   TOWER_MISSILE_NEST,
+  TOWER_PD,
   towerArcDeg,
   towerFireInterval,
   towerHeatMax,
@@ -115,6 +120,7 @@ import {
 import {
   type Enemy,
   affixMask,
+  ENEMY_HIT_FLASH,
   hasAffix,
   hpScaleAt,
   initEnemy,
@@ -122,7 +128,7 @@ import {
   ST_DASH,
   ST_WINDUP,
 } from './enemy';
-import { FXV_BEAM, FXV_HULL_HIT, FXV_MUZZLE, FXV_SPARK } from './fx';
+import { FXV_BEAM, FXV_HULL_HIT, FXV_IMPACT, FXV_KILL, FXV_MUZZLE, FXV_SPARK } from './fx';
 import { DEG2RAD, type ShipCommand, type Vec2, wrapAngle } from './ship';
 import { cellFireInterval, cellHeatMax } from './tower';
 import { waveDirAt } from './waves';
@@ -749,6 +755,56 @@ describe('开火接线(05 号:塔真的打出东西来)', () => {
     }
     expect(w.fx.size).toBe(0);
     expect(frames).toBeLessThanOrEqual(Math.ceil(FX_LIFE_BEAM / SIM_DT) + 1);
+  });
+
+  it('受击闪白:命中置满、逐帧减 dt 夹 0(与 hitCd 同口径,渲染层只读剩余量)', () => {
+    const w = new World(123);
+    w.step();
+    const e = w.enemies.items[0]!;
+    park(e, 0, 0);
+    w.damageEnemy(e, 1);
+    expect(e.hitFlash).toBe(ENEMY_HIT_FLASH);
+
+    w.step();
+    expect(e.hitFlash).toBeCloseTo(ENEMY_HIT_FLASH - SIM_DT, 12); // 衰减一帧,不为负
+    for (let f = 0; f < 60 && e.hitFlash > 0; f++) w.step();
+    expect(e.hitFlash).toBe(0); // 夹 0:不会跑成负数在哈希里无限发散
+  });
+
+  it('hitFlash 不进 checksum:同样的世界只差一个闪白剩余量,checksum 一字不差', () => {
+    // 判定口径(见 world.checksum 的注释):hitFlash 是纯表现 —— 不参与任何判定,
+    // 且完全由伤害输入决定 = 派生量。这里手工抹掉一只的闪白再比哈希:
+    // 若它进了哈希,两个"表现不同、世界相同"的局会当场分叉
+    const a = new World(77);
+    a.step();
+    const b = new World(77);
+    b.step();
+    const ea = a.enemies.items[0]!;
+    const eb = b.enemies.items[0]!;
+    park(ea, 100, 0);
+    park(eb, 100, 0);
+    a.damageEnemy(ea, 5);
+    b.damageEnemy(eb, 5);
+    eb.hitFlash = 0; // 唯一差异:闪白被手工抹掉(表现层差异,世界不该跟着分叉)
+    expect(a.checksum()).toBe(b.checksum());
+  });
+
+  it('击杀爆点事件携带致死那一发的实际伤害与相对满血比例(飘字用)', () => {
+    const w = new World(88);
+    w.step();
+    const e = w.enemies.items[0]!;
+    park(e, 100, 0);
+    const full = e.maxHp;
+    w.damageEnemy(e, full); // 一发送走:lastHit 由 damageEnemy 落账
+    // 钉死敌速:reap 那一帧读的是敌人"当场"的位置,怪还会动 —— 不动才比得准(afterEach 还原)
+    tuning.enemySpeedScale = 0;
+    w.step(); // 帧尾 reap 落账:击杀爆点入池
+    const killFx = w.fx.items.find((fx) => fx.kind === FXV_KILL);
+    expect(killFx).toBeDefined();
+    expect(killFx!.damage).toBe(full); // 致死伤害 = 满血一发送走
+    expect(killFx!.dmgRatio).toBeCloseTo(1, 9); // damage / maxHp = 1
+    expect(killFx!.x0).toBeCloseTo(100, 9); // 爆点坐标 = 死亡地点(敌人钉在 (100, 0))
+    expect(killFx!.y0).toBeCloseTo(0, 9);
   });
 
   it('broadside:同舷三座塔同帧开火 → 记下那一舷与塔数;没人开火的帧读回 -1/0', () => {
@@ -3741,5 +3797,151 @@ describe('解锁接线(19 号:掩码注入、卡池过滤、eliteKills 与确定
       return stream;
     };
     expect(play(0)).toEqual(play(MASK_ALL)); // 解锁与否,后续 24 次掷值逐位一致
+  });
+});
+
+/**
+ * 孢子炮手与点防拦截(22 号,GDD §6.2 / §5.2)—— 世界这一层的接线:
+ * 齐射落地(敌人循环里消费 sporeFire 闩)、弹丸的 damageShip 路由、点防拦截的移除,
+ * 以及最要紧的两条确定性口径 —— 齐射与拦截**零 rng**(volley 由锚定计时器驱动,
+ * 拦截由几何驱动),checksum 把敌方弹丸当 sim 状态哈进去。
+ * 行为状态机本身在 enemy.test.ts 钉,这里钉的是"世界把它的副作用接对了没有"。
+ */
+describe('孢子炮手与点防拦截(22 号)', () => {
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  });
+
+  /** 换脚本并回到正式出怪路(照"波次出怪接线"那个 describe 的同款写法) */
+  function useScript(...segs: WaveSegment[]): void {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...segs);
+  }
+
+  function segment(p: Partial<WaveSegment> = {}): WaveSegment {
+    return {
+      name: 'seg',
+      duration: 60,
+      dirStartDeg: 0,
+      dirEndDeg: 0,
+      streams: [],
+      bursts: [],
+      elites: [],
+      ...p,
+    };
+  }
+
+  /** 固定随机序列 + 计数器(照"星币与重摇"那个 describe 的同款写法) */
+  class CountingRng {
+    calls = 0;
+    constructor(private readonly values: number[] = []) {}
+    next(): number {
+      return this.values[this.calls++] ?? 0;
+    }
+  }
+
+  /** 手动往场上塞一只孢子(正式出怪器之外的注入,与既有用例的手动 initEnemy 同款) */
+  function injectSpore(w: World, dx: number, dy: number): void {
+    const e = w.enemies.spawn();
+    initEnemy(e, KIND_SPORE, w.ship.x + dx, w.ship.y + dy, w.elapsed, w.rng);
+  }
+
+  /** 手动往场上塞一颗弹丸(避开"等孢子自己喷"的几十秒) */
+  function injectProjectile(w: World, x: number, y: number, vx: number, vy: number, damage: number): void {
+    const b = w.enemyBullets.spawn();
+    b.x = b.px = x;
+    b.y = b.py = y;
+    b.vx = vx;
+    b.vy = vy;
+    b.damage = damage;
+    b.life = 20;
+    b.radius = 5;
+    b.kind = KIND_SPORE;
+  }
+
+  it('孢子齐射落地:锚定后按间隔喷吐,弹丸进 enemyBullets,发射零 rng', () => {
+    useScript(segment({})); // 空脚本:step() 全程不掷 rng,账才数得清
+    const w = new World(7);
+    const SPORE = ENEMIES[KIND_SPORE]!;
+    // 射程带内放一只:首帧锚定,sporeInterval + sporeWarnTime 后喷第一轮
+    injectSpore(w, SPORE.sporeRange - 10, 0);
+    // 锚定用真实 rng 放完(侧那一掷),此后换计数器:齐射的每一帧都不许再碰 rng
+    const counting = new CountingRng();
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    for (let i = 0; i < 200; i++) w.step(); // 200 帧 = 3.3s:够锚定(2.2s)+ 蓄力(0.8s)+ 开火
+    expect(w.enemyBullets.size).toBe(SPORE.sporeSalvoCount); // 一轮齐射 = 3 发
+    expect(w.enemyBullets.items[0]!.damage).toBe(SPORE.sporeDamage); // 伤害发射那一刻定死
+    expect(counting.calls).toBe(0); // 齐射零 rng:同 seed 两局的弹丸序列逐位一致
+    expect(w.ship.hp).toBe(100); // 弹丸还在路上,没到船
+  });
+
+  it('弹丸命中走 damageShip 路由:核心命中扣血 + 该舷受击惩罚 + 船体飘字事件', () => {
+    const w = new World(7); // 默认压测路(本文件 BASE):空场,手动注入弹丸
+    const hp0 = w.ship.hp;
+    // 弹丸贴着核心区边缘(船头方向,世界 (0, 20) → 局部 -20),一帧位移(3.67px)落进核心
+    injectProjectile(w, 0, 20, 0, -220, 8);
+    w.step();
+    expect(w.ship.hp).toBe(hp0 - 8); // 09 号预留的 damageShip 接口第一次真正被调用
+    expect(w.edgePenalty[EDGE_STERN]!).toBeGreaterThan(0); // 弹丸从船尾方向(+Y)来:惩罚落在 STERN
+    expect(w.fx.items.some((e) => e.kind === FXV_HULL_HIT && e.damage === 8)).toBe(true);
+    expect(w.enemyBullets.size).toBe(0); // 命中即消失
+  });
+
+  it('弹丸擦碰甲板轮廓:只出火花、弹丸继续飞,一分血都不扣', () => {
+    const w = new World(7);
+    // 甲板轮廓带(格边长 12):从带外(局部 x = -30)慢速朝船飞,进带那一帧出一声火花
+    // (边缘检测);弹丸不被拦下 —— 轮廓是接触模型的概念,拦不下飞行物
+    injectProjectile(w, 0, 30, 0, -2, 8);
+    let sparked = false;
+    for (let i = 0; i < 50 && !sparked; i++) {
+      w.step();
+      sparked = w.fx.items.some((e) => e.kind === FXV_SPARK); // 火花只有 0.12s,当场检测
+    }
+    expect(sparked).toBe(true);
+    expect(w.ship.hp).toBe(100);
+    expect(w.enemyBullets.size).toBe(1); // 继续飞,直到寿命走完或进核心
+  });
+
+  it('点防拦截:射程内朝船接近的弹丸被拦截弹打掉(双回池 + 拦截火花),船不掉血', () => {
+    const w = new World(7);
+    // 船头边缘格放点防(TOWER_PD,广 150°):射界中心 = 船头方向(-Y),正对弹丸来向
+    expect(isPlaceSuccess(w.place(1, 0, CELL_WEAPON, TOWER_PD))).toBe(true);
+    // 弹丸从船头前方 300px 直扑船心:进点防射程(210)后被拦截,永远到不了船
+    injectProjectile(w, 0, -300, 0, 220, 8);
+    // 步进到弹丸消失为止(拦截命中当帧的 FXV_IMPACT 还活着;再走 60 帧它已老化出池)
+    for (let i = 0; i < 60 && w.enemyBullets.size > 0; i++) w.step();
+    expect(w.enemyBullets.size).toBe(0); // 弹丸没了(被拦截,不是命中了船)
+    expect(w.ship.hp).toBe(100); // 一颗都没漏过来
+    expect(w.fx.items.some((e) => e.kind === FXV_IMPACT)).toBe(true); // 拦截火花
+  });
+
+  it('拦截零 rng:点防开火/命中一步都不掷,随机序列原地不动', () => {
+    useScript(segment({})); // 空脚本 + 计数器:任何一步偷吃 rng 都会被 calls 抓住
+    const w = new World(7);
+    expect(isPlaceSuccess(w.place(1, 0, CELL_WEAPON, TOWER_PD))).toBe(true);
+    injectProjectile(w, 0, -300, 0, 220, 8);
+    const counting = new CountingRng();
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    for (let i = 0; i < 60; i++) w.step();
+    expect(counting.calls).toBe(0);
+    expect(w.enemyBullets.size).toBe(0);
+  });
+
+  it('敌弹进 checksum:同 seed 两局,弹丸位置分叉立即体现在哈希里', () => {
+    const a = new World(99);
+    const b = new World(99);
+    // 两局注入同一颗弹丸 → 哈希一致(池序一致,逐位可比)
+    injectProjectile(a, 100, 50, -220, 0, 8);
+    injectProjectile(b, 100, 50, -220, 0, 8);
+    expect(a.checksum()).toBe(b.checksum());
+    // 挪动一颗的位置 → 哈希分叉(位置是弹丸状态的唯一哈面)
+    a.enemyBullets.items[0]!.x = 100.5;
+    expect(a.checksum()).not.toBe(b.checksum());
+    // 少一颗(存在性)同样是状态:清掉一颗 → 分叉
+    a.enemyBullets.items[0]!.x = 100;
+    a.enemyBullets.despawnAt(0);
+    expect(a.checksum()).not.toBe(b.checksum());
+    expect(b.checksum()).toBe(b.checksum());
   });
 });

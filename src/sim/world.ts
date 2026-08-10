@@ -49,6 +49,10 @@ import {
   ELITE,
 } from '../data/affixes';
 import {
+  DOCK_EDICT_COUNT,
+  DOCK_EDICT_PRICE,
+  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_PRICE,
   DROP_MAX_ALIVE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
@@ -56,7 +60,7 @@ import {
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
-import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
+import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import {
   edictAmmoFireRateMul,
   edictCruiseSpeedMul,
@@ -65,6 +69,8 @@ import {
   edictMagnetRadiusMul,
   edictMask,
   edictTurnRateAdd,
+  EDICT_KIND_COUNT,
+  hasEdict,
 } from '../data/edicts';
 import { SUP_AMMO_BAY } from '../data/supports';
 import {
@@ -77,6 +83,7 @@ import {
   THR_HEAT,
   TOWER_AUTOCANNON,
 } from '../data/towers';
+import { UNLOCK_EDICT, UNLOCKS } from '../data/unlocks';
 import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
 import { type Bullet, createBullet, resetBullet, stepBullets } from './bullet';
 import { tuning } from './config';
@@ -89,6 +96,14 @@ import {
   hitBroadside,
   hullMaxHp,
 } from './damage';
+import {
+  createEnemyBullet,
+  type EnemyBullet,
+  ENEMY_BULLET_MAX_ALIVE,
+  resetEnemyBullet,
+  stepEnemyBullets,
+} from './enemyBullet';
+import { stepInterception, stepInterceptHits } from './intercept';
 import {
   createDeck,
   type Deck,
@@ -143,6 +158,7 @@ import {
   FXV_SPARK,
   resetFxEvent,
 } from './fx';
+import type { EnemyBulletSink } from './enemyBullet';
 import { createShip, DEG2RAD, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
 import { syncSupportBuffs } from './support';
 import { stepTurrets } from './turret';
@@ -169,6 +185,8 @@ import {
 export type { Enemy } from './enemy';
 /** 子弹同理:实体搬去 bullet.ts 之后,渲染层的 `import type { Bullet } from '../sim/world'` 不必改 */
 export type { Bullet } from './bullet';
+/** 敌方弹丸同理(22 号):渲染层从 world 取类型,与 Enemy / Bullet 同一条既有路径 */
+export type { EnemyBullet } from './enemyBullet';
 
 /** 无输入的默认指令:让不接线输入的调用方(单测、无头跑批)照常 world.step() */
 const IDLE: ShipCommand = { desiredHeading: null };
@@ -193,6 +211,12 @@ export const ENEMY_REJOIN_RADIUS = SPAWN_RADIUS;
 /** 压测出怪环的内/外半径:别把敌人直接生在船脸上。**只服务于 stressSyncCounts 那条 debug 路径** */
 const SPAWN_MIN_RADIUS = 300;
 const SPAWN_MAX_RADIUS = 1200;
+
+/**
+ * 孢子弹丸的碰撞半径(22 号,px)。数据表里没有单独一档(现在只有孢子一种弹),
+ * 留在世界侧与发射点同源 —— 判定体多大、渲染层画多大,由这一个数对齐。
+ */
+const SPORE_BULLET_RADIUS = 5;
 
 /**
  * 敌人期望速度的暂存。模块级复用而不是每只现造:1000 敌 × 60Hz 下,
@@ -273,10 +297,48 @@ export const REROLL_NO_STARCOINS = -30;
 /** 重摇失败:当前这档 offer 已经摇过一次(每级最多 1 次,todos/16)。 */
 export const REROLL_ALREADY_DONE = -31;
 
+/**
+ * 船坞商店(21 号)失败码。与 REROLL_* 同一条"负数、落在既有成功码之外"的口径:
+ * 调用方拿到的与 takeUpgrade 是同一条返回通道,一个 `< 0` 判据就能把成功与失败分开,
+ * ui 照码说人话(refitFlow.refitDenyMessage)。
+ */
+/** 这张法令卡已经卖出(或下标越界 —— 本轮货架没有这一格)。 */
+export const DOCK_EDICT_SOLD = -40;
+/** 星币不足(价 = data/economy 的 DOCK_EDICT_PRICE / DOCK_REPAIR_PRICE)。 */
+export const DOCK_NO_STARCOINS = -41;
+/** 船体已满血,付费修复没有意义。 */
+export const DOCK_HP_FULL = -42;
+
+/**
+ * 法令的船坞货架解锁闸门位(21 号):下标 = 法令号,值 = 该法令在 UNLOCKS 表里的下标
+ * (= 解锁掩码位)。与 upgrade.ts 的 EDICT_UNLOCK_BIT 是**同一张映射** —— 那张表是模块
+ * 私有的,而船坞货架是第二个消费点,故按同一条"加载时扫 UNLOCKS 表"的口径再建一份:
+ * 改解锁表两处同源自动跟(都是"模块加载时算一次"),不必两头维护。
+ * 掩码位 i = UNLOCKS[i] 开没开;未被闸门覆盖的法令填 -1 = 恒进池(与 upgrade.ts 同约定)。
+ */
+const DOCK_EDICT_UNLOCK_BIT: number[] = new Array<number>(EDICT_KIND_COUNT).fill(-1);
+for (let i = 0; i < UNLOCKS.length; i++) {
+  const u = UNLOCKS[i]!;
+  if (u.kind === UNLOCK_EDICT && u.type >= 0 && u.type < EDICT_KIND_COUNT) {
+    DOCK_EDICT_UNLOCK_BIT[u.type] = i;
+  }
+}
+
 export class World {
   readonly rng: Rng;
   readonly enemies: Pool<Enemy>;
   readonly bullets: Pool<Bullet>;
+
+  /**
+   * 场上的**敌方弹丸**(22 号,GDD §6.2 孢子炮手的远程攻击)。
+   * 与 bullets 同一条生命周期写法:池里的普通对象、维护 px/py 供渲染插值、
+   * 移动/命中/到期由 sim/enemyBullet.ts 的 stepEnemyBullets 每帧推进(倒序 swap-remove 回收),
+   * 点防拦截的命中移除在 sim/intercept.ts 的 stepInterceptHits。
+   * 它是**真 sim 状态**(决定船掉不掉血),故进 checksum —— 与 bullets 同一条"只哈位置"口径
+   * (伤害/半径是发射那一刻定死的常量,位置已抓住任何弹道分叉)。
+   * 数量级:孢子在场个位数、每轮齐射 3 发,全场稳定几十颗;上限见 ENEMY_BULLET_MAX_ALIVE(保险丝)。
+   */
+  readonly enemyBullets: Pool<EnemyBullet>;
 
   /**
    * 场上的残骸掉落物(10 号 issue T1)。敌人死在哪就掉在哪(reap 里的 spawnDrop),
@@ -449,13 +511,17 @@ export class World {
   /**
    * 已入账、未花掉的星币(GDD §7 第二货币,16 号)。**恒整数**:面额是数值表里的整数
    * (ELITE.starCoins / BOSS.starCoins),精英/Boss 击杀当场整笔进账(spawnDrop 里结),
-   * 重摇时整笔扣费(rerollOffer),全程没有任何系数或按比例结算。
+   * 重摇/船坞购买时整笔扣费(rerollOffer / buyDockEdict / buyDockRepair),全程没有系数或按比例结算。
    *
    * 与残骸同口径的只是"逐帧演化出来的账目"这一面;**它不进 checksum**(与 maxHp 同一条
    * "不进"的先例,但理由不同,见下):星币只影响 UI 读数与消费,不参与任何 sim 判定 ——
-   * 重摇消耗的 rng 本身在随机序列里(每次恰 2×UPGRADE_CHOICE_COUNT 次),余额只是那条
-   * 序列的**读数**:同一局扣过费没有,序列照样逐位可复现。一旦出现"星币 ≥ X 触发某行为"
-   * 的规则(如商店购买门槛),它就成了判定输入,必须改成进 checksum(todos/16 口径)。
+   * 消费点消耗的 rng 本身都在随机序列里(重摇每次恰 2×UPGRADE_CHOICE_COUNT 次、船坞货架
+   * 每轮恰 DOCK_EDICT_COUNT 次;**购买本身一次都不掷**),余额只是那条序列的**读数**:
+   * 同一局扣过费没有,序列照样逐位可复现。todos/16 那句"星币 ≥ X 触发行为就要进 checksum"
+   * 指的是 sim **自己**按余额做决定(如余额够了自动弹商店);玩家主动点击的购买
+   * (rerollOffer / buyDockEdict / buyDockRepair)是 step() 之外的外部输入 —— 失败的尝试
+   * 一个字段都不动,成功的尝试效果落在 edicts 与 ship.hp 这两个已在哈希里的字段上,
+   * 故余额照旧不进。
    */
   starCoins = 0;
 
@@ -522,6 +588,22 @@ export class World {
   onRefitOffer: ((segment: number) => void) | null = null;
 
   /**
+   * 本轮整备的船坞法令货架(21 号):每个元素是一条**还没卖出**的法令号,卖出一格当场写成 -1;
+   * 长度 = 本轮实际掷出的条数(可选池被掏空就少,0..DOCK_EDICT_COUNT)。
+   * 进入整备那一帧(step 里 refitPending 置位处)由 rollDockEdicts 掷定,整备结束
+   * (completeRefit)清空,下一轮整备重掷 —— 与 offer 同一条"生成一次、当场消费 rng"的生命周期。
+   *
+   * 它与 offer 同一条性质:**消耗了 rng、决定玩家这轮能买什么**,故逐项进 checksum
+   * (已售出的格子哈成 -1,售出与否同样在哈希里,照 offerRerolled 的"真状态"先例);
+   * 星币余额则仍不进 —— 购买是 step() 之外的外部输入、一次 rng 都不掷,效果落在
+   * edicts 与 ship.hp 这两个已在哈希里的字段上,余额只是那条序列的读数(理由全文见
+   * starCoins 字段注释;购买零 rng 的口径见 buyDockEdict)。
+   */
+  readonly dockEdictOffers: number[] = [];
+  /** 货架掷定的可选池暂存(铁律 3:整局复用、不新建数组);与 edgeFires 同一条私有暂存待遇 */
+  private readonly dockPool: number[] = [];
+
+  /**
    * 开火/命中的可视化事件(05 号 issue):渲染层遍历 world.fx.items 逐个画,按 life 淡出。
    * **纯表现,一律不进 checksum**(理由见 checksum 末尾那段);每帧在 step 末尾统一老化,
    * life ≤ 0 倒序 swap-remove 回池 —— 与子弹、敌人共用同一套生命周期写法(铁律 3)。
@@ -569,10 +651,10 @@ export class World {
    * world.fx,而契约里记事件的方法也叫 fx —— 同一个类上放不下两个同名成员。
    * 构造时建一次、整局复用(箭头函数捕获 this),不在每帧的开火路径上现造对象。
    */
-  private readonly sink: FireSink = {
+  private readonly sink: FireSink & EnemyBulletSink = {
     spawnBullet: () => this.bullets.spawn(),
     damage: (e, amount, throttle) => this.damageEnemy(e, amount, throttle),
-    fx: (kind, x0, y0, x1, y1, radius, towerType) => {
+    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0) => {
       const e = this.fx.spawn();
       e.kind = kind;
       e.x0 = x0;
@@ -582,9 +664,25 @@ export class World {
       e.radius = radius;
       e.towerType = towerType;
       e.life = fxLife(kind);
+      e.damage = damage;
+      e.dmgRatio = dmgRatio;
     },
     query: (x, y, r, out) => {
       this.grid.query(x, y, r, out);
+    },
+    // —— 敌方弹丸的命中去处(22 号,EnemyBulletSink)——
+    // 核心命中:走 damageShip(09 号在注释里预留的敌方弹幕伤害入口,今天第一次真正使用),
+    // 飘字与血条同款"各算各的一份、两边同源"的口径(见 settleHullDamage 那段的理由)
+    hullHit: (x, y, damage) => {
+      if (this.shipDead) return;
+      const dealt = damage * edgeDamageMul(this.deck, hitBroadside(this.ship, x, y));
+      this.damageShip(damage, x, y);
+      this.pushHitFx(FXV_HULL_HIT, x, y, dealt, 0);
+    },
+    // 蹭到甲板轮廓:只出火花,一分血都不结算(GDD §4.4,与敌人接触同口径)
+    graze: (x, y) => {
+      if (this.shipDead) return;
+      this.pushHitFx(FXV_SPARK, x, y);
     },
     fired: (cell) => {
       // 一座塔属于它**每一条暴露边**对应的舷,故角落格的这一发**同时记进两舷** ——
@@ -637,6 +735,7 @@ export class World {
     this.wave = createWaveState(unlockMask);
     this.enemies = new Pool<Enemy>(createEnemy, resetEnemy);
     this.bullets = new Pool<Bullet>(createBullet, resetBullet);
+    this.enemyBullets = new Pool<EnemyBullet>(createEnemyBullet, resetEnemyBullet);
     this.drops = new Pool<Drop>(createDrop, resetDrop);
     // HP 上限问 damage.hullMaxHp 而不是直接读 tuning:06 号的装甲舱("船体 HP +15")会把它变成
     // **甲板的派生量**,调用点今天就接好,届时 06 只需要把那个函数体填掉,World 一个字不用动。
@@ -783,6 +882,9 @@ export class World {
       if (this.wave.segment !== segmentBefore && !this.wave.done) {
         this.refitPending = true;
         this.refitWelded = false;
+        // 21 号:跨段那一帧掷定本轮船坞法令货架 —— 与出怪同一条"帧首、定死顺序"的确定性,
+        // 玩家在整备面板上买不买都扰动不到这条随机序列(购买零 rng,见 buyDockEdict)。
+        this.rollDockEdicts();
         openedRefit = true;
       }
     }
@@ -898,6 +1000,9 @@ export class World {
       // 全船一个冷却的话,蜂群贴脸时只有最先判到的那一只咬得动,"一百只压上来"与"一只压上来"
       // 的掉血速率会一模一样(见 Enemy.hitCd 的字段注释)。Boss 与普通怪同一条冷却。
       if (e.hitCd > 0) e.hitCd = Math.max(0, e.hitCd - SIM_DT);
+      // 受击闪白逐帧减 dt、夹 0(与 hitCd 同口径):闪白是"这一发打中了"的回执,
+      // 减到 0 就熄 —— 渲染层只读剩余量,不自己推第二份计时(纯表现,不进 checksum)
+      if (e.hitFlash > 0) e.hitFlash = Math.max(0, e.hitFlash - SIM_DT);
 
       // 行为只给"期望速度 + 追随系数",位置由这里积分(sim/enemy 不碰位置)。
       // Boss 走自己的状态机(sim/boss.ts,寻路原语与普通怪同源:seek/lockCharge),
@@ -905,6 +1010,13 @@ export class World {
       const follow = isBoss
         ? stepBossBehavior(e, ship, SIM_DT, desired)
         : stepEnemyBehavior(e, ship, SIM_DT, desired);
+      // 孢子齐射落地(22 号):状态机在蓄力到期那一帧置位 sporeFire 闩,这里当场读走并清回 ——
+      // 发射弹丸是副作用,状态机只出"期望速度 + 追随系数"(见 sim/enemy.ts 的文件头)。
+      // 排在本帧积分之前:弹丸从孢子上一帧的位置出膛,预警环画的也是那个位置(见 fireSporeVolley)
+      if (e.sporeFire) {
+        e.sporeFire = false;
+        this.fireSporeVolley(e);
+      }
       let dvx = desired.x;
       let dvy = desired.y;
 
@@ -967,6 +1079,21 @@ export class World {
       if (cdx * cdx + cdy * cdy < cr * cr) this.contacts.push(e);
     }
 
+    // 点防拦截(22 号):**排在 stepTurrets 之前** —— 顺序就是优先级,一帧里弹丸与敌人
+    // 同时在射界内时,点防先把这一发打给弹丸;onFired 写下的 cooldown 把 stepTurrets 的
+    // canFire 当场闸住,天然不会双射(设计决策与理由全文见 sim/intercept.ts 的文件头)。
+    // 零 rng:拦截一步都不掷,出怪/召唤的随机序列不受影响
+    stepInterception(
+      this.deck,
+      ship,
+      this.enemyBullets.items,
+      SIM_DT,
+      this.sink,
+      this.edgePenalty,
+      edictAmmoFireRateMul(this.edicts),
+      edictHeatMaxMul(this.edicts),
+    );
+
     // 炮管:朝射界内最近的敌人转,没得打就归位(04 号 issue),够得着又转得过来就开火(05 号)。
     // 传 this.grid 而不是 enemies:1000 敌 × 十座塔的线性扫描是 GDD §13 明令要用哈希避开的那件事;
     // 传 this.sink 而不是 this:开火侧只认识 FireSink 那份契约,永远不认识 World(见 sim/fx.ts);
@@ -986,6 +1113,17 @@ export class World {
 
     // 子弹:积分 → 命中 → 迫击炮到期在落点炸 AoE(规则全在 sim/bullet.ts,本文件只给它一个 sink)
     stepBullets(this.bullets, SIM_DT, this.sink);
+
+    // 敌方弹丸(22 号):积分 → 船体三层判定(核心真掉血 / 轮廓只出火花 / 没碰上)→ 回池。
+    // 排在 my 子弹之后:拦截弹本帧已经飞完,弹丸再动,命中结算在下面那个 pass 里做 ——
+    // 顺序定死,同 seed 逐帧可复现;它也是 damageShip 那条预留接口的第一个真实调用方
+    stepEnemyBullets(this.enemyBullets, SIM_DT, this.ship, this.deck, this.sink);
+
+    // 拦截弹 × 弹丸的命中结算(22 号):两边都移动完的这一帧末,线段 × 圆判定,
+    // 命中 = 双回池 + FXV_IMPACT(确认这一发打在弹丸上)。零 rng、零分配
+    stepInterceptHits(this.bullets, this.enemyBullets, (towerType, x, y) => {
+      this.sink.fx(FXV_IMPACT, x, y, x, y, 0, towerType);
+    });
 
     // 残骸:起吸 → 匀速直追 → 收取,收到多少当帧进账(规则全在 sim/drop.ts,这里只给它池、甲板与船心)。
     // 船心传的是本帧**积分之后**的位置:残骸追的是船现在在哪 ——
@@ -1020,6 +1158,8 @@ export class World {
       else {
         this.refitPending = false;
         this.refitWelded = false;
+        // 整备被局终吞掉:货架一起清空,免得下一轮(不会有)或任何读它的路径拿到过期货
+        this.dockEdictOffers.length = 0;
       }
     }
 
@@ -1124,6 +1264,8 @@ export class World {
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
       // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum。
       // Boss 的爆点半径走 bossRadius()(它不进 ENEMIES 表,enemyTint 对越界 kind 有兜底)
+      // damage 带致死那一发的实际伤害(Enemy.lastHit,reap 前刚由 damageEnemy 写过)、
+      // dmgRatio = 致死伤害 / 满血 —— 飘字与配色在回池前当场取走
       this.sink.fx(
         FXV_KILL,
         e.x,
@@ -1132,6 +1274,8 @@ export class World {
         e.y,
         e.kind === KIND_BOSS ? bossRadius() : enemyRadius(e),
         e.kind,
+        e.lastHit,
+        e.maxHp > 0 ? e.lastHit / e.maxHp : 0,
       );
       // 掉落排在公开挂钩**之前**:先把世界自己的账落地(残骸是这一局的成长资源,不是一段表现),
       // 再把这具尸体递给外面 —— 于是挂钩接不接、接的人在回调里做了什么,都影响不到掉落。
@@ -1234,12 +1378,18 @@ export class World {
       e.hitCd = tuning.enemyHitInterval;
 
       if (hit === HIT_CORE) {
-        this.damageShip(
-          (isBoss ? bossContactDamage() : ENEMIES[e.kind]!.contactDamage) * scale,
+        const raw = (isBoss ? bossContactDamage() : ENEMIES[e.kind]!.contactDamage) * scale;
+        this.damageShip(raw, e.x, e.y);
+        // 撞进核心区 = 真掉血:飘字带**实际结算**的伤害 —— 与 damageShip 里同一份乘式
+        // (舷向减伤是 06 号装甲舱的挂钩,edgeDamageMul 由同一张甲板同一舷算出,确定性不变),
+        // 于是红字与血条扣掉的量永远一致,玩家不会读到两本账
+        this.pushHitFx(
+          FXV_HULL_HIT,
           e.x,
           e.y,
+          raw * edgeDamageMul(this.deck, hitBroadside(this.ship, e.x, e.y)),
+          0,
         );
-        this.pushHitFx(FXV_HULL_HIT, e.x, e.y);
       } else {
         // 蹭到核心区之外的甲板:**只出火花,一分血都不结算**(GDD §4.4)。
         // classifyHit 先判核心后判轮廓,所以核心区里的敌人永远走不进这一支
@@ -1253,9 +1403,11 @@ export class World {
    * FxEvent 的生命周期全仓只该有一条路径(fxLife 的口径也才不会分裂)。
    * 起点终点同点、半径 0:这两种表现都画在**接触点**上(见 renderer 的 FXV_SPARK / FXV_HULL_HIT);
    * towerType 填 0 只是占位 —— 挨打不是任何一座塔打出来的,渲染层对这两种 kind 也不读它。
+   * @param damage 实际结算的伤害量(仅 FXV_HULL_HIT 填,红字飘字用;火花 = 0 不飘字)
+   * @param dmgRatio 伤害 / 满血,飘字配色用(船体飘字恒红,这里恒 0)
    */
-  private pushHitFx(kind: number, x: number, y: number): void {
-    this.sink.fx(kind, x, y, x, y, 0, 0);
+  private pushHitFx(kind: number, x: number, y: number, damage = 0, dmgRatio = 0): void {
+    this.sink.fx(kind, x, y, x, y, 0, 0, damage, dmgRatio);
   }
 
   /**
@@ -1313,6 +1465,9 @@ export class World {
         amount *= AFFIXES[AFFIX_PHASED]!.energyMul;
       }
     }
+    // 实际结算量写给敌对象:命中飘字(FXV_IMPACT)与死亡飘字(FXV_KILL)都认它 ——
+    // 不带抗性时 amount 就是调用方给的原值,语义一字不变(见 Enemy.lastHit 的字段注释)
+    e.lastHit = amount;
     return applyDamage(e, amount);
   }
 
@@ -1406,6 +1561,8 @@ export class World {
     if (!this.refitPending) return false;
     this.refitPending = false;
     this.refitWelded = false;
+    // 货架随整备结束清空:下一轮跨段时 rollDockEdicts 重掷(与 offer 结算清空的同一条生命周期)
+    this.dockEdictOffers.length = 0;
     // GDD §9 的船坞回血:整局唯一修复点。整备天然两分钟一次,与"重排"共用同一段休整时刻;
     // 回血是确定性算术(不掷 rng),hp 本就在 checksum 里,同 seed 回放逐位不变。
     this.ship.hp = Math.min(
@@ -1414,6 +1571,87 @@ export class World {
     );
     this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
     return true;
+  }
+
+  /**
+   * 掷定本轮整备的船坞法令货架(21 号)。**只在 step 里 refitPending 置位那一帧调用**:
+   * 与出怪同一条"帧首、定死顺序"的确定性 —— 同 seed 同操作序列,货架逐位可复现。
+   *
+   * rng 消耗口径(定死,与 upgrade.ts 文件头同一条):**每个货架位恰好消耗 1 次 rng**,
+   * 即使这一位最终空着(可选池没有货)也照样消耗 —— 消耗次数与持有状态、解锁状态、
+   * 池大小全无关,于是"玩家又抽到一张法令"这种事移动不了整条随机序列。
+   * 可选池 = 未持有(法令不叠级,货架不摆买了也白买的重复卡)+ 已解锁(19 号闸门,
+   * 照 upgrade.ts 的 collectTypes 过滤)+ 本轮尚未上架(两张一样的卡等于少一个选项)。
+   */
+  private rollDockEdicts(): void {
+    const offers = this.dockEdictOffers;
+    offers.length = 0;
+    const pool = this.dockPool;
+    for (let slot = 0; slot < DOCK_EDICT_COUNT; slot++) {
+      pool.length = 0;
+      for (let type = 0; type < EDICT_KIND_COUNT; type++) {
+        if (offers.includes(type)) continue; // 本轮已上架:不摆重复卡
+        if (hasEdict(this.edicts, type)) continue; // 已持有:不摆重复卡
+        const unlockBit = DOCK_EDICT_UNLOCK_BIT[type]!;
+        if (unlockBit >= 0 && (this.unlockMask & (1 << unlockBit)) === 0) continue; // 未解锁
+        pool.push(type);
+      }
+      // 与 rollUpgradeOffer 同款取型(Math.floor(roll × pool) + 越界夹取);
+      // 池空也照样掷这一次(消耗次数与池大小无关,见上面的口径)
+      const roll = this.rng.next();
+      if (pool.length === 0) continue;
+      offers.push(pool[Math.min(pool.length - 1, Math.floor(roll * pool.length))]!);
+    }
+  }
+
+  /**
+   * 船坞商店(21 号):买下第 index 张法令卡。法令是全船被动、**即时生效、无放置**
+   * (与 takeUpgrade 的 OFFER_EDICT 分支同一条授予路径:置位掩码,效果走六个现读点)。
+   *
+   * 与 rerollOffer 同一条"step() 之外的外部输入"路径:
+   *   **一次 rng 都不掷** —— 购买只动账(星币 / 法令掩码 / 货架),随机序列原地不动,
+   *   于是"买没买"反过来扰动不到出怪序列(同 seed 同操作序列逐位可复现);
+   *   校验顺序定死(整备闸门 → 货架有货 → 星币够),失败原样返回、一个字段都不动。
+   * 成功后:扣费 → 货架当场下架(一卡一售)→ 置位掩码 → 同步船体上限(照 weld 的三步:
+   * 结构加固的 +20 是甲板派生量,现算现夹,hp 只夹不涨)。
+   *
+   * @returns 0 = 成功(照 takeUpgrade 返回 PLACE_OK 的口径);负数 = 理由码
+   *   (REFIT_NOT_ACTIVE / DOCK_EDICT_SOLD / DOCK_NO_STARCOINS)。
+   */
+  buyDockEdict(index: number): number {
+    if (!this.refitPending) return REFIT_NOT_ACTIVE;
+    const type = this.dockEdictOffers[index];
+    if (type === undefined || type < 0) return DOCK_EDICT_SOLD;
+    if (this.starCoins < DOCK_EDICT_PRICE) return DOCK_NO_STARCOINS;
+    this.starCoins -= DOCK_EDICT_PRICE;
+    this.dockEdictOffers[index] = -1; // 一卡一售:当场下架,本轮不再出现
+    this.edicts |= edictMask(type);
+    this.ship.maxHp = hullMaxHp(this.deck, edictHullHpAdd(this.edicts));
+    if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    return 0;
+  }
+
+  /**
+   * 船坞商店(21 号):付费修复船体(立即、无放置)。与 buyDockEdict 同一条外部输入口径:
+   * **零 rng**、失败一个字段都不动、可重复购买、夹在 maxHp 上不溢出。
+   * 满血拒绝(DOCK_HP_FULL)是"可买但没必要"的口径,与 ui 的置灰按钮互为主备
+   * (置灰只是读数,真正的裁决始终以返回码为准)。
+   * 修复量 = ceil(maxHp × DOCK_REPAIR_FRACTION) —— 与 completeRefit 的免费回血同一条
+   * ceil 取整口径(见 data/economy 的 REFIT_HEAL_FRACTION 那段):比例修复不许因为舍入
+   * 变成"回了个寂寞"。
+   *
+   * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / DOCK_HP_FULL / DOCK_NO_STARCOINS)。
+   */
+  buyDockRepair(): number {
+    if (!this.refitPending) return REFIT_NOT_ACTIVE;
+    if (this.ship.hp >= this.ship.maxHp) return DOCK_HP_FULL;
+    if (this.starCoins < DOCK_REPAIR_PRICE) return DOCK_NO_STARCOINS;
+    this.starCoins -= DOCK_REPAIR_PRICE;
+    this.ship.hp = Math.min(
+      this.ship.maxHp,
+      this.ship.hp + Math.ceil(this.ship.maxHp * DOCK_REPAIR_FRACTION),
+    );
+    return 0;
   }
 
   /**
@@ -1604,6 +1842,43 @@ export class World {
   }
 
   /**
+   * 孢子的齐射落地(22 号)—— 发射敌方弹丸是副作用,世界侧的唯一发射点。
+   * **零 rng**:发射时刻由状态机计时器决定、方向 = 船当前方位 + 固定扇面偏移,
+   * 于是"同 seed 两局:同一帧、同一方向、同一批弹丸"逐位可复现,出怪序列一步不挪。
+   *
+   * 弹丸伤害在发射那一刻定死(def.sporeDamage,飞行途中不回查敌人 —— 与 Bullet.damage
+   * 同一条口径;精英/词缀不放大弹伤,放大的只有体型与 HP,与 14 号语义一致)。
+   * life = 锚定距离 / 弹速 + 2s 余量:船在弹丸飞行途中还能机动,余量覆盖"船往远处躲"
+   * 的那段航程,到期自然消失(射程上限的唯一表达,见 EnemyBullet.life)。
+   */
+  private fireSporeVolley(e: Enemy): void {
+    const def = ENEMIES[e.kind]!;
+    // 触顶丢弃、不留账:ENEMY_BULLET_MAX_ALIVE 是保险丝不是旋钮(与 spawnFromWave 一字同源)
+    if (this.enemyBullets.size + def.sporeSalvoCount > ENEMY_BULLET_MAX_ALIVE) return;
+    // 齐射扇面:固定偏移、固定步长,不掷随机(与 fireBullets 的扇开同一条写法)
+    const base = Math.atan2(this.ship.y - e.y, this.ship.x - e.x);
+    const n = Math.max(1, def.sporeSalvoCount);
+    const step = n > 1 ? (def.sporeSpreadDeg * DEG2RAD) / (n - 1) : 0;
+    const offset = -((n - 1) / 2) * step;
+    const life = def.sporeRange / def.sporeSpeed + 2;
+    for (let i = 0; i < n; i++) {
+      const a = base + offset + i * step;
+      const b = this.enemyBullets.spawn();
+      b.kind = e.kind; // 来源敌型:渲染层据此取 enemyTint 配色(将来新远程型直接换号)
+      b.x = b.px = e.x;
+      b.y = b.py = e.y;
+      b.vx = Math.cos(a) * def.sporeSpeed;
+      b.vy = Math.sin(a) * def.sporeSpeed;
+      // 弹幕伤害乘全局倍率,与 effectiveDamage 同一条口径(0 允许、负数与 NaN 一律当 0):
+      // 面板/economy 测试要能整体关掉这一路伤害而不动接触伤害
+      const scale = tuning.enemySporeDamageScale;
+      b.damage = def.sporeDamage * (scale > 0 ? scale : 0);
+      b.life = life;
+      b.radius = SPORE_BULLET_RADIUS;
+    }
+  }
+
+  /**
    * **debug 压测路径,不是正式出怪器** —— 正式的在 step() 里走 stepWaves + spawnFromWave。
    * 只有 tuning.stressSpawn = true 时才被调用,而 tuning.stressEnemies 与四条 enemyMix*
    * 也只在这条路上生效:它维持"场上恒定 N 只"这种压测才要的定数(01 号验收:1000 敌同屏 60fps),
@@ -1771,10 +2046,22 @@ export class World {
       // 无敌帧剩余秒同理是逐帧演化的状态:它决定"这一口该不该咬",漏了它,
       // "结算间隔算错"就只会在血条上慢慢体现,而不会当场炸出一次确定性分叉。× 100 同上
       acc(e.hitCd * 100);
+      // **hitFlash / lastHit 一律不进**:hitFlash 是纯表现(闪白不参与任何判定,渲染层
+      // 只读它上色,少闪一帧不改变世界的下一帧 —— 与 animSeed 同一条口径);
+      // lastHit 是伤害输入的派生量(amount × 抗性,抗性读 e.affixes、伤害最终落在 e.hp,
+      // 两个输入都已在哈希里 —— 哈它只是把同一件事哈两遍,与 maxHp 同一条口径)。
+      // 本哈希本来也不逐字段哈敌人(状态机/速度/朝向都不进),它们不在,表现字段更不该在
     }
     // 子弹**只哈位置**:伤害/存活/穿透都是发射那一刻定死的常量(见 sim/bullet.ts),
     // 而位置已经能抓住任何弹道分叉 —— 多哈几个不会变的数只是把同一件事哈好几遍。
     for (const b of this.bullets.items) {
+      acc(b.x);
+      acc(b.y);
+    }
+    // 敌方弹丸(22 号)紧跟 my 子弹,且同样**只哈位置**,理由也是同一条:
+    // 伤害/半径是发射那一刻按敌型定死的常量;存在性(池里有几颗)本身就在这条循环里
+    // —— 少哈一颗,齐射错位/拦截漏判这类分叉就只会在船体 HP 上慢慢体现,当场看不出来
+    for (const b of this.enemyBullets.items) {
       acc(b.x);
       acc(b.y);
     }
@@ -1812,11 +2099,15 @@ export class World {
     // 出不出,不参与任何判定、不移动 rng 消耗 —— 与跨 seed 同一条口径,哈它只是把
     // "同一份存档"哈一遍;eliteKills 同理不进(与 kills 同一条派生量口径,见字段注释)
     acc(this.edicts);
+    // 船坞法令货架(21 号)紧跟法令掩码:它消耗了 rng、决定玩家这轮能买什么,不是任何
+    // 派生量 —— 漏了它,"同 seed 两局货架摆出不同两张卡"要等买完、法令掩码分叉后才
+    // 看得见(与 offer 逐项进哈希同一条理由);已售出的格子哈成 -1,售出与否同样在哈希里
+    for (const t of this.dockEdictOffers) acc(t);
     // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
     // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。
-    // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何判定;重摇消耗的 rng
-    // 本身在序列里,余额只是那条序列的读数 —— 扣过费没有,序列照样逐位可复现
-    // (与 maxHp 同一条"不进"的口径,理由全文见 starCoins 字段注释)。
+    // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何 sim 判定;重摇与船坞
+    // 购买(21 号)消耗的 rng 本身在序列里,余额只是那条序列的读数 —— 扣过费没有,
+    // 序列照样逐位可复现(与 maxHp 同一条"不进"的口径,理由全文见 starCoins 字段注释)。
     acc(this.offerRerolled ? 1 : 0);
     // FxEvent 一律**不进** checksum:它纯是表现(少画一条闪电不改变世界的下一帧),
     // 混进来只会让"渲染改一下淡出时长"看起来像一次确定性回归。broadside 同理是本帧的表现读数。

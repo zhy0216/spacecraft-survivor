@@ -14,9 +14,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  DOCK_EDICT_COUNT,
+  DOCK_EDICT_PRICE,
+  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_PRICE,
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_TOWER,
+  REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   skipRefundFor,
   UPGRADE_CHOICE_COUNT,
@@ -161,6 +166,31 @@ describe('三选一与跳过', () => {
     // 与跳过互不抵扣:跳过退残骸(UPGRADE_SKIP_FEE)、重摇花星币 —— 两条出口不该撞成一个数,
     // 否则玩家在 UI 上分不清这次点击花的是哪种钱
     expect(REROLL_PRICE).not.toBe(UPGRADE_SKIP_FEE);
+  });
+});
+
+describe('船坞商店(21 号)', () => {
+  it('法令货架张数是小正整数:2 张配 300–430px 的侧栏不挤,货架摆得下也读得完', () => {
+    expect(Number.isInteger(DOCK_EDICT_COUNT)).toBe(true);
+    expect(DOCK_EDICT_COUNT).toBeGreaterThan(0);
+    expect(DOCK_EDICT_COUNT).toBeLessThanOrEqual(3);
+  });
+
+  it('法令卡是正整数星币,且贵于一次重摇(10):它是攒出来的大项,不是顺手的小费', () => {
+    expect(Number.isInteger(DOCK_EDICT_PRICE)).toBe(true);
+    expect(DOCK_EDICT_PRICE).toBeGreaterThan(REROLL_PRICE);
+  });
+
+  it('付费修复与法令同价(25):两者都是整备期"一个决定"的档位,不该有便宜的次等选项', () => {
+    expect(Number.isInteger(DOCK_REPAIR_PRICE)).toBe(true);
+    expect(DOCK_REPAIR_PRICE).toBeGreaterThan(0);
+    expect(DOCK_REPAIR_PRICE).toBe(DOCK_EDICT_PRICE);
+  });
+
+  it('付费修复比例在 (0,1) 且严格强于免费回血(30%):花了钱不能比白送的弱', () => {
+    expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(0);
+    expect(DOCK_REPAIR_FRACTION).toBeLessThan(1);
+    expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(REFIT_HEAL_FRACTION);
   });
 });
 

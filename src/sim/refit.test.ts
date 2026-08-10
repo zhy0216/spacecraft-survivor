@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { DECK_PIECE_BAR } from '../data/deckPieces';
-import { REFIT_HEAL_FRACTION } from '../data/economy';
+import {
+  DOCK_EDICT_COUNT,
+  DOCK_EDICT_PRICE,
+  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_PRICE,
+  REFIT_HEAL_FRACTION,
+} from '../data/economy';
+import { EDICT_KIND_COUNT, EDICT_RAPID, EDICT_TRACER, edictMask } from '../data/edicts';
 import { KIND_SWARM } from '../data/enemies';
 import { SUP_AMMO_BAY, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_GATLING, TOWER_MAX_LEVEL } from '../data/towers';
+import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import { tuning } from './config';
 import {
@@ -23,6 +31,7 @@ import {
 } from './deck';
 import { syncSupportBuffs } from './support';
 import {
+  DOCK_NO_STARCOINS,
   REFIT_ALREADY_WELDED,
   REFIT_NOT_ACTIVE,
   World,
@@ -256,5 +265,148 @@ describe('两分钟波次整备', () => {
     // 塔开火是确定性算术(不掷 rng),且此刻敌人远在射程外,不会因甲板差异提前打死谁。
     const read = (w: World): number[][] => w.enemies.items.map((e) => [e.x, e.y, e.kind]);
     expect(read(a)).toEqual(read(b));
+  });
+});
+
+/**
+ * 船坞商店(21 号)的确定性:货架掷定(跨段那帧的 rng 消耗口径)与购买零 rng。
+ * 购买本身的账(扣费/生效/失败原子)钉在 world.test.ts —— 这里只钉与随机序列有关的那一半:
+ * 货架掷定的消耗次数、过滤口径、以及"买没买"扰动不到出怪序列(照上面"进化不消耗 rng"
+ * 用例的形制;两处各管一摊,别挪来挪去)。
+ */
+describe('船坞商店(21 号:货架掷定与购买零 rng)', () => {
+  /** 固定随机序列 + 计数器(与 world.test.ts 的星币重摇 describe 同款):类型私有字段使 Rng 名义化 */
+  class CountingRng {
+    calls = 0;
+    constructor(private readonly values: number[] = []) {}
+    next(): number {
+      return this.values[this.calls++] ?? 0;
+    }
+  }
+
+  /** 两段空脚本(无流/无侧压/无精英):stepWaves 零 rng,跨段那一帧的消耗才数得清 */
+  function useEmptySegments(): void {
+    tuning.stressSpawn = false;
+    WAVE_SEGMENTS.splice(
+      0,
+      WAVE_SEGMENTS.length,
+      segment({ name: '旧波' }),
+      segment({ name: '新波', duration: 1 }),
+    );
+  }
+
+  /** 走到跨段那一帧(旧段 0.05s = 3 帧走完,第 4 帧跨段)并断言整备挂起 */
+  function reachRefit(w: World): void {
+    for (let i = 0; i < 4; i++) w.step();
+    expect(w.refitPending).toBe(true);
+  }
+
+  it('跨段那一帧掷定货架:每个货架位恰消耗 1 次 rng,空池也照样消耗', () => {
+    useEmptySegments();
+    const w = new World(881);
+    const counting = new CountingRng([0.9, 0.9]);
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    reachRefit(w);
+    expect(counting.calls).toBe(DOCK_EDICT_COUNT); // 除货架外零消耗:消耗次数与池大小无关
+    expect(w.dockEdictOffers.length).toBe(DOCK_EDICT_COUNT); // 池没被掏空:两个货架位都摆上了
+    for (const t of w.dockEdictOffers) {
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(t).toBeLessThan(EDICT_KIND_COUNT);
+    }
+  });
+
+  it('同 seed 双世界:货架逐位一致(掷定在跨段那一帧,两边消耗相同的 rng)', () => {
+    useEmptySegments();
+    const a = new World(881);
+    const b = new World(881);
+    reachRefit(a);
+    reachRefit(b);
+    expect(b.dockEdictOffers).toEqual(a.dockEdictOffers);
+  });
+
+  it('货架过滤:已持有与未解锁的绝不上架(与三选一候选的过滤同一条口径)', () => {
+    // 缺省掩码 0:急速协议(唯一带解锁闸门的法令)绝不出现(结构上成立:池里根本没有它)
+    for (let seed = 0; seed < 12; seed++) {
+      useEmptySegments();
+      const w = new World(900 + seed);
+      reachRefit(w);
+      expect(w.dockEdictOffers).not.toContain(EDICT_RAPID);
+    }
+    // 掩码全开 + 定制掷值:同一下标就能掷中急速协议(对照上面"掷不中")
+    useEmptySegments();
+    const open = new CountingRng([6.5 / 7, 6.5 / 7]);
+    const wOpen = new World(1, (1 << UNLOCKS.length) - 1);
+    Object.defineProperty(wOpen, 'rng', { value: open, configurable: true });
+    reachRefit(wOpen);
+    expect(wOpen.dockEdictOffers[0]).toBe(EDICT_RAPID); // 7 型池的最后一位
+    expect(wOpen.dockEdictOffers[1]).not.toBe(EDICT_RAPID); // 第二格不摆重复卡
+    // 已持有:跨段前先持有曳光协议,货架就不再摆它(法令不叠级,买了也是白买)
+    useEmptySegments();
+    const held = new World(2);
+    held.edicts = edictMask(EDICT_TRACER);
+    reachRefit(held);
+    expect(held.dockEdictOffers).not.toContain(EDICT_TRACER);
+  });
+
+  it('购买零 rng:同 seed 双世界,一边在整备里买法令/修复一边不买,之后出怪逐只重合', () => {
+    useTwoSegments();
+    const a = new World(882);
+    const b = new World(882);
+    for (let i = 0; i < 4; i++) {
+      a.step();
+      b.step();
+    }
+    expect(a.refitPending).toBe(true);
+    expect(a.dockEdictOffers).toEqual(b.dockEdictOffers); // 货架同 seed 逐位一致
+
+    a.starCoins = b.starCoins = 999;
+    a.ship.hp = 1; // a 残血才买得起修复(b 满血不买 —— 这正是"买没买"的分叉点)
+    if (a.dockEdictOffers.length > 0) expect(a.buyDockEdict(0)).toBe(0);
+    expect(a.buyDockRepair()).toBe(0);
+    expect(a.starCoins).toBeLessThan(b.starCoins); // 扣费了,但没动任何随机数
+    expect(a.completeRefit()).toBe(true);
+    expect(b.completeRefit()).toBe(true);
+    for (let i = 0; i < 30; i++) {
+      a.step();
+      b.step();
+    }
+    // 出怪位置/型号是 rng 驱动的:购买扰动到任何一个随机数,这里立刻分叉。
+    // 两边都没放塔,敌人在射程外,法令/血量的差异反哺不到出怪(与"进化不消耗 rng"同款判据)
+    const read = (w: World): number[][] => w.enemies.items.map((e) => [e.x, e.y, e.kind]);
+    expect(read(a)).toEqual(read(b));
+  });
+
+  it('购买失败(星币不足)不消耗 rng:失败尝试之后序列原地不动', () => {
+    useEmptySegments();
+    const w = new World(883);
+    const counting = new CountingRng([0.5, 0.5, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]);
+    Object.defineProperty(w, 'rng', { value: counting, configurable: true });
+    reachRefit(w);
+    expect(counting.calls).toBe(DOCK_EDICT_COUNT);
+    // 星币为 0:买法令与修复都被拒,一次 rng 都不许动(照 rerollOffer 的"失败不许推序列")
+    w.ship.hp = 1;
+    expect(w.buyDockEdict(0)).toBe(DOCK_NO_STARCOINS);
+    expect(w.buyDockRepair()).toBe(DOCK_NO_STARCOINS);
+    expect(counting.calls).toBe(DOCK_EDICT_COUNT);
+  });
+
+  it('整备里买过法令/修复后完成整备:付费 40% 与免费 30% 各算各的账,货架随整备清空', () => {
+    useEmptySegments();
+    const w = new World(884);
+    w.starCoins = DOCK_EDICT_PRICE + DOCK_REPAIR_PRICE;
+    reachRefit(w);
+    expect(w.dockEdictOffers.length).toBe(DOCK_EDICT_COUNT);
+    w.ship.hp = 1;
+    const edictBefore = w.edicts;
+    expect(w.buyDockEdict(0)).toBe(0);
+    const maxHp = w.ship.maxHp; // 结构加固可能已把上限抬高:以购买后的上限为准
+    expect(w.buyDockRepair()).toBe(0);
+    const paid = Math.ceil(maxHp * DOCK_REPAIR_FRACTION);
+    expect(w.ship.hp).toBe(Math.min(maxHp, 1 + paid)); // 付费修复当场生效
+    expect(w.edicts).not.toBe(edictBefore); // 法令真的买到手了
+    expect(w.completeRefit()).toBe(true);
+    const free = Math.ceil(maxHp * REFIT_HEAL_FRACTION);
+    expect(w.ship.hp).toBe(Math.min(maxHp, 1 + paid + free)); // 免费回血照常在结束时结算
+    expect(w.dockEdictOffers).toEqual([]); // 货架随整备结束清空,下一轮跨段重掷
   });
 });
