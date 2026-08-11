@@ -249,6 +249,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   weaponTitle.textContent = '武器商店';
   const refreshBtn = document.createElement('button');
   refreshBtn.style.cssText = REFRESH_BTN_CSS;
+  refreshBtn.addEventListener('click', refreshShop);
   weaponHead.append(weaponTitle, refreshBtn);
   const cards = document.createElement('div');
   cards.style.cssText = CARDS_CSS;

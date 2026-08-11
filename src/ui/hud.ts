@@ -301,10 +301,13 @@ function createBar(parent: HTMLElement, labelText: string, color: string): BarEl
   return { value, fill };
 }
 
-export function createHud(opts: { world: World; rightGutter?: number }): HudUi {
+export function createHud(opts: { world: World; rightGutter?: number; debug?: boolean }): HudUi {
   let world = opts.world;
   let paused = false;
   const rightGutter = opts.rightGutter ?? HUD_RIGHT_GUTTER;
+  // debug 由 main 注入(URL 口径只解析一次),HUD 不自己摸 location:sync 是 60fps 热路径,
+  // 且测试桩里根本没有 location
+  const debug = opts.debug ?? false;
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -467,7 +470,7 @@ export function createHud(opts: { world: World; rightGutter?: number }): HudUi {
     const cost = finiteOrZero(world.upgradeCost);
     const scrapNow = finiteOrZero(world.scrap);
     // 玩家形态不展示具体经验值/费用:数值区留空,只保留进度条(?debug 才显示精确读数)
-    scrap.value.textContent = location.search.includes('debug') ? `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}` : '';
+    scrap.value.textContent = debug ? `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}` : '';
     scrap.fill.style.width = `${hudRatio(scrapNow, cost) * 100}%`;
 
     const coins = finiteOrZero(world.starCoins);

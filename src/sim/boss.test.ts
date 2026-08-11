@@ -349,7 +349,7 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(run(20260816)).not.toBe(a); // 换 seed 才换
   });
 
-  it('击杀 Boss → 胜利:记 bossKilledAt 与击杀数,Boss 必掉固定星币(击杀当场进账)', () => {
+  it('击杀 Boss → 胜利:记 bossKilledAt 与击杀数,双轨进账:固定星币当场入账 + 原地掉一颗 Boss 档经验', () => {
     const w = bossWorld(9);
     expect(w.wave.done).toBe(true);
     expect(w.bossPhase).toBe(1);
@@ -368,9 +368,11 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(w.result).toBe(RESULT_WIN);
     expect(over).toBe(RESULT_WIN);
 
-    // 大额星币:固定面额、零 rng、击杀当场进账(16 号:旧"4× 残骸"整体替换为它)
+    // 双轨进账(见 World.spawnDrop):星币固定面额、零 rng、击杀当场直接入账,不经掉落物池;
     expect(w.starCoins).toBe(BOSS.starCoins);
-    expect(w.drops.size).toBe(0); // 直接入账,不造掉落物(不占 DROP_MAX_ALIVE、不走磁吸)
+    // 经验走掉落物:原地必掉一颗,面额 = 底座 scrap × BOSS.hpMul(Boss 档 12 倍)
+    expect(w.drops.size).toBe(1);
+    expect(w.drops.items[0]!.value).toBe(ENEMIES[BOSS.baseKind]!.scrap * BOSS.hpMul);
   });
 
   it('Boss 撞击复用 09 受击模型:撞核心区扣 bossContactDamage(大质量,比底座更疼)', () => {

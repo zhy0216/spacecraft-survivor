@@ -18,6 +18,7 @@ describe('敌方弹丸无甲板参数', () => {
   it('命中圆形船体后回池并通知 hullHit', () => {
     const pool = new Pool(createEnemyBullet, resetEnemyBullet);
     const bullet = pool.spawn();
+    bullet.radius = 5; // 池默认 0:一帧后 y ≈ 28.33,受击圆 24 够不着;补半径后 hitR = 24 + 5 = 29 才命中
     bullet.x = bullet.px = 0; bullet.y = bullet.py = 30;
     bullet.vx = 0; bullet.vy = -100; bullet.life = 10; bullet.damage = 8;
     let hits = 0;

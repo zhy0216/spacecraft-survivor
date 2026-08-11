@@ -167,7 +167,7 @@ export const SUPPORTS: SupportDef[] = [
     damageTakenMul: 1,
     xpMul: 1.5, // 经验 +50%(连乘;占位待调)
     magnetRadiusMul: 1,
-    tint: 0xcfe8a0, // 占位待调(冷黄绿:唯一"经济向"的支援,色相上与火力支援拉开)
+    tint: 0xa0e8cf, // 占位待调(冷薄荷绿:唯一"经济向"的支援,色相上与火力支援拉开,b > r 守住冷色审计)
   },
   {
     type: SUP_MAGNET,

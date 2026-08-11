@@ -35,8 +35,10 @@ describe('stepInterceptHits', () => {
     const projectiles = new Pool(createEnemyBullet, resetEnemyBullet);
     const bullet = bullets.spawn();
     bullet.intercept = true;
+    bullet.radius = 5; // 池默认 0:半径不补,r = 0 下相距 1px 也判不中(intercept.ts 的 r = p.radius + b.radius + step)
     bullet.x = bullet.px = 0; bullet.y = bullet.py = 0;
     const projectile = projectiles.spawn();
+    projectile.radius = 5;
     projectile.x = projectile.px = 1; projectile.y = projectile.py = 0;
     const events: number[] = [];
     stepInterceptHits(bullets, projectiles, (type) => events.push(type));

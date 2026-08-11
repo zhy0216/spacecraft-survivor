@@ -239,7 +239,11 @@ describe('createHud', () => {
     createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
     expect(findText(root, '75 / 100')).toBeDefined();
-    expect(findText(root, '10 / 40')).toBeDefined();
+    // 玩家形态(默认)不亮经验数值:读数留空,升级进度只靠进度条比例(10/40 → 25%)
+    expect(findText(root, '10 / 40')).toBeUndefined();
+    const vitals = root.children[0]!.children[0]!;
+    expect(vitals.children[2]!.children[1]!.textContent).toBe('');
+    expect(vitals.children[3]!.children[0]!.style.width).toBe('25%');
     expect(findText(root, '1:05')).toBeDefined();
     expect(findText(root, WAVE_SEGMENTS[0]!.name)).toBeDefined();
     const threat = root.children[1]!;
@@ -248,6 +252,17 @@ describe('createHud', () => {
     expect(Number.parseFloat(threat.style.left!)).toBeLessThan(730);
     expect(threat.style.transform).toContain('rotate(180deg)');
     expect(threat.style.opacity).not.toBe('');
+  });
+
+  it('经验读数按形态分流:debug 注入才显示精确数值,默认玩家形态为空字符串', () => {
+    // 开发形态(main 解析 ?debug 后注入 debug: true):精确读数照旧
+    createHud({ world: stubWorld() as unknown as World, debug: true });
+    expect(findText(dom.ui.children[0]!, '10 / 40')).toBeDefined();
+
+    // 玩家形态(默认不传 debug):同一世界的数值区是空字符串
+    createHud({ world: stubWorld() as unknown as World });
+    const playerVitals = dom.ui.children[1]!.children[0]!.children[0]!;
+    expect(playerVitals.children[2]!.children[1]!.textContent).toBe('');
   });
 
   it('星币读数:与残骸同族的独立面板,显示余额且 setWorld 换世界同步更新', () => {
@@ -428,7 +443,8 @@ describe('createHud', () => {
   });
 
   it('时停淡出;重开只换 World 引用,不重复 append DOM', () => {
-    const hud = createHud({ world: stubWorld() as unknown as World });
+    // debug: true:换世界后的经验读数(33 / 55)才有数值可断言
+    const hud = createHud({ world: stubWorld() as unknown as World, debug: true });
     const root = dom.ui.children[0]!;
     hud.setPaused(true);
     expect(Number(root.style.opacity)).toBeLessThan(0.1);

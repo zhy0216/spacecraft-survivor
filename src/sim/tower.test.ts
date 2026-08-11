@@ -37,11 +37,25 @@ describe('三套槽位节流状态机', () => {
   it('过热系达到上限后锁定并随时间降温', () => {
     const { slot, def } = setup(TOWER_LASER);
     const buffs = createSupportBuffs();
-    while (canFire(slot, def)) onFired(slot, def, 1, buffs);
+    // 与 sim/turret.ts 的每帧顺序同口径:先推进节流,再问放行,能开就开。
+    // onFired 每发都写入 fireInterval 冷却,一口气 while 连开只打得出第 1 发就被冷却挡住,
+    // 必须逐帧贪连射才到得了顶(满速约 3s = 24 / (1.6/0.1 - 8));600 帧 = 10s 是宽裕的安全上限
+    for (let f = 0; f < 600 && slot.coolLock <= 0; f++) {
+      stepThrottle(slot, def, SIM_DT, buffs);
+      if (canFire(slot, def)) onFired(slot, def, 1, buffs);
+    }
     expect(slot.coolLock).toBeGreaterThan(0);
+    expect(slot.heat).toBe(slotHeatMax(slot, def, buffs)); // 夹在上限,不冲过头
+    // 锁死期间:一律不许开火,但降温照跑(热量条一直往下走)
     const heat = slot.heat;
     stepThrottle(slot, def, SIM_DT, buffs);
+    expect(canFire(slot, def)).toBe(false);
     expect(slot.heat).toBeLessThan(heat);
+    // 罚够 overheatLock 就到点解锁,且热量从零起手
+    for (let f = 0; f < Math.ceil(def.overheatLock / SIM_DT); f++) stepThrottle(slot, def, SIM_DT, buffs);
+    expect(slot.coolLock).toBe(0);
+    expect(slot.heat).toBe(0);
+    expect(canFire(slot, def)).toBe(true);
   });
 
   it('充能系蓄满才可开火,开火清空充能', () => {

@@ -55,7 +55,7 @@ const CARD_CSS =
 const CARD_LOCKED_CSS = `opacity:.45;cursor:default;`;
 const CARD_NAME_CSS = `color:${OK_COLOR};font-size:14px;letter-spacing:.08em;margin-bottom:4px;`;
 const CARD_DESC_CSS = `color:${VALUE_COLOR};font-size:12px;line-height:1.6;min-height:58px;`;
-/** 甲板示意图:等宽 + 白字,与读数区同款写法 */
+/** 槽位示意图:等宽 + 白字,与读数区同款写法 */
 const DIAGRAM_CSS =
   'white-space:pre;color:#e8f2ff;font:inherit;margin:8px 0 6px;background:rgba(5,7,13,.5);' +
   'border-radius:4px;padding:4px 6px;';

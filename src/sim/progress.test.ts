@@ -8,10 +8,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
-import { isEvolutionTower } from '../data/evolutions';
+import { isMergeResult } from '../data/merges';
 import { TOWER_KIND_COUNT } from '../data/towers';
 import { COND_ELITE_KILLS, COND_FIRST_WIN, COND_KILLS, UNLOCKS } from '../data/unlocks';
-import { createDeck } from './deck';
+import { createSupportSlots, createWeaponSlots } from './armory';
 import {
   createProgress,
   evaluateRun,
@@ -23,7 +23,7 @@ import {
   SILHOUETTE_MAX_COUNT,
   type RunStats,
 } from './progress';
-import { OFFER_TOWER, rollUpgradeOffer, type UpgradeOption } from './upgrade';
+import { OFFER_WEAPON_UPGRADE, rollUpgradeOffer, type UpgradeOption } from './upgrade';
 import { RESULT_LOSE, RESULT_WIN } from './world';
 
 /** 固定随机序列 + 计数器:类型私有字段使 Rng 名义化,测试桩经 unknown 显式转入(与 upgrade.test 同款) */
@@ -274,23 +274,28 @@ describe('unlockMask 编码与 sim/upgrade.ts 的位约定一致', () => {
   });
 
   it('evaluateRun 算出的掩码被 upgrade.ts 闸门直接消费:全解锁下导弹巢可被掷中', () => {
-    const deck = createDeck();
+    const weapons = createWeaponSlots();
+    const supports = createSupportSlots();
+    const banked = new Array<number>(TOWER_KIND_COUNT).fill(0);
     const mask = evaluateRun(createProgress(), {
       result: RESULT_WIN,
       kills: 300,
       eliteKills: 14,
       silhouette: null,
     }).progress.unlockMask;
-    // 沿 upgrade.test.ts "掩码打开后全表可达"的既有口径:逐型喂掷值,每一型都必须掷得中
+    // 沿 upgrade.test.ts 逐型喂掷值的既有口径:kind 掷 0.1 = 武器升级(未拥有也进池),
+    // 升级池 = 型号升序剔除合成结果塔 —— 全解锁掩码下每一型(含导弹巢)都必须掷得中
     const towerPool: number[] = [];
     for (let t = 0; t < TOWER_KIND_COUNT; t++) {
-      if (!isEvolutionTower(t)) towerPool.push(t);
+      if (!isMergeResult(t)) towerPool.push(t);
     }
     for (const [pos, type] of towerPool.entries()) {
       const out: UpgradeOption[] = [];
       const rng = new CountingRng([0.1, (pos + 0.5) / towerPool.length]);
-      expect(rollUpgradeOffer(deck, rng as unknown as Rng, out, false, 0, mask)).toBeGreaterThan(0);
-      expect(out[0]).toEqual({ kind: OFFER_TOWER, type, level: 0 });
+      expect(
+        rollUpgradeOffer(rng as unknown as Rng, out, 0, mask, weapons, supports, banked),
+      ).toBeGreaterThan(0);
+      expect(out[0]).toEqual({ kind: OFFER_WEAPON_UPGRADE, type, level: 0 });
     }
   });
 });

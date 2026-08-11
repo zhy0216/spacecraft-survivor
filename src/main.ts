@@ -98,7 +98,7 @@ async function boot(): Promise<void> {
   // 重开走 setWorld,升级时停与结算的淡出则每渲染帧照 run.paused 同步,不另挂事件监听器。
   // 放在升级/结算面板之前创建,后两者弹出时自然盖在它上面;HUD 本身 pointer-events:none。
   // rightGutter:玩家模式 0(罗盘/顶栏用到整条屏幕),开发模式 288(给 Tweakpane 让位)。
-  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0 });
+  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG });
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
