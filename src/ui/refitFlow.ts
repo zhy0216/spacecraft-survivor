@@ -1,16 +1,26 @@
 /**
  * 航段整备流程 —— 纯商店(改版:甲板网格删除后的落点)。
  * 旧版的「左甲板工作区 + 三阶段(选拼块/焊接/重排)+ 空间进化」随甲板一起删除,
- * 本流程只剩**右侧一栏商店**:武器商店(30 ★/把,不满 10 ★ 刷新,槽满弹替换选择器)、
+ * 本流程剩两块:**左侧舰船一览**(ui/shipDiagram)+ **右侧一栏商店** ——
+ * 武器商店(30 ★/把,不满 10 ★ 刷新,槽满转到舰船上点一格替换)、
  * 法令卡(25 ★ 即时生效、无占槽)、付费修复(25 ★ 回 40% HP,满血置灰)、完成整备
  * (completeRefit → hide + onResolved,恢复战斗在 main.ts)。与普通升级彻底分开:
  * 不消费残骸、不生成三选一、没有战斗中可调用的入口;购买全部零 rng,ui 只照返回码说人话。
  *
- * —— 替换选择器(武器槽满时)——
+ * —— 为什么商店里要画船(用户反馈)——
+ * 商店搬上地图后,买东西这一刻玩家已经离开了战斗视角:货架上写着"磁轨炮 30 ★",
+ * 但"我现在有几把炮、哪个方向是缺口、这把买回来装哪儿"三问全靠记。左侧那张图就是答案 ——
+ * 八个槽按真实朝向围一圈、每把武器画出自己的射界扇形;**悬停一张货架卡**,它就以幽灵态
+ * 虚装到即将落位的那一格上(槽满时则跟着鼠标落在待替换的那一格),于是"买它会变成什么样"
+ * 是买之前看得见的事,而不是买完才知道。
+ *
+ * —— 替换(武器槽满时)——
  * buyShopWeapon(index) 在槽满且没给替换位时返回 ACQUIRE_REPLACE_NEEDED —— **不扣星币、
  * 货架不动**(world.ts 的 doc 原文),于是"选槽失败/取消"天然一分钱不扣。
- * ui 列出 4 个武器槽,玩家点一个 → **带着 slotIndex 重买一次**(buyShopWeapon(index,
- * slotIndex) 内部完成换装/扣费/下架/查三合一)。**不单独调 replaceWeapon**:它不扣星币,
+ * 面板转入 pick 态:**玩家在左侧舰船图上点一个槽** → 带着 slotIndex 重买一次
+ * (buyShopWeapon(index, slotIndex) 内部完成换装/扣费/下架/查三合一)。
+ * 换成在船上点而不是在侧栏列 8 行,是因为要换掉哪一把取决于"它朝哪、射界多宽" ——
+ * 那正是列表读不出、非得看图的东西。**不单独调 replaceWeapon**:它不扣星币,
  * 先换再买会白送一把武器。
  *
  * —— 对外接口(main.ts 照此接线)——
@@ -30,15 +40,15 @@ import {
   DOCK_WEAPON_PRICE,
 } from '../data/economy';
 import { EDICTS } from '../data/edicts';
+import { mergeResultOf } from '../data/merges';
 import {
-  TOWER_ARC,
-  TOWER_AUTOCANNON,
-  TOWER_LASER,
-  TOWER_MISSILE_NEST,
-  TOWER_MORTAR,
-  TOWER_PD,
-  TOWER_RAILGUN,
+  THR_AMMO,
+  THR_CHARGE,
+  THR_HEAT,
+  TOWER_MAX_LEVEL,
   TOWERS,
+  towerArcDeg,
+  towerRange,
 } from '../data/towers';
 import {
   ACQUIRE_REPLACE_NEEDED,
@@ -52,6 +62,15 @@ import {
   type World,
 } from '../sim/world';
 import { audioBus } from '../render/audio';
+import {
+  createShipDiagram,
+  previewSustainedDps,
+  SLOT_FACING_NAME,
+  towerGlyph,
+  towerTintCss,
+  type ShipDiagramState,
+  type ShipDiagramUi,
+} from './shipDiagram';
 import { edictDesc } from './upgradeFlow';
 
 const OK_COLOR = '#9adcff';
@@ -61,7 +80,13 @@ const MUTED_COLOR = '#6f89a5';
 const LINE_COLOR = '#2b4a6e';
 const ROOT_CSS =
   'position:fixed;inset:0;z-index:20;display:none;pointer-events:none!important;' +
+  // 淡幕:整备是时停时刻,压暗背后那一屏虫潮才读得清货架与舰船图(仍透出地图,信标位置不丢)
+  'background:radial-gradient(120% 100% at 30% 50%,rgba(4,8,14,.42) 0%,rgba(3,6,11,.68) 100%);' +
   `color:${TEXT_COLOR};font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;`;
+/** 舰船图的容器:占满商店左边那一半,内容居中;屏太矮时让它自己滚,而不是把图裁掉 */
+const BOARD_WRAP_CSS =
+  'position:absolute;left:0;top:0;bottom:0;right:340px;display:flex;align-items:center;' +
+  'justify-content:center;padding:20px;box-sizing:border-box;overflow:auto;pointer-events:none;';
 const SHOP_CSS =
   'position:absolute;right:0;top:0;height:100%;width:340px;box-sizing:border-box;display:flex;' +
   'pointer-events:auto;flex-direction:column;gap:14px;padding:24px 22px 20px;overflow:auto;' +
@@ -87,9 +112,11 @@ const REFRESH_BTN_CSS =
   `padding:4px 9px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
   `background:rgba(43,74,110,.28);color:${OK_COLOR};font:inherit;font-size:10px;cursor:pointer;` +
   'letter-spacing:.06em;white-space:nowrap;';
-const CARDS_CSS = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;';
+// 一列而不是两列:武器卡要印下"节流系 · 射界 · 射程 · DPS"与合成进度,两列挤在 340px 侧栏里
+// 会把每一行都折断,而这些数正是"这把值不值 30 星币"的全部依据
+const CARDS_CSS = 'display:grid;grid-template-columns:1fr;gap:8px;';
 const CARD_CSS =
-  `min-height:88px;padding:11px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
+  `min-height:72px;padding:11px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
   'background:rgba(18,29,45,.72);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);' +
   `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;transition:border-color 100ms,background 100ms,opacity 100ms;`;
 const ROW_CSS =
@@ -171,35 +198,12 @@ export function dockEdictEffect(type: number): string {
   return edictDesc(def);
 }
 
-/**
- * 武器卡的几何图标,与 upgradeFlow 的 cardIcon 同一套"无外部资产"口径
- * (未知型号显式报 ?,不静默冒充第 0 型)。商店直接持有 TOWER_* 下标,故按型分派。
- */
-function towerGlyph(type: number): string {
-  switch (type) {
-    case TOWER_AUTOCANNON:
-      return '▰';
-    case TOWER_LASER:
-      return '◇';
-    case TOWER_ARC:
-      return 'ϟ';
-    case TOWER_RAILGUN:
-      return '➠';
-    case TOWER_PD:
-      return '✣';
-    case TOWER_MORTAR:
-      return '◉';
-    case TOWER_MISSILE_NEST:
-      return '♁';
-    default:
-      return '?';
-  }
-}
-
-/** 塔的渲染色(数值表 0xRRGGBB 整数)→ CSS 颜色;型越界退回弱化色 */
-function towerTintCss(type: number): string {
-  const tint = TOWERS[type]?.tint;
-  return tint === undefined ? MUTED_COLOR : `#${tint.toString(16).padStart(6, '0')}`;
+/** 节流系的单字(与 shipDiagram / armoryPanel 同源:卡片窄,只取一个字) */
+function throttleGlyph(throttle: number): string {
+  if (throttle === THR_AMMO) return '弹';
+  if (throttle === THR_HEAT) return '热';
+  if (throttle === THR_CHARGE) return '充';
+  return '?';
 }
 
 export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
@@ -249,27 +253,22 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   cards.style.cssText = CARDS_CSS;
   weaponSection.append(weaponHead, cards);
 
-  // —— 替换选择器:武器槽满时盖住卡片的那一层(只建一次,display 由 syncPanel 翻) ——
+  // —— 替换态:武器槽满时盖住卡片的那一层。**槽位不在这里列** ——
+  // 要换掉哪一把取决于"它朝哪、射界多宽",那是列表读不出的东西,故选槽整个搬到左侧舰船图上
+  // (点击经 createShipDiagram 的 onSlotClick 回到 pickReplacement)。这里只留提示 + 退路。
   const picker = document.createElement('div');
   picker.style.cssText = SECTION_CSS;
   picker.style.display = 'none';
   const pickerTitle = document.createElement('div');
   pickerTitle.style.cssText = SECTION_TITLE_CSS;
-  pickerTitle.textContent = '武器槽已满 —— 选一把替换';
-  picker.appendChild(pickerTitle);
-  const pickerRows: HTMLButtonElement[] = [];
-  for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-    const row = document.createElement('button');
-    row.style.cssText = ROW_CSS;
-    row.addEventListener('click', () => pickReplacement(i));
-    picker.appendChild(row);
-    pickerRows.push(row);
-  }
+  pickerTitle.textContent = '武器槽已满';
+  const pickerHint = document.createElement('div');
+  pickerHint.style.cssText = `color:${MUTED_COLOR};font-size:11px;`;
   const pickerCancel = document.createElement('button');
   pickerCancel.style.cssText = BTN_CSS;
   pickerCancel.textContent = '取消购买';
   pickerCancel.addEventListener('click', cancelPicker);
-  picker.appendChild(pickerCancel);
+  picker.append(pickerTitle, pickerHint, pickerCancel);
   weaponSection.appendChild(picker);
 
   // —— 星币区:法令卡 + 付费修复(既有,文案与置灰口径原样保留) ——
@@ -302,6 +301,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shop.append(shopHead, segment, weaponSection, starSection, finish);
   root.appendChild(shop);
 
+  // —— 左半屏:舰船一览(shop 之后挂,故 root.children[0] 仍是 shop) ——
+  const boardWrap = document.createElement('div');
+  boardWrap.style.cssText = BOARD_WRAP_CSS;
+  const shipDiagram: ShipDiagramUi = createShipDiagram({ onSlotClick: pickReplacement });
+  boardWrap.appendChild(shipDiagram.root);
+  root.appendChild(boardWrap);
+
   const toast = document.createElement('div');
   toast.style.cssText = TOAST_CSS;
   const ui = document.getElementById('ui')!;
@@ -313,13 +319,18 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const card = document.createElement('button');
     card.style.cssText = CARD_CSS;
     card.addEventListener('click', () => buyWeapon(i));
+    // 悬停 = 在左边那张船图上虚装一把给你看(见文件头"为什么商店里要画船")
+    card.addEventListener('mouseenter', () => hoverCardChanged(i));
+    card.addEventListener('mouseleave', () => hoverCardChanged(-1));
     cards.appendChild(card);
     weaponCards.push(card);
   }
 
   let shown = false;
-  /** 待换槽购买:null = 选择器没开。index = 武器货架位,type 由世界验过 ≥ 0 */
+  /** 待换槽购买:null = 不在替换态。index = 武器货架位,type 由世界验过 ≥ 0 */
   let pendingBuy: { index: number; type: number } | null = null;
+  /** 鼠标停在第几张货架卡(-1 = 没有);只喂舰船图的幽灵预览,不参与任何裁决 */
+  let hoverCard = -1;
   let flashTimer = 0;
 
   function flash(text: string, color: string): void {
@@ -347,6 +358,57 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
+   * 买下第 type 型武器时它会是几级 —— 与 World.installWeapon 同一条口径:
+   * **1 + 存档级**(weaponBankedLevels:给没拥有的武器升过级就存在那里),夹到满级。
+   * 商店卡上印的"入手 Lv2"与舰船图上虚装的那一把都读它:两处各算一份的话,
+   * 玩家会看到卡上写 Lv1、装上去却是 Lv2(或反过来),而这种差异只有买完才发现。
+   */
+  function incomingLevel(type: number): number {
+    const banked = world.weaponBankedLevels[type] ?? 0;
+    const level = 1 + banked;
+    return level < TOWER_MAX_LEVEL ? level : TOWER_MAX_LEVEL;
+  }
+
+  /** 第一个空槽下标(-1 = 槽已满)。与 World.acquireWeapon 的落位顺序同向:从槽 0 往后找 */
+  function firstEmptySlot(): number {
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const slot = world.weapons[i];
+      if (!slot || slot.type < 0) return i;
+    }
+    return -1;
+  }
+
+  /** 船上已装了几把这一型(三合一进度:凑满 3 把当场合成,见 data/merges) */
+  function ownedCount(type: number): number {
+    let n = 0;
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      if (world.weapons[i]?.type === type) n++;
+    }
+    return n;
+  }
+
+  /** 舰船图这一帧该画成什么:替换态跟着鼠标走,只读态把悬停的那把虚装到第一个空槽 */
+  function diagramState(): ShipDiagramState {
+    if (pendingBuy) {
+      return {
+        mode: 'pick',
+        incoming: { type: pendingBuy.type, level: incomingLevel(pendingBuy.type) },
+        target: -1,
+      };
+    }
+    const type = hoverCard >= 0 ? world.shopWeapons[hoverCard] : undefined;
+    if (type === undefined || type < 0) return { mode: 'view', incoming: null, target: -1 };
+    return { mode: 'view', incoming: { type, level: incomingLevel(type) }, target: firstEmptySlot() };
+  }
+
+  /** 悬停换了一张卡:只重画舰船图(货架文案与余额一个字都没变,整屏重刷是白干) */
+  function hoverCardChanged(index: number): void {
+    if (!shown || hoverCard === index) return;
+    hoverCard = index;
+    shipDiagram.paint(world, diagramState());
+  }
+
+  /**
    * 全店唯一的刷新点:任何购买/刷新/换局后当场重刷。置灰只认"已售出/满血"两样 UI 读数;
    * **星币不足不置灰**,那是点击时的 deny 反馈 —— 余额随时可能被另一张卡花掉,置灰态会
    * 过期,真正的裁决始终以 world 的返回码为准。
@@ -354,12 +416,17 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   function syncPanel(): void {
     starBalance.textContent = `★ ${world.starCoins}`;
 
-    // 武器卡:选择器开着时整排让位,只露选择器
+    // 武器卡:替换态时整排让位,只露提示与退路(选槽在左边那张船图上)
     const pickerOpen = pendingBuy !== null;
     cards.style.display = pickerOpen ? 'none' : 'grid';
     picker.style.display = pickerOpen ? 'flex' : 'none';
+    if (pendingBuy) {
+      const name = TOWERS[pendingBuy.type]?.name ?? '这把武器';
+      pickerHint.textContent = `在左侧舰船上点一个武器槽，把它换成「${name}」；取消不扣星币`;
+    }
     setGrey(refreshBtn, pickerOpen);
     refreshBtn.textContent = `刷新 ${DOCK_SHOP_REFRESH_PRICE} ★`;
+    const empty = firstEmptySlot();
     for (let i = 0; i < weaponCards.length; i++) {
       const card = weaponCards[i]!;
       const type = world.shopWeapons[i];
@@ -369,13 +436,33 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
         card.innerHTML =
           `<span style="color:${MUTED_COLOR};font-size:12px">` +
           `${type === undefined ? '本轮无货' : '已售出'}</span>`;
-      } else {
-        card.innerHTML =
-          `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
-          `<span><span style="color:${towerTintCss(type)}">${towerGlyph(type)}</span> ${TOWERS[type]?.name ?? `未知武器(${type})`}</span>` +
-          `<span>${DOCK_WEAPON_PRICE} ★</span></span>` +
-          `<span style="color:${MUTED_COLOR};font-size:11px">点击购买</span>`;
+        continue;
       }
+      const def = TOWERS[type];
+      const level = incomingLevel(type);
+      // 数值行:与舰船图上那一格印的是同一套读数(节流系 · 射界 · 射程 · 持续 DPS),
+      // 于是"货架上这把"与"船上那把"能直接对着比 —— 这正是要不要花 30 星币的全部依据
+      const stats = def
+        ? `${throttleGlyph(def.throttle)} · ${Math.round(towerArcDeg(def, level))}° · ` +
+          `射程 ${Math.round(towerRange(def, level))} · ${Math.round(previewSustainedDps(world, type, level))}/s`
+        : '数值表里没有这一型';
+      const owned = ownedCount(type);
+      const mergeResult = mergeResultOf(type);
+      const notes: string[] = [`入手 Lv${level}`];
+      notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
+      if (owned > 0) {
+        notes.push(
+          owned >= 2 && mergeResult >= 0
+            ? `已有 ${owned} 把 · 再 1 把合成「${TOWERS[mergeResult]?.name ?? '合成武器'}」`
+            : `已有 ${owned} 把`,
+        );
+      }
+      card.innerHTML =
+        `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
+        `<span><span style="color:${towerTintCss(type)}">${towerGlyph(type)}</span> ${def?.name ?? `未知武器(${type})`}</span>` +
+        `<span>${DOCK_WEAPON_PRICE} ★</span></span>` +
+        `<span style="display:block;color:${TEXT_COLOR};font-size:11px">${stats}</span>` +
+        `<span style="display:block;color:${MUTED_COLOR};font-size:11px">${notes.join(' · ')}</span>`;
     }
 
     // 法令卡
@@ -396,30 +483,17 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       }
     }
 
-    // 替换选择器:照当前武器槽现摆。空槽理论走不到(能开选择器 = 四槽全满),这是防桩
-    for (let i = 0; i < pickerRows.length; i++) {
-      const row = pickerRows[i]!;
-      const slot = world.weapons[i];
-      if (!slot || slot.type < 0) {
-        setGrey(row, true);
-        row.innerHTML = `<span style="color:${MUTED_COLOR};font-size:12px">槽 ${i + 1} · 空槽</span>`;
-        continue;
-      }
-      setGrey(row, false);
-      const name = TOWERS[slot.type]?.name ?? `未知武器(${slot.type})`;
-      row.innerHTML =
-        `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px">` +
-        `<span><span style="color:${towerTintCss(slot.type)}">${towerGlyph(slot.type)}</span> ${name}</span>` +
-        `<span>Lv${slot.level}</span></span>`;
-    }
-
     // 付费修复:满血置灰
     setGrey(repairBtn, world.ship.hp >= world.ship.maxHp);
+
+    // 舰船图:与货架同一次重画。买完一把武器、修完一次船,左边那张图当帧就跟上 ——
+    // 两块面板要是各刷各的,玩家就得靠"关了再开"去确认自己刚买的东西真的装上了
+    shipDiagram.paint(world, diagramState());
   }
 
   /**
    * 买第 index 张武器卡。槽有空位 → 世界当场落位;槽满 → ACQUIRE_REPLACE_NEEDED
-   * (不扣星币、货架不动),开替换选择器;其余失败码照 refitDenyMessage 说人话。
+   * (不扣星币、货架不动),转入替换态(选槽在左侧舰船图上);其余失败码照 refitDenyMessage 说人话。
    */
   function buyWeapon(index: number): void {
     if (!shown || pendingBuy) return;
@@ -443,15 +517,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
-   * 替换选择器里点一个武器槽:带着槽位重买。**不单独调 replaceWeapon** ——
+   * 在舰船图上点了一个武器槽(替换态):带着槽位重买。**不单独调 replaceWeapon** ——
    * buyShopWeapon(index, slotIndex) 内部已含换装/扣费/下架/查三合一(world.ts 的 doc 原文),
    * 先 replace 再买会白送一把不扣钱的武器。换装成功报"换下旧武器"的回执。
    */
   function pickReplacement(slotIndex: number): void {
     const pending = pendingBuy;
     if (!pending || !shown) return;
-    const row = pickerRows[slotIndex];
-    if (!row || row.disabled) return;
     const oldSlot = world.weapons[slotIndex];
     const oldName =
       oldSlot && oldSlot.type >= 0
@@ -460,7 +532,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const code = world.buyShopWeapon(pending.index, slotIndex);
     pendingBuy = null;
     if (code === ACQUIRE_REPLACE_NEEDED) {
-      // 点击瞬间槽位又空了(理论走不到:能开选择器 = 四槽全满,这是防桩):关掉让玩家重买
+      // 点击瞬间槽位又空了(理论走不到:能进替换态 = 八槽全满,这是防桩):退出让玩家重买
       flash(refitDenyMessage(code), DENY_COLOR);
       syncPanel();
       return;
@@ -476,14 +548,14 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     syncPanel();
   }
 
-  /** 取消换槽购买:选择器没开时是空操作;开了也只关选择器 —— 失败尝试一分钱不扣 */
+  /** 取消换槽购买:不在替换态时是空操作;在的话也只退出替换态 —— 失败尝试一分钱不扣 */
   function cancelPicker(): void {
     if (!pendingBuy) return;
     pendingBuy = null;
     syncPanel();
   }
 
-  /** 刷新武器货架:花 DOCK_SHOP_REFRESH_PRICE 星币重掷。置灰(选择器开着)时点击不生效 */
+  /** 刷新武器货架:花 DOCK_SHOP_REFRESH_PRICE 星币重掷。置灰(替换态)时点击不生效 */
   function refreshShop(): void {
     if (!shown || refreshBtn.disabled) return;
     const code = world.refreshShop();
@@ -539,6 +611,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   function hide(): void {
     shown = false;
     pendingBuy = null;
+    hoverCard = -1; // 悬停是纯表现,但留着的话下次开面板会莫名其妙先亮着一格幽灵
     root.style.display = 'none';
     ui.style.zIndex = '';
     // 提示条**不清**:那行回执(已购入/已换装)要留到战斗恢复之后才读得到
@@ -555,6 +628,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       }
       shown = true;
       pendingBuy = null;
+      hoverCard = -1;
       clearFlash();
       segment.textContent = `整备 · 航段 ${segmentIndex + 1}`;
       // Tweakpane 是运行时追加到 body 的后置兄弟;临时抬高 #ui 的堆叠层,确保固定商店盖住它

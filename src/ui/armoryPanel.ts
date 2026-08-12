@@ -22,6 +22,9 @@ import { slotSustainedDps } from '../sim/tower';
 import { WEAPON_SLOT_COUNT, type WeaponSlot } from '../sim/armory';
 import type { World } from '../sim/world';
 import { isTyping } from './isTyping';
+// 朝向中文名从舰船图那边取:商店的舰船一览与本面板印的必须是同一张表,
+// 各存一份就会出现"同一个槽在两个面板上叫不同的方向"(SLOT_CELL 与它咬合的纪律见下)
+import { SLOT_FACING_NAME } from './shipDiagram';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -66,9 +69,6 @@ const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spac
  * 而那是玩家换完位才会在战斗里发现的那类错)。
  */
 const SLOT_CELL: number[] = [1, 2, 5, 8, 7, 6, 3, 0];
-
-/** 槽位编号 → 朝向的中文名(与 SLOT_CELL 同一条"与 WEAPON_SLOT_FACING 咬合"的纪律) */
-const SLOT_FACING_NAME: string[] = ['正前', '右前', '正右', '右后', '正后', '左后', '正左', '左前'];
 
 /** 节流系的单字(与 upgradeFlow 的 THROTTLE_NAMES 同源,面板窄,这里只取一个字) */
 function throttleGlyph(throttle: number): string {

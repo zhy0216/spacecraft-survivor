@@ -9,6 +9,7 @@ import {
   DOCK_WEAPON_PRICE,
 } from '../data/economy';
 import {
+  createEdictLevels,
   EDICT_AMMO,
   EDICT_ARMOR,
   EDICT_COOLANT,
@@ -18,8 +19,16 @@ import {
   EDICT_OVERDRIVE,
   EDICTS,
 } from '../data/edicts';
-import { TOWER_AUTOCANNON, TOWER_LASER, TOWER_RAILGUN, TOWERS } from '../data/towers';
-import { createWeaponSlots, WEAPON_SLOT_COUNT, type WeaponSlot } from '../sim/armory';
+import {
+  TOWER_AUTOCANNON,
+  TOWER_KIND_COUNT,
+  TOWER_LASER,
+  TOWER_RAILGUN,
+  TOWER_STORM_CANNON,
+  TOWERS,
+} from '../data/towers';
+import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
+import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -149,6 +158,9 @@ interface StubWorld {
   shopWeapons: number[];
   dockEdictOffers: number[];
   weapons: WeaponSlot[];
+  weaponBankedLevels: number[];
+  edictLevels: number[];
+  buffs: EdictBuffs;
   weaponCalls: Array<[number, number | undefined]>;
   weaponCode: number;
   replaceNeeded: boolean;
@@ -175,6 +187,9 @@ function createStubWorld(): StubWorld {
     shopWeapons: [TOWER_AUTOCANNON, -1],
     dockEdictOffers: [EDICT_AMMO, EDICT_GYRO],
     weapons: createWeaponSlots(),
+    weaponBankedLevels: new Array<number>(TOWER_KIND_COUNT).fill(0),
+    edictLevels: createEdictLevels(),
+    buffs: createEdictBuffs(),
     weaponCalls: [],
     weaponCode: 0,
     replaceNeeded: false,
@@ -237,6 +252,19 @@ const starSectionOf = (dom: StubDom): StubEl => shopOf(dom).children[3] as StubE
 const edictOf = (dom: StubDom, index: number): StubEl => starSectionOf(dom).children[index + 1] as StubEl;
 const repairOf = (dom: StubDom): StubEl => starSectionOf(dom).children[DOCK_EDICT_COUNT + 1] as StubEl;
 const finishOf = (dom: StubDom): StubEl => shopOf(dom).children[4] as StubEl;
+// 舰船图:root 的第二个孩子是它的容器(shop 仍是第一个),里头是 shipDiagram.root
+const boardOf = (dom: StubDom): StubEl => (rootOf(dom).children[1] as StubEl).children[0] as StubEl;
+const headOf = (dom: StubDom): StubEl => boardOf(dom).children[0] as StubEl;
+const ringOf = (dom: StubDom): StubEl => boardOf(dom).children[2] as StubEl;
+const edictWrapOf = (dom: StubDom): StubEl => (boardOf(dom).children[3] as StubEl).children[1] as StubEl;
+/**
+ * 槽位卡片层永远是环里**最后挂的一层**(后挂 = 盖在扇形与船体上,卡片才点得到),
+ * 层内下标即槽位编号。照这条契约取,而不是数"前面有几枚扇形几层船体" ——
+ * 后者会随任何一次装饰改动错位,而错位的症状是点到了别的槽(看着像换错了武器)
+ */
+const chipLayerOf = (dom: StubDom): StubEl =>
+  ringOf(dom).children[ringOf(dom).children.length - 1] as StubEl;
+const chipOf = (dom: StubDom, slot: number): StubEl => chipLayerOf(dom).children[slot] as StubEl;
 
 describe('createRefitFlow 纯商店流程', () => {
   let dom: StubDom;
@@ -295,8 +323,11 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(world.weaponCalls).toEqual([[0, undefined]]);
     expect(cardsOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
-    expect((pickerOf(dom).children[3] as StubEl).innerHTML).toContain('Lv3');
-    fire(pickerOf(dom).children[3] as StubEl, 'click');
+    // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 Lv3)
+    expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(chipOf(dom, 2).innerHTML).toContain('正右');
+    expect(chipOf(dom, 2).innerHTML).toContain('Lv3');
+    fire(chipOf(dom, 2), 'click');
     expect(world.weaponCalls).toEqual([[0, undefined], [0, 2]]);
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
     expect(pickerOf(dom).style.display).toBe('none');
@@ -356,6 +387,85 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(repairOf(dom).disabled).toBe(true);
   });
 
+  it('左侧画出整条船：每格印朝向，已装的印名称等级、没装的印空槽，船体读数取自 world.ship', () => {
+    world.weapons[0]!.type = TOWER_LASER;
+    world.weapons[0]!.level = 2;
+    setup();
+    expect(chipOf(dom, 0).innerHTML).toContain('正前');
+    expect(chipOf(dom, 0).innerHTML).toContain(TOWERS[TOWER_LASER]?.name);
+    expect(chipOf(dom, 0).innerHTML).toContain('Lv2');
+    expect(chipOf(dom, 1).innerHTML).toContain('右前');
+    expect(chipOf(dom, 1).innerHTML).toContain('空槽');
+    expect((headOf(dom).children[1] as StubEl).innerHTML).toContain('60/100');
+  });
+
+  it('悬停货架卡把武器虚装到第一个空槽上，移开还原；预览一次都不碰世界', () => {
+    world.weapons[0]!.type = TOWER_LASER;
+    world.weapons[0]!.level = 1;
+    setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
+    expect(chipOf(dom, 1).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(chipOf(dom, 0).innerHTML).not.toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(world.weaponCalls).toEqual([]);
+    expect(world.starCoins).toBe(100);
+    fire(cardsOf(dom).children[0] as StubEl, 'mouseleave');
+    expect(chipOf(dom, 1).innerHTML).toContain('空槽');
+  });
+
+  it('替换态里悬停一个槽，就地演示「换下谁、换成谁」', () => {
+    world.replaceNeeded = true;
+    for (const slot of world.weapons) {
+      slot.type = TOWER_RAILGUN;
+      slot.level = 4;
+    }
+    setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    fire(chipOf(dom, 5), 'mouseenter');
+    expect(chipOf(dom, 5).innerHTML).toContain('line-through');
+    expect(chipOf(dom, 5).innerHTML).toContain(TOWERS[TOWER_RAILGUN]?.name);
+    expect(chipOf(dom, 5).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(chipOf(dom, 4).innerHTML).not.toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+  });
+
+  it('替换态点到空槽不成交（真 DOM 靠 disabled 拦，这里是防桩）', () => {
+    world.replaceNeeded = true;
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.level = 1;
+    setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    fire(chipOf(dom, 1), 'click');
+    expect(world.weaponCalls).toEqual([[0, undefined]]);
+    expect(world.starCoins).toBe(100);
+    fire(chipOf(dom, 0), 'click');
+    expect(world.weaponCalls).toEqual([[0, undefined], [0, 0]]);
+  });
+
+  it('法令按层数印在船图上，一条都没有时明说', () => {
+    setup();
+    expect(edictWrapOf(dom).innerHTML).toContain('尚未持有');
+    world.edictLevels[EDICT_MAGNET] = 2;
+    world.edictLevels[EDICT_ARMOR] = 1;
+    fire(repairOf(dom), 'click'); // 任一次购买都会重画左侧
+    expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_MAGNET]!.name} ×2`);
+    expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_ARMOR]!.name} ×1`);
+  });
+
+  it('武器卡印出数值、入手等级、落位方向与三合一进度', () => {
+    world.weaponBankedLevels[TOWER_AUTOCANNON] = 1;
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.level = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.level = 1;
+    setup();
+    const card = cardsOf(dom).children[0] as StubEl;
+    expect(card.innerHTML).toContain('射程');
+    expect(card.innerHTML).toContain('/s');
+    expect(card.innerHTML).toContain('入手 Lv2'); // 1 + 存档级，与 World.installWeapon 同口径
+    expect(card.innerHTML).toContain('装到「正右」'); // 槽 0/1 已满，第一个空槽是槽 2
+    expect(card.innerHTML).toContain('已有 2 把');
+    expect(card.innerHTML).toContain(TOWERS[TOWER_STORM_CANNON]?.name);
+  });
+
   it('完成整备调用 completeRefit，成功才回调', () => {
     setup();
     fire(finishOf(dom), 'click');
@@ -378,6 +488,5 @@ describe('createRefitFlow 纯商店流程', () => {
   });
 });
 
-// 替换层 = 一行标题 + WEAPON_SLOT_COUNT 个槽按钮 + 一颗取消:槽位数从 armory 现读,
-// 写死数字的话槽位一扩(4 -> 8)这一条就点到了某个槽而不是取消,症状还长得像「取消没反应」
-const WEAPON_PICKER_CANCEL_INDEX = 1 + WEAPON_SLOT_COUNT;
+// 替换层 = 标题 + 一行提示 + 一颗取消(槽位不在侧栏列,选槽整个搬到左侧舰船图上)
+const WEAPON_PICKER_CANCEL_INDEX = 2;
