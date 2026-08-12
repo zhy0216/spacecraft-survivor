@@ -11,7 +11,18 @@ import { tuning } from '../sim/config';
 import { segmentLabel } from './gameOver';
 
 export interface DebugStats {
+  /**
+   * 窗口平均帧率(最近约 1 秒的帧,见 core/frameMeter.ts),**不是** Pixi 那个单帧瞬时 FPS。
+   * 它与下面两条是同一个窗口的三种读法:平均帧率看趋势,最差帧才是"掉帧了没"的答案。
+   */
   fps: number;
+  /** 窗口平均帧时(ms)。60fps = 16.7ms —— 比 fps 更好与"一帧的预算"直接比 */
+  frameMs: number;
+  /**
+   * 窗口内最长的一帧(ms)。01 号验收(1000 敌 + 500 弹 @60fps)盯的就是这个数:
+   * 一次 120ms 的卡顿摊进一秒的平均帧率里只压掉三四帧,在 fps 那一行上根本看不见。
+   */
+  worstMs: number;
   /** 存活敌数 = 池里 items.length,与滑杆设定的目标值区分开 —— fps 读数得配它才有意义 */
   enemies: number;
   bullets: number;
@@ -80,7 +91,12 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   const pane = new Pane({ title: 'STARWRECK · 灰盒调参' });
 
   const perf = pane.addFolder({ title: '性能 / 确定性' });
-  perf.addBinding(stats, 'fps', { readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  // 帧率三读数摆在一起才有意义:平均帧率好看、帧时对预算、最差帧报卡顿(见 DebugStats)。
+  // 标签把窗口写进去(1s 均):不写的话它与 Pixi 的瞬时 FPS 长得一模一样,而两者读法完全不同
+  perf.addBinding(stats, 'fps', { label: 'fps(1s 均)', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  perf.addBinding(stats, 'frameMs', { label: '帧时 ms', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
+  // 盯着它:60fps 的预算是 16.7ms,这个数一跳到 30+ 就是真掉了一帧(平均值上看不出来)
+  perf.addBinding(stats, 'worstMs', { label: '最差帧 ms(1s 内)', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
   perf.addBinding(stats, 'enemies', { label: '敌(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 05 号起这是**塔真的打出来的弹**(不再有凭空重生的压测哑弹),故它同时是"500 弹不掉帧"
   // 那条验收的读数:它爬到 500 上下时 fps 还稳,才算数

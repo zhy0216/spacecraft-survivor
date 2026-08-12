@@ -27,6 +27,7 @@
  * "跨帧恒为初值"(runSave.ts 文件头第三类)。局终则反过来**删档**:
  * 一局打完还留着半局存档,下次进来那颗「继续」通向的是一场已经结束的战斗。
  */
+import { FrameMeter } from './core/frameMeter';
 import { Input } from './core/input';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
@@ -133,8 +134,14 @@ async function boot(): Promise<void> {
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
+  // 帧率读数的统计窗(见 core/frameMeter.ts):**跨局复用**,与 tuning/stats 同一档 ——
+  // 它量的是这台机器这一刻画得多快,不属于任何一局,重开不清窗
+  const frameMeter = new FrameMeter();
+
   const stats: DebugStats = {
     fps: 0,
+    frameMs: 0,
+    worstMs: 0,
     enemies: 0,
     bullets: 0,
     speed: 0,
@@ -728,7 +735,14 @@ async function boot(): Promise<void> {
     hud.setPaused(run.paused);
     hud.sync();
 
-    stats.fps = Math.round(renderer.app.ticker.FPS);
+    // 帧率读数(只喂 ?debug 面板,不进 checksum、不参与确定性)。喂进去的是 ticker.elapsedMS ——
+    // Pixi 那个**未夹取**的真实帧间隔(它只夹 deltaMS,见 Ticker.update),所以掉帧不会被
+    // minFPS 的 100ms 上限磨平;代价是切标签页回来会送进一个几秒的"帧",由 FrameMeter 当断点挡掉。
+    // 不读 ticker.FPS 的理由见 core/frameMeter.ts 文件头:那是单帧瞬时值,面板上只会乱跳
+    frameMeter.push(ticker.elapsedMS);
+    stats.fps = frameMeter.fps;
+    stats.frameMs = frameMeter.frameMs;
+    stats.worstMs = frameMeter.worstMs;
     stats.enemies = world.enemies.size;
     // 音乐威胁强度:存活敌人数 ÷ WAVE_MAX_ALIVE(同屏保险丝上限)→ 0..1 密度比。
     // Boss 在场时怪可能很少,配乐仍需保持压力 —— 取密度比与 0.35 的较大者。
