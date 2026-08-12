@@ -14,6 +14,11 @@ export interface Vec2 {
 /** World.step 的纯数据入参:输入永远不进 sim,由 main.ts 每逻辑帧从 Input 取值填好传进来 */
 export interface ShipCommand {
   desiredHeading: Vec2 | null;
+  /**
+   * 本逻辑帧是否按着加速键(空格)。可选:既有调用方(单测、无头跑批)不填 = 恒不加速,
+   * 语义一字不变。触发裁决(冷却门槛)在 World.step —— 这里只是"键按没按着"的纯数据
+   */
+  boost?: boolean;
 }
 
 export interface Ship {
@@ -86,6 +91,9 @@ export function createShip(): Ship {
  *   (扩建惩罚 + 18 号重心校准),与 tuning 同一条"面板/表改了就生效"的口径
  * @param cruiseMul 巡航速度倍率(18 号巡航校准 = 1.1),缺省 1 = 未持有。
  *   只放大巡航上限这一个数:推力与阻尼一个字都不碰 —— 法令是"跑得更快",不是"推得更猛"
+ * @param accelMul 推力倍率(加速技能的加速窗内 = tuning.boostAccelMul),缺省 1。
+ *   与 cruiseMul 分开给:巡航上限抬了推力不抬,加速窗的前半段就还是老爬升曲线,
+ *   "点燃推进器"那一脚踹不出来 —— 两个倍率各推各的数,由 World 按帧配对传入
  */
 export function stepShip(
   ship: Ship,
@@ -93,6 +101,7 @@ export function stepShip(
   dt: number,
   turnRateDeg: number = tuning.shipTurnRate,
   cruiseMul: number = 1,
+  accelMul: number = 1,
 ): void {
   ship.px = ship.x;
   ship.py = ship.y;
@@ -109,10 +118,12 @@ export function stepShip(
     ship.heading = wrapAngle(ship.heading + Math.max(-maxTurn, Math.min(maxTurn, diff)));
 
     // 推力沿船头方向、而不是沿期望航向:这才产生"先转船、再找射界"的手感(GDD §3.1 走位 = 火控)
+    // 倍率先夹 0(负数会把推力反向,NaN 顺着乘法污染速度),与 cruiseMul 那一句同一道保护
     const hx = Math.cos(ship.heading);
     const hy = Math.sin(ship.heading);
-    ship.vx += hx * tuning.shipAccel * dt;
-    ship.vy += hy * tuning.shipAccel * dt;
+    const accel = tuning.shipAccel * Math.max(0, accelMul);
+    ship.vx += hx * accel * dt;
+    ship.vy += hy * accel * dt;
 
     // 当前速度不会随船头自动旋转:若只叠前向推力,高速转 90° 后航向会落后船头四十多度,
     // 镜头已经朝新方向前视,船却还横着冲,观感就像转向被旧速度拖住。这里把速度拆成沿船头/

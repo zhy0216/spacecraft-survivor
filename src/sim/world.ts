@@ -229,6 +229,12 @@ const SPORE_BULLET_RADIUS = 5;
 const desired: Vec2 = { x: 0, y: 0 };
 
 /**
+ * 加速窗内无方向输入时"沿船头满推"的期望航向暂存(模块级复用,铁律 3:
+ * 每逻辑帧最多写一次,绝不跨帧持有 —— stepShip 只读不存引用)。
+ */
+const boostForward: Vec2 = { x: 0, y: 0 };
+
+/**
  * 威胁罗盘的实际出怪统计采用一阶指数平滑。1.25s 足够把低速怪流的逐只脉冲抹平，
  * 又不会让侧压 burst 过了几秒还把箭头拽在旧方向。衰减与单次成功出怪的脉冲增益都按
  * 固定 SIM_DT 预先算好：热路径只做乘加，不现算 exp、也不分配样本对象。
@@ -241,6 +247,17 @@ const THREAT_SMOOTH_DECAY = Math.exp(-SIM_DT / THREAT_SMOOTH_TAU);
 const THREAT_SPAWN_IMPULSE = (1 - THREAT_SMOOTH_DECAY) / SIM_DT;
 /** 最近实际生成速率低于这一档时，旧样本已经没有指向意义，回退波次脚本的派生方向。 */
 const THREAT_DIRECTION_MIN_RATE = 0.05;
+
+/**
+ * 逐武器 DPS 读数(HUD 统计面板)的一阶指数平滑 —— 与威胁罗盘同一套写法与理由:
+ * 帧首统一衰减,伤害结算时按 (1-decay)/dt 的脉冲增益进账,稳定的 X 伤害/秒收敛到 X。
+ * 2.5s 比罗盘的 1.25s 更钝:DPS 是"这门炮最近打得怎么样"的读数,迫击炮几秒一发的
+ * 攒-放节奏在 1.25s 窗口下会在 0 与峰值之间大幅跳动,读不出均值。
+ * 纯 HUD 读数,不参与任何判定,不进 checksum(照 threatRate 口径)。
+ */
+const DPS_SMOOTH_TAU = 2.5;
+const DPS_SMOOTH_DECAY = Math.exp(-SIM_DT / DPS_SMOOTH_TAU);
+const DPS_SMOOTH_IMPULSE = (1 - DPS_SMOOTH_DECAY) / SIM_DT;
 /** 两股相反压力把方向向量抵消时同样回退，避免 atan2(≈0,≈0) 给出随机抖动。 */
 const THREAT_DIRECTION_EPSILON = 1e-6;
 
@@ -683,6 +700,37 @@ export class World {
   private threatDirX = 0;
   private threatDirY = 0;
 
+  /**
+   * 逐塔型的实际 DPS 平滑值(下标 = TOWER_*)。伤害结算的唯一入口(damageEnemy)在
+   * 带 towerType 时按**实际结算量**(词缀抗性折算后)进账,帧首统一衰减(见 DPS_SMOOTH_TAU)。
+   * 纯 HUD 读数(dpsOf),不参与任何判定、不进 checksum —— 与 threatRate 同一条口径。
+   */
+  private readonly dpsByType = new Float64Array(TOWER_KIND_COUNT);
+
+  /**
+   * 逐塔型的**本局累计**实际伤害(下标 = TOWER_*,与 dpsByType 同一处进账、同一份口径,
+   * 只是不衰减)。局末武器战报读它 —— "这一局谁扛了输出"的总账。
+   * 纯读数,不参与任何判定、不进 checksum(照 kills 的派生量口径:伤害效果已落在敌 hp 上)。
+   */
+  readonly runDamageByType = new Float64Array(TOWER_KIND_COUNT);
+
+  /**
+   * 本局的**峰值总 DPS**(全武器 dpsByType 之和的历史最大值)。帧首衰减后现算现比,
+   * 局末战报的"最高一刻打出了多少"。纯读数,不进 checksum(与 runDamageByType 同口径)。
+   */
+  peakDps = 0;
+
+  /**
+   * 加速技能(空格,畅玩性)的两个计时器,秒。boostTime > 0 = 加速窗内:巡航上限与推力
+   * 都按 tuning.boost* 放大(乘进 stepShip 的 cruiseMul/accelMul);boostCooldown 从
+   * **触发那一帧**起算(含加速窗本身),归零前不许再次触发。
+   * 两个都是**真状态**:它们直接决定船的速度上限与推力 —— 差一帧,船的位置当帧分叉,
+   * 故都进 checksum(×100,与 offerCooldown 那批秒数字段同一条量化理由)。
+   * 触发条件读的是 cmd.boost(输入以纯数据进 sim,铁律 1),同 seed + 同输入序列照旧同轨迹。
+   */
+  boostTime = 0;
+  boostCooldown = 0;
+
   private scratch: Enemy[] = [];
 
   /**
@@ -705,7 +753,7 @@ export class World {
    */
   private readonly sink: FireSink & EnemyBulletSink = {
     spawnBullet: () => this.bullets.spawn(),
-    damage: (e, amount, throttle) => this.damageEnemy(e, amount, throttle),
+    damage: (e, amount, throttle, towerType) => this.damageEnemy(e, amount, throttle, towerType),
     fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0) => {
       const e = this.fx.spawn();
       e.kind = kind;
@@ -727,7 +775,8 @@ export class World {
     // 按支援聚合现算),飘字与血条同款"各算各的一份、两边同源"的口径(见 settleHullDamage)
     hullHit: (x, y, damage) => {
       if (this.shipDead) return;
-      const dealt = damage * hullDamageTaken(this.supportBuffs);
+      // 飘字与扣血共用 shipDamageTakenMul(支援 × 加速窗)—— 两本账同源,见 settleHullDamage
+      const dealt = damage * this.shipDamageTakenMul();
       this.damageShip(damage);
       this.pushHitFx(FXV_HULL_HIT, x, y, dealt, 0);
     },
@@ -872,6 +921,15 @@ export class World {
     this.threatRate *= THREAT_SMOOTH_DECAY;
     this.threatDirX *= THREAT_SMOOTH_DECAY;
     this.threatDirY *= THREAT_SMOOTH_DECAY;
+    // 逐武器 DPS 同一条"帧首衰减、结算时进脉冲"的顺序(常量注释里有账):
+    // 本帧稍后开火的伤害以完整强度进账,没在打的塔平滑退回 0。
+    // 顺手把总和跟峰值比一次(局末战报的"最高一刻"):在衰减后取样,读到的是稳态口径
+    let dpsSum = 0;
+    for (let i = 0; i < TOWER_KIND_COUNT; i++) {
+      this.dpsByType[i]! *= DPS_SMOOTH_DECAY;
+      dpsSum += this.dpsByType[i]!;
+    }
+    if (dpsSum > this.peakDps) this.peakDps = dpsSum;
 
     // 支援聚合与 HP 上限两样派生量在帧首统一刷,于是"这一帧"的塔与"这一帧"的撞击
     // 读到的都是最新的支援(改版 06 号)。聚合每帧全量重算:4 个槽的几遍乘法,
@@ -886,11 +944,38 @@ export class World {
     this.ship.maxHp = hullMaxHp(this.supportBuffs, edictHullHpAdd(this.edicts));
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
 
+    // 加速技能(空格):触发判定在计时递减**之前** —— 触发那一帧就是加速的第一帧,
+    // 玩家按下与船提速之间没有一帧的空档。冷却从触发起算(含加速窗),归零前按了也不响。
+    // cmd.boost 是每逻辑帧采样的纯数据输入(与 desiredHeading 同一条铁律 1 口径)
+    if (cmd.boost && this.boostCooldown <= 0) {
+      this.boostTime = tuning.boostDuration;
+      this.boostCooldown = tuning.boostCooldown;
+    }
+    const boosting = this.boostTime > 0;
+    if (this.boostTime > 0) this.boostTime = Math.max(0, this.boostTime - SIM_DT);
+    if (this.boostCooldown > 0) this.boostCooldown = Math.max(0, this.boostCooldown - SIM_DT);
+
     // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后。
     // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_FALLBEHIND_RADIUS 那段)。
-    // 巡航倍率(18 号巡航校准)照 turnRateDeg 的先例由 World 现算传入:未持有 = 1,逐位恒等
+    // 巡航倍率(18 号巡航校准)照 turnRateDeg 的先例由 World 现算传入:未持有 = 1,逐位恒等;
+    // 加速窗内巡航与推力再乘 tuning.boost*(现读,面板拖动即时生效)。
+    // 加速窗内**无方向输入**时沿船头满推(desired 顶成船头方向):不给这一手,
+    // 松着方向键按空格就什么都不发生 —— "点燃了推进器船却不动"是最违和的哑火
     const ship = this.ship;
-    stepShip(ship, cmd.desiredHeading, SIM_DT, this.turnRate, edictCruiseSpeedMul(this.edicts));
+    let desiredHeading = cmd.desiredHeading;
+    if (boosting && desiredHeading === null) {
+      boostForward.x = Math.cos(ship.heading);
+      boostForward.y = Math.sin(ship.heading);
+      desiredHeading = boostForward;
+    }
+    stepShip(
+      ship,
+      desiredHeading,
+      SIM_DT,
+      this.turnRate,
+      edictCruiseSpeedMul(this.edicts) * (boosting ? tuning.boostSpeedMul : 1),
+      boosting ? tuning.boostAccelMul : 1,
+    );
 
     // 出怪。正式路径是波次脚本的运行器(sim/waves.ts):它一个字都不认识世界,只说"朝这个方向
     // 出一只这型的怪",落点由 waveSink → spawnFromWave 补完。
@@ -1403,10 +1488,10 @@ export class World {
       e.hitCd = tuning.enemyHitInterval;
 
       const raw = (isBoss ? bossContactDamage() : ENEMIES[e.kind]!.contactDamage) * scale;
-      // 飘字带**实际结算**的伤害 —— 与 damageShip 里同一份乘式
-      // (支援减伤是改版 06 号装甲舱的挂钩,hullDamageTaken 由同一份聚合算出,确定性不变),
+      // 飘字带**实际结算**的伤害 —— 与 damageShip 里同一份乘式(shipDamageTakenMul:
+      // 支援减伤 × 加速窗减伤,同一份聚合与同一个 boostTime,确定性不变),
       // 于是红字与血条扣掉的量永远一致,玩家不会读到两本账
-      this.pushHitFx(FXV_HULL_HIT, e.x, e.y, raw * hullDamageTaken(this.supportBuffs), 0);
+      this.pushHitFx(FXV_HULL_HIT, e.x, e.y, raw * this.shipDamageTakenMul(), 0);
       this.damageShip(raw);
     }
   }
@@ -1434,12 +1519,23 @@ export class World {
    * 减伤的唯一去处就是这一句(与飘字那一边同源,见 settleHullDamage)。
    * 旧版的四舷惩罚(edgePenalty / 受击闪红)随甲板删除:受击不再有方向性反馈。
    */
+  /**
+   * 船体受伤的总倍率 = 支援减伤(装甲舱 ×0.8)× 加速窗减伤(boostDamageTakenMul,
+   * 仅 boostTime > 0 的那几帧)。**飘字与扣血的唯一共同乘式**:settleHullDamage /
+   * sink.hullHit 的红字与 damageShip 的血条读的都是它,两本账永远一致。
+   * 倍率夹 0(面板拖成负数不该把受伤变成回血),与 stepShip 那批倍率同一道保护。
+   */
+  shipDamageTakenMul(): number {
+    const boostMul = this.boostTime > 0 ? Math.max(0, tuning.boostDamageTakenMul) : 1;
+    return hullDamageTaken(this.supportBuffs) * boostMul;
+  }
+
   damageShip(amount: number): boolean {
     // 已沉就一切停手:这一句同时保证了 onShipDestroyed 只可能响一次(与 applyDamage 的
     // "同帧重复致命只算一次"同一条口径),08 号的失败流程不必自己去重
     if (this.shipDead || amount <= 0) return false;
 
-    const dealt = amount * hullDamageTaken(this.supportBuffs);
+    const dealt = amount * this.shipDamageTakenMul();
     this.ship.hp = Math.max(0, this.ship.hp - dealt);
 
     if (this.ship.hp <= 0) {
@@ -1461,7 +1557,7 @@ export class World {
    *   不带 = 既有调用方语义,一律不抗(普通怪本来就是恒 1,无词缀时此参数完全无效)
    * @returns 本次是否致死(同帧重复致命只算一次,见 applyDamage)
    */
-  damageEnemy(e: Enemy, amount: number, throttle?: number): boolean {
+  damageEnemy(e: Enemy, amount: number, throttle?: number, towerType?: number): boolean {
     // 抗性判定挂在伤害结算的唯一入口,与塔的节流(throttle)字段对齐 —— 不另造伤害类型体系
     // (todos/14 口径:装甲 = 弹药系、相位 = 过热/充能系)。乘出来的仍是"这一发实际造成的伤害"
     if (throttle !== undefined && e.affixes !== 0) {
@@ -1471,10 +1567,25 @@ export class World {
         amount *= AFFIXES[AFFIX_PHASED]!.energyMul;
       }
     }
+    // 逐武器 DPS 归账(HUD 统计面板)与本局累计总账(局末战报):按**实际结算量**
+    // (抗性已折算)进账,与飘字同一份真相。型越界(表写坏/测试桩乱传)只是不归账,
+    // 不炸整局 —— 归账是纯读数,照 threatRate 口径
+    if (towerType !== undefined && towerType >= 0 && towerType < TOWER_KIND_COUNT) {
+      this.dpsByType[towerType]! += amount * DPS_SMOOTH_IMPULSE;
+      this.runDamageByType[towerType]! += amount;
+    }
     // 实际结算量写给敌对象:命中飘字(FXV_IMPACT)与死亡飘字(FXV_KILL)都认它 ——
     // 不带抗性时 amount 就是调用方给的原值,语义一字不变(见 Enemy.lastHit 的字段注释)
     e.lastHit = amount;
     return applyDamage(e, amount);
+  }
+
+  /**
+   * 塔型 type 最近的实际 DPS(一阶平滑,窗口 DPS_SMOOTH_TAU)。HUD 统计面板的唯一读口;
+   * 型越界返回 0(HUD 逐槽读,空槽 type = -1 走这条兜底)。
+   */
+  dpsOf(type: number): number {
+    return type >= 0 && type < TOWER_KIND_COUNT ? this.dpsByType[type]! : 0;
   }
 
   /**
@@ -2137,6 +2248,11 @@ export class World {
     //   result 又是 shipDead / wave.done / bossPhase 的纯函数(settleOutcome 只读这三样;
     //   bossPhase 在下面单独哈过),同理没有独立信息。
     acc(this.ship.hp);
+    // 加速技能的两个计时器紧跟着船:它们直接决定巡航上限与推力的倍率,差一帧船的位置
+    // 当帧分叉 —— 照 offerCooldown"凡是决定判定何时改变的字段都是真状态"的先例进哈希。
+    // × 100 的量化理由与那批秒数字段一字同源(1/8 的步长抓不住单帧差)
+    acc(this.boostTime * 100);
+    acc(this.boostCooldown * 100);
     // 武器槽紧跟着船(改版 §5,取代旧甲板的逐格哈希):槽位与节流状态是逐帧演化的真状态,
     // 漏了它们,"某座塔的装填提前了一帧"这类分叉就从确定性口径下漏掉了 ——
     // 而节流状态恰恰决定了下一帧谁开火。顺序 = 槽位下标 0..3,永不改。

@@ -62,7 +62,7 @@ async function boot(): Promise<void> {
   window.addEventListener('pointerdown', unlockAudio);
   // 整局复用同一个 cmd:World 只读它、不缓存引用,所以就地改字段是安全的,
   // 也省下 60Hz 的稳定分配(铁律 3 的运行期零新增分配)。跨局也复用 —— 它是输入的暂存,不是世界状态
-  const cmd: ShipCommand = { desiredHeading: null };
+  const cmd: ShipCommand = { desiredHeading: null, boost: false };
 
   // 这一局的世界与循环。两个都是 **let**:重开 = 换一个新 World + 一个新 FixedStepLoop
   // (World 不加 reset()/restart():池、rng、tick、槽位全是新的,才谈得上"同 seed 可复现";
@@ -188,6 +188,9 @@ async function boot(): Promise<void> {
   // 冻结截止的墙钟时刻 —— performance.now() < hitstopUntil 时跳过 loop.advance(见 ticker)
   let lastKills = 0;
   let hitstopUntil = 0;
+  // 加速技能音效的沿检测基准(与 lastScrap 同一条增量检测写法):boostTime 从 0 变正的
+  // 那一帧 = 触发帧,响一声推进器点火;窗内持续为真不重复响
+  let lastBoostActive = false;
   // 本局已 toast 过的解锁位掩码(19 号):与 progress.unlockMask 同编码。局内检测跨过阈值
   // 就置位,防止同一局里"300 杀达标"这类条件每帧弹一次 —— 置位过的不再重复提示
   let announcedMask = 0;
@@ -215,6 +218,8 @@ async function boot(): Promise<void> {
       // 掉帧补步时也照样一步一次,手感不随渲染帧率漂移。
       // 读的是外层那个 let world —— 每局都新建 loop,而 startRun 已经先把它换成本局这个了
       cmd.desiredHeading = input.desiredHeading();
+      // 加速键与方向同一条采样纪律:触发裁决(冷却)在 World.step,这里只报"按没按着"
+      cmd.boost = input.isDown('Space');
       world.step(cmd);
     });
 
@@ -257,6 +262,15 @@ async function boot(): Promise<void> {
       for (let i = 0; i < UNLOCKS.length; i++) {
         if ((evalResult.newUnlocks & (1 << i)) !== 0) newUnlockIdx.push(i);
       }
+      // 武器战报快照:从 world.runDamageByType 摘"真打出过伤害"的型、按伤害降序 ——
+      // 显示层(weaponReportRows)只管排版,排序口径在摘数的这一处定死。
+      // 一局一次的分配,不在铁律 3 管的热路径上
+      const weaponReport: { type: number; damage: number }[] = [];
+      for (let i = 0; i < world.runDamageByType.length; i++) {
+        const damage = world.runDamageByType[i]!;
+        if (damage > 0) weaponReport.push({ type: i, damage });
+      }
+      weaponReport.sort((a, b) => b.damage - a.damage);
       // 结算数据在这一刻全部取走(世界此后不再动):延迟弹出用的就是这份快照,
       // 期间重开换掉 world 引用也不影响它 —— 见下面 setTimeout 的 runToken 守卫
       const summary = {
@@ -276,6 +290,9 @@ async function boot(): Promise<void> {
         // progressStats = 结算后的元进度,图鉴读它 —— 两字段定义在 ui/gameOver.ts 的 RunSummary
         newUnlocks: newUnlockIdx,
         progressStats: progress,
+        // 武器战报(上面刚摘的快照)+ 本局峰值总 DPS:结算界面的输出占比条读它们
+        weaponReport,
+        peakDps: world.peakDps,
       };
       // 失败 = 沉船:结算**推迟 SHIP_DEATH_FX_TIME** 秒再弹,让爆炸演出读得完
       // (爆炸是渲染层自持的,run.paused 冻结世界但不冻结它)。胜利没有爆炸,当场弹。
@@ -334,6 +351,8 @@ async function boot(): Promise<void> {
     // (留着旧基准会以为"新局第一秒就杀了一只",或把上一局的冻结窗带进新局)
     lastKills = 0;
     hitstopUntil = 0;
+    // 加速音效的沿检测基准同属上一局:新世界 boostTime 必然是 0,基准清回 false 对齐
+    lastBoostActive = false;
     // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
     announcedMask = 0;
     stats.upgrades = 0;
@@ -496,6 +515,10 @@ async function boot(): Promise<void> {
         hud.toast(`解锁:${entry.name}`);
       }
     }
+    // 加速技能触发:boostTime 从 0 变正的那一帧响推进器点火(沿检测,窗内不重复响)
+    const boostActive = world.boostTime > 0;
+    if (boostActive && !lastBoostActive) audioBus.playBoost();
+    lastBoostActive = boostActive;
     // 残骸拾取:scrap 值爬升的那一帧响一声轻快高频叮(增量检测,首帧基准在 startRun 里已对齐,
     // 不会误触发;升级花掉残骸是下降,不响)
     if (world.scrap > lastScrap) audioBus.playCollect();

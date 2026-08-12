@@ -587,6 +587,17 @@ export function playBroadside(): void {
   playVoice({ type: 'sine', freq: 65.4, attack: 0.004, decay: 0.32, peak: 0.22 });
 }
 
+/**
+ * 加速技能触发:低频推进器点火 + 上扫气流。无专属素材(genmedia 下一轮再补),
+ * 纯合成兜底路径直接出声 —— 与其余 SFX 同一条 throttled/降级纪律。
+ */
+export function playBoost(): void {
+  if (!throttled('boost')) return;
+  if (deferSynthFallback()) return;
+  playVoice({ type: 'sawtooth', freq: 70, freqEnd: 150, attack: 0.02, decay: 0.4, peak: 0.24 });
+  playVoice({ noise: true, filterType: 'bandpass', filterFreq: 900, filterQ: 0.8, attack: 0.03, decay: 0.35, peak: 0.14 });
+}
+
 /** 精英警告:短促双音金属警报 */
 export function playEliteWarn(): void {
   if (!throttled('warn:elite')) return;
@@ -638,6 +649,7 @@ export const audioBus = {
   playCollect,
   playUpgrade,
   playPlace,
+  playBoost,
   playBroadside,
   playEliteWarn,
   playBossWarn,

@@ -147,8 +147,11 @@ export interface FireSink {
    * @param throttle 开火塔的节流系(THR_*)。词缀抗性(14 号:装甲/相位)在伤害结算那一处
    *   按它判定 —— 判定挂在 damage 结算处、与塔的节流字段对齐,不另造伤害类型体系。
    *   不带 = 无抗性判定(既有调用方语义原样成立)
+   * @param towerType 来源塔型(TOWER_*),HUD 的逐武器 DPS 读数按它归账(World.dpsOf)。
+   *   子弹带的是发射那一刻定死的 b.towerType,瞬时结算(光束/链电/磁轨)带 def.type。
+   *   不带 = 不归账(既有调用方与测试桩语义原样成立;归账是纯读数,不参与任何判定)
    */
-  damage(e: Enemy, amount: number, throttle?: number): boolean;
+  damage(e: Enemy, amount: number, throttle?: number, towerType?: number): boolean;
   /** 记一次可视化事件(坐标一律世界坐标) */
   fx(
     kind: number,

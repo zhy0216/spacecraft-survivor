@@ -14,8 +14,10 @@ export interface Vec2 {
  * 而且松手的 keyup 会落到那个新获得焦点的元素上、根本传不回 window,
  * keys 里的 'Tab' 于是永远清不掉,叠加层卡在常亮(blur 兜底也只在整个窗口失焦时才触发)。
  * 只列真正需要的键:全量 preventDefault 会把浏览器快捷键与将来的文本输入一起废掉。
+ * Space 是加速技能键:不拦的话浏览器会拿它滚动页面,还会"点击"恰好持有焦点的按钮 ——
+ * 战斗中每次加速都可能顺手触发一次静音开关这类灾难。
  */
-const PREVENT_DEFAULT = new Set(['Tab']);
+const PREVENT_DEFAULT = new Set(['Tab', 'Space']);
 
 export class Input {
   private keys = new Set<string>();

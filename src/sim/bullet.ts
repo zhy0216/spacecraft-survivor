@@ -215,8 +215,9 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
   }
   if (!best) return true;
 
-  // 带节流系进伤害结算:词缀抗性(装甲/相位)在 World.damageEnemy 那一处按它判定
-  sink.damage(best, b.damage, b.throttle);
+  // 带节流系进伤害结算:词缀抗性(装甲/相位)在 World.damageEnemy 那一处按它判定;
+  // 塔型跟着进 —— HUD 的逐武器 DPS 按它归账(发射那一刻定死,塔被换掉不改已出膛这一发的归属)
+  sink.damage(best, b.damage, b.throttle, b.towerType);
   // 命中飘字带**实际结算**的伤害与相对满血的比例:抗性在 damageEnemy 里折算过,
   // 只有 Enemy.lastHit 是那一份真相(见 enemy.ts 的 lastHit 注释);它恰好在这一发刚
   // 结算完,读到的一定是本发 —— 不是上一发留下的脏值
@@ -291,6 +292,6 @@ function blast(b: Bullet, sink: FireSink): void {
     const dx = e.x - b.x;
     const dy = e.y - b.y;
     const r = b.aoeRadius + enemyRadius(e);
-    if (dx * dx + dy * dy <= r * r) sink.damage(e, b.aoeDamage, b.throttle); // 含边界,与直射弹同口径
+    if (dx * dx + dy * dy <= r * r) sink.damage(e, b.aoeDamage, b.throttle, b.towerType); // 含边界,与直射弹同口径
   }
 }

@@ -8,9 +8,12 @@
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
 import { EDICTS, edictMask } from '../data/edicts';
+import { TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
+import { WEAPON_SLOT_COUNT } from '../sim/armory';
+import { tuning } from '../sim/config';
 import type { Enemy, World } from '../sim/world';
 import { formatDuration } from './gameOver';
 
@@ -60,27 +63,57 @@ const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
 /**
  * 星币读数(16 号):与残骸读数同族(同一套 PANEL/LABEL_ROW/LABEL/VALUE 样式)的独立读数,
  * 但没有进度轨道 —— 星币只有余额、没有"目标费用"可填。贴在 vitals 面板正下方
- * (面板顶 48 + 两行面板高:行 17.4×2 + 轨道 10×2 + gap 7 + padding 16 ≈ 78 + 间距 14 = 140);
- * vitals 将来加行需同步改这里。
+ * (面板顶 48 + 三行面板高:行 17.4×3 + 轨道 10×3 + gap 7×2 + padding 16 ≈ 112 + 间距 14 = 174;
+ * 第三行是加速技能的冷却条);vitals 将来加行需同步改这里。
  */
-const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:140px;`;
+const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:174px;`;
 
 /**
- * 法令徽记(18 号):与星币读数同族的面板,叠在它正下方(top 140 + 面板高 ≈ 34 + 间距 14 = 188),
+ * 法令徽记(18 号):与星币读数同族的面板,叠在它正下方(top 174 + 面板高 ≈ 34 + 间距 14 = 222),
  * 一行印出**已持有**法令的名字 —— "所见即所得":抽到哪条,这里立刻多出哪个名字
  * (与支援连线的同级口径:画面即真相,不另开菜单去翻)。
  * 名字直取 data/edicts(ui 不抄第二份);无法令时整体隐藏(display:none),持有才亮。
  */
-const EDICTS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:188px;display:none;`;
+const EDICTS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:222px;display:none;`;
 
 /**
  * 图鉴读数(19 号):与星币/法令同族的面板,叠在法令徽记正下方
- * (top 188 + 面板高 ≈ 34 + 间距 14 = 236)。一行"图鉴 n/总":
+ * (top 222 + 面板高 ≈ 34 + 间距 14 = 270)。一行"图鉴 n/总":
  * 已解锁计数 = world.unlockMask 的置位数(位 i = UNLOCKS[i],与 World 构造时
  * 喂进来的 progress.unlockMask 同编码),总数直取 UNLOCKS.length ——
  * 每帧 sync 现算,重开换世界(setWorld → sync)当帧跟上,HUD 不需要单独接进度引用。
  */
-const COLLECTION_CSS = `${PANEL_CSS}position:absolute;left:48px;top:236px;`;
+const COLLECTION_CSS = `${PANEL_CSS}position:absolute;left:48px;top:270px;`;
+
+/**
+ * 火力统计面板:左列第四块,叠在图鉴正下方(top 270 + 面板高 ≈ 34 + 间距 14 = 318)。
+ * 行结构:击杀数 + 总 DPS 两行常驻,其下每**持有的武器型**一行(名字 Lv ×数量 | 实时 DPS)。
+ * DPS 读 world.dpsOf(sim 侧 2.5s 一阶平滑,与威胁罗盘同族的纯读数);同型多把合并成一行
+ * (dpsOf 按型归账,逐槽出行会把同一份 DPS 印两遍)。行节点按武器槽上限只建一次,
+ * 每帧改 textContent 与 display —— 与整页其余节点同一条"永不重建 DOM"的口径。
+ */
+const FIREPOWER_CSS = `${PANEL_CSS}position:absolute;left:48px;top:318px;display:flex;flex-direction:column;gap:5px;`;
+/** 加速技能冷却条的填充色:推进器青绿,与 HP 青/星币金/威胁红都分得开 */
+const BOOST_COLOR = '#8ef2c0';
+
+/**
+ * 战术雷达(右下角):一块圆形 canvas,每帧 2D 重绘 —— 怪群/精英/Boss/经验掉落的方位一览。
+ * 罗盘只报"主压从哪边来"的一个方向,雷达补上"身后还剩多少没清、掉落散落在哪"的全景。
+ * canvas 而不是 DOM 点:同屏几百只怪,几百个 DOM 节点就是几百次 style 写入,
+ * 而一块 148px 的 2D canvas 每帧全清全画只是几百次 fillRect —— HUD 永不 import pixi 的
+ * 铁律不碰(canvas 2D 是 DOM 自带的)。右缘与罗盘通道同一套 gutter 口径(开发模式让位 Tweakpane)。
+ */
+const RADAR_SIZE = 148;
+/** 雷达量程(世界 px):盖住出怪环(SPAWN_RADIUS 1300)再留一点余量;更远的贴边钉在圈沿 */
+const RADAR_RANGE = 1500;
+function radarCss(rightGutter: number): string {
+  const right = rightGutter > 0 ? `right:${rightGutter + 12}px` : 'right:48px';
+  return (
+    `position:absolute;${right};bottom:48px;width:${RADAR_SIZE}px;height:${RADAR_SIZE}px;` +
+    `border-radius:50%;border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.55);` +
+    'box-shadow:0 2px 12px rgba(0,0,0,.28);'
+  );
+}
 
 /**
  * 解锁 toast(19 号):与升级/改造流程那两枚 toast 同族的提示条,但长在 HUD 根里
@@ -197,6 +230,79 @@ export interface SegmentReadout {
   label: string;
   ratio: number;
 }
+
+/**
+ * DPS 读数排版:0.05 以下印 '0'(平滑尾巴永远到不了精确 0,别让读数长期挂着 0.0x),
+ * 10 以下留一位小数(早期单塔 DPS 是个位数,取整会把升级前后的差别抹平),再往上取整。
+ */
+export function formatDps(v: number): string {
+  const n = finiteOrZero(v);
+  if (n < 0.05) return '0';
+  return n < 10 ? n.toFixed(1) : String(Math.round(n));
+}
+
+export interface BoostReadout {
+  /** 数值区文本:加速中 / 就绪 / 剩余冷却秒 */
+  text: string;
+  /** 冷却回充进度 0..1(加速中与就绪都钉满格) */
+  ratio: number;
+  /** 加速窗内(渲染层可借它点亮填充) */
+  active: boolean;
+}
+
+/** 加速技能读数:boostTime > 0 = 窗内;冷却条按 1 - cd/cdMax 回充,归零印"就绪" */
+export function boostReadout(boostTime: number, cooldown: number, cdMax: number): BoostReadout {
+  if (finiteOrZero(boostTime) > 0) return { text: '加速中', ratio: 1, active: true };
+  const cd = finiteOrZero(cooldown);
+  if (cd <= 0) return { text: '就绪', ratio: 1, active: false };
+  return { text: `${cd.toFixed(1)}s`, ratio: 1 - hudRatio(cd, cdMax), active: false };
+}
+
+export interface RadarPoint {
+  /** 相对雷达圆心的屏幕偏移(px,y 向下,与世界系同向 —— 雷达不随船头旋转,北就是世界 -Y) */
+  x: number;
+  y: number;
+  /** 超出量程、被钉在圈沿(画得更淡:方向仍真,距离已饱和) */
+  clamped: boolean;
+}
+
+/**
+ * 世界相对位移 → 雷达屏幕偏移。量程内线性缩放,量程外沿方向钉在圈沿;
+ * 结果写进调用方给的 out(每帧几百个点,不 new —— 与 sim 侧的模块级暂存同一条纪律)。
+ * 坏输入(NaN / 非正量程)一律落在圆心:雷达是读数,绝不把 NaN 写进 canvas 变换。
+ */
+export function radarProject(
+  dx: number,
+  dy: number,
+  range: number,
+  radiusPx: number,
+  out: RadarPoint,
+): RadarPoint {
+  const vx = finiteOrZero(dx);
+  const vy = finiteOrZero(dy);
+  if (!(range > 0) || !Number.isFinite(range) || !(radiusPx > 0)) {
+    out.x = 0;
+    out.y = 0;
+    out.clamped = false;
+    return out;
+  }
+  const d = Math.hypot(vx, vy);
+  if (d <= range) {
+    const k = radiusPx / range;
+    out.x = vx * k;
+    out.y = vy * k;
+    out.clamped = false;
+  } else {
+    const k = radiusPx / d;
+    out.x = vx * k;
+    out.y = vy * k;
+    out.clamped = true;
+  }
+  return out;
+}
+
+/** radarProject 的模块级暂存(HUD 每帧几百个点,不逐点 new;单线程 sync 内独占) */
+const radarScratch: RadarPoint = { x: 0, y: 0, clamped: false };
 
 /** 当前航段的名字、n/N 与段内进度;脚本走完钉在满格,不显示 5/4 */
 export function segmentReadout(segment: number, segTime: number): SegmentReadout {
@@ -318,6 +424,9 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
   const hp = createBar(vitals, '船体 HP', HP_COLOR);
   const scrap = createBar(vitals, '升级残骸', SCRAP_COLOR);
+  // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"。
+  // 改行数记得同步 STARCOINS_CSS 那笔位置账
+  const boost = createBar(vitals, '加速 [空格]', BOOST_COLOR);
 
   const timer = document.createElement('div');
   timer.style.cssText = TIMER_CSS;
@@ -418,6 +527,32 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   collectionRow.append(collectionLabel, collectionValue);
   collection.appendChild(collectionRow);
 
+  // 火力统计面板:击杀 + 总 DPS 两行常驻,加上按武器槽上限预建的型号行(初始全藏,
+  // 每帧按持有情况点亮)。行结构复用 LABEL_ROW/LABEL/VALUE 三件套,与整列同族
+  const firepower = document.createElement('div');
+  firepower.style.cssText = FIREPOWER_CSS;
+  firepower.title = '火力统计';
+  function statRow(labelText: string, valueColor: string): { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement } {
+    const row = document.createElement('div');
+    row.style.cssText = LABEL_ROW_CSS;
+    const label = document.createElement('span');
+    label.style.cssText = LABEL_CSS;
+    label.textContent = labelText;
+    const value = document.createElement('span');
+    value.style.cssText = `${VALUE_CSS}color:${valueColor};`;
+    row.append(label, value);
+    firepower.appendChild(row);
+    return { row, value, label };
+  }
+  const killsRow = statRow('击杀', VALUE_COLOR);
+  const totalDpsRow = statRow('总 DPS', OK_COLOR);
+  const weaponRows: { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement }[] = [];
+  for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+    const r = statRow('', VALUE_COLOR);
+    r.row.style.display = 'none';
+    weaponRows.push(r);
+  }
+
   // 解锁 toast(19 号):初始隐藏,toast() 点亮并计时自动收回 —— 与升级/改造流程的
   // flash 同一条"闪现一下"的口径;连点重置计时,换局(setWorld)清掉上一局的话
   const unlockToast = document.createElement('div');
@@ -446,7 +581,18 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   vignette.style.cssText = VIGNETTE_CSS;
   vignette.title = '船体受损';
 
-  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection, vignette);
+  // 战术雷达:一块圆形 canvas,布局走 gutter 口径(开发模式给 Tweakpane 让位)。
+  // getContext 拿不到(测试桩 / 极端环境)就整块隐藏 —— 雷达是读数,缺了不碰主流程
+  const radar = document.createElement('canvas') as HTMLCanvasElement;
+  radar.width = RADAR_SIZE;
+  radar.height = RADAR_SIZE;
+  radar.style.cssText = radarCss(rightGutter);
+  radar.title = '战术雷达';
+  const radarCtx: CanvasRenderingContext2D | null =
+    typeof radar.getContext === 'function' ? radar.getContext('2d') : null;
+  if (!radarCtx) radar.style.display = 'none';
+
+  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection, firepower, radar, vignette);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -473,6 +619,13 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     scrap.value.textContent = debug ? `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}` : '';
     scrap.fill.style.width = `${hudRatio(scrapNow, cost) * 100}%`;
 
+    // 加速技能:读数与条都走纯函数 boostReadout(冷却上限现读 tuning —— 面板拖动即时改刻度)。
+    // 窗内点亮成白色抢眼一瞬,回充/就绪回推进器青绿
+    const br = boostReadout(world.boostTime, world.boostCooldown, tuning.boostCooldown);
+    boost.value.textContent = br.text;
+    boost.fill.style.width = `${br.ratio * 100}%`;
+    boost.fill.style.background = br.active ? '#eafff4' : BOOST_COLOR;
+
     const coins = finiteOrZero(world.starCoins);
     starValue.textContent = String(Math.max(0, Math.round(coins)));
 
@@ -497,6 +650,48 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       if ((world.unlockMask & (1 << i)) !== 0) unlocked++;
     }
     collectionValue.textContent = `${unlocked}/${UNLOCKS.length}`;
+
+    // 火力统计:击杀直读,DPS 逐**持有型**读 world.dpsOf(sim 侧平滑好的账,ui 不自己攒)。
+    // 同型多把(三合一凑数途中)合并成一行印 ×N:dpsOf 按型归账,逐槽出行会把同一份印两遍。
+    // 行数上限 = 武器槽数,故这两层 O(4×4) 的小循环没有分配、没有排序
+    killsRow.value.textContent = String(Math.max(0, Math.round(finiteOrZero(world.kills))));
+    let rowCursor = 0;
+    let totalDps = 0;
+    const weapons = world.weapons;
+    for (let i = 0; i < weapons.length; i++) {
+      const slot = weapons[i]!;
+      if (slot.type < 0) continue;
+      // 首见槽位才出行:往前扫到同型就交给它那一行(count/maxLevel 由首见槽位一次算齐)
+      let firstSeen = true;
+      let count = 0;
+      let maxLevel = 0;
+      for (let j = 0; j < weapons.length; j++) {
+        const other = weapons[j]!;
+        if (other.type !== slot.type) continue;
+        if (j < i) {
+          firstSeen = false;
+          break;
+        }
+        count++;
+        if (other.level > maxLevel) maxLevel = other.level;
+      }
+      if (!firstSeen) continue;
+      const dps = world.dpsOf(slot.type);
+      totalDps += dps;
+      const name = TOWERS[slot.type]?.name ?? '?';
+      const r = weaponRows[rowCursor++]!;
+      r.row.style.display = 'flex';
+      r.label.textContent = count > 1 ? `${name} Lv${maxLevel} ×${count}` : `${name} Lv${maxLevel}`;
+      r.value.textContent = formatDps(dps);
+    }
+    // 没点亮的行连文本一起清:换局(setWorld → sync)时上一局的武器名不许在隐藏行里赖着
+    for (; rowCursor < weaponRows.length; rowCursor++) {
+      const r = weaponRows[rowCursor]!;
+      r.row.style.display = 'none';
+      r.label.textContent = '';
+      r.value.textContent = '';
+    }
+    totalDpsRow.value.textContent = formatDps(totalDps);
 
     timer.textContent = formatDuration(world.elapsed);
 
@@ -583,6 +778,70 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       bossBar.fill.style.width = `${hudRatio(bNow, bMax) * 100}%`;
     } else {
       boss.style.display = 'none';
+    }
+
+    // 战术雷达:全清全画。点位 = 世界相对位移经 radarProject 缩进圈内(不随船头旋转,
+    // 世界系方向即雷达方向 —— 与罗盘箭头同一套"世界绝对角"口径,两块读数不打架)。
+    // 复用上面那趟池扫描拿不到位置明细,这里自己再遍历一次 items:每帧几百次 fillRect,
+    // 是 canvas 2D 的舒适区;radarScratch 复用,零分配
+    if (radarCtx) {
+      const c = radarCtx;
+      const center = RADAR_SIZE / 2;
+      const rim = center - 3;
+      const shipX = finiteOrZero(world.ship.x);
+      const shipY = finiteOrZero(world.ship.y);
+      c.clearRect(0, 0, RADAR_SIZE, RADAR_SIZE);
+      // 距离参照:半量程刻度环 + 十字线,极淡 —— 是标尺,不是内容
+      c.strokeStyle = 'rgba(43,74,110,.55)';
+      c.lineWidth = 1;
+      c.beginPath();
+      c.arc(center, center, rim * 0.5, 0, Math.PI * 2);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(center - rim, center);
+      c.lineTo(center + rim, center);
+      c.moveTo(center, center - rim);
+      c.lineTo(center, center + rim);
+      c.stroke();
+      // 经验掉落:金色小点,画在敌点之下。圈外的不画 —— 捡不到的方位只是噪音
+      c.fillStyle = SCRAP_COLOR;
+      const dropItems = world.drops.items;
+      for (let i = 0; i < dropItems.length; i++) {
+        const d = dropItems[i]!;
+        const p = radarProject(d.x - shipX, d.y - shipY, RADAR_RANGE, rim, radarScratch);
+        if (p.clamped) continue;
+        c.fillRect(center + p.x - 1, center + p.y - 1, 2, 2);
+      }
+      // 敌人:普通 = 威胁红小点,精英 = 亮一号的大点,Boss = 深红大方块(与 Boss 血条同色)。
+      // 钉在圈沿的(量程外)透明度减半:方向仍真,距离已饱和
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i]!;
+        const p = radarProject(e.x - shipX, e.y - shipY, RADAR_RANGE, rim, radarScratch);
+        c.globalAlpha = p.clamped ? 0.45 : 1;
+        if (e.kind === KIND_BOSS) {
+          c.fillStyle = BOSS_HP_COLOR;
+          c.fillRect(center + p.x - 3, center + p.y - 3, 6, 6);
+        } else if (e.affixes !== 0) {
+          c.fillStyle = '#ff8ba0';
+          c.fillRect(center + p.x - 2, center + p.y - 2, 4, 4);
+        } else {
+          c.fillStyle = THREAT_COLOR;
+          c.fillRect(center + p.x - 1, center + p.y - 1, 2, 2);
+        }
+      }
+      c.globalAlpha = 1;
+      // 自己的船:圆心一支按船头朝向的小三角(雷达不转,船头在雷达上转 —— 与战场同构)
+      c.save();
+      c.translate(center, center);
+      c.rotate(finiteOrZero(world.ship.heading));
+      c.fillStyle = OK_COLOR;
+      c.beginPath();
+      c.moveTo(6, 0);
+      c.lineTo(-4, -4);
+      c.lineTo(-4, 4);
+      c.closePath();
+      c.fill();
+      c.restore();
     }
   }
 

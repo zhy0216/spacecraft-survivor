@@ -716,6 +716,18 @@ const SHAKE_DECAY_TAU = 0.12;
 const SHAKE_FREQUENCY = 48;
 const SHAKE_PIXEL_SCALE = 4.5;
 
+// —— 加速技能表现(纯表现,渲染层自持;sim 侧只有 world.boostTime 一个读数)——
+/** 点火那一帧入账的震屏 trauma:比受击(0.85)轻 —— 是"推背感",不是"挨了一下" */
+const BOOST_SHAKE_TRAUMA = 0.45;
+/** 拖尾采样点上限(环形复用,life ≤ 0 的槽位即空闲;24 点 × 0.45s 存续覆盖整条尾迹) */
+const BOOST_TRAIL_MAX = 24;
+/** 单个拖尾点的存续秒:淡出快于加速窗(1.1s),尾迹只跟在船屁股后面,不铺满整条航线 */
+const BOOST_TRAIL_LIFE = 0.45;
+/** 尾焰/拖尾颜色 = HUD 冷却条的推进器青绿(ui/hud 的 BOOST_COLOR 十六进制同值) */
+const BOOST_TINT = 0x8ef2c0;
+/** 尾焰基准长度(船体局部 px):约半个船身,flicker 后在 0.75~1 倍间喘 */
+const BOOST_FLAME_LEN = 26;
+
 export class Renderer {
   readonly app: Application;
   private world: World;
@@ -857,6 +869,16 @@ export class Renderer {
   private shakePhase = 0;
   private shakeX = 0;
   private shakeY = 0;
+
+  /**
+   * 加速技能表现(畅玩性):尾焰画在船体局部空间(跟着船转),拖尾画在世界空间
+   * (甩在身后的才叫尾迹)。trail 是定长环形缓冲,构造时一次建齐(铁律 3);
+   * lastBoostTime 是点火的沿检测基准 —— boostTime 只在触发那一帧上跳,其余帧单调递减。
+   */
+  private boostFlameG = new Graphics();
+  private boostTrailG = new Graphics();
+  private boostTrail: { x: number; y: number; life: number }[] = [];
+  private lastBoostTime = 0;
 
   /**
    * 精英出场预警的去重键(segment × ELITE_WARN_KEY_STRIDE + eliteNext;哨兵 -1 = 无预警)。
@@ -1047,11 +1069,14 @@ export class Renderer {
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变)
     this.telegraphG = new Graphics();
 
-    // 船体 = shipG 一个容器:六个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
-    // 子层序:射界扇形(底衬)→ 舰壳图 → 程序化船身兜底 → 炮位贴图 → 炮口线 → 节流读数。
+    // 船体 = shipG 一个容器:七个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
+    // 子层序:射界扇形(底衬)→ 加速尾焰(长在船尾、压不住船身)→ 舰壳图 → 程序化船身兜底
+    // → 炮位贴图 → 炮口线 → 节流读数。
     // 扇形画在船体之下:它是底衬,不许糊住船身与炮位;炮口线与读数长在炮位上,理应压住贴图。
     // 这里不建炮位几何 —— 槽位内容要等 sync() 的签名检查在首帧补上(weaponSig = -1)。
-    this.shipG.addChild(this.arcG, this.hullArtG, this.hullG, this.weaponG, this.muzzleG, this.throttleG);
+    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.muzzleG, this.throttleG);
+    // 拖尾环形缓冲一次建齐(铁律 3):life ≤ 0 = 空闲槽,运行期只改字段
+    for (let i = 0; i < BOOST_TRAIL_MAX; i++) this.boostTrail.push({ x: 0, y: 0, life: 0 });
 
     // 层序:前摇指示 → 敌(按 kind 顺序,后面的型压住前面的:冲撞甲虫排最后,
     // 不会被蜂群蛭糊掉)→ Boss(最大的个体,压在全部普通/精英剪影之上)
@@ -1073,6 +1098,8 @@ export class Renderer {
     this.worldLayer.addChild(this.dropPc);
     this.worldLayer.addChild(this.sporeBulletPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
+    // 加速拖尾压在开火光效之下、弹之上:它是船自己的航迹,不该糊住"这一发打中了"的读数
+    this.worldLayer.addChild(this.boostTrailG);
     this.worldLayer.addChild(this.fxG, this.shipG, this.muzzleFxG);
     this.worldLayer.addChild(this.dmgG, this.deathLayer);
 
@@ -1149,6 +1176,8 @@ export class Renderer {
     this.stepShake(dt);
     this.stepDmgNumbers(dt);
     this.stepDeathFx(dt);
+    // 加速表现(尾焰 + 拖尾 + 点火震屏)也是渲染层自持:读的只有 world.boostTime 一个数
+    this.stepBoostFx(dt, sx, sy, sh);
     // 震屏直接加在镜头的屏幕位置上:worldLayer 无旋转,世界系的方向向量与屏幕系一一对应
     this.worldLayer.position.set(screen.width / 2 + this.shakeX, screen.height / 2 + this.shakeY);
 
@@ -1360,6 +1389,11 @@ export class Renderer {
     this.deathLeft = 0;
     this.deathLayer.visible = false;
     this.deathG.clear();
+    // 加速表现同属上一局:尾焰/拖尾当场清,点火沿检测基准回 0(新世界 boostTime 必然是 0)
+    this.lastBoostTime = 0;
+    this.boostFlameG.clear();
+    this.boostTrailG.clear();
+    for (let i = 0; i < this.boostTrail.length; i++) this.boostTrail[i]!.life = 0;
   }
 
   /**
@@ -2036,6 +2070,70 @@ export class Renderer {
       d.g.rotation += d.spin * dt;
       d.g.alpha = Math.max(0, d.life / d.full);
       if (d.life <= 0) d.g.visible = false;
+    }
+  }
+
+  /**
+   * 加速技能表现(畅玩性):点火震屏 + 船尾尾焰 + 世界空间拖尾。
+   * **纯表现**:sim 侧只读 world.boostTime 一个数,一个字段都不写回。
+   * 尾焰画在船体局部空间(跟 shipG 一起转),拖尾逐渲染帧在船尾世界坐标落点、
+   * 存续期内淡出缩小 —— 世界冻结(时停)时不再落新点,已有的照常淡完(渲染层自持计时)。
+   */
+  private stepBoostFx(dt: number, sx: number, sy: number, sh: number): void {
+    const boostTime = this.world.boostTime;
+    // 点火沿检测:boostTime 只会在触发那一帧上跳(其余帧单调递减),上跳 = 一次点火
+    if (boostTime > this.lastBoostTime) {
+      this.shakeTrauma = Math.min(SHAKE_MAX_TRAUMA, this.shakeTrauma + BOOST_SHAKE_TRAUMA);
+    }
+    this.lastBoostTime = boostTime;
+    const boosting = boostTime > 0;
+
+    // 尾焰:两层三角(外层青绿 + 内层白芯),长度随动画时钟快闪 —— 火在喘,不是一块静态贴片
+    const flame = this.boostFlameG;
+    flame.clear();
+    if (boosting) {
+      const flicker = 0.75 + 0.25 * Math.sin(this.animClock * 40);
+      const len = BOOST_FLAME_LEN * flicker;
+      const half = tuning.shipWidth * 0.18;
+      const stern = -tuning.shipLength / 2;
+      flame
+        .moveTo(stern, -half)
+        .lineTo(stern - len, 0)
+        .lineTo(stern, half)
+        .closePath()
+        .fill({ color: BOOST_TINT, alpha: 0.85 });
+      flame
+        .moveTo(stern, -half * 0.45)
+        .lineTo(stern - len * 0.55, 0)
+        .lineTo(stern, half * 0.45)
+        .closePath()
+        .fill({ color: 0xffffff, alpha: 0.9 });
+    }
+
+    // 拖尾:加速中每渲染帧在船尾世界坐标落一个采样点(环形缓冲找空闲槽,满了就不落 ——
+    // 丢最新的点比顶掉最旧的便宜,且尾迹的头部本就被船身盖着看不见)
+    if (boosting) {
+      const sternX = sx - Math.cos(sh) * (tuning.shipLength / 2);
+      const sternY = sy - Math.sin(sh) * (tuning.shipLength / 2);
+      for (let i = 0; i < this.boostTrail.length; i++) {
+        const t = this.boostTrail[i]!;
+        if (t.life > 0) continue;
+        t.x = sternX;
+        t.y = sternY;
+        t.life = BOOST_TRAIL_LIFE;
+        break;
+      }
+    }
+    // 存续期内:半径随寿命收缩、透明度随寿命淡出 —— 一条越远越细越淡的航迹
+    const g = this.boostTrailG;
+    g.clear();
+    for (let i = 0; i < this.boostTrail.length; i++) {
+      const t = this.boostTrail[i]!;
+      if (t.life <= 0) continue;
+      t.life -= dt;
+      if (t.life <= 0) continue;
+      const k = t.life / BOOST_TRAIL_LIFE;
+      g.circle(t.x, t.y, 2 + 5 * k).fill({ color: BOOST_TINT, alpha: 0.4 * k });
     }
   }
 

@@ -5,10 +5,20 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EDICT_GYRO, EDICT_HULL, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
 import { KIND_BOSS } from '../data/enemies';
+import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import type { World } from '../sim/world';
-import { createHud, hudRatio, segmentReadout, THREAT_INTENSITY_MAX, threatVisual } from './hud';
+import {
+  boostReadout,
+  createHud,
+  formatDps,
+  hudRatio,
+  radarProject,
+  segmentReadout,
+  THREAT_INTENSITY_MAX,
+  threatVisual,
+} from './hud';
 
 describe('hudRatio / segmentReadout', () => {
   it('条形进度夹在 [0,1],坏分母与 NaN 不流进 CSS', () => {
@@ -183,6 +193,13 @@ interface StubWorld {
   edicts: number;
   /** 解锁状态掩码(19 号):位 i = UNLOCKS[i] 开没开;图鉴计数按它数置位 */
   unlockMask: number;
+  /** 火力统计面板:击杀数 + 武器槽(名字/等级出行)+ 逐型 DPS 读口 */
+  kills: number;
+  weapons: { type: number; level: number }[];
+  dpsOf(type: number): number;
+  /** 加速技能(空格)的两个计时器:HUD 冷却条读它们 */
+  boostTime: number;
+  boostCooldown: number;
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -199,6 +216,11 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     enemies: { items: [] },
     edicts: 0,
     unlockMask: 0,
+    kills: 0,
+    weapons: [],
+    dpsOf: () => 0,
+    boostTime: 0,
+    boostCooldown: 0,
     ...over,
   };
 }
@@ -230,8 +252,9 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
     // 与屏下缘两根血条(精英 + Boss)、星币读数、法令徽记(18 号)、解锁 toast
-    // 与图鉴读数(19 号)以及低血量红晕(畅玩性),没有按敌人数增长的节点或中央遮罩
-    expect(root.children.length).toBe(11);
+    // 与图鉴读数(19 号)、火力统计面板、战术雷达以及低血量红晕(畅玩性),
+    // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
+    expect(root.children.length).toBe(13);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -482,5 +505,111 @@ describe('createHud', () => {
     // 本段 burst 已放完 / 脚本走完:burstWarning 返回 null
     hud.setWorld(stubWorld() as unknown as World);
     expect(warn.style.display).toBe('none');
+  });
+
+  it('火力统计:击杀与逐武器 DPS 出行,同型多把合并 ×N,空槽行藏着', () => {
+    const hud = createHud({
+      world: stubWorld({
+        kills: 42,
+        weapons: [
+          { type: TOWER_AUTOCANNON, level: 2 },
+          { type: TOWER_LASER, level: 3 },
+          { type: TOWER_AUTOCANNON, level: 1 },
+          { type: -1, level: 0 },
+        ],
+        dpsOf: (type: number) => (type === TOWER_AUTOCANNON ? 12.3 : type === TOWER_LASER ? 5 : 0),
+      }) as unknown as World,
+    });
+    const root = dom.ui.children[0]!;
+    const firepower = root.children[10]!;
+    expect(firepower.title).toBe('火力统计');
+    expect(findText(firepower, '击杀')).toBeDefined();
+    expect(findText(firepower, '42')).toBeDefined();
+    // 同型两把合并一行:名字 + 最高级 + ×2;dpsOf 按型归账印一次
+    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name} Lv2 ×2`)).toBeDefined();
+    expect(findText(firepower, '12')).toBeDefined();
+    expect(findText(firepower, `${TOWERS[TOWER_LASER]!.name} Lv3`)).toBeDefined();
+    expect(findText(firepower, '5.0')).toBeDefined();
+    // 总 DPS = 12.3 + 5 → 取整 17
+    expect(findText(firepower, '17')).toBeDefined();
+    // 行节点按槽上限预建:两行点亮,其余藏着(display:none),节点数不随内容涨
+    const rows = firepower.children;
+    expect(rows.length).toBe(2 + 4);
+    expect(rows[2]!.style.display).toBe('flex');
+    expect(rows[3]!.style.display).toBe('flex');
+    expect(rows[4]!.style.display).toBe('none');
+
+    // 换局(空槽新世界):武器行全收,击杀归零
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(rows[2]!.style.display).toBe('none');
+    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name}`)).toBeUndefined();
+  });
+
+  it('加速冷却条:窗内印"加速中",冷却回充印剩余秒,归零印"就绪"', () => {
+    const hud = createHud({ world: stubWorld({ boostCooldown: 2.5 }) as unknown as World });
+    const root = dom.ui.children[0]!;
+    const vitals = root.children[0]!.children[0]!;
+    // 第三根条(下标 4/5 = 行/轨道):回充中印剩余秒
+    expect(vitals.children[4]!.children[1]!.textContent).toBe('2.5s');
+
+    hud.setWorld(stubWorld({ boostTime: 0.8, boostCooldown: 4.9 }) as unknown as World);
+    expect(vitals.children[4]!.children[1]!.textContent).toBe('加速中');
+    expect(vitals.children[5]!.children[0]!.style.width).toBe('100%');
+
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(vitals.children[4]!.children[1]!.textContent).toBe('就绪');
+    expect(vitals.children[5]!.children[0]!.style.width).toBe('100%');
+  });
+});
+
+describe('radarProject', () => {
+  it('量程内线性缩放,量程外沿方向钉在圈沿并标 clamped', () => {
+    const out = { x: 0, y: 0, clamped: false };
+    // 量程 1500 → 半径 71:750 世界 px 落在半径一半
+    radarProject(750, 0, 1500, 71, out);
+    expect(out.x).toBeCloseTo(35.5);
+    expect(out.y).toBe(0);
+    expect(out.clamped).toBe(false);
+    // 3000 px(两倍量程):钉在圈沿,方向不变
+    radarProject(0, 3000, 1500, 71, out);
+    expect(out.x).toBeCloseTo(0);
+    expect(out.y).toBeCloseTo(71);
+    expect(out.clamped).toBe(true);
+    // 斜向钉沿:模长 = 半径
+    radarProject(3000, 3000, 1500, 71, out);
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(71);
+    expect(out.clamped).toBe(true);
+  });
+
+  it('坏输入(NaN / 非正量程)落在圆心,不把 NaN 写进 canvas', () => {
+    const out = { x: 9, y: 9, clamped: true };
+    radarProject(Number.NaN, 10, 1500, 71, out);
+    expect(out.x).toBe(0);
+    expect(Number.isFinite(out.y)).toBe(true);
+    radarProject(100, 100, 0, 71, out);
+    expect(out).toEqual({ x: 0, y: 0, clamped: false });
+    radarProject(100, 100, Number.NaN, 71, out);
+    expect(out).toEqual({ x: 0, y: 0, clamped: false });
+  });
+});
+
+describe('formatDps / boostReadout', () => {
+  it('DPS 排版:平滑尾巴印 0,个位数留一位小数,两位数以上取整,NaN 不外漏', () => {
+    expect(formatDps(0)).toBe('0');
+    expect(formatDps(0.04)).toBe('0');
+    expect(formatDps(3.14)).toBe('3.1');
+    expect(formatDps(12.6)).toBe('13');
+    expect(formatDps(Number.NaN)).toBe('0');
+  });
+
+  it('加速读数:窗内加速中,冷却按 1 - cd/cdMax 回充,归零就绪', () => {
+    expect(boostReadout(0.5, 4.4, 5)).toEqual({ text: '加速中', ratio: 1, active: true });
+    expect(boostReadout(0, 0, 5)).toEqual({ text: '就绪', ratio: 1, active: false });
+    const mid = boostReadout(0, 2.5, 5);
+    expect(mid.text).toBe('2.5s');
+    expect(mid.ratio).toBeCloseTo(0.5);
+    expect(mid.active).toBe(false);
+    // 坏刻度(cdMax 0/NaN)不把 NaN 写进 CSS:hudRatio 兜底,ratio 仍是有限数
+    expect(Number.isFinite(boostReadout(0, 2, 0).ratio)).toBe(true);
   });
 });

@@ -23,6 +23,7 @@ import {
 import { WAVE_SEGMENTS } from '../data/waves';
 import { createProgress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN } from '../sim/world';
+import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
 import {
   collectionCategoryName,
   collectionItemName,
@@ -33,6 +34,7 @@ import {
   resultTitle,
   segmentLabel,
   summaryText,
+  weaponReportRows,
 } from './gameOver';
 
 describe('formatDuration', () => {
@@ -108,9 +110,32 @@ function summary(over: Partial<RunSummary> = {}): RunSummary {
     silhouette: null,
     newUnlocks: [],
     progressStats: createProgress(),
+    weaponReport: [],
+    peakDps: 0,
     ...over,
   };
 }
+
+describe('weaponReportRows', () => {
+  it('名字取数据表,伤害取整,占比按全武器总伤害算(条加起来是一整局的 100%)', () => {
+    const rows = weaponReportRows([
+      { type: TOWER_AUTOCANNON, damage: 750.4 },
+      { type: TOWER_LASER, damage: 250 },
+    ]);
+    expect(rows[0]!.name).toBe(TOWERS[TOWER_AUTOCANNON]!.name);
+    expect(rows[0]!.damage).toBe(750);
+    expect(rows[0]!.ratio).toBeCloseTo(0.7501, 3);
+    expect(rows[1]!.ratio).toBeCloseTo(0.2499, 3);
+  });
+
+  it('型越界印 #type(不许静默兜底),空表与坏数值不产出 NaN', () => {
+    expect(weaponReportRows([{ type: 999, damage: 10 }])[0]!.name).toBe('#999');
+    expect(weaponReportRows([])).toEqual([]);
+    const rows = weaponReportRows([{ type: TOWER_AUTOCANNON, damage: Number.NaN }]);
+    expect(rows[0]!.damage).toBe(0);
+    expect(rows[0]!.ratio).toBe(0);
+  });
+});
 
 describe('summaryText', () => {
   it('失败局三行:存活时间 / 击杀数 / 航段进度,一行都不许少,也不带 Boss 行', () => {
@@ -310,8 +335,13 @@ function findEl(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl | undefin
   return undefined;
 }
 
-/** 「解锁 XX」块 = 结算卡第 5 个子节点(标题/注/剪影/读数/解锁/图鉴/按钮,构造顺序固定,与 upgradeFlow.test 同款按位取) */
+/** 「解锁 XX」块 = 结算卡第 6 个子节点(标题、注、剪影、读数、战报、解锁、图鉴、按钮,构造顺序固定,与 upgradeFlow.test 同款按位取) */
 function unlockBlock(dom: StubDom): StubEl {
+  return panel(dom).children[5]!;
+}
+
+/** 武器战报块 = 结算卡第 5 个子节点(位序见 unlockBlock 的注释) */
+function reportBlock(dom: StubDom): StubEl {
   return panel(dom).children[4]!;
 }
 
@@ -354,6 +384,31 @@ describe('createGameOverUi', () => {
     expect(root(dom).style.display).toBe('flex');
     ui.hide();
     expect(root(dom).style.display).toBe('none');
+  });
+
+  it('武器战报:有伤害的局出占比行与峰值标题,一炮没开的局整块藏着', () => {
+    const ui = make();
+    ui.show(
+      summary({
+        weaponReport: [
+          { type: TOWER_AUTOCANNON, damage: 900 },
+          { type: TOWER_LASER, damage: 100 },
+        ],
+        peakDps: 55.6,
+      }),
+    );
+    const report = reportBlock(dom);
+    expect(report.style.display).toBe('block');
+    // 标题印峰值 DPS(取整);行数 = 标题 + 两把武器
+    expect(report.children[0]!.textContent).toBe('武器战报 · 峰值 56 DPS');
+    expect(report.children.length).toBe(3);
+    expect(findEl(report, (el) => el.textContent === TOWERS[TOWER_AUTOCANNON]!.name)).toBeDefined();
+    expect(findEl(report, (el) => el.textContent === '900')).toBeDefined();
+
+    // 换一局(一炮没开):整块收回,行也清空 —— 上一局的战报不许赖在下一局的结算卡里
+    ui.show(summary());
+    expect(reportBlock(dom).style.display).toBe('none');
+    expect(reportBlock(dom).children.length).toBe(0);
   });
 
   it('印的就是那三行 + 胜负各自的标题(与纯函数同一份口径)', () => {

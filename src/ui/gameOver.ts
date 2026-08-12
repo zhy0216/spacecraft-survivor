@@ -94,6 +94,14 @@ const SHOT_THUMB_CSS =
   `border:1px solid ${LINE_COLOR};border-radius:4px;margin:4px 6px 0 0;`;
 const SHOT_PLACEHOLDER_CSS = `color:${IDLE_COLOR};margin-top:4px;`;
 
+/** 武器战报块:读数区之下、「解锁 XX」之上;行 = 名字 + 占比条 + 伤害数(冷色域,GDD §12) */
+const REPORT_CSS = 'text-align:left;margin-bottom:16px;';
+const REPORT_TITLE_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;margin-bottom:4px;`;
+const REPORT_ROW_CSS = `display:flex;align-items:center;gap:8px;color:${VALUE_COLOR};`;
+const REPORT_TRACK_CSS =
+  'flex:1 1 auto;height:5px;border-radius:999px;background:rgba(43,74,110,.35);overflow:hidden;';
+const REPORT_FILL_CSS = `height:100%;background:${OK_COLOR};border-radius:inherit;`;
+
 /** button 不继承页面字体,font:inherit 这一句不能省(否则读数是等宽、按钮是系统黑体) */
 const BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
@@ -118,6 +126,13 @@ export interface RunSummary {
   newUnlocks: number[];
   /** 结算后的元进度(sim/progress.ts):解锁掩码 + 计数器 + 剪影集合,图鉴读它 */
   progressStats: Progress;
+  /**
+   * 武器战报(本局逐塔型累计实际伤害,main.ts 从 world.runDamageByType 摘好、
+   * 只带 damage > 0 的型、按伤害降序)。空数组 = 整块战报不显示(一炮没开的局没有战报)。
+   */
+  weaponReport: { type: number; damage: number }[];
+  /** 本局峰值总 DPS(world.peakDps);战报标题行印它 */
+  peakDps: number;
 }
 
 export interface GameOverUi {
@@ -208,6 +223,35 @@ export function summaryText(s: RunSummary): string {
  */
 export const COLLECTION_SILHOUETTE_MAX = 3;
 
+export interface WeaponReportRow {
+  /** 塔名(数据表即真相;型越界印 #type,与 resultTitle 的未知码同一条"不许静默兜底"口径) */
+  name: string;
+  /** 累计伤害(取整 —— 战报是总账,小数位是噪音) */
+  damage: number;
+  /** 占本局武器总伤害的比例 0..1(条形宽度;总量 0 时全 0) */
+  ratio: number;
+}
+
+/**
+ * 武器战报的显示行。做成纯函数(照 summaryText 的理由):"战报到底显示了什么"
+ * 要能在 Node 里数出来 —— 占比算错、除零 NaN 流进条宽,都是要等真人打完一局才看得见的错。
+ * 比例分母 = 全武器伤害总和(不是第一名):条形读作"输出占比",加起来是一整局的 100%。
+ */
+export function weaponReportRows(report: { type: number; damage: number }[]): WeaponReportRow[] {
+  let total = 0;
+  for (const r of report) total += r.damage > 0 ? r.damage : 0;
+  const rows: WeaponReportRow[] = [];
+  for (const r of report) {
+    const dmg = r.damage > 0 && Number.isFinite(r.damage) ? r.damage : 0;
+    rows.push({
+      name: TOWERS[r.type]?.name ?? `#${r.type}`,
+      damage: Math.round(dmg),
+      ratio: total > 0 ? dmg / total : 0,
+    });
+  }
+  return rows;
+}
+
 /** 图鉴分类名(UNLOCK_* → 类别文案);未知 kind 印出码本身,与 resultTitle 的未知结果码同一口径 */
 export function collectionCategoryName(kind: number): string {
   switch (kind) {
@@ -283,6 +327,10 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
   shotEl.alt = '本局最终船形';
   const statsEl = document.createElement('div');
   statsEl.style.cssText = STATS_CSS;
+  // 武器战报:一炮没开的局(weaponReport 空)整块隐藏,由 renderWeaponReport 决定露不露脸
+  const reportEl = document.createElement('div');
+  reportEl.style.cssText = REPORT_CSS;
+  reportEl.style.display = 'none';
   // —— 19 号:「解锁 XX」+ 图鉴两块。图鉴常显(未解锁全灰 = "下一把的新理由"就摆在眼前),
   // 「解锁 XX」只在本次有新解锁时露脸;内容由 show() 按 newUnlocks / progressStats 现刷 ——
   const unlockEl = document.createElement('div');
@@ -305,7 +353,7 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
   retryBtn.textContent = '再试这一局(R · 同种子同起手)';
-  card.append(titleEl, noteEl, shotEl, statsEl, unlockEl, collectionEl, btn);
+  card.append(titleEl, noteEl, shotEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
@@ -330,6 +378,41 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
     // 与 restart 同口径:先收面板再回调,理由一字同源
     hide();
     opts.onRetry?.();
+  }
+
+  /**
+   * 刷新武器战报:行内容全走 weaponReportRows(纯函数,那边测),这里只摆 DOM。
+   * 一局一次的重建(replaceChildren + 现建行节点),照 renderCollection 的先例 ——
+   * 铁律 3 管的是热路径,结算一局只弹一次。
+   */
+  function renderWeaponReport(s: RunSummary): void {
+    if (s.weaponReport.length === 0) {
+      reportEl.replaceChildren();
+      reportEl.style.display = 'none';
+      return;
+    }
+    reportEl.replaceChildren();
+    const title = document.createElement('div');
+    title.style.cssText = REPORT_TITLE_CSS;
+    title.textContent = `武器战报 · 峰值 ${Math.round(s.peakDps > 0 ? s.peakDps : 0)} DPS`;
+    reportEl.appendChild(title);
+    for (const row of weaponReportRows(s.weaponReport)) {
+      const line = document.createElement('div');
+      line.style.cssText = REPORT_ROW_CSS;
+      const name = document.createElement('span');
+      name.textContent = row.name;
+      const track = document.createElement('div');
+      track.style.cssText = REPORT_TRACK_CSS;
+      const fill = document.createElement('div');
+      fill.style.cssText = REPORT_FILL_CSS;
+      fill.style.width = `${Math.round(row.ratio * 100)}%`;
+      track.appendChild(fill);
+      const value = document.createElement('span');
+      value.textContent = String(row.damage);
+      line.append(name, track, value);
+      reportEl.appendChild(line);
+    }
+    reportEl.style.display = 'block';
   }
 
   /** 刷新「解锁 XX」块:有新解锁才露脸;空数组整个隐藏(没有新解锁的局没有这条新闻) */
@@ -426,6 +509,7 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
       titleEl.style.color = s.result === RESULT_LOSE ? LOSE_COLOR : OK_COLOR;
       noteEl.textContent = resultNote(s.result);
       statsEl.textContent = summaryText(s);
+      renderWeaponReport(s);
       renderUnlocks(s);
       renderCollection(s);
       // 抓不到剪影就整个不显示,**且不去动 src** —— 置空 src 在部分浏览器上会重新请求当前页面,
