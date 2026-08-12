@@ -120,7 +120,7 @@ describe('波次脚本', () => {
     }
   });
 
-  it('密度曲线只涨不落,换段时也不掉压(否则每次换段都送一段白给的喘息)', () => {
+  it('基线密度只涨不落,换段时也不掉压(节奏的起伏走 tides 潮汐,不动基线)', () => {
     for (const seg of WAVE_SEGMENTS) {
       for (const s of seg.streams) {
         expect(s.rate1, `${seg.name}/${ENEMIES[s.kind]!.name}`).toBeGreaterThanOrEqual(s.rate0);
@@ -305,6 +305,7 @@ describe('波次脚本', () => {
       streams: [{ kind: KIND_SWARM, rate0: 1, rate1: 1, spreadDeg: 0 }],
       bursts: [],
       elites: [],
+      tides: [],
     };
     WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, short);
     expect(WAVE_SEGMENTS.length).toBe(1);
@@ -316,6 +317,63 @@ describe('波次脚本', () => {
     // WAVE_TOTAL_TIME 是模块加载时算的**设计口径**快照,不随 splice 变 ——
     // 运行器一个字都不读它(局终由逐段推进到越界自然得出),故这里不是漏算
     expect(WAVE_TOTAL_TIME).toBe(BASE_TOTAL);
+  });
+});
+
+describe('潮汐窗口(节奏改版)—— 基线上的涨落,重分配不砍量', () => {
+  it('窗口合法:at 升序、互不重叠、不跨段,mul 落在 [0.2, 1.5] 的涨落带内', () => {
+    for (const seg of WAVE_SEGMENTS) {
+      let prevEnd = -1;
+      for (const t of seg.tides) {
+        expect(t.at, seg.name).toBeGreaterThanOrEqual(0);
+        // 运行器只往前扫、扫到"还没开始"的窗口就早退(tideMulAt):乱序/重叠会被静默读错
+        expect(t.at, `${seg.name} 的潮汐必须按 at 升序且互不重叠`).toBeGreaterThanOrEqual(prevEnd);
+        expect(t.duration, seg.name).toBeGreaterThan(0);
+        expect(t.at + t.duration, `${seg.name}@${t.at}s 的窗口不许跨段`).toBeLessThanOrEqual(
+          seg.duration,
+        );
+        prevEnd = t.at + t.duration;
+        // 下界 0.2:退潮是"静一口气",不是把流关停(0 会让密度曲线与罗盘双双躺平);
+        // 上界 1.5:再高就该改基线 rate 了,潮汐只负责起伏不负责总量
+        expect(t.mul, seg.name).toBeGreaterThanOrEqual(0.2);
+        expect(t.mul, seg.name).toBeLessThanOrEqual(1.5);
+        expect(t.mul, `${seg.name}@${t.at}s 恰为 1 的窗口是没意义的占位`).not.toBe(1);
+      }
+    }
+  });
+
+  it('每段都有潮汐编排,且涨落两个方向都有(只退不涨是变相砍量,只涨不退是变相加压)', () => {
+    for (const seg of WAVE_SEGMENTS) {
+      expect(seg.tides.length, seg.name).toBeGreaterThan(0);
+      expect(seg.tides.some((t) => t.mul < 1), `${seg.name} 没有退潮`).toBe(true);
+      expect(seg.tides.some((t) => t.mul > 1), `${seg.name} 没有涨潮`).toBe(true);
+    }
+  });
+
+  it('退潮必须绑任务(WaveTide 编排铁律 1):窗口要么预告事件、要么跟在恶战后', () => {
+    // "绑任务"翻成可判的几何:窗口开始前 15s 内触发过、或收窗后 8s 内将触发一次
+    // burst/精英 —— 前者是恶战后的捡拾退潮,后者是静场预告。两头都不沾的退潮
+    // 就是一段无意义的空场:玩家闲着,紧张感白白漏掉
+    for (const seg of WAVE_SEGMENTS) {
+      const events = [...seg.bursts.map((b) => b.at), ...seg.elites.map((e) => e.at)];
+      for (const t of seg.tides) {
+        if (t.mul >= 1) continue;
+        const hit = events.some((at) => at >= t.at - 15 && at <= t.at + t.duration + 8);
+        expect(hit, `${seg.name}@${t.at}s 的退潮既不预告事件也不跟在恶战后`).toBe(true);
+      }
+    }
+  });
+
+  it('潮汐是重分配不是砍量(WaveTide 编排铁律 2):时间加权平均 mul 贴着 1(±15%)', () => {
+    // 整局经济与压力总账归 rate0/rate1 管;潮汐把量挪来挪去制造起伏,
+    // 平均值偏离 1 太多就是在偷偷改总账 —— 12–15 次升级的验收窗口会被它悄悄戳穿
+    for (const seg of WAVE_SEGMENTS) {
+      let delta = 0;
+      for (const t of seg.tides) delta += (t.mul - 1) * t.duration;
+      const avg = 1 + delta / seg.duration;
+      expect(avg, seg.name).toBeGreaterThanOrEqual(0.85);
+      expect(avg, seg.name).toBeLessThanOrEqual(1.15);
+    }
   });
 });
 

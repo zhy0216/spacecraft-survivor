@@ -28,6 +28,7 @@ import {
   resetWaveState,
   type SpawnSink,
   stepWaves,
+  tideMulAt,
   type WaveState,
   waveDirAt,
   waveIntensityAt,
@@ -62,6 +63,7 @@ function segment(p: Partial<WaveSegment> = {}): WaveSegment {
     streams: [],
     bursts: [],
     elites: [],
+    tides: [],
     ...p,
   };
 }
@@ -144,6 +146,101 @@ describe('waveIntensityAt', () => {
   it('侧压事件不计入强度:它是脉冲,不是速率', () => {
     const seg = segment({ duration: 10, bursts: [burst({ at: 0, counts: [50, 0, 0, 0] })] });
     expect(waveIntensityAt(seg, 0)).toBe(0);
+  });
+});
+
+describe('潮汐(tides,节奏改版)', () => {
+  it('tideMulAt:窗口内取 mul、窗口外恒 1,边界含头不含尾', () => {
+    const seg = segment({
+      duration: 30,
+      tides: [
+        { at: 5, duration: 5, mul: 0.5 },
+        { at: 20, duration: 5, mul: 1.4 },
+      ],
+    });
+    expect(tideMulAt(seg, 0)).toBe(1);
+    expect(tideMulAt(seg, 5)).toBe(0.5); // 含头
+    expect(tideMulAt(seg, 9.999)).toBe(0.5);
+    expect(tideMulAt(seg, 10)).toBe(1); // 不含尾
+    expect(tideMulAt(seg, 22)).toBe(1.4);
+    expect(tideMulAt(seg, 25)).toBe(1);
+    expect(tideMulAt(segment({ duration: 10 }), 3)).toBe(1); // 无潮汐编排 = 恒基线
+  });
+
+  it('退潮攒账变慢:1 只/秒 × mul 0.5,10 秒只出 5 只,且 rng 消耗 = 出怪数(潮汐零 rng)', () => {
+    // 段长 20 > 跑的 10 帧:最后一帧不撞段边界(撞界那一帧只推进不出怪,不属于本用例要钉的事)
+    useScript(
+      segment({
+        duration: 20,
+        streams: [stream({ rate0: 1, rate1: 1 })],
+        tides: [{ at: 0, duration: 20, mul: 0.5 }],
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    const rng = new CountingRng(7);
+    run(s, 10, 1, rng, r);
+    expect(r.list.length).toBe(5);
+    expect(rng.calls).toBe(5); // 每成功出一只恰一次,窗口本身一次都不掷
+  });
+
+  it('涨潮攒账变快:1 只/秒 × mul 1.5,10 秒出 15 只(重分配的另一半)', () => {
+    useScript(
+      segment({
+        duration: 20,
+        streams: [stream({ rate0: 1, rate1: 1 })],
+        tides: [{ at: 0, duration: 20, mul: 1.5 }],
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    run(s, 10, 1, new Rng(7), r);
+    expect(r.list.length).toBe(15);
+  });
+
+  it('窗口只管窗口内:进窗前的出怪序列与无潮汐脚本逐位一致(同 seed 契约不被窗口的存在扰动)', () => {
+    const base = () =>
+      segment({ duration: 10, streams: [stream({ rate0: 1, rate1: 1, spreadDeg: 30 })] });
+    useScript(base());
+    const plain = rec();
+    const s1 = createWaveState();
+    run(s1, 5, 1, new Rng(42), plain);
+
+    const tided = base();
+    tided.tides = [{ at: 6, duration: 3, mul: 0.5 }]; // 窗口在第 6 秒之后,前 5 秒不该受影响
+    useScript(tided);
+    const withTide = rec();
+    const s2 = createWaveState();
+    run(s2, 5, 1, new Rng(42), withTide);
+
+    expect(withTide.list).toEqual(plain.list);
+  });
+
+  it('waveIntensityAt 乘上潮汐系数:罗盘强度如实反映"此刻静了/涨了"', () => {
+    const seg = segment({
+      duration: 10,
+      streams: [stream({ rate0: 2, rate1: 4 })],
+      tides: [{ at: 4, duration: 2, mul: 0.5 }],
+    });
+    expect(waveIntensityAt(seg, 0)).toBeCloseTo(2, 9);
+    expect(waveIntensityAt(seg, 5)).toBeCloseTo(1.5, 9); // 基线 3 × 退潮 0.5
+    expect(waveIntensityAt(seg, 8)).toBeCloseTo(3.6, 9); // 窗口外回基线
+  });
+
+  it('事件不受潮汐管:深退潮里 burst/精英照常整组出(它们是原子脉冲,不在密度曲线里)', () => {
+    useScript(
+      segment({
+        duration: 10,
+        bursts: [burst({ at: 3, counts: [4, 0, 0, 0] })],
+        elites: [{ at: 5, kind: 1, count: 2, affixes: [0] }],
+        tides: [{ at: 0, duration: 10, mul: 0.2 }],
+      }),
+    );
+    const s = createWaveState();
+    const r = rec();
+    run(s, 10, 1, new Rng(7), r);
+    expect(r.list.length).toBe(6); // 4(burst)+ 2(精英),流本来就是空的
+    expect(r.list.filter((e) => e.affixes !== undefined).length).toBe(2);
   });
 });
 

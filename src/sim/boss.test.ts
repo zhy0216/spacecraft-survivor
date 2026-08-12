@@ -77,6 +77,7 @@ function bossWorld(seed: number): World {
     streams: [],
     bursts: [],
     elites: [],
+    tides: [],
   });
   const w = new World(seed);
   for (let i = 0; i < CROSS; i++) w.step();

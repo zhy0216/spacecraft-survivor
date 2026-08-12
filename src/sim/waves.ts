@@ -20,6 +20,8 @@
  * 出现时刻只由 at 与 segTime 决定、与种子无关,每出一只恰好一次 rng.next()。
  * 19 号的解锁精英(WAVE_LOCKED_ELITES)也走这条链:换段时按 at 归并进本段精英链,
  * 未解锁的整条跳过 —— 精英零 rng,解锁与否只决定"这组怪出不出",不移动随机序列。
+ * 潮汐(tides,节奏改版)同样零 rng:tideMulAt 是 segment + segTime 的纯函数,
+ * 只缩放流的记账速率 —— 它改"出多少只",不改"每只怎么掷"(见 tideMulAt 的注释)。
  * 出场顺序 = 侧压 → 主压流 → 精英(帧末):精英排在帧末,触发帧内的普通怪
  * 与无精英脚本逐只一致(帧间序列从下一帧起才整体顺延)。
  */
@@ -107,9 +109,28 @@ function segProgress(seg: WaveSegment, segTime: number): number {
   return p < 0 ? 0 : p > 1 ? 1 : p;
 }
 
-/** 某条流的当前速率(只/秒):段首 rate0 → 段尾 rate1 线性插值,这就是「随时间的密度曲线」 */
+/** 某条流的当前**基线**速率(只/秒):段首 rate0 → 段尾 rate1 线性插值,这就是「随时间的密度曲线」 */
 function rateAt(st: WaveStream, prog: number): number {
   return st.rate0 + (st.rate1 - st.rate0) * prog;
+}
+
+/**
+ * 潮汐系数:segTime 落在某个 tides 窗口内 → 该窗口的 mul,否则 1(基线)。
+ * 窗口按 at 升序且互不重叠(data/waves.test 钉),故扫到第一个"还没开始"的窗口即可收工 ——
+ * 正常一段只有几个窗口,这是每帧一次的 O(个位数) 早退扫描,零分配。
+ * **零 rng、零状态**:它是 segment + segTime 的纯函数,与 waveDirAt 同一条派生量口径;
+ * 它只缩放流的记账速率(mul < 1 攒得慢、> 1 攒得快),每成功出一只仍恰好一次 rng.next(),
+ * "同 seed 同序列"的消耗契约一个字不动 —— 潮汐改的是出多少只,不是每只怎么掷。
+ * 公开导出:HUD/调参面板要能单独问"此刻是潮是汐"(与 waveDirAt / waveIntensityAt 同待遇)。
+ */
+export function tideMulAt(seg: WaveSegment, segTime: number): number {
+  const tides = seg.tides;
+  for (let i = 0; i < tides.length; i++) {
+    const w = tides[i]!;
+    if (segTime < w.at) return 1;
+    if (segTime < w.at + w.duration) return w.mul;
+  }
+  return 1;
 }
 
 /**
@@ -122,12 +143,16 @@ export function waveDirAt(seg: WaveSegment, segTime: number): number {
   return wrapAngle(deg * DEG2RAD);
 }
 
-/** 脚本计划强度(只/秒)= 本段各流当前速率之和；侧压 burst 是离散事件，不属于这条计划曲线。 */
+/**
+ * 脚本计划强度(只/秒)= 本段各流当前速率之和 × 潮汐系数;侧压 burst 是离散事件,不属于这条计划曲线。
+ * 潮汐乘在这里而不是只乘在出怪处:罗盘强度与调试读数要如实反映"此刻真的静了/涨了",
+ * 退潮的"耳朵一静"本身就是给玩家的预警信号(WaveTide 编排铁律 1 的可读性落点)。
+ */
 export function waveIntensityAt(seg: WaveSegment, segTime: number): number {
   const prog = segProgress(seg, segTime);
   let sum = 0;
   for (const st of seg.streams) sum += rateAt(st, prog);
-  return sum;
+  return sum * tideMulAt(seg, segTime);
 }
 
 /** peekNextBurst 的答复(调用方持有、跨帧复用,铁律 3:热路径零分配) */
@@ -364,14 +389,16 @@ export function stepWaves(
     }
   }
 
-  // 6. 主压怪流,**按 streams 数组顺序**
+  // 6. 主压怪流,**按 streams 数组顺序**。潮汐(tideMulAt)只乘在这条记账速率上:
+  //    退潮攒得慢、涨潮攒得快,bursts/elites 是原子事件不受它管(WaveTide 的分工口径)
   const streams = seg.streams;
   const prog = segProgress(seg, s.segTime);
+  const tide = tideMulAt(seg, s.segTime);
   for (let i = 0; i < streams.length; i++) {
     // 撞上限那一帧,后面的流连账都不记:上限是保险丝,不是配额分配器
     if (spawned >= WAVE_MAX_SPAWN_PER_TICK) break;
     const st = streams[i]!;
-    let debt = s.debt[i]! + rateAt(st, prog) * dt;
+    let debt = s.debt[i]! + rateAt(st, prog) * tide * dt;
     const spread = st.spreadDeg * DEG2RAD;
     while (debt >= 1 && spawned < WAVE_MAX_SPAWN_PER_TICK) {
       debt -= 1;
