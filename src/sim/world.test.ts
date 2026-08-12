@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DOCK_REPAIR_PRICE, STARTING_STAR_COINS } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
 import { tuning } from './config';
@@ -91,9 +92,20 @@ describe('World 槽位制核心接线', () => {
     // 概率不同、掷的次数相同:同 seed 同操作序列,两条随机流必须停在同一格
     // (少了"每杀恒掷一次"这条,拿一层星图协议就会把整局的出怪序列整体挪位)
     expect(a.rng.next()).toBe(b.rng.next());
-    // 概率真的起作用了:5 层星图协议的收入应当明显高于基础档(200 杀,期望 20 vs 100)
-    expect(a.starCoins).toBeGreaterThan(0);
-    expect(b.starCoins).toBeGreaterThan(a.starCoins * 2);
+    // 概率真的起作用了:5 层星图协议的收入应当明显高于基础档(200 杀,期望 20 vs 100)。
+    // 钉的是**这一局挣到的**,不是余额 —— 开局白送的 STARTING_STAR_COINS 两边一样多,
+    // 留在读数里只会把两档的倍数差冲淡(15 + 20 与 15 + 100 的比值远小于真实的 5 倍)
+    const earned = (w: World): number => w.starCoins - STARTING_STAR_COINS;
+    expect(earned(a)).toBeGreaterThan(0);
+    expect(earned(b)).toBeGreaterThan(earned(a) * 2);
+  });
+
+  it('开局白送 STARTING_STAR_COINS:一分没杀就有余额,且不因 seed 而变', () => {
+    // 与出怪/掉落无关的常数:换 seed 不该换到第二个数(它不掷 rng,也不进 checksum)
+    expect(new World(1).starCoins).toBe(STARTING_STAR_COINS);
+    expect(new World(999).starCoins).toBe(STARTING_STAR_COINS);
+    // 第一家店(武器 30 / 法令 25 / 修复 25)仍买不起:白送的是半样东西,不是一整套起手装备
+    expect(STARTING_STAR_COINS).toBeLessThan(DOCK_REPAIR_PRICE);
   });
 
   it('checksum 不包含星币余额', () => {

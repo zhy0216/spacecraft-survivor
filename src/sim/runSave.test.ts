@@ -117,6 +117,13 @@ describe('局内存档:capture → restore', () => {
     expect(restored.peakDps).toBe(88.5);
   });
 
+  it('读档不补发开局星币:余额取存档里的那一份(花掉的钱不会读一次档回来)', () => {
+    const world = freshRun(300);
+    world.starCoins = 3; // 比 STARTING_STAR_COINS 低:补发过就会被顶回 15
+    const restored = restoreRun(captureRun(world, META));
+    expect(restored.starCoins).toBe(3);
+  });
+
   it('起手配置不被重放:读档拿的是存下来的槽位,不是开局那四门炮', () => {
     const world = freshRun(60);
     // 手动改一个槽,模拟"半局里换过武器":读档必须拿到改后的这一份

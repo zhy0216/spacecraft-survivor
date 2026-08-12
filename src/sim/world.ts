@@ -74,6 +74,7 @@ import {
   SHOP_BEACON_MIN_DIST,
   SHOP_BEACON_RADIUS,
   skipRefundFor,
+  STARTING_STAR_COINS,
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
@@ -599,8 +600,11 @@ export class World {
    * "星币 ≥ X 触发行为就要进 checksum"指的是 sim **自己**按余额做决定(如余额够了自动弹商店);
    * 玩家主动点击的购买是 step() 之外的外部输入 —— 失败的尝试一个字段都不动,
    * 成功的尝试效果落在 edicts / ship.hp / 槽位这三个已在哈希里的字段上,故余额照旧不进。
+   *
+   * **开局不是 0**:每局白送 STARTING_STAR_COINS(见 data/economy.ts 那条口径)。
+   * 读档局在 runSave 的 restore 里被存档余额整个覆盖,不会再补发一次。
    */
-  starCoins = 0;
+  starCoins = STARTING_STAR_COINS;
 
   /**
    * 已经**结算完**的升级次数,同时也是下一次费用曲线的级数。

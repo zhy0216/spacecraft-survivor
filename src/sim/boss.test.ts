@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
+import { STARTING_STAR_COINS } from '../data/economy';
 import {
   BOSS,
   ENEMIES,
@@ -375,9 +376,10 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(over).toBe(RESULT_WIN);
 
     // 双轨进账(见 World.spawnDrop):星币**按概率**入账(用户设计会:每次击杀恒掷一次、
-    // 命中 buffs.starCoinChance 才给),故这里只钉两档合法读数 —— 要么 0、要么整额 BOSS.starCoins,
-    // 绝不会是别的数(面额本身没变,变的只是给不给)。命中与否由那一掷决定,与 seed 绑定
-    expect([0, BOSS.starCoins]).toContain(w.starCoins);
+    // 命中 buffs.starCoinChance 才给),故这里只钉两档合法读数 —— 要么一分没进、要么整额
+    // BOSS.starCoins,绝不会是别的数(面额本身没变,变的只是给不给)。命中与否由那一掷决定,
+    // 与 seed 绑定;两档都从开局白送的 STARTING_STAR_COINS 起算(那是余额的地板,不是收入)
+    expect([STARTING_STAR_COINS, STARTING_STAR_COINS + BOSS.starCoins]).toContain(w.starCoins);
     // 经验走掉落物:原地必掉一颗,面额 = 底座 scrap × BOSS.hpMul(Boss 档 12 倍)
     expect(w.drops.size).toBe(1);
     expect(w.drops.items[0]!.value).toBe(ENEMIES[BOSS.baseKind]!.scrap * BOSS.hpMul);

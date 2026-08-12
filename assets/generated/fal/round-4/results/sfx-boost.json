@@ -1,0 +1,26 @@
+{
+  "status": "completed",
+  "endpoint_id": "sonilo/v1.1/text-to-sound-effects",
+  "request_id": "019ff6ac-b5ef-7da3-8cb5-d43416a9ae99",
+  "result": {
+    "audio": {
+      "url": "https://v3b.fal.media/files/b/0aa60f12/Gj-yrfNdkPRv3iSfRNC3d_tmpm771737z.wav",
+      "content_type": "audio/wav",
+      "file_name": "tmpm771737z.wav",
+      "file_size": 524366
+    },
+    "audios": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa60f12/Gj-yrfNdkPRv3iSfRNC3d_tmpm771737z.wav",
+        "content_type": "audio/wav",
+        "file_name": "tmpm771737z.wav",
+        "file_size": 524366
+      }
+    ]
+  },
+  "gallery": {
+    "session_id": "216e400d772a",
+    "path": "/Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html"
+  }
+}

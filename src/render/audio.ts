@@ -536,13 +536,23 @@ export function playHurt(kind: 'spark' | 'hull'): void {
   }
 }
 
-/** 残骸拾取:上扬的数字提示音 + 金属亮点,与击杀冲击区分 */
+/**
+ * 残骸(= 经验)拾取。**不许听成金币**:游戏里星币是另一套货币(World.starCoins,击杀直接进账、
+ * 没有拾取物也没有音效),拾取声若是"明亮金属叮"就会把两条经济线在耳朵里混成一条。
+ * 旧素材正是那个音:频谱质心 1977Hz、3kHz 以上占两三成、拖 0.74s —— 教科书式的金币叮。
+ *
+ * 现素材(genmedia 第二轮,prompt 见 assets/audio/README.md)是一记暖木质拨奏:
+ * 主频 365Hz、质心 ~340Hz、能量九成压在 500Hz 以下,4ms 起音、0.46s 单调衰减收干。
+ * 音量 0.20 略高于旧的 0.17 不是调响了:新音色整体低了两个八度,A 计权下同一读数听感要低 6dB,
+ * 0.20 才与旧素材的 0.17 打平(音量分级仍是 开火 < 击杀 < 拾取/放置 < 受击)。
+ */
 export function playCollect(): void {
   if (!throttled('collect')) return;
-  if (playSample('collect', 0.17)) return;
+  if (playSample('collect', 0.2)) return;
   if (deferSynthFallback()) return;
-  playVoice({ type: 'sine', freq: 1318, attack: 0.002, decay: 0.12, peak: 0.18 });
-  playVoice({ type: 'sine', freq: 2637, attack: 0.002, decay: 0.08, peak: 0.08, startAt: 0.01 });
+  // 兜底同口径:三角波拨奏 + 低八度身体,同样不给 1kHz 以上的亮音
+  playVoice({ type: 'triangle', freq: 365, attack: 0.004, decay: 0.3, peak: 0.2 });
+  playVoice({ type: 'sine', freq: 182, attack: 0.004, decay: 0.16, peak: 0.12 });
 }
 
 /** 升级:三选一确认用的全息上扬提示音 */

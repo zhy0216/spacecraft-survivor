@@ -1,0 +1,23 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/flux-2-pro",
+  "request_id": "019ff6ab-9191-7d52-b53b-3f92b5b2894b",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa60f0b/qCM1sFZ2qfiFSibc_nKGL_5Z0fxUl0.png",
+        "content_type": "image/png",
+        "file_name": "qCM1sFZ2qfiFSibc_nKGL_5Z0fxUl0.png",
+        "file_size": null,
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "seed": 44102
+  },
+  "gallery": {
+    "session_id": "216e400d772a",
+    "path": "/Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html"
+  }
+}
