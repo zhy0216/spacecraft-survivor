@@ -317,6 +317,42 @@ export function resetWaveState(s: WaveState): void {
 }
 
 /**
+ * 把存档里的波次进度放回一份状态里(sim/runSave.ts 的读档路径,**只此一个调用方**)。
+ *
+ * 为什么读档不能自己逐字段赋值就完事:elites 与 debt 的长度都是 **segment 的派生量**
+ * (见 WaveState.elites 注释与 enterSegment 末尾那句),直接把 segment 写成 3 而不重拼精英链,
+ * 这一段的精英就还是第 0 段那批 —— 而 eliteNext 游标又是照新链的下标存下来的,
+ * 两边一错位,读档后的精英要么整批重出、要么整批消失,且只在读档后几十秒才浮上来。
+ * 于是本函数走**先 enterSegment 重建派生量、再覆盖游标**的顺序,与 resetWaveState 同一条纪律。
+ *
+ * 逐字段夹取在这里做而不在调用方:手改过的存档(段号越界、游标为负、debt 长度不对)
+ * 不许把运行器推进一条它自己都没见过的路 —— 与 parseProgress 的"形状合法还要夹一遍"同口径。
+ */
+export function restoreWaveState(
+  s: WaveState,
+  segment: number,
+  segTime: number,
+  burstNext: number,
+  eliteNext: number,
+  debt: readonly number[],
+): void {
+  s.segment = Math.min(WAVE_SEGMENTS.length, Math.max(0, Math.floor(segment)));
+  enterSegment(s); // elites 重拼 + debt 补长 + 两个游标归零(下面按存档覆盖)
+  const seg = WAVE_SEGMENTS[s.segment];
+  // 段内计时夹在本段时长内:越界会让下一帧当场连跳两段(段推进带余数进位)
+  s.segTime = seg === undefined ? 0 : Math.min(seg.duration, Math.max(0, segTime));
+  s.burstNext = Math.min(seg?.bursts.length ?? 0, Math.max(0, Math.floor(burstNext)));
+  // 精英游标按**重拼后**的链长夹(段表 + 已解锁槽位):存档时的掩码与此刻不同也不会越界
+  s.eliteNext = Math.min(s.elites.length, Math.max(0, Math.floor(eliteNext)));
+  for (let i = 0; i < s.debt.length; i++) {
+    const v = debt[i];
+    s.debt[i] = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, v) : 0;
+  }
+  s.done = s.segment >= WAVE_SEGMENTS.length;
+  refreshDerived(s);
+}
+
+/**
  * 推进波次一逻辑帧。**每一步的顺序都定死**(整条 rng 序列依赖它,单测按此钉):
  *   1 走完直接闭嘴 → 2 推时间 → 3 段推进(带余数进位)→ 4 重算方向/强度 →
  *   5 侧压事件 → 6 主压怪流 → 7 精英插入(帧末)。

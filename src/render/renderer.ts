@@ -871,6 +871,14 @@ export class Renderer {
   private shakeY = 0;
 
   /**
+   * 玩家设置的两个表现开关(ui/settings.ts 的 shake / damageNumbers,经 setEffects 灌进来)。
+   * 初值 = 出厂设置 = 这两样功能上线时原本写死的行为:设置系统即使一次都没被调用过,
+   * 渲染层的表现也与从前逐帧一致(设置不该在"没人碰过它"的时候改变任何东西)。
+   */
+  private shakeScale = 1;
+  private showDamageNumbers = true;
+
+  /**
    * 加速技能表现(畅玩性):尾焰画在船体局部空间(跟着船转),拖尾画在世界空间
    * (甩在身后的才叫尾迹)。trail 是定长环形缓冲,构造时一次建齐(铁律 3);
    * lastBoostTime 是点火的沿检测基准 —— boostTime 只在触发那一帧上跳,其余帧单调递减。
@@ -1353,6 +1361,18 @@ export class Renderer {
    */
   setArcOverlay(on: boolean): void {
     this.arcOverlay = on;
+  }
+
+  /**
+   * 灌一份玩家的表现设置(ui/settings.ts)。**只收纯表现的两项**:震屏强度与伤害飘字 ——
+   * 它们既不进 checksum、也不改变 sim 的任何判定,故设置页随便怎么拨都动不了
+   * "同 seed + 同输入 → 同轨迹"这条口径(音量归 audioBus,顿帧归 main,各有各的落点)。
+   * 幂等且便宜(两次赋值),设置页每次改动直接整份重灌,不必算增量。
+   * @param shake 0..1,0 = 完全静止(调用方已夹取,这里再夹一次:渲染层不信任何外部读数)
+   */
+  setEffects(shake: number, damageNumbers: boolean): void {
+    this.shakeScale = Number.isFinite(shake) ? Math.min(1, Math.max(0, shake)) : 1;
+    this.showDamageNumbers = damageNumbers;
   }
 
   /**
@@ -1961,6 +1981,9 @@ export class Renderer {
    * 同帧同点的多个事件按固定 8 向错开落点(定死不掷随机,与 FX_KILL_DIRS 同一条口径)。
    */
   private spawnDmgNumber(kind: number, x: number, y: number, damage: number, ratio: number): void {
+    // 玩家关掉飘字 = **一个字都不生成**(而不是生成完再隐藏):飘字的成本在 Text 更新与
+    // 逐帧推进上,画出来再设 visible=false 只省下最后一步,等于关了个寂寞
+    if (!this.showDamageNumbers) return;
     if (this.dmgSpawnedThisFrame >= DMG_SPAWN_CAP) return;
     this.dmgSpawnedThisFrame++;
     const slot = this.dmgSlots[this.dmgCursor]!;
@@ -2157,7 +2180,10 @@ export class Renderer {
       this.shakeTrauma * Math.exp(-Math.max(0, dt) / SHAKE_DECAY_TAU),
     );
     this.shakePhase += Math.max(0, dt) * SHAKE_FREQUENCY;
-    const amplitude = this.shakeTrauma * this.shakeTrauma * SHAKE_PIXEL_SCALE;
+    // 玩家的震屏强度只乘在**振幅**上,不碰 trauma 的累积与衰减:
+    // 乘进 trauma 的话,关掉再打开会因为衰减常数被改写而留下一段"半强度"的过渡,
+    // 而振幅是每帧现算的纯输出 —— 拨到 0 当帧就绝对静止,拨回来当帧就恢复原样
+    const amplitude = this.shakeTrauma * this.shakeTrauma * SHAKE_PIXEL_SCALE * this.shakeScale;
     this.shakeX = Math.sin(this.shakePhase * 1.7) * amplitude;
     this.shakeY = Math.cos(this.shakePhase * 1.3) * amplitude;
   }

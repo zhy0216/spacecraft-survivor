@@ -15,6 +15,17 @@
  * 停不停、放不放大、什么时候恢复战斗一概不归它管(与 onGameOver 一字同源)。
  * 冻结世界要两句话才算数 —— run.paused 挡住下一次 advance,loop.halt() 让**本次** advance
  * 当场停手(回调是在 step 回调里响的,那一刻 while 还没走完)。
+ *
+ * 存档改版起,**开跑前的那一屏也只在这一层**:页面载入不再直接开打,而是
+ * 标题界面(继续 / 新航行 / 设置)→ 起手配置选择 → startRun。三条入口最后都汇进
+ * startRun 这一个装配点(读档多一条 restored 分支,见其参数),理由与首局/重开
+ * 不许各写一份是同一条:装配漏接一样,要等真人走到那条入口才看得见。
+ *
+ * **存档时机也只在这一层**(sim/runSave.ts 只提供纯粹的 capture/restore,它不知道"何时"):
+ * 一律挑**世界已经冻住的那些点** —— 升级时停 / 整备时停 / 暂停菜单 / 页面隐藏。
+ * 帧中不存:那一刻 dead 闩没清、contacts 没结算,而快照不存这些字段的前提正是
+ * "跨帧恒为初值"(runSave.ts 文件头第三类)。局终则反过来**删档**:
+ * 一局打完还留着半局存档,下次进来那颗「继续」通向的是一场已经结束的战斗。
  */
 import { Input } from './core/input';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
@@ -26,13 +37,24 @@ import { applyStartingLoadout } from './sim/loadout';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
 import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
+import { canSaveRun, captureRun, digestRunSnapshot } from './sim/runSave';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
 import { createHud, type HudUi } from './ui/hud';
 import { createLoadoutFlow } from './ui/loadoutFlow';
-import { createPauseMenu } from './ui/pauseMenu';
+import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
+import {
+  clearRunSnapshot,
+  loadRunSnapshot,
+  loadRunWorld,
+  saveRunSnapshot,
+} from './ui/runSaveStorage';
+import type { Settings } from './ui/settings';
+import { createSettingsMenu } from './ui/settingsMenu';
+import { applySettings, loadSettings, saveSettings } from './ui/settingsStorage';
+import { createTitleScreen } from './ui/titleScreen';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
@@ -50,6 +72,12 @@ const HITSTOP_MS = 45;
 
 async function boot(): Promise<void> {
   const input = new Input();
+  // 玩家设置(音量/震屏/飘字/顿帧):**页载第一件事就读并生效** —— 静音的玩家不该
+  // 在标题界面出现之前先被响一声。渲染层此刻还不存在,故先只灌音频那一半(applySettings
+  // 收 renderer 可缺席),Renderer.create 之后再整份重灌一次(见下面那句)。
+  // 它是整页唯一那一份设置(设置页与暂停菜单读的都是它),故是 let 而不是 const
+  let settings: Settings = loadSettings();
+  applySettings(settings);
   // 浏览器自动播放策略:AudioContext 只能由用户手势解锁。在首次键盘/点击的同步栈里 resume
   // 一次就摘掉监听(浏览器要求 resume 必须落在手势处理里;之后发声全靠已解锁的 ctx)。
   // 挂在 main 而不是 Input 里:输入管线不认识声音,音频只从事件出口消费(见 render/audio.ts)。
@@ -93,6 +121,8 @@ async function boot(): Promise<void> {
   // 这个初始 loop 从不会被 advance(run.paused 挡着),startRun 会立刻用本局的替换掉它
   let loop: FixedStepLoop = new FixedStepLoop(() => world.step(cmd));
   const renderer = await Renderer.create(world);
+  // 渲染层就位,把设置整份重灌一次 —— 这一次震屏强度与飘字开关才真的落到位
+  applySettings(settings, renderer);
 
   // 战斗 HUD 同样整页只建一次:固定屏幕空间的血条/残骸/计时/航段与威胁箭头都只改已有 DOM。
   // 重开走 setWorld,升级时停与结算的淡出则每渲染帧照 run.paused 同步,不另挂事件监听器。
@@ -152,21 +182,30 @@ async function boot(): Promise<void> {
 
   // 结算界面同样**只建一次**(理由同上:每局多挂一份 Enter 监听器 = 一次回车重开好几局),
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
-  const gameOver = createGameOverUi({ onRestart: restart, onRetry: retry });
+  // onTitle:局终之后回标题的出口。补的是流程死角 —— 玩家模式下 Esc 暂停菜单要求
+  // `!run.paused`,而局终后 run.paused 恒真,没有这颗按钮就只剩重开两条路(见 gameOver.ts)。
+  // 存档在 onGameOver 里已经删过,这里不必再管
+  const gameOver = createGameOverUi({ onRestart: restart, onRetry: retry, onTitle: toTitle });
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
   // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)。
   // 开发模式(?debug)挂 Tweakpane;玩家模式挂 Esc 暂停菜单 —— 战斗中的暂停/换局入口
   // 在玩家模式下只能从这里进,调试面板的暂停勾选与两个重开按钮玩家看不到(畅玩性)。
+  // 暂停菜单的句柄:设置页关掉后要弹回它(战斗中开的设置该回暂停,不该回标题)。
+  // 开发模式下没有暂停菜单(那边是 Tweakpane),故可空 —— settingsMenu 里用 `?.` 兜住
+  let pauseMenu: PauseMenuUi | null = null;
   if (DEBUG) {
     createDebugPanel(stats, run, { restart, retry });
   } else {
-    createPauseMenu({
+    pauseMenu = createPauseMenu({
       canPause: () => !run.paused,
       onPause: () => {
         // 暂停 = 下一次 advance 被挡住;本次没有 step 回调在跑(回调只在 ticker 的
         // advance 里),不必 loop.halt() —— 与升级/结算时停同一套口径,只多一行
         run.paused = true;
+        // 自动存档点之三:玩家主动暂停 = 最可能接着去干别的事的时刻。
+        // 世界此刻已冻(上一句),正是干净的存档时机
+        saveRun();
       },
       onResume: () => {
         run.paused = false;
@@ -178,8 +217,31 @@ async function boot(): Promise<void> {
       onRetry: () => {
         retry();
       },
+      // 设置页开在暂停菜单之上时,那一记 Esc 归设置页(见 pauseMenu.ts 的 blocked 注释)
+      blocked: () => settingsMenu.visible(),
+      onSettings: () => {
+        pauseMenu?.hide(); // 纯收起,世界继续冻着(hide 不触发 onResume)
+        settingsMenu.show();
+      },
+      onSaveAndQuit: () => {
+        // 存不上就**原地留在暂停菜单里**(返回 false,由菜单当场改口报错):
+        // 此刻退出会静默丢掉这一局,而玩家点这颗按钮的全部意图恰恰是"别丢"
+        if (!saveRun()) return false;
+        pauseMenu?.hide();
+        toTitle();
+        return true;
+      },
     });
   }
+
+  /**
+   * 这一局跑起来了没有。**存档的总闸**:boot 里那个预建的 World(标题界面背景里那艘
+   * 没出港的船)也是一个合法的、result === RUNNING 的世界,canSaveRun 会痛快地放行 ——
+   * 于是玩家在标题界面切一下浏览器标签,就会被存进一份 0 帧的"存档",
+   * 而它长得跟真存档一模一样,下次进来那颗「继续」通向的是一局根本没打过的仗。
+   * startRun 置真,局终与回标题置假。
+   */
+  let runActive = false;
 
   let lastChecksumTick = -SIM_HZ;
   // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)
@@ -196,6 +258,20 @@ async function boot(): Promise<void> {
   let announcedMask = 0;
 
   /**
+   * 存一次档。**只在世界冻着的那些点调用**(升级/整备时停、暂停菜单、页面隐藏) ——
+   * 帧中存会捞到 dead 闩没清的半帧状态,而快照不存那些字段的前提正是"跨帧恒为初值"
+   * (sim/runSave.ts 文件头第三类)。
+   *
+   * 三道闸各挡一种"存了等于害人"的情况:没跑起来的局(runActive)、已分胜负或已沉船的局
+   * (canSaveRun)、以及存储本身不可用(saveRunSnapshot 返回 false)。
+   * @returns 真的存上了没有 —— 暂停菜单的「保存并退出」据此决定是退出还是当场改口报错
+   */
+  function saveRun(): boolean {
+    if (!runActive || !canSaveRun(world)) return false;
+    return saveRunSnapshot(captureRun(world, { seed: runSeed, loadout: loadoutIndex }));
+  }
+
+  /**
    * 装配一局。首局与重开走的是同一条路,顺序有讲究:
    * 先换 world/loop 与挂钩(它们是这一局的本体),再把吃 World 引用的地方指过去
    * (渲染层的脏标记缓存 / 升级流程认的甲板 / HUD 读数 / 结算界面收起来),最后复位调试读数。
@@ -204,7 +280,7 @@ async function boot(): Promise<void> {
    * 升级流程留着旧 world → 点下去落进上一局那艘沉船,画面上什么都不发生;
    * 面板读数不复位 → checksum/tick 还挂在上一局的数上,"同 seed 可复现"当场没法验。
    */
-  function startRun(next: World): void {
+  function startRun(next: World, restored = false): void {
     // 一局的流水号(畅玩性,沉船爆炸的延迟结算用):换一局就 +1 —— 延迟回调里比对它,
     // 期间重开过的旧局结算直接作废,不会在"新一局"头上弹"上一局"的卡片
     runToken++;
@@ -212,7 +288,11 @@ async function boot(): Promise<void> {
     // 正式开局才套用起手配置。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
     // 而「这一局怎么开场」是 data/loadout.ts 的数值配置,经 sim/loadout 逐条填槽的唯一入口。
     // 20 号:套哪一套由 loadoutIndex 定(开局选择界面选完才走到这里,retry 原样沿用上一局的)
-    applyStartingLoadout(world, loadoutIndex);
+    //
+    // **读档进来的世界一律跳过这一句**(restored):它的槽位是存档里那一份 ——
+    // 再套一遍起手配置就是把玩家半局攒下的武器覆盖回开局那四门炮,而盘面看着还挺正常
+    // (船在、怪在、时间也对),是读档最惨烈也最难自查的一种失败
+    if (!restored) applyStartingLoadout(world, loadoutIndex);
     loop = new FixedStepLoop(() => {
       // 必须在每个逻辑帧边界重新取样:一帧一采才让"按住 A 的时长"精确对应转过的角度,
       // 掉帧补步时也照样一步一次,手感不随渲染帧率漂移。
@@ -222,6 +302,10 @@ async function boot(): Promise<void> {
       cmd.boost = input.isDown('Space');
       world.step(cmd);
     });
+    // 帧号对齐到世界的(新局恒 0,读档接着存档那一刻往下数):loop.tick 是面板与
+    // checksum 节流的游标,让它从 0 重数的话,读档后面板上的 tick 会与世界的 elapsed
+    // 差出整整一局 —— 而那个数正是核对确定性时唯一会被人盯着看的读数
+    loop.tick = world.tick;
 
     // 沉船那一刻的表现(畅玩性):爆炸演出 + 重震 + 爆炸音。**纯表现** —— 渲染层不碰 sim
     // 任何字段;这一帧稍后的 onGameOver 才暂停世界、推迟弹结算(见下面那句 setTimeout)。
@@ -243,7 +327,13 @@ async function boot(): Promise<void> {
       loop.halt();
       upgradeFlow.hide();
       refitFlow.hide();
-      // 剪影在渲染层只截一次,存档与结算界面共用同一张(渲染层抓不到就是 null,此时不入图鉴)
+      // 局终 = 删半局存档。留着它的话下次进标题那颗「继续」通向一场**已经结束**的战斗
+      // (读进去 result 早已落定,settleOutcome 的结论永不再变,当场又弹一次结算)。
+      // 排在结算之前:结算界面可能被延迟 SHIP_DEATH_FX_TIME 秒才弹,而"这一局结束了"
+      // 在此刻就已经是事实,删档不该等演出
+      runActive = false;
+      clearRunSnapshot();
+      // 剪影在渲染层只截一次,元进度与结算界面共用同一张(渲染层抓不到就是 null,此时不入图鉴)
       const silhouette = renderer.captureShipSilhouette();
       // 19 号:一局结束 → 结算进元进度。**条件达成即记,不看胜负**:失败局照常入档
       // (progress.ts 口径),wins 是否 +1 由 evaluateRun 自己判,这里只摘 runStats 读数。
@@ -317,6 +407,11 @@ async function boot(): Promise<void> {
       run.paused = true;
       loop.halt();
       upgradeFlow.show();
+      // 自动存档点之一。挑这里而不是"每隔 N 秒存一次":世界此刻已经被上面两句冻住,
+      // 而定时存档必然落在帧中(见 saveRun 的口径)。三选一大约每分钟弹一次,
+      // 密度正好 —— 意外关页面最多丢一次升级的进度。
+      // **必须排在 halt 之后**:不然存下来的是"这一帧还没停稳"的世界
+      saveRun();
     };
 
     // 航段跨过两分钟边界后，World 已经停住下一段的出怪；这里负责把当前固定步当场截住，
@@ -325,6 +420,9 @@ async function boot(): Promise<void> {
       run.paused = true;
       loop.halt();
       refitFlow.show(segmentIndex);
+      // 自动存档点之二(理由同 onUpgradeOffer)。航段整备是这一局最像"关卡边界"的地方,
+      // 每两分钟一次 —— 玩家心里的"存档点"多半就是这里
+      saveRun();
     };
 
     // 吃 World 引用的地方(渲染层的脏标记缓存 / 升级流程 / HUD),各自的理由见它们自己那边。
@@ -337,25 +435,30 @@ async function boot(): Promise<void> {
 
     // UI 读数复位。**不动 tuning、不动 run.timeScale**:
     // 那些是玩家自己拖出来的调参状态,重开一局不该顺手替他复原
-    stats.tick = 0;
+    // 读数一律**从新世界现读**而不是写死 0:新局那些值本来就是 0,而读档进来的世界
+    // 带着半局的账(击杀 300、残骸 40)—— 写死 0 的话面板会先报一屏假读数,
+    // 更要命的是下面两个增量基准会以为"这一帧刚杀了 300 只"
+    stats.tick = world.tick;
     stats.checksum = '—';
     stats.hp = world.ship.hp;
     stats.maxHp = world.ship.maxHp;
     stats.turnRate = world.turnRate;
     stats.seed = runSeed;
-    stats.kills = 0;
-    stats.scrap = 0;
-    // 新局基准 = 新世界的 scrap(当前为 0):首帧增量检测零出发,不会误响拾取音
+    stats.kills = world.kills;
+    stats.scrap = world.scrap;
+    // 新局基准 = 新世界的 scrap(新局 0 / 读档是存档那一刻的余额):首帧增量检测零出发,
+    // 不会误响拾取音
     lastScrap = world.scrap;
-    // hitstop 的增量基准与冻结窗同样属于上一局:新局清零,首帧击杀照常触发一记顿挫
-    // (留着旧基准会以为"新局第一秒就杀了一只",或把上一局的冻结窗带进新局)
-    lastKills = 0;
+    // hitstop 的增量基准与冻结窗同样属于上一局:换局对齐到新世界、冻结窗清零。
+    // **基准取 world.kills 而不是 0**:读档时它是几百,留 0 的话首帧就会被判成"刚刚连杀",
+    // 玩家一进游戏先吃一记莫名其妙的顿帧
+    lastKills = world.kills;
     hitstopUntil = 0;
     // 加速音效的沿检测基准同属上一局:新世界 boostTime 必然是 0,基准清回 false 对齐
     lastBoostActive = false;
     // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
     announcedMask = 0;
-    stats.upgrades = 0;
+    stats.upgrades = world.upgrades;
     stats.upgradeCost = world.upgradeCost;
     stats.segment = world.wave.segment;
     stats.segTime = world.wave.segTime;
@@ -365,6 +468,28 @@ async function boot(): Promise<void> {
     run.paused = false;
     // 上一局若停在升级/结算态,HUD 此刻仍是淡出的;新局装配完成就当场恢复,不等首个 ticker。
     hud.setPaused(false);
+    // 这一局开始接受存档(见 runActive 的声明):标题界面上那个预建的空世界不算一局
+    runActive = true;
+    // 开一局**新的**就把旧存档删掉:那份快照指向的是一场此后再也回不去的航行,
+    // 留着它只会让下次进标题时那颗「继续」通向一局玩家已经亲手放弃过的战斗。
+    // 读档进来的这一局反过来不删 —— 它本来就是那份存档
+    if (!restored) clearRunSnapshot();
+
+    // 读档回到一个**停在时停里**的世界:升级三选一与航段整备恰恰是最自然的存档点
+    // (世界本来就冻着,main 也正是在那两处存的档)。此时不能直接恢复战斗 ——
+    // 候选卡还挂在 world.offer 上没结算,直接开跑就是"卡片凭空消失、这一次升级白欠"。
+    // 判据取世界自己的字段而不是另存一个 UI 状态位:offer 与 refitPending 都进 checksum,
+    // 它们就是"这一局欠玩家一次选择"的唯一真相,而 UI 状态位存了还会与它们打架
+    if (restored) {
+      if (world.refitPending) {
+        run.paused = true;
+        refitFlow.show(world.wave.segment);
+      } else if (world.offer.length > 0) {
+        run.paused = true;
+        upgradeFlow.show();
+      }
+      hud.setPaused(run.paused);
+    }
 
     // 开发用全局句柄:浏览器控制台里可直接 __game.run.paused = true / __game.world.checksum()
     // / __game.input.desiredHeading() 确认键位真的被读到 / __game.restart() 手动重开。
@@ -380,8 +505,15 @@ async function boot(): Promise<void> {
       hud,
       gameOver,
       loadoutFlow,
+      titleScreen,
+      settingsMenu,
       restart,
       retry,
+      // 存档一路都能在控制台里手验:__game.saveRun() 存一次、__game.toTitle() 回标题
+      // 看那颗「继续」在不在、__game.clearRunSnapshot() 清档复现"新玩家第一次进游戏"
+      saveRun,
+      toTitle,
+      clearRunSnapshot,
     };
   }
 
@@ -432,14 +564,103 @@ async function boot(): Promise<void> {
     },
   });
 
-  // 首局:起手配置选择界面先行(GDD §10「起手配置…可在开局选择」)。
-  // 首局也走选择界面而不是静默默认「标准起手」:解锁行军从第一把起就看得见
-  // ("下一把的新理由"与主流程同屏),且首局与重开从此共用同一条装配路径。
-  // 选择不消耗 rng、不推进 sim —— 挑多久都不影响「?seed= 复现第一局」的确定性口径。
+  /**
+   * 回标题界面。**存档在调用之前由调用方决定存不存** —— 「保存并退出」先存再回,
+   * 而局终是删档后回:两条路对存档的处置正好相反,故不塞进本函数。
+   * 世界继续冻着(run.paused 恒真):标题界面背后那张静止的战场就是刚才那一局,
+   * 直到玩家挑好下一条路才被换掉。
+   */
+  function toTitle(): void {
+    runActive = false;
+    run.paused = true;
+    gameOver.hide();
+    upgradeFlow.hide();
+    refitFlow.hide();
+    loadoutFlow.hide();
+    titleScreen.show(titleDigest());
+  }
+
+  /**
+   * 此刻有没有可继续的存档。**每次都重读 localStorage** 而不是缓存一个布尔:
+   * 刚才那一步可能刚存下一份(保存并退出)、也可能刚把它删掉(局终),
+   * 读一次现成的好过在调用点各自推断"现在应该有没有档"—— 那种推断错一处,
+   * 症状就是标题界面上多出/少掉一颗「继续」,而它恰恰是最要命的那颗按钮
+   */
+  function titleDigest(): ReturnType<typeof digestRunSnapshot> | null {
+    const snap = loadRunSnapshot();
+    return snap === null ? null : digestRunSnapshot(snap);
+  }
+
+  // 设置页:**整页只建一次、标题与暂停两个入口共用**(见 ui/settingsMenu.ts 文件头)。
+  // 改一项就落盘 + 整份重灌到各落点 —— 没有"改了没保存"的中间态。
+  // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):战斗中开的就弹回暂停菜单,
+  // 否则回标题 —— 判据取 runActive 而不是"上次谁调的 show",少一个必须两处同步的状态位
+  const settingsMenu = createSettingsMenu({
+    get: () => settings,
+    onChange: (next) => {
+      settings = next;
+      saveSettings(settings);
+      applySettings(settings, renderer);
+    },
+    onClose: () => {
+      if (runActive) pauseMenu?.show();
+      else titleScreen.show(titleDigest());
+    },
+  });
+
+  /**
+   * 标题界面(进游戏的第一屏)。三条出口:
+   *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不套起手配置**);
+   *   新航行 —— 走原来那条起手配置选择,选完开新局;
+   *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来。
+   * 读档失败(存档损坏 / 存储不可用)不弹错误框,直接退回"没有存档"的标题:
+   * loadRunWorld 已经把读不出来的档删掉了,玩家再点一次就是一颗干净的「开始航行」
+   */
+  const titleScreen = createTitleScreen({
+    onContinue: () => {
+      const loaded = loadRunWorld();
+      if (loaded === null) {
+        titleScreen.show(null);
+        return;
+      }
+      // 存档里带着开跑前那两样输入(种子与起手配置):不接回来的话,读档后再点
+      // 「再试一局」会用标题界面那个默认种子重开 —— 那是另一局
+      runSeed = loaded.snapshot.seed;
+      loadoutIndex = loaded.snapshot.loadout;
+      firstRun = false; // 预建的那个空 World 就此作废,重开走"新建"那条
+      startRun(loaded.world, true);
+    },
+    onNewRun: () => {
+      run.paused = true;
+      loadoutFlow.show(progress.unlockMask);
+    },
+    onSettings: () => {
+      titleScreen.hide();
+      settingsMenu.show();
+    },
+  });
+
+  // 进游戏第一屏:标题界面(继续 / 新航行 / 设置),而不是直接开打。
+  // 起手配置选择退到「新航行」之后 —— 它仍是开新局的必经一步(GDD §10「起手配置…可在开局选择」),
+  // 只是不再是页面载入后玩家看到的第一样东西。
   // **先冻结再弹**:此刻 ticker 已挂上(见 boot 末尾),run.paused 挡住 loop.advance,
   // 选择期间世界停在首帧,选完 startRun 收尾时一并恢复
   run.paused = true;
-  loadoutFlow.show(progress.unlockMask);
+  toTitle();
+
+  // 页面隐藏时自动存档(切标签页 / 切到后台 / 关页面)。**用 visibilitychange 而不是
+  // beforeunload**:移动端与现代浏览器的标签页回收根本不保证触发 beforeunload,
+  // 而 visibilitychange→hidden 是官方推荐的"最后一次可靠机会"。
+  // pagehide 再兜一道(桌面端直接关窗时更稳)。两条路都只是再存一次同一份快照,
+  // 重复存不产生任何副作用(saveRun 是幂等的纯读 + 覆盖写)。
+  // 时停/暂停期间照存:世界冻着,正是最干净的存档时机
+  const saveOnLeave = (): void => {
+    saveRun();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveOnLeave();
+  });
+  window.addEventListener('pagehide', saveOnLeave);
 
   renderer.app.ticker.add((ticker) => {
     // 击杀 hitstop(畅玩性):击杀数爬升的那一帧立一个 ~50ms 的冻结窗。
@@ -448,7 +669,14 @@ async function boot(): Promise<void> {
     // 那两个状态 run.paused = true,世界本来就不动,再立冻结窗只会把恢复战斗的时间点往后推。
     // 封顶两道:同帧多杀(kills 一次跳 N)只算一次(增量检测);冻结窗内再杀不续窗
     // (`>= hitstopUntil` 挡住了) —— 8 杀/秒也不会变成永久慢动作
-    if (!run.paused && world.kills > lastKills && performance.now() >= hitstopUntil) {
+    // settings.hitstop 是玩家的开关(ui/settings.ts):关掉后**一个冻结窗都不立**,
+    // 而不是立了再跳过 —— 后者会让 hitstopUntil 一直挂着未来的时刻,拨回来时还要等它过期
+    if (
+      settings.hitstop &&
+      !run.paused &&
+      world.kills > lastKills &&
+      performance.now() >= hitstopUntil
+    ) {
       hitstopUntil = performance.now() + HITSTOP_MS;
     }
     lastKills = world.kills;

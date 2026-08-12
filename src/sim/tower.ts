@@ -26,12 +26,16 @@
  * 收成 3 个(数值/支援/法令),effectiveFireInterval 的 fireMul 参数保留为恒 1 的保留位
  * (将来若再做"全局减速"类效果,从那个位置进,不必改调用点)。
  */
+import { SIM_DT } from '../core/loop';
 import {
+  FX_BULLET,
+  FX_MORTAR,
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
   type TowerDef,
   towerAoeDamage,
+  towerBurst,
   towerChargeTime,
   towerDamage,
   towerFireInterval,
@@ -402,4 +406,180 @@ export function effectiveDamage(def: TowerDef, level: number): number {
 export function effectiveAoeDamage(def: TowerDef, level: number): number {
   const scale = tuning.towerDamageScale;
   return towerAoeDamage(def, level) * (scale > 0 ? scale : 0);
+}
+
+/**
+ * 一次开火实际打出几发 —— sim/turretFire.ts 与 HUD 理论 DPS 的**同一份**口径。
+ * 两个来源相乘:恒发数(def.burst,风暴机炮"双管齐射"/焦土骤雨"三连发"的合成签名,0 = 恒 1)
+ * × Lv3 跳变(towerBurst,机炮双管)。今天两档不会同时非 1(合成武器不叠等级跳变,
+ * 基塔不带恒发),乘积与"各自单独生效"逐位一致;将来真有塔两档都占,乘法也是唯一说得通的叠法
+ * (恒发的每一管都吃跳变)。FX_MORTAR 只认恒发数(fireMortar 的口径:三连发是同一次蓄力的表现,
+ * 不叠等级跳变);光束/链电/磁轨恒 1(一次结算就是"一发",代价按发算)。
+ */
+export function slotShotsPerFire(def: TowerDef, level: number): number {
+  const constant = def.burst > 0 ? def.burst : 1;
+  if (def.fx === FX_BULLET) return constant * towerBurst(def, level);
+  if (def.fx === FX_MORTAR) return constant;
+  return 1;
+}
+
+/**
+ * 这个槽的**理论持续 DPS**(对单目标)—— HUD 火力面板的那一个固定数字。
+ * "固定"指它只是 (等级, 支援聚合, 法令, tuning) 的纯函数:升级/买支援/拖面板才变,
+ * 打没打中不变 —— 与实时账(World.dpsOf 的平滑读数)是两码事,后者只喂局末战报的峰值。
+ * "持续"指含整个节流周期:弹药系摊上装填硬停顿,过热系摊上贪连射的锁死罚时,充能系就是攒-放
+ * —— 三套机制的取舍在这一个数字里可比(点防 18.5 > 机炮 13.2,虽然单发更轻)。
+ * "单目标"指链跳/穿透/AoE 溅射一律不计:多目标收益随场面波动,不属于"固定数值"的口径
+ * (迫击炮取落点伤害 —— 单目标吃的就是那一份,def.damage 恒 0)。
+ * 数值全走 slot* 包装与 effective*(支援/法令/tuning 各过各的门),别处不许再算第二遍。
+ */
+export function slotSustainedDps(
+  slot: WeaponSlot,
+  def: TowerDef,
+  supportBuffs: SupportBuffs,
+  edictAmmoMul = 1,
+  edictHeatMaxMul = 1,
+): number {
+  const shots = slotShotsPerFire(def, slot.level);
+  const dmg = def.fx === FX_MORTAR ? effectiveAoeDamage(def, slot.level) : effectiveDamage(def, slot.level);
+  const perFire = shots * dmg;
+  let dps: number;
+
+  switch (def.throttle) {
+    case THR_AMMO: {
+      const interval = slotFireInterval(slot, def, supportBuffs, 1, edictAmmoMul);
+      if (!(interval > 0)) return 0; // 表被改坏(充能系才许 0 间隔),不除 0
+      const reload = slotReload(slot, def, supportBuffs);
+      const magazine = towerMagazine(def, slot.level);
+      if (!(reload > 0) || !(magazine > 0)) {
+        dps = perFire / interval; // 无装填(风暴机炮的买断/表调 0):硬停顿整条消失,纯射速
+      } else {
+        // 一整个弹夹周期:开火在 0, I, …, (F-1)I(每次耗 shots 发,F = ⌈M/shots⌉),
+        // 见底那一刻起装填,下一夹的第一发等 max(装填, 冷却) —— 两者并行推进(stepThrottle 口径)
+        const fires = Math.ceil(magazine / shots);
+        dps = (fires * perFire) / ((fires - 1) * interval + Math.max(reload, interval));
+      }
+      break;
+    }
+
+    case THR_HEAT: {
+      const interval = slotFireInterval(slot, def, supportBuffs);
+      if (!(interval > 0)) return 0;
+      const burstDps = perFire / interval;
+      // 满速连射的净热速率:≤ 0 = 收支平衡,永不停火(激光半速点射的分水岭、极光"无过热"签名)
+      const heatRate = (def.heatPerShot * shots) / interval - def.coolPerSec;
+      const heatMax = slotHeatMax(slot, def, supportBuffs, edictHeatMaxMul);
+      if (heatRate <= 0 || !(heatMax > 0) || !(def.overheatLock > 0)) {
+        dps = burstDps;
+      } else {
+        // 稳态周期:0 → 顶要 heatMax/净速率 秒(锁死到点热量归零,每一轮都从零起手),罚 overheatLock 秒
+        const firing = heatMax / heatRate;
+        dps = (burstDps * firing) / (firing + def.overheatLock);
+      }
+      break;
+    }
+
+    case THR_CHARGE: {
+      // 攒-放的全部节奏就是蓄力时长;表调 0 = 当场满充(stepThrottle 兜底),封在一帧一发
+      const t = slotChargeTime(slot, def, supportBuffs);
+      dps = perFire / (t > SIM_DT ? t : SIM_DT);
+      break;
+    }
+
+    default: {
+      const interval = slotFireInterval(slot, def, supportBuffs);
+      dps = interval > 0 ? perFire / interval : 0;
+      break;
+    }
+  }
+  return Number.isFinite(dps) && dps > 0 ? dps : 0;
+}
+
+// —— 下一次发射读数(HUD 火力面板的 CD 列)——
+// 三套节流各自的"还要等多久":装填/锁死/蓄力是玩家该盯的三种硬等待,普通冷却只是射速的间隙。
+export const FIRE_READY = 0; // 当下就能开火
+export const FIRE_COOLDOWN = 1; // 射击间隔未走完
+export const FIRE_RELOAD = 2; // 弹药系:装填中
+export const FIRE_LOCKED = 3; // 过热系:锁死罚时中
+export const FIRE_CHARGING = 4; // 充能系:蓄力中
+
+export interface FireReadout {
+  /** FIRE_* */
+  state: number;
+  /** 距下一次能开火的秒数(READY 恒 0) */
+  seconds: number;
+  /** 就绪进度 0..1(1 = 可开火;HUD 的小条按它填充) */
+  ratio: number;
+}
+
+function clamp01(v: number): number {
+  return v > 0 ? (v < 1 ? v : 1) : 0;
+}
+
+/**
+ * 这个槽"下一次发射"读数,写进调用方给的 out(HUD 每帧逐槽问,零分配)。
+ * 判序与 canFire 一字同源(装填/锁死/蓄满是各系的放行门,冷却排在其后):
+ * 读数与放行判据分叉的话,面板印着"就绪"炮却哑着,那读数就成了谎话。
+ * 进度分母全走 slot* 包装(当前等级/支援/法令下的实际时长),与 stepThrottle 的逐帧夹取同源。
+ */
+export function slotFireReadout(
+  slot: WeaponSlot,
+  def: TowerDef,
+  supportBuffs: SupportBuffs,
+  out: FireReadout,
+  edictAmmoMul = 1,
+): FireReadout {
+  out.state = FIRE_READY;
+  out.seconds = 0;
+  out.ratio = 1;
+
+  switch (def.throttle) {
+    case THR_AMMO:
+      if (slot.reloadLeft > 0) {
+        const max = slotReload(slot, def, supportBuffs);
+        out.state = FIRE_RELOAD;
+        out.seconds = slot.reloadLeft;
+        out.ratio = max > 0 ? clamp01(1 - slot.reloadLeft / max) : 0;
+      } else if (slot.cooldown > 0) {
+        const max = slotFireInterval(slot, def, supportBuffs, 1, edictAmmoMul);
+        out.state = FIRE_COOLDOWN;
+        out.seconds = slot.cooldown;
+        out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;
+      }
+      break;
+
+    case THR_HEAT:
+      if (slot.coolLock > 0) {
+        out.state = FIRE_LOCKED;
+        out.seconds = slot.coolLock;
+        out.ratio = def.overheatLock > 0 ? clamp01(1 - slot.coolLock / def.overheatLock) : 0;
+      } else if (slot.cooldown > 0) {
+        const max = slotFireInterval(slot, def, supportBuffs);
+        out.state = FIRE_COOLDOWN;
+        out.seconds = slot.cooldown;
+        out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;
+      }
+      break;
+
+    case THR_CHARGE:
+      if (slot.charge < 1) {
+        out.state = FIRE_CHARGING;
+        out.seconds = clamp01(1 - slot.charge) * slotChargeTime(slot, def, supportBuffs);
+        out.ratio = clamp01(slot.charge);
+      }
+      break;
+
+    default:
+      if (slot.cooldown > 0) {
+        const max = slotFireInterval(slot, def, supportBuffs);
+        out.state = FIRE_COOLDOWN;
+        out.seconds = slot.cooldown;
+        out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;
+      }
+      break;
+  }
+  // 坏状态(NaN 计时器)不外漏成 NaN 文本/宽度:读数一律有限
+  if (!Number.isFinite(out.seconds) || out.seconds < 0) out.seconds = 0;
+  if (!Number.isFinite(out.ratio)) out.ratio = 0;
+  return out;
 }

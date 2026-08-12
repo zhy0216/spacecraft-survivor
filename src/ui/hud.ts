@@ -7,13 +7,23 @@
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
-import { EDICTS, edictMask } from '../data/edicts';
+import { edictAmmoFireRateMul, edictHeatMaxMul, EDICTS, edictMask } from '../data/edicts';
 import { TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { audioBus } from '../render/audio';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { tuning } from '../sim/config';
+import {
+  FIRE_CHARGING,
+  FIRE_COOLDOWN,
+  FIRE_LOCKED,
+  FIRE_READY,
+  FIRE_RELOAD,
+  type FireReadout,
+  slotFireReadout,
+  slotSustainedDps,
+} from '../sim/tower';
 import type { Enemy, World } from '../sim/world';
 import { formatDuration } from './gameOver';
 
@@ -61,40 +71,54 @@ const TIMER_CSS =
 const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
 
 /**
+ * 左列纵队:vitals 血条面板 + 星币/法令/图鉴/火力四块读数,住在顶栏 grid 的第一格里、
+ * 一根 flex 纵列自动堆叠(间距 14px)。此前四块各自 absolute 记 top 偏移,vitals 加一行
+ * 就要手改整串数字 —— 加速条上线时那笔账没跟上,星币面板直接压进了血条面板;
+ * 法令隐藏时中段还留一个空洞。flex 纵列把这两类失配一并消灭:增行/隐藏,下面的自动跟上。
+ */
+const LEFT_COL_CSS = 'display:flex;flex-direction:column;gap:14px;align-items:stretch;';
+
+/**
  * 星币读数(16 号):与残骸读数同族(同一套 PANEL/LABEL_ROW/LABEL/VALUE 样式)的独立读数,
- * 但没有进度轨道 —— 星币只有余额、没有"目标费用"可填。贴在 vitals 面板正下方
- * (面板顶 48 + 三行面板高:行 17.4×3 + 轨道 10×3 + gap 7×2 + padding 16 ≈ 112 + 间距 14 = 174;
- * 第三行是加速技能的冷却条);vitals 将来加行需同步改这里。
+ * 但没有进度轨道 —— 星币只有余额、没有"目标费用"可填。位置由左列纵队给,不自带偏移。
  */
-const STARCOINS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:174px;`;
+const STARCOINS_CSS = PANEL_CSS;
 
 /**
- * 法令徽记(18 号):与星币读数同族的面板,叠在它正下方(top 174 + 面板高 ≈ 34 + 间距 14 = 222),
- * 一行印出**已持有**法令的名字 —— "所见即所得":抽到哪条,这里立刻多出哪个名字
- * (与支援连线的同级口径:画面即真相,不另开菜单去翻)。
- * 名字直取 data/edicts(ui 不抄第二份);无法令时整体隐藏(display:none),持有才亮。
+ * 法令徽记(18 号):左列第二块读数,一行印出**已持有**法令的名字 —— "所见即所得":
+ * 抽到哪条,这里立刻多出哪个名字(与支援连线的同级口径:画面即真相,不另开菜单去翻)。
+ * 名字直取 data/edicts(ui 不抄第二份);无法令时整体隐藏(display:none),持有才亮,
+ * 纵队里下面的面板自动补位。
  */
-const EDICTS_CSS = `${PANEL_CSS}position:absolute;left:48px;top:222px;display:none;`;
+const EDICTS_CSS = `${PANEL_CSS}display:none;`;
 
 /**
- * 图鉴读数(19 号):与星币/法令同族的面板,叠在法令徽记正下方
- * (top 222 + 面板高 ≈ 34 + 间距 14 = 270)。一行"图鉴 n/总":
- * 已解锁计数 = world.unlockMask 的置位数(位 i = UNLOCKS[i],与 World 构造时
- * 喂进来的 progress.unlockMask 同编码),总数直取 UNLOCKS.length ——
- * 每帧 sync 现算,重开换世界(setWorld → sync)当帧跟上,HUD 不需要单独接进度引用。
+ * 图鉴读数(19 号):左列第三块。一行"图鉴 n/总":已解锁计数 = world.unlockMask 的置位数
+ * (位 i = UNLOCKS[i],与 World 构造时喂进来的 progress.unlockMask 同编码),
+ * 总数直取 UNLOCKS.length —— 每帧 sync 现算,重开换世界(setWorld → sync)当帧跟上,
+ * HUD 不需要单独接进度引用。
  */
-const COLLECTION_CSS = `${PANEL_CSS}position:absolute;left:48px;top:270px;`;
+const COLLECTION_CSS = PANEL_CSS;
 
 /**
- * 火力统计面板:左列第四块,叠在图鉴正下方(top 270 + 面板高 ≈ 34 + 间距 14 = 318)。
- * 行结构:击杀数 + 总 DPS 两行常驻,其下每**持有的武器型**一行(名字 Lv ×数量 | 实时 DPS)。
- * DPS 读 world.dpsOf(sim 侧 2.5s 一阶平滑,与威胁罗盘同族的纯读数);同型多把合并成一行
- * (dpsOf 按型归账,逐槽出行会把同一份 DPS 印两遍)。行节点按武器槽上限只建一次,
- * 每帧改 textContent 与 display —— 与整页其余节点同一条"永不重建 DOM"的口径。
+ * 火力统计面板:左列末块。行结构:击杀数 + 总 DPS 两行常驻,其下每**持有的武器型**一格:
+ * 一行"名字 Lv ×数量 | 下一次发射 | 理论 DPS" + 一根就绪小条。
+ * DPS 是 sim/tower 的 slotSustainedDps —— **固定数值**(等级/支援/法令/tuning 的纯函数,
+ * 含装填/过热/充能整周期的单体持续口径),不随场面波动;实时账只喂局末战报的峰值。
+ * 下一次发射读数走 slotFireReadout(与 canFire 判序同源),装填/过热/充能各配一色。
+ * 同型多把合并成一格印 ×N(DPS 逐槽求和,发射读数取最快就绪那把)。
+ * 格节点按武器槽上限只建一次,每帧改 textContent 与 display —— 整页"永不重建 DOM"的口径。
  */
-const FIREPOWER_CSS = `${PANEL_CSS}position:absolute;left:48px;top:318px;display:flex;flex-direction:column;gap:5px;`;
+const FIREPOWER_CSS = `${PANEL_CSS}display:flex;flex-direction:column;gap:5px;`;
+/** 武器格的就绪小条:比 vitals 的 5px 轨道再细一档 —— 是行内读数,不是主条 */
+const FIRE_TRACK_CSS =
+  `height:3px;margin-top:3px;overflow:hidden;border-radius:999px;background:rgba(43,74,110,.35);`;
 /** 加速技能冷却条的填充色:推进器青绿,与 HP 青/星币金/威胁红都分得开 */
 const BOOST_COLOR = '#8ef2c0';
+/** 过热锁死的读数色:全 HUD 唯一的暖色 —— GDD §12 把暖色只留给"拒绝/过热"这类小面积读数 */
+const HEAT_WARN_COLOR = '#ff9a5c';
+/** 充能读数色:磁轨系的亮靛(与就绪的 OK 蓝、冷却的灰蓝一眼分得开,仍在冷色域) */
+const CHARGE_COLOR = '#8a96ff';
 
 /**
  * 战术雷达(右下角):一块圆形 canvas,每帧 2D 重绘 —— 怪群/精英/Boss/经验掉落的方位一览。
@@ -240,6 +264,49 @@ export function formatDps(v: number): string {
   if (n < 0.05) return '0';
   return n < 10 ? n.toFixed(1) : String(Math.round(n));
 }
+
+/**
+ * 下一次发射读数排版:三种硬等待(装填/过热/充能)带状态前缀,普通冷却只印秒
+ * (射速的间隙不值得占字),就绪印"就绪"。秒数一位小数 —— 与加速条同一档读数精度。
+ */
+export function fireReadoutText(state: number, seconds: number): string {
+  const sec = `${finiteOrZero(seconds).toFixed(1)}s`;
+  switch (state) {
+    case FIRE_RELOAD:
+      return `装填 ${sec}`;
+    case FIRE_LOCKED:
+      return `过热 ${sec}`;
+    case FIRE_CHARGING:
+      return `充能 ${sec}`;
+    case FIRE_COOLDOWN:
+      return sec;
+    default:
+      return '就绪';
+  }
+}
+
+/** 发射读数配色:文本与就绪小条同色 —— 过热是全 HUD 唯一的暖色,其余全在冷色域 */
+export function fireReadoutColor(state: number): string {
+  switch (state) {
+    case FIRE_RELOAD:
+      return SCRAP_COLOR;
+    case FIRE_LOCKED:
+      return HEAT_WARN_COLOR;
+    case FIRE_CHARGING:
+      return CHARGE_COLOR;
+    case FIRE_COOLDOWN:
+      return IDLE_COLOR;
+    default:
+      return OK_COLOR;
+  }
+}
+
+/**
+ * slotFireReadout 的模块级暂存两枚:scratch 逐槽问,best 存"同型里最快就绪那把"
+ * (HUD 每帧 4 槽 × 2 次比较,不逐槽 new;单线程 sync 内独占,与 radarScratch 同一条纪律)
+ */
+const fireScratch: FireReadout = { state: FIRE_READY, seconds: 0, ratio: 1 };
+const fireBest: FireReadout = { state: FIRE_READY, seconds: 0, ratio: 1 };
 
 export interface BoostReadout {
   /** 数值区文本:加速中 / 就绪 / 剩余冷却秒 */
@@ -424,8 +491,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
   const hp = createBar(vitals, '船体 HP', HP_COLOR);
   const scrap = createBar(vitals, '升级残骸', SCRAP_COLOR);
-  // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"。
-  // 改行数记得同步 STARCOINS_CSS 那笔位置账
+  // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
   const boost = createBar(vitals, '加速 [空格]', BOOST_COLOR);
 
   const timer = document.createElement('div');
@@ -434,8 +500,6 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   const segment = document.createElement('div');
   segment.style.cssText = SEGMENT_CSS;
   const segmentBar = createBar(segment, '航段进度', OK_COLOR);
-
-  top.append(vitals, timer, segment);
 
   const threat = document.createElement('div');
   threat.style.cssText = THREAT_CSS;
@@ -527,8 +591,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   collectionRow.append(collectionLabel, collectionValue);
   collection.appendChild(collectionRow);
 
-  // 火力统计面板:击杀 + 总 DPS 两行常驻,加上按武器槽上限预建的型号行(初始全藏,
-  // 每帧按持有情况点亮)。行结构复用 LABEL_ROW/LABEL/VALUE 三件套,与整列同族
+  // 火力统计面板:击杀 + 总 DPS 两行常驻,加上按武器槽上限预建的武器格(初始全藏,
+  // 每帧按持有情况点亮)。格 = 一行三段(名字 | 下一次发射 | 理论 DPS)+ 一根就绪小条
   const firepower = document.createElement('div');
   firepower.style.cssText = FIREPOWER_CSS;
   firepower.title = '火力统计';
@@ -546,11 +610,34 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   }
   const killsRow = statRow('击杀', VALUE_COLOR);
   const totalDpsRow = statRow('总 DPS', OK_COLOR);
-  const weaponRows: { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement }[] = [];
+  interface WeaponBox {
+    box: HTMLDivElement;
+    label: HTMLSpanElement;
+    cd: HTMLSpanElement;
+    value: HTMLSpanElement;
+    fill: HTMLDivElement;
+  }
+  const weaponBoxes: WeaponBox[] = [];
   for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-    const r = statRow('', VALUE_COLOR);
-    r.row.style.display = 'none';
-    weaponRows.push(r);
+    const box = document.createElement('div');
+    box.style.display = 'none';
+    const row = document.createElement('div');
+    row.style.cssText = LABEL_ROW_CSS;
+    const label = document.createElement('span');
+    label.style.cssText = LABEL_CSS;
+    const cd = document.createElement('span');
+    cd.style.cssText = `color:${IDLE_COLOR};white-space:nowrap;`;
+    const value = document.createElement('span');
+    value.style.cssText = VALUE_CSS;
+    row.append(label, cd, value);
+    const track = document.createElement('div');
+    track.style.cssText = FIRE_TRACK_CSS;
+    const fill = document.createElement('div');
+    fill.style.cssText = FILL_CSS;
+    track.appendChild(fill);
+    box.append(row, track);
+    firepower.appendChild(box);
+    weaponBoxes.push({ box, label, cd, value, fill });
   }
 
   // 解锁 toast(19 号):初始隐藏,toast() 点亮并计时自动收回 —— 与升级/改造流程的
@@ -592,7 +679,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     typeof radar.getContext === 'function' ? radar.getContext('2d') : null;
   if (!radarCtx) radar.style.display = 'none';
 
-  root.append(top, threat, warn, muteBtn, elite, boss, starCoins, edicts, unlockToast, collection, firepower, radar, vignette);
+  // 左列纵队进顶栏 grid 第一格:vitals 在头,四块读数按序堆下去 —— 位置全交给 flex,
+  // 不再有任何一块自记 top 偏移(星币压血条那类失配从结构上消灭)
+  const leftCol = document.createElement('div');
+  leftCol.style.cssText = LEFT_COL_CSS;
+  leftCol.append(vitals, starCoins, edicts, collection, firepower);
+  top.append(leftCol, timer, segment);
+
+  root.append(top, threat, warn, muteBtn, elite, boss, unlockToast, radar, vignette);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -651,20 +745,25 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     }
     collectionValue.textContent = `${unlocked}/${UNLOCKS.length}`;
 
-    // 火力统计:击杀直读,DPS 逐**持有型**读 world.dpsOf(sim 侧平滑好的账,ui 不自己攒)。
-    // 同型多把(三合一凑数途中)合并成一行印 ×N:dpsOf 按型归账,逐槽出行会把同一份印两遍。
-    // 行数上限 = 武器槽数,故这两层 O(4×4) 的小循环没有分配、没有排序
+    // 火力统计:击杀直读;DPS 是 slotSustainedDps 的**理论固定值**(逐槽算、同型求和),
+    // 下一次发射读数走 slotFireReadout,同型多把取"最快就绪那把"(下一发确实从它出膛)。
+    // 同型合并成一格印 ×N;格数上限 = 武器槽数,这两层 O(4×4) 的小循环没有分配、没有排序
     killsRow.value.textContent = String(Math.max(0, Math.round(finiteOrZero(world.kills))));
-    let rowCursor = 0;
+    const buffs = world.supportBuffs;
+    const ammoEdict = edictAmmoFireRateMul(world.edicts);
+    const heatEdict = edictHeatMaxMul(world.edicts);
+    let boxCursor = 0;
     let totalDps = 0;
     const weapons = world.weapons;
     for (let i = 0; i < weapons.length; i++) {
       const slot = weapons[i]!;
       if (slot.type < 0) continue;
-      // 首见槽位才出行:往前扫到同型就交给它那一行(count/maxLevel 由首见槽位一次算齐)
+      const def = TOWERS[slot.type];
+      // 首见槽位才出格:往前扫到同型就交给它那一格(count/maxLevel/dps/发射读数一次算齐)
       let firstSeen = true;
       let count = 0;
       let maxLevel = 0;
+      let dps = 0;
       for (let j = 0; j < weapons.length; j++) {
         const other = weapons[j]!;
         if (other.type !== slot.type) continue;
@@ -674,22 +773,43 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
         }
         count++;
         if (other.level > maxLevel) maxLevel = other.level;
+        if (def) {
+          dps += slotSustainedDps(other, def, buffs, ammoEdict, heatEdict);
+          slotFireReadout(other, def, buffs, fireScratch, ammoEdict);
+          if (count === 1 || fireScratch.seconds < fireBest.seconds) {
+            fireBest.state = fireScratch.state;
+            fireBest.seconds = fireScratch.seconds;
+            fireBest.ratio = fireScratch.ratio;
+          }
+        }
       }
       if (!firstSeen) continue;
-      const dps = world.dpsOf(slot.type);
       totalDps += dps;
-      const name = TOWERS[slot.type]?.name ?? '?';
-      const r = weaponRows[rowCursor++]!;
-      r.row.style.display = 'flex';
-      r.label.textContent = count > 1 ? `${name} Lv${maxLevel} ×${count}` : `${name} Lv${maxLevel}`;
-      r.value.textContent = formatDps(dps);
+      const name = def?.name ?? '?';
+      const b = weaponBoxes[boxCursor++]!;
+      b.box.style.display = 'block';
+      b.label.textContent = count > 1 ? `${name} Lv${maxLevel} ×${count}` : `${name} Lv${maxLevel}`;
+      b.value.textContent = formatDps(dps);
+      if (def) {
+        const color = fireReadoutColor(fireBest.state);
+        b.cd.textContent = fireReadoutText(fireBest.state, fireBest.seconds);
+        b.cd.style.color = color;
+        b.fill.style.width = `${hudRatio(fireBest.ratio, 1) * 100}%`;
+        b.fill.style.background = color;
+      } else {
+        // 塔型越界(表被改坏):名字已印 '?',发射读数与小条留空,不拿 NaN 去画
+        b.cd.textContent = '';
+        b.fill.style.width = '0%';
+      }
     }
-    // 没点亮的行连文本一起清:换局(setWorld → sync)时上一局的武器名不许在隐藏行里赖着
-    for (; rowCursor < weaponRows.length; rowCursor++) {
-      const r = weaponRows[rowCursor]!;
-      r.row.style.display = 'none';
-      r.label.textContent = '';
-      r.value.textContent = '';
+    // 没点亮的格连文本一起清:换局(setWorld → sync)时上一局的武器名不许在隐藏格里赖着
+    for (; boxCursor < weaponBoxes.length; boxCursor++) {
+      const b = weaponBoxes[boxCursor]!;
+      b.box.style.display = 'none';
+      b.label.textContent = '';
+      b.cd.textContent = '';
+      b.value.textContent = '';
+      b.fill.style.width = '0%';
     }
     totalDpsRow.value.textContent = formatDps(totalDps);
 

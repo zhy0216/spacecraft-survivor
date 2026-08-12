@@ -22,14 +22,13 @@ import {
   FX_LANCE,
   FX_MORTAR,
   type TowerDef,
-  towerBurst,
   towerChainCount,
   towerPierce,
   towerRange,
 } from '../data/towers';
 import type { WeaponSlot } from './armory';
 import { BK_DIRECT, BK_MORTAR } from './bullet';
-import { effectiveAoeDamage, effectiveDamage } from './tower';
+import { effectiveAoeDamage, effectiveDamage, slotShotsPerFire } from './tower';
 import { type Enemy, enemyRadius } from './enemy';
 import { type FireSink, FXV_BEAM, FXV_CHAIN, FXV_LANCE } from './fx';
 import { DEG2RAD, type Vec2 } from './ship';
@@ -95,7 +94,9 @@ function fireBullets(
   // 子弹池会一路涨到掉帧。当场哑火,代价是"这门炮不响",而不是一个越跑越卡的世界
   if (!(def.bulletSpeed > 0)) return 0;
 
-  const n = towerBurst(def, slot.level);
+  // 发数走 slotShotsPerFire(恒发数 × Lv3 跳变):风暴机炮的"双管齐射"是恒发签名(def.burst = 2),
+  // 只读 towerBurst 会把它漏成单管 —— 面板理论 DPS 与真开火必须同一份口径
+  const n = slotShotsPerFire(def, slot.level);
   const damage = effectiveDamage(def, slot.level);
   const pierce = towerPierce(def, slot.level);
   const life = range / def.bulletSpeed;
@@ -145,7 +146,7 @@ function fireMortar(
 ): number {
   if (!(def.bulletSpeed > 0)) return 0; // 理由同 fireBullets:Infinity 的 life 是个不回收的弹
 
-  const n = def.burst > 0 ? def.burst : 1;
+  const n = slotShotsPerFire(def, slot.level); // FX_MORTAR 只认恒发数(三连发是同一次蓄力的表现)
   const dx = target.x - muzzle.x;
   const dy = target.y - muzzle.y;
   // 夹在射程内是给浮点边界与将来的规则变动兜底(findArcTarget 已保证 ≤ range):

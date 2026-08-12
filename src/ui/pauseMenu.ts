@@ -51,6 +51,21 @@ export interface PauseMenuHooks {
   onRestart(): void;
   /** 「再试一局」(同种子同起手):main 走 retry */
   onRetry(): void;
+  /**
+   * 别人正占着 Esc 吗(设置页开在本菜单之上时,main 传 `() => settingsMenu.visible()`)。
+   * **让路必须是主动的**:两个覆盖层的 keydown 都挂在同一个 window 上,谁先收到取决于
+   * 创建顺序 —— 靠 stopPropagation 抢等于把行为押在 main 里两行代码的先后上。
+   * 可选:不传 = 没有人抢(既有调用方与单测语义一字不变)。
+   */
+  blocked?(): boolean;
+  /** 「设置」:main 收起本菜单、弹设置页(关掉后由 main 再把本菜单弹回来) */
+  onSettings(): void;
+  /**
+   * 「保存并退出」:main 存一份局内存档、回标题界面。
+   * @returns 真的存上了没有(配额耗尽 / 隐私模式会是 false)—— 按钮据此改口,
+   *   宁可当场说"保存失败"也不给一个空头承诺(见 ui/runSaveStorage.ts 的口径)
+   */
+  onSaveAndQuit(): boolean;
 }
 
 export interface PauseMenuUi {
@@ -93,6 +108,25 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     hooks.onRetry();
   });
 
+  // 「保存并退出」排在换局两项之前:它是**不丢进度**的那条出口,而重开是丢进度的 ——
+  // 相邻两颗按钮一个保住半小时、一个抹掉半小时,先摆保住的那颗
+  const saveQuitBtn = document.createElement('button');
+  saveQuitBtn.style.cssText = BTN_CSS;
+  saveQuitBtn.textContent = '保存并退出到标题';
+  saveQuitBtn.addEventListener('click', () => {
+    // 存不上就**留在菜单里**并当场改口:此时退出会静默丢掉这一局,
+    // 而玩家点这颗按钮的全部意图恰恰是"别丢"(见 onSaveAndQuit 的返回值口径)
+    if (hooks.onSaveAndQuit()) return;
+    saveQuitBtn.textContent = '保存失败(存储不可用)';
+  });
+
+  const settingsBtn = document.createElement('button');
+  settingsBtn.style.cssText = BTN_CSS;
+  settingsBtn.textContent = '设置';
+  settingsBtn.addEventListener('click', () => {
+    hooks.onSettings();
+  });
+
   const muteBtn = document.createElement('button');
   muteBtn.style.cssText = MUTE_CSS;
   function paintMute(): void {
@@ -108,7 +142,16 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   hint.style.cssText = HINT_CSS;
   hint.textContent = '战斗中按 Esc 随时暂停';
 
-  card.append(title, resumeBtn, restartBtn, retryBtn, muteBtn, hint);
+  card.append(
+    title,
+    resumeBtn,
+    saveQuitBtn,
+    restartBtn,
+    retryBtn,
+    settingsBtn,
+    muteBtn,
+    hint,
+  );
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
@@ -116,6 +159,9 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     visible = true;
     root.style.display = 'flex';
     paintMute();
+    // 「保存并退出」的文案每次弹出都复位:上一次的"保存失败"是**那一次**的结论,
+    // 留着它会让下一次暂停一进来就挂着一句吓人的错误(而此刻可能根本没试过存)
+    saveQuitBtn.textContent = '保存并退出到标题';
     hooks.onPause();
   }
 
@@ -134,6 +180,9 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   window.addEventListener('keydown', (e) => {
     // 收着的时候一律不认;焦点在输入框里时 Esc 是打字,不该被当成暂停/继续
     if (e.repeat || e.code !== 'Escape' || isTyping()) return;
+    // 设置页开在本菜单之上时,这一记 Esc 归它(见 blocked 的注释):
+    // 不让路的话"关设置页"会同一次按键把暂停也解掉,玩家直接摔回战斗
+    if (hooks.blocked?.()) return;
     if (visible) {
       resume();
       return;

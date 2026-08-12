@@ -312,8 +312,16 @@ export function collectionItemName(entry: UnlockEntry): string {
  *   语义仍是"说出玩家想要什么",换不换种子是 main.ts 那条重开流程的事。
  *   被特定波次组合打死后,"我知道 48s 右舷会来侧掠者"这类死后学习必须有处可用,
  *   否则 9 分钟从零重来的失败惩罚被换种子无谓放大。
+ * @param opts.onTitle 「返回标题」(存档改版)。不传就不摆这个按钮。
+ *   补的是流程上的一个死角:玩家模式下 Esc 暂停菜单要求 `!run.paused`,而局终之后
+ *   run.paused 恒为真 —— 没有这颗按钮的话,一局打完就只剩"再来一局/再试一局"两条路,
+ *   想去改个设置或干脆歇一会儿都得刷新页面。
  */
-export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => void }): GameOverUi {
+export function createGameOverUi(opts: {
+  onRestart: () => void;
+  onRetry?: () => void;
+  onTitle?: () => void;
+}): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
   const card = document.createElement('div');
@@ -353,8 +361,14 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
   retryBtn.textContent = '再试这一局(R · 同种子同起手)';
+  // 「返回标题」排在最后、且用暗色:局终之后玩家八成想马上再开一局,
+  // 回标题是那条"我先歇会儿 / 去改个设置"的次要出口,不该跟重开抢眼
+  const titleBtn = document.createElement('button');
+  titleBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
+  titleBtn.textContent = '返回标题';
   card.append(titleEl, noteEl, shotEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
+  if (opts.onTitle) card.appendChild(titleBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
@@ -378,6 +392,12 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
     // 与 restart 同口径:先收面板再回调,理由一字同源
     hide();
     opts.onRetry?.();
+  }
+
+  function toTitle(): void {
+    // 与 restart / retry 同口径:先收面板再回调
+    hide();
+    opts.onTitle?.();
   }
 
   /**
@@ -484,6 +504,7 @@ export function createGameOverUi(opts: { onRestart: () => void; onRetry?: () => 
 
   btn.addEventListener('click', restart);
   retryBtn.addEventListener('click', retry);
+  titleBtn.addEventListener('click', toTitle);
 
   window.addEventListener('keydown', (e) => {
     // 收着的时候一律不认:战斗中按 Enter/R 不该把正打着的一局重开掉

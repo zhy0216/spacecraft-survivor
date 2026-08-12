@@ -8,10 +8,22 @@ import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
+import type { WeaponSlot } from '../sim/armory';
+import { createSupportBuffs, type SupportBuffs } from '../sim/support';
+import {
+  FIRE_CHARGING,
+  FIRE_COOLDOWN,
+  FIRE_LOCKED,
+  FIRE_READY,
+  FIRE_RELOAD,
+  slotSustainedDps,
+} from '../sim/tower';
 import type { World } from '../sim/world';
 import {
   boostReadout,
   createHud,
+  fireReadoutColor,
+  fireReadoutText,
   formatDps,
   hudRatio,
   radarProject,
@@ -193,13 +205,29 @@ interface StubWorld {
   edicts: number;
   /** 解锁状态掩码(19 号):位 i = UNLOCKS[i] 开没开;图鉴计数按它数置位 */
   unlockMask: number;
-  /** 火力统计面板:击杀数 + 武器槽(名字/等级出行)+ 逐型 DPS 读口 */
+  /** 火力统计面板:击杀数 + 武器槽(名字/等级/节流状态出格)+ 支援聚合(理论 DPS 的倍率来源) */
   kills: number;
-  weapons: { type: number; level: number }[];
-  dpsOf(type: number): number;
+  weapons: WeaponSlot[];
+  supportBuffs: SupportBuffs;
   /** 加速技能(空格)的两个计时器:HUD 冷却条读它们 */
   boostTime: number;
   boostCooldown: number;
+}
+
+/** 武器槽桩:节流状态全零(就绪),用例按需覆写装填/锁死/蓄力 */
+function stubWeapon(type: number, level: number, over: Partial<WeaponSlot> = {}): WeaponSlot {
+  return {
+    type,
+    level,
+    cooldown: 0,
+    ammo: 1,
+    reloadLeft: 0,
+    heat: 0,
+    coolLock: 0,
+    charge: 1,
+    turretOffset: 0,
+    ...over,
+  };
 }
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
@@ -218,7 +246,7 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     unlockMask: 0,
     kills: 0,
     weapons: [],
-    dpsOf: () => 0,
+    supportBuffs: createSupportBuffs(),
     boostTime: 0,
     boostCooldown: 0,
     ...over,
@@ -250,11 +278,11 @@ describe('createHud', () => {
     const root = dom.ui.children[0]!;
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
-    // 只含上沿读数、两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关
-    // 与屏下缘两根血条(精英 + Boss)、星币读数、法令徽记(18 号)、解锁 toast
-    // 与图鉴读数(19 号)、火力统计面板、战术雷达以及低血量红晕(畅玩性),
+    // 只含上沿读数(左列纵队:vitals/星币/法令/图鉴/火力全在 grid 第一格里)、
+    // 两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关、屏下缘两根血条(精英 + Boss)、
+    // 解锁 toast、战术雷达以及低血量红晕(畅玩性),
     // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
-    expect(root.children.length).toBe(13);
+    expect(root.children.length).toBe(9);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -264,7 +292,8 @@ describe('createHud', () => {
     expect(findText(root, '75 / 100')).toBeDefined();
     // 玩家形态(默认)不亮经验数值:读数留空,升级进度只靠进度条比例(10/40 → 25%)
     expect(findText(root, '10 / 40')).toBeUndefined();
-    const vitals = root.children[0]!.children[0]!;
+    // 顶栏 grid 第一格是左列纵队,vitals 是纵队第一块
+    const vitals = root.children[0]!.children[0]!.children[0]!;
     expect(vitals.children[2]!.children[1]!.textContent).toBe('');
     expect(vitals.children[3]!.children[0]!.style.width).toBe('25%');
     expect(findText(root, '1:05')).toBeDefined();
@@ -284,14 +313,14 @@ describe('createHud', () => {
 
     // 玩家形态(默认不传 debug):同一世界的数值区是空字符串
     createHud({ world: stubWorld() as unknown as World });
-    const playerVitals = dom.ui.children[1]!.children[0]!.children[0]!;
+    const playerVitals = dom.ui.children[1]!.children[0]!.children[0]!.children[0]!;
     expect(playerVitals.children[2]!.children[1]!.textContent).toBe('');
   });
 
-  it('星币读数:与残骸同族的独立面板,显示余额且 setWorld 换世界同步更新', () => {
+  it('星币读数:左列纵队第二块(血条面板正下方,不再自记偏移),显示余额且 setWorld 同步更新', () => {
     const hud = createHud({ world: stubWorld({ starCoins: 27 }) as unknown as World });
     const root = dom.ui.children[0]!;
-    const coins = root.children[6]!;
+    const coins = root.children[0]!.children[0]!.children[1]!;
     expect(coins.title).toBe('星币');
     expect(findText(root, '★ 星币')).toBeDefined();
     const value = coins.children[0]!.children[1]!;
@@ -304,7 +333,7 @@ describe('createHud', () => {
   it('法令徽记:无法令时隐藏,持有后按掩码印出名字,setWorld 换世界同步更新', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const edicts = root.children[7]!;
+    const edicts = root.children[0]!.children[0]!.children[2]!;
     expect(edicts.title).toBe('已生效法令');
     // 简单口径:无法令整体隐藏(display:none),持有才亮
     expect(edicts.style.display).toBe('none');
@@ -326,7 +355,7 @@ describe('createHud', () => {
   it('图鉴读数:按 world.unlockMask 置位数显示已解锁数/总数,setWorld 换世界当帧跟上', () => {
     const hud = createHud({ world: stubWorld({ unlockMask: 0b011 }) as unknown as World });
     const root = dom.ui.children[0]!;
-    const collection = root.children[9]!;
+    const collection = root.children[0]!.children[0]!.children[3]!;
     expect(collection.title).toBe('图鉴');
     expect(findText(root, '图鉴')).toBeDefined();
     const value = collection.children[0]!.children[1]!;
@@ -345,7 +374,7 @@ describe('createHud', () => {
   it('解锁 toast:toast() 亮出"解锁 XX",到点自动消失;setWorld 换局清掉上一局的提示', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const toastEl = root.children[8]!;
+    const toastEl = root.children[6]!;
     // 初始隐藏(display:none 写在 cssText 里,toast() 点亮时才落成 style.display 属性)
     expect(toastEl.style.cssText).toContain('display:none');
 
@@ -507,48 +536,59 @@ describe('createHud', () => {
     expect(warn.style.display).toBe('none');
   });
 
-  it('火力统计:击杀与逐武器 DPS 出行,同型多把合并 ×N,空槽行藏着', () => {
-    const hud = createHud({
-      world: stubWorld({
-        kills: 42,
-        weapons: [
-          { type: TOWER_AUTOCANNON, level: 2 },
-          { type: TOWER_LASER, level: 3 },
-          { type: TOWER_AUTOCANNON, level: 1 },
-          { type: -1, level: 0 },
-        ],
-        dpsOf: (type: number) => (type === TOWER_AUTOCANNON ? 12.3 : type === TOWER_LASER ? 5 : 0),
-      }) as unknown as World,
+  it('火力统计:理论 DPS 逐槽求和出格,同型合并 ×N 且发射读数取最快就绪那把,空槽格藏着', () => {
+    // 两门机炮:Lv2 就绪、Lv1 装填中 —— 合并格该报"就绪"(下一发确实从 Lv2 那把出膛);
+    // 激光锁死 1.2s —— 单独格报"过热 1.2s"
+    const world = stubWorld({
+      kills: 42,
+      weapons: [
+        stubWeapon(TOWER_AUTOCANNON, 2),
+        stubWeapon(TOWER_LASER, 3, { coolLock: 1.2 }),
+        stubWeapon(TOWER_AUTOCANNON, 1, { reloadLeft: 0.9 }),
+        stubWeapon(-1, 0),
+      ],
     });
+    const hud = createHud({ world: world as unknown as World });
     const root = dom.ui.children[0]!;
-    const firepower = root.children[10]!;
+    const firepower = root.children[0]!.children[0]!.children[4]!;
     expect(firepower.title).toBe('火力统计');
     expect(findText(firepower, '击杀')).toBeDefined();
     expect(findText(firepower, '42')).toBeDefined();
-    // 同型两把合并一行:名字 + 最高级 + ×2;dpsOf 按型归账印一次
+    // DPS 是固定理论值(slotSustainedDps),不随实时输出漂:期望值用同一份纯函数现算
+    const buffs = createSupportBuffs();
+    const acDps =
+      slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 2), TOWERS[TOWER_AUTOCANNON]!, buffs) +
+      slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 1), TOWERS[TOWER_AUTOCANNON]!, buffs);
+    const laserDps = slotSustainedDps(stubWeapon(TOWER_LASER, 3), TOWERS[TOWER_LASER]!, buffs);
     expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name} Lv2 ×2`)).toBeDefined();
-    expect(findText(firepower, '12')).toBeDefined();
+    expect(findText(firepower, formatDps(acDps))).toBeDefined();
     expect(findText(firepower, `${TOWERS[TOWER_LASER]!.name} Lv3`)).toBeDefined();
-    expect(findText(firepower, '5.0')).toBeDefined();
-    // 总 DPS = 12.3 + 5 → 取整 17
-    expect(findText(firepower, '17')).toBeDefined();
-    // 行节点按槽上限预建:两行点亮,其余藏着(display:none),节点数不随内容涨
+    expect(findText(firepower, formatDps(laserDps))).toBeDefined();
+    expect(findText(firepower, formatDps(acDps + laserDps))).toBeDefined();
+    // 发射读数:机炮格就绪(装填那把不拖累),激光格报过热剩余秒
+    expect(findText(firepower, '就绪')).toBeDefined();
+    expect(findText(firepower, '过热 1.2s')).toBeDefined();
+    // 格节点按槽上限预建:两格点亮,其余藏着(display:none),节点数不随内容涨
     const rows = firepower.children;
     expect(rows.length).toBe(2 + 4);
-    expect(rows[2]!.style.display).toBe('flex');
-    expect(rows[3]!.style.display).toBe('flex');
+    expect(rows[2]!.style.display).toBe('block');
+    expect(rows[3]!.style.display).toBe('block');
     expect(rows[4]!.style.display).toBe('none');
+    // 就绪小条:激光格按 1 - coolLock/overheatLock 回充(2s 锁罚走掉 0.8s = 40%)
+    const laserFill = rows[3]!.children[1]!.children[0]!;
+    expect(laserFill.style.width).toBe(`${(1 - 1.2 / TOWERS[TOWER_LASER]!.overheatLock) * 100}%`);
 
-    // 换局(空槽新世界):武器行全收,击杀归零
+    // 换局(空槽新世界):武器格全收、文本清空,击杀归零
     hud.setWorld(stubWorld() as unknown as World);
     expect(rows[2]!.style.display).toBe('none');
     expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name}`)).toBeUndefined();
+    expect(findText(firepower, '过热')).toBeUndefined();
   });
 
   it('加速冷却条:窗内印"加速中",冷却回充印剩余秒,归零印"就绪"', () => {
     const hud = createHud({ world: stubWorld({ boostCooldown: 2.5 }) as unknown as World });
     const root = dom.ui.children[0]!;
-    const vitals = root.children[0]!.children[0]!;
+    const vitals = root.children[0]!.children[0]!.children[0]!;
     // 第三根条(下标 4/5 = 行/轨道):回充中印剩余秒
     expect(vitals.children[4]!.children[1]!.textContent).toBe('2.5s');
 
@@ -611,5 +651,20 @@ describe('formatDps / boostReadout', () => {
     expect(mid.active).toBe(false);
     // 坏刻度(cdMax 0/NaN)不把 NaN 写进 CSS:hudRatio 兜底,ratio 仍是有限数
     expect(Number.isFinite(boostReadout(0, 2, 0).ratio)).toBe(true);
+  });
+
+  it('发射读数排版:三种硬等待带前缀,冷却只印秒,就绪印"就绪";NaN 秒不外漏', () => {
+    expect(fireReadoutText(FIRE_RELOAD, 1.23)).toBe('装填 1.2s');
+    expect(fireReadoutText(FIRE_LOCKED, 0.8)).toBe('过热 0.8s');
+    expect(fireReadoutText(FIRE_CHARGING, 2.4)).toBe('充能 2.4s');
+    expect(fireReadoutText(FIRE_COOLDOWN, 0.35)).toBe('0.3s');
+    expect(fireReadoutText(FIRE_READY, 0)).toBe('就绪');
+    expect(fireReadoutText(FIRE_RELOAD, Number.NaN)).toBe('装填 0.0s');
+  });
+
+  it('发射读数配色:过热是唯一暖色,其余全在冷色域且五态互不相同', () => {
+    const colors = [FIRE_READY, FIRE_COOLDOWN, FIRE_RELOAD, FIRE_LOCKED, FIRE_CHARGING].map(fireReadoutColor);
+    expect(new Set(colors).size).toBe(5);
+    expect(fireReadoutColor(FIRE_LOCKED)).toBe('#ff9a5c');
   });
 });

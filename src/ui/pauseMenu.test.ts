@@ -130,6 +130,12 @@ describe('createPauseMenu', () => {
   let paused: boolean;
   let restarts: number;
   let retries: number;
+  let settingsOpened: number;
+  /** 「保存并退出」这一次存得上吗(存档改版:存不上要留在菜单里改口报错) */
+  let saveOk: boolean;
+  let saveAttempts: number;
+  /** 设置页开着吗 —— main 传 `() => settingsMenu.visible()`,菜单据此对 Esc 让路 */
+  let settingsVisible: boolean;
 
   function make(): ReturnType<typeof createPauseMenu> {
     const hooks: PauseMenuHooks = {
@@ -146,6 +152,14 @@ describe('createPauseMenu', () => {
       onRetry: () => {
         retries++;
       },
+      blocked: () => settingsVisible,
+      onSettings: () => {
+        settingsOpened++;
+      },
+      onSaveAndQuit: () => {
+        saveAttempts++;
+        return saveOk;
+      },
     };
     return createPauseMenu(hooks);
   }
@@ -155,6 +169,10 @@ describe('createPauseMenu', () => {
     paused = false;
     restarts = 0;
     retries = 0;
+    settingsOpened = 0;
+    saveAttempts = 0;
+    saveOk = true;
+    settingsVisible = false;
   });
   afterEach(() => {
     dom.restore();
@@ -223,6 +241,66 @@ describe('createPauseMenu', () => {
     findButton(dom, '再试一局(同种子)')!.listeners.get('click')!({});
     expect(menu.visible()).toBe(false);
     expect(retries).toBe(1);
+  });
+
+  it('「保存并退出」存上了:调一次 onSaveAndQuit,退出由 main 接手', () => {
+    const menu = make();
+    dom.key(keyEvent('Escape'));
+    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
+    expect(saveAttempts).toBe(1);
+    // 收菜单/回标题都是 main 那一侧的事(onSaveAndQuit 里做),菜单自己不擅自收起
+    expect(paused).toBe(true);
+  });
+
+  it('「保存并退出」**存不上时留在菜单里并当场改口** —— 不给一个空头承诺', () => {
+    saveOk = false;
+    const menu = make();
+    dom.key(keyEvent('Escape'));
+    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
+    // 这是这颗按钮唯一不能出错的地方:此刻退出会静默丢掉整整一局,
+    // 而玩家点它的全部意图恰恰是"别丢"
+    expect(menu.visible()).toBe(true);
+    expect(findButton(dom, '保存失败(存储不可用)')).toBeDefined();
+  });
+
+  it('上一次的"保存失败"不留到下一次暂停(那是那一次的结论)', () => {
+    saveOk = false;
+    const menu = make();
+    dom.key(keyEvent('Escape'));
+    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
+    expect(findButton(dom, '保存失败(存储不可用)')).toBeDefined();
+    menu.hide();
+    menu.show();
+    // 重新弹出时按钮已复位:不然玩家一进暂停就挂着一句吓人的错误,而此刻根本没试过存
+    expect(findButton(dom, '保存并退出到标题')).toBeDefined();
+    expect(findButton(dom, '保存失败(存储不可用)')).toBeUndefined();
+  });
+
+  it('「设置」按钮:只说一声,收菜单与弹设置页都归 main(两个入口共用一页设置)', () => {
+    const menu = make();
+    dom.key(keyEvent('Escape'));
+    findButton(dom, '设置')!.listeners.get('click')!({});
+    expect(settingsOpened).toBe(1);
+    expect(paused).toBe(true); // 世界继续冻着
+  });
+
+  it('设置页开着时 Esc 归它:暂停菜单主动让路,不会一键摔回战斗', () => {
+    const menu = make();
+    dom.key(keyEvent('Escape')); // 暂停
+    expect(menu.visible()).toBe(true);
+    settingsVisible = true; // 设置页盖在上面
+    dom.key(keyEvent('Escape')); // 这一记归设置页
+    // 让路失败的症状:菜单收起 + onResume 触发 = 玩家关个设置页直接摔回战斗
+    expect(menu.visible()).toBe(true);
+    expect(paused).toBe(true);
+  });
+
+  it('设置页开着时 Esc 也不会从战斗中把菜单弹出来', () => {
+    const menu = make();
+    settingsVisible = true;
+    dom.key(keyEvent('Escape'));
+    expect(menu.visible()).toBe(false);
+    expect(paused).toBe(false);
   });
 
   it('hide() 是纯收起:不触发 onResume,世界状态由 main 自己定(restart/retry 换局用)', () => {

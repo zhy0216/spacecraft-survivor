@@ -9,6 +9,20 @@ export class Rng {
     this.s = seed >>> 0;
   }
 
+  /**
+   * 内部游标(mulberry32 的 32 位状态)。**只为存档而开**(sim/runSave.ts):
+   * 读档要接着存档那一刻的随机序列往下掷,否则同一局存前存后会走出两条轨迹 ——
+   * 而"这一局接着打"正是存档的全部承诺。写入一律 `>>> 0` 归一,与构造函数同口径:
+   * 手改过的存档塞进来一个小数/负数,序列会当场变成另一条(mulberry32 只认无符号 32 位)。
+   */
+  get state(): number {
+    return this.s;
+  }
+
+  set state(v: number) {
+    this.s = v >>> 0;
+  }
+
   /** [0, 1) */
   next(): number {
     let t = (this.s += 0x6d2b79f5);
