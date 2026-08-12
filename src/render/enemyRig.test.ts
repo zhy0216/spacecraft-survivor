@@ -79,18 +79,20 @@ describe('结构不变量', () => {
 });
 
 describe('静止位姿(swingMul=0):关节落在从 round-1 原图量出来的校准值上', () => {
-  it('蜂群蛭:核心盘在原点,6 片裂瓣的根均匀分布在 r=40 的圆上、间隔 60°', () => {
+  it('蜂群蛭:核心盘在原点,6 片裂瓣的根均匀分布在 r=28.2 的圆上、间隔 60°', () => {
     const out = restPose(RIG_SWARM);
     const core = slot(out, 0);
     expect(core.x).toBeCloseTo(0, 6);
     expect(core.y).toBeCloseTo(0, 6);
 
+    // 28.2 = 切图时的 r₀(40) × cos(半角 45°):裁剪框最左那条边落在扇区的两个内角上,
+    // 不在轴上。把它当 40 会让六片瓣整体外移、瓣根从核心盘下面露出来(改过一次的坑)
     for (let k = 0; k < 6; k++) {
       const lobe = slot(out, 1 + k);
       const th = (29 + k * 60) * D2R;
-      expect(Math.hypot(lobe.x, lobe.y)).toBeCloseTo(40, 4);
-      expect(lobe.x).toBeCloseTo(Math.cos(th) * 40, 4);
-      expect(lobe.y).toBeCloseTo(Math.sin(th) * 40, 4);
+      expect(Math.hypot(lobe.x, lobe.y)).toBeCloseTo(28.2, 4);
+      expect(lobe.x).toBeCloseTo(Math.cos(th) * 28.2, 4);
+      expect(lobe.y).toBeCloseTo(Math.sin(th) * 28.2, 4);
       // 瓣自身朝向 = 它所在的轴向:切图时已把瓣轴转到纹理 +X,于是 rest 直接就是轴角
       expect(lobe.rot).toBeCloseTo(th, 6);
     }

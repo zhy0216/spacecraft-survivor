@@ -112,7 +112,18 @@ const D2R = Math.PI / 180;
  * 关节点取瓣根(ax=0,即纹理左缘)而不是瓣心:绕瓣心转会把瓣根甩出核心盘之外露馅。
  */
 const LEECH_LOBE_AXIS = 29;
-const LEECH_LOBE_ROOT = 40; // 瓣根到生物中心的距离(单位空间);核心盘半径大于它,于是切口被盖住
+/**
+ * 瓣根关节到生物中心的距离(单位空间)。
+ *
+ * 它不是拍脑袋的 —— 裂瓣是从原图上按 **±45° 扇区、r ≥ 40** 切下来的,轴转到纹理 +X,
+ * 于是裁剪框最左那条边落在两个内角上,离中心 40 × cos45° = 28.2 而不是 40。
+ * 切 ±45° 而不是 ±31°(瓣间隔 60°,45 让相邻瓣重叠 30°)是**必须的**:
+ * 按 60° 半宽以内切,瓣根会被截窄成一条细颈,六片瓣在画面上就散成"轮毂 + 六个挂件",
+ * 而原图那圈瓣在根部是宽幅融合的。重叠区双绘的是同一份材料,正好把凹口填回原样。
+ */
+const LEECH_LOBE_ROOT = 28.2;
+/** 生物中心投影到裁剪图内的纵向比例(切图时实测,不是 0.5 —— 真实裂瓣并非严格轴对称) */
+const LEECH_LOBE_PIVOT_Y = 0.5598;
 
 export const RIG_SWARM: RigDef = {
   textureCount: 2, // 0 = lobe(在后), 1 = core(在前,压住 6 片瓣根的直边切口)
@@ -127,8 +138,8 @@ export const RIG_SWARM: RigDef = {
       return part({
         tex: 0,
         parent: 0,
-        ax: 0, // 瓣根 = 纹理左缘
-        ay: 0.506,
+        ax: 0, // 瓣根 = 纹理左缘(扇区的内边)
+        ay: LEECH_LOBE_PIVOT_Y,
         dx: Math.cos(th) * LEECH_LOBE_ROOT,
         dy: Math.sin(th) * LEECH_LOBE_ROOT,
         rest: th,
