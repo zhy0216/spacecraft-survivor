@@ -18,8 +18,14 @@
  *   充能 THR_CHARGE :攒-放,节奏只由 chargeTime 给,**与射速旋钮完全无关**;满 1.0 停着等目标。
  *
  * 改版后的取值链路:四个 slot* 包装(slotFireInterval / slotReload / slotHeatMax /
- * slotChargeTime)是全仓唯一读 SupportBuffs 的地方 —— 塔的每一处取值都必须从它们进,
- * 别处再算一遍就是第二条取值链路。聚合本身由 sim/support.ts 全船重算,本文件只读不写。
+ * slotChargeTime)是全仓唯一读 EdictBuffs 的地方 —— 塔的每一处取值都必须从它们进,
+ * 别处再算一遍就是第二条取值链路。聚合本身由 sim/edictBuffs.ts 全船重算,本文件只读不写。
+ *
+ * —— 支援并入法令后的签名收敛(用户设计会)——
+ * 旧版每个开火相关函数都拖着一条 edictMul / heatMaxEdictMul 的尾巴(支援走 buffs、法令走散参,
+ * 两条取值链路并行)。两套被动合并成一套之后,**法令的倍率已经在 EdictBuffs 里**,
+ * 那些散参整批删除:本文件的每一处取值只有 buffs 一个来源,调用方也不再需要
+ * "按槽上节流系挑一个法令倍率传进来"这一步(挑系那件事在聚合里按 throttle 折过了)。
  *
  * 旧版的受击射速惩罚(fireMul / edgePenalty)随甲板四舷一起删除:
  * 被撞舷"顿一下"的反馈不再存在,惩罚倍率在签名里随之消失 —— 档位由 4 个(数值/受击/支援/法令)
@@ -45,7 +51,7 @@ import {
 } from '../data/towers';
 import type { WeaponSlot } from './armory';
 import { tuning } from './config';
-import type { SupportBuffs } from './support';
+import type { EdictBuffs } from './edictBuffs';
 
 /**
  * 计时到期的判据容差(秒),与 enemy.ts 的 TIMER_EPS 一字同源:
@@ -84,28 +90,21 @@ export function slotTowerDef(slot: WeaponSlot): TowerDef | undefined {
 
 /*
  * —— 支援聚合后的取值(改版 06 号)——
- * 四个包装一律 (slot, def, supportBuffs) 入参:等级从槽上取、聚合倍率也从参数进,
+ * 四个包装一律 (slot, def, buffs) 入参:等级从槽上取、聚合倍率也从参数进,
  * 于是调用点只需要"这一个槽 + 这份表 + 这一帧的聚合"就问得出实际读数,
  * 不必知道倍率从哪来、是乘还是除、要不要过下限保护。
- * 聚合的系限定档(supportBuffs.fireRateMul 等按下标 THR_* 直取)在**没有支援的甲板上全是 1**,
+ * 聚合的系限定档(buffs.fireRateMul 等按下标 THR_* 直取)在**没有支援的甲板上全是 1**,
  * 故四个包装与旧链路在无支援时逐位一字不差(乘 1 / 除 1 在 IEEE754 下是恒等)。
  */
 
 /**
- * 这个槽的实际射击间隔(秒/次)= 等级取值 ÷ 全局倍率 ÷ **支援聚合** ÷ 法令倍率。
- * 弹药库 fireRateMul = 1.25 ⇒ 机炮 0.4s → 0.32s。三个旋钮各除各的,理由见 effectiveFireInterval。
+ * 这个槽的实际射击间隔(秒/次)= 等级取值 ÷ 全局倍率 ÷ **法令聚合**。
+ * 弹药协议 fireRateMul = 1.25 ⇒ 机炮 0.4s → 0.32s(2 层 = 1.25² ⇒ 0.256s)。
+ * 两个旋钮各除各的,理由见 effectiveFireInterval。
  * @param fireMul 保留位(旧版受击惩罚的倍率),恒 1 —— 见文件头那段"惩罚随四舷删除"的说明。
- * @param edictMul 法令的弹药系射速倍率(18 号曳光协议 = 1.1),缺省 1 = 未持有。sim/turret.ts
- *   按槽上节流系挑好传入(非弹药系塔恒 1),本函数只认倍率、不认法令是谁。
  */
-export function slotFireInterval(
-  slot: WeaponSlot,
-  def: TowerDef,
-  supportBuffs: SupportBuffs,
-  fireMul = 1,
-  edictMul = 1,
-): number {
-  return effectiveFireInterval(def, slot.level, fireMul, supportBuffs.fireRateMul[def.throttle]!, edictMul);
+export function slotFireInterval(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs, fireMul = 1): number {
+  return effectiveFireInterval(def, slot.level, fireMul, buffs.fireRateMul[def.throttle]!);
 }
 
 /**
@@ -115,18 +114,16 @@ export function slotFireInterval(
  * 那门炮此后再也不装填,弹药系的硬停顿整条消失。
  * 不随等级成长:GDD §5.4 的成长档里没有装填这一项(弹夹是加法档,装填是定值)。
  */
-export function slotReload(slot: WeaponSlot, def: TowerDef, supportBuffs: SupportBuffs): number {
-  return def.reload * supportBuffs.reloadMul[def.throttle]!;
+export function slotReload(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
+  return def.reload * buffs.reloadMul[def.throttle]!;
 }
 
 /**
- * 这个槽的实际过热上限 = 等级取值 × 支援聚合 × 法令倍率。
+ * 这个槽的实际过热上限 = 等级取值 × 法令聚合(散热协议 1.5 = 能连烧半倍久)。
  * 渲染层的热量条分母读的也是它:分子(slot.heat)夹在这个上限里,两边同源才不会画出框。
- * @param edictMul 法令的过热上限倍率(18 号散热协议 = 1.2),缺省 1 = 未持有;
- *   由 sim/turret.ts 按槽上节流系挑好传入(非过热系塔恒 1)。
  */
-export function slotHeatMax(slot: WeaponSlot, def: TowerDef, supportBuffs: SupportBuffs, edictMul = 1): number {
-  return towerHeatMax(def, slot.level) * supportBuffs.heatMaxMul[def.throttle]! * edictMul;
+export function slotHeatMax(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
+  return towerHeatMax(def, slot.level) * buffs.heatMaxMul[def.throttle]!;
 }
 
 /**
@@ -136,8 +133,8 @@ export function slotHeatMax(slot: WeaponSlot, def: TowerDef, supportBuffs: Suppo
  * 除数过一遍 safeScale:与 effectiveFireInterval 同一道保护 —— 倍率被填成 0 会算出
  * Infinity 的蓄力时长,那座塔此后一帧都攒不起来,而且从画面上完全看不出是表填错了。
  */
-export function slotChargeTime(slot: WeaponSlot, def: TowerDef, supportBuffs: SupportBuffs): number {
-  return towerChargeTime(def, slot.level) / safeScale(supportBuffs.chargeRateMul[def.throttle]!);
+export function slotChargeTime(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
+  return towerChargeTime(def, slot.level) / safeScale(buffs.chargeRateMul[def.throttle]!);
 }
 
 /**
@@ -153,15 +150,9 @@ export function slotChargeTime(slot: WeaponSlot, def: TowerDef, supportBuffs: Su
  * 那一刻正在走的这一轮冷却当场变短** —— 不夹的话"射速 +25%"要等这一发的旧冷却走完才看得见,
  * 而购买正是玩家最盯着看反馈的那一帧。
  */
-function stepCooldown(
-  slot: WeaponSlot,
-  def: TowerDef,
-  dt: number,
-  supportBuffs: SupportBuffs,
-  edictMul: number,
-): void {
+function stepCooldown(slot: WeaponSlot, def: TowerDef, dt: number, buffs: EdictBuffs): void {
   if (slot.cooldown <= 0) return;
-  const max = slotFireInterval(slot, def, supportBuffs, 1, edictMul);
+  const max = slotFireInterval(slot, def, buffs);
   if (slot.cooldown > max) slot.cooldown = max;
   slot.cooldown -= dt;
   if (slot.cooldown <= THROTTLE_EPS) slot.cooldown = 0;
@@ -171,27 +162,19 @@ function stepCooldown(
  * 推进一个槽的节流一逻辑帧。**有没有目标都要跑** —— 装填、降温、蓄力都在这里:
  * 只在有目标时推进,弹药塔就会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
  * 调用方(sim/turret.ts)先按 type = -1 挡掉空槽:空槽没有节流可言。
- * @param supportBuffs 本帧的支援聚合(sim/support.ts 现算):四个 slot* 包装的倍率来源。
- * @param edictMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。只进射击间隔:
- *   装填/降温/蓄力那几条腿一个字都不碰 —— 法令是"打得快",不是"装得快/凉得快"。
+ * @param buffs 本帧的法令聚合(sim/edictBuffs.ts 现算):四个 slot* 包装的倍率来源。
  */
-export function stepThrottle(
-  slot: WeaponSlot,
-  def: TowerDef,
-  dt: number,
-  supportBuffs: SupportBuffs,
-  edictMul = 1,
-): void {
+export function stepThrottle(slot: WeaponSlot, def: TowerDef, dt: number, buffs: EdictBuffs): void {
   switch (def.throttle) {
     case THR_AMMO: {
       // 冷却与装填**并行**推进:装填完毕那一帧就该能开火,不再叠一层射击间隔。
       // (reload 1.5s 远长于 fireInterval,并行只是为了这条语义不依赖数值大小)
-      stepCooldown(slot, def, dt, supportBuffs, edictMul);
+      stepCooldown(slot, def, dt, buffs);
       if (slot.reloadLeft > 0) {
         // 剩余装填每帧现夹在**当前**装填时长之内,理由与 stepCooldown 那道夹取一字同源:
         // 买下弹药库,正在走的这一轮装填当场变短;不夹的话"装填 -30%"要等这一轮 1.5s 走完
         // 才看得见,而那正是玩家盯着看反馈的那一秒半。
-        const max = slotReload(slot, def, supportBuffs);
+        const max = slotReload(slot, def, buffs);
         if (slot.reloadLeft > max) slot.reloadLeft = max;
         slot.reloadLeft -= dt;
         if (slot.reloadLeft <= THROTTLE_EPS) {
@@ -204,7 +187,7 @@ export function stepThrottle(
     }
 
     case THR_HEAT: {
-      stepCooldown(slot, def, dt, supportBuffs, edictMul);
+      stepCooldown(slot, def, dt, buffs);
       // 降温**任何时候都在跑**,含强制冷却期间:UI 的热量条因此一直在往下走,
       // 玩家看得见"还剩多久能打",而不是锁死期间冻在顶上、解锁那一刻突然归零。
       if (slot.heat > 0) {
@@ -228,7 +211,7 @@ export function stepThrottle(
       // 故这里连清零都不必 —— 热循环里不放一句注定为真的赋值。UI 的"充能系 cooldown 恒 0"由此成立。
       // 电容组的加成也从这里进(slotChargeTime 现读聚合的 chargeRateMul):蓄力是充能系的
       // **全部**节奏,加成不进这一句就等于电容组对磁轨完全无效
-      const t = slotChargeTime(slot, def, supportBuffs);
+      const t = slotChargeTime(slot, def, buffs);
       if (t > 0) {
         slot.charge += dt / t;
         // 满了就**精确停在 1.0**(而不是留个 0.9999…):UI 的充能环要能画满,
@@ -245,7 +228,7 @@ export function stepThrottle(
 
     default:
       // 未知节流(数值表被改坏)退化成纯冷却:这样的塔至少还打得响,便于当场看出是表填错了
-      stepCooldown(slot, def, dt, supportBuffs, edictMul);
+      stepCooldown(slot, def, dt, buffs);
       break;
   }
 }
@@ -278,35 +261,24 @@ export function canFire(slot: WeaponSlot, def: TowerDef): boolean {
  * @param shots 这一次打出去几发(机炮 Lv3 双管 = 2,见 towerBurst)。
  *   连发的代价按发算:不乘 shots 就等于"升到 Lv3 之后多出来的那一发是免费的",
  *   弹夹与热量这两套机制会随着等级悄悄变弱 —— 而它们正是支援设施要作用的锚点。
- * @param supportBuffs 本帧的支援聚合:只进射击间隔与热上限两个"大小"档
- *   (弹药库的射速 / 散热器的热上限),单发的代价与装填一个字不碰 —— 支援是"打得更快/
+ * @param buffs 本帧的法令聚合:只进射击间隔与热上限两个"大小"档
+ *   (弹药协议的射速 / 散热协议的热上限),单发的代价与装填一个字不碰 —— 法令是"打得更快/
  *   连烧更久",不是"更省弹药/更不发热"。
- * @param edictMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。与 supportBuffs 同一条
- *   "只进射击间隔"的口径:法令是打得快,不是更省弹药/更不发热。
- * @param heatMaxEdictMul 法令的过热上限倍率(18 号散热协议),缺省 1 = 未持有。
- *   只进热上限(slotHeatMax):抬的是"能连烧多久",单发的代价一个字不变。
  */
-export function onFired(
-  slot: WeaponSlot,
-  def: TowerDef,
-  shots: number,
-  supportBuffs: SupportBuffs,
-  edictMul = 1,
-  heatMaxEdictMul = 1,
-): void {
+export function onFired(slot: WeaponSlot, def: TowerDef, shots: number, buffs: EdictBuffs): void {
   // 至少算一发:调用点就是"确实开火了"那一处,传 0/NaN 进来会让弹夹永不见底 = 节流形同虚设
   const n = shots > 1 ? Math.floor(shots) : 1;
 
   switch (def.throttle) {
     case THR_AMMO: {
-      slot.cooldown = slotFireInterval(slot, def, supportBuffs, 1, edictMul);
+      slot.cooldown = slotFireInterval(slot, def, buffs);
       slot.ammo -= n;
       if (slot.ammo <= 0) {
         slot.ammo = 0; // 夹 0:UI 直接把这个整数印出来,不能出现 -1 发
         // 判据也走包装:写 `def.reload > 0` 而按聚合后的时长去装填,两个数就会在
         // reloadMul 把它压到 0(或表被填成负数)时分叉 —— 那时塔会带着一个 ≤ 0 的 reloadLeft
         // 进"装填中",canFire 当场放行,弹夹却永远填不回来。一个数只算一次
-        const reload = slotReload(slot, def, supportBuffs);
+        const reload = slotReload(slot, def, buffs);
         if (reload > 0) {
           slot.reloadLeft = reload;
         } else {
@@ -318,11 +290,11 @@ export function onFired(
     }
 
     case THR_HEAT: {
-      slot.cooldown = slotFireInterval(slot, def, supportBuffs, 1, edictMul);
+      slot.cooldown = slotFireInterval(slot, def, buffs);
       slot.heat += def.heatPerShot * n;
       // 散热器抬的是**上限**(slotHeatMax),不是每发热量:于是"能连烧多久"变长,
       // 而单发的代价一个字不变 —— 与 GDD §5.3 那行"过热上限 +50%"逐字对应
-      const max = slotHeatMax(slot, def, supportBuffs, heatMaxEdictMul);
+      const max = slotHeatMax(slot, def, buffs);
       if (slot.heat >= max) {
         // 夹到上限而不是让它冲过头:热量条是 heat / heatMax,超过 1 的条会画到框外面去
         slot.heat = max;
@@ -341,7 +313,7 @@ export function onFired(
       break;
 
     default:
-      slot.cooldown = slotFireInterval(slot, def, supportBuffs, 1, edictMul);
+      slot.cooldown = slotFireInterval(slot, def, buffs);
       break;
   }
 }
@@ -358,41 +330,33 @@ export function onFired(
  *
  * @param fireMul 保留位(旧版受击射速惩罚),缺省 1 = 无惩罚。它是"外部事件让塔顿一下"
  *   这类效果的预留通道,今天恒 1(见文件头)。
- * @param buffMul **支援聚合**倍率(改版 06 号:弹药库 1.25 = 快两成半),缺省 1 = 没有生效的支援。
+ * @param buffMul **法令聚合**倍率(弹药协议 1.25 = 快两成半;2 层 = 1.25²),缺省 1 = 没有生效的法令。
  *   正常调用方一律不直接传它 —— 走 slotFireInterval 从聚合取,免得"加成"在第二处被算一遍。
- * @param edictMul **法令倍率**(18 号曳光协议 = 1.1,弹药系射速 +10%),缺省 1 = 未持有。
- *   与 buffMul 同一条路:sim/turret.ts 按槽上节流系挑好传入(非弹药系恒 1),
- *   本函数只认倍率、不认法令是谁 —— 与 tuning 同一档"改数据即可调平衡"。
  *
- * 四个旋钮**各除各的、各自过一遍 safeScale**,而不是先乘成一个数再除:它们分别是数值面板、
- * 船体状态、支援聚合、法令集合的函数,合并之后任何一边被填坏(0/NaN)都会顺着乘法把另外
- * 三边一起吞掉(NaN × 有限数还是 NaN),而下限保护也只剩一道、护不住各自的量级。
+ * 三个旋钮**各除各的、各自过一遍 safeScale**,而不是先乘成一个数再除:它们分别是数值面板、
+ * 船体状态、法令聚合的函数,合并之后任何一边被填坏(0/NaN)都会顺着乘法把另外两边一起吞掉
+ * (NaN × 有限数还是 NaN),而下限保护也只剩一道、护不住各自的量级。
  * 射速的唯一去处就是这一条式子:另开一份"加成后的间隔"必然与 stepCooldown 那道夹取错开口径。
  */
-export function effectiveFireInterval(
-  def: TowerDef,
-  level: number,
-  fireMul = 1,
-  buffMul = 1,
-  edictMul = 1,
-): number {
+export function effectiveFireInterval(def: TowerDef, level: number, fireMul = 1, buffMul = 1): number {
   return (
     towerFireInterval(def, level) /
     safeScale(tuning.towerFireRateScale) /
     safeScale(fireMul) /
-    safeScale(buffMul) /
-    safeScale(edictMul)
+    safeScale(buffMul)
   );
 }
 
 /**
- * 实际单次伤害 = 数值表的等级取值 × 全局伤害倍率,同样每次现读 tuning。
+ * 实际单次伤害 = 数值表的等级取值 × 全局伤害倍率 × **法令伤害倍率**,同样每次现读 tuning。
  * 倍率允许为 0(全场零伤害是个可逆、可理解的调试态),但**负数与 NaN 一律当 0**:
  * 负伤害等于给敌人回血,NaN 更会顺着 hp 一路污染到 checksum,而那是确定性口径的根。
+ * @param damageMul 法令聚合的全武器伤害倍率(超载协议 1.15;2 层 = 1.15²),缺省 1 = 未持有。
+ *   它与 tuning 那个旋钮**各过各的门**(同一手 `> 0 ? : 0`):一边被填坏不许把另一边一起吞掉。
  */
-export function effectiveDamage(def: TowerDef, level: number): number {
+export function effectiveDamage(def: TowerDef, level: number, damageMul = 1): number {
   const scale = tuning.towerDamageScale;
-  return towerDamage(def, level) * (scale > 0 ? scale : 0);
+  return towerDamage(def, level) * (scale > 0 ? scale : 0) * (damageMul > 0 ? damageMul : 0);
 }
 
 /**
@@ -403,9 +367,9 @@ export function effectiveDamage(def: TowerDef, level: number): number {
  * (途中不碰撞,伤害全在落点),少了这一层,面板上的 towerDamageScale 就会漏掉六塔里的一座 ——
  * 而"全局倍率只在本文件现乘"正是数据表不必认识 config 的前提(倍率写进 data/towers 就成环了)。
  */
-export function effectiveAoeDamage(def: TowerDef, level: number): number {
+export function effectiveAoeDamage(def: TowerDef, level: number, damageMul = 1): number {
   const scale = tuning.towerDamageScale;
-  return towerAoeDamage(def, level) * (scale > 0 ? scale : 0);
+  return towerAoeDamage(def, level) * (scale > 0 ? scale : 0) * (damageMul > 0 ? damageMul : 0);
 }
 
 /**
@@ -425,31 +389,28 @@ export function slotShotsPerFire(def: TowerDef, level: number): number {
 
 /**
  * 这个槽的**理论持续 DPS**(对单目标)—— HUD 火力面板的那一个固定数字。
- * "固定"指它只是 (等级, 支援聚合, 法令, tuning) 的纯函数:升级/买支援/拖面板才变,
+ * "固定"指它只是 (等级, 法令聚合, tuning) 的纯函数:升级/拿法令/拖面板才变,
  * 打没打中不变 —— 与实时账(World.dpsOf 的平滑读数)是两码事,后者只喂局末战报的峰值。
  * "持续"指含整个节流周期:弹药系摊上装填硬停顿,过热系摊上贪连射的锁死罚时,充能系就是攒-放
  * —— 三套机制的取舍在这一个数字里可比(点防 18.5 > 机炮 13.2,虽然单发更轻)。
  * "单目标"指链跳/穿透/AoE 溅射一律不计:多目标收益随场面波动,不属于"固定数值"的口径
  * (迫击炮取落点伤害 —— 单目标吃的就是那一份,def.damage 恒 0)。
- * 数值全走 slot* 包装与 effective*(支援/法令/tuning 各过各的门),别处不许再算第二遍。
+ * 数值全走 slot* 包装与 effective*(法令/tuning 各过各的门),别处不许再算第二遍。
  */
-export function slotSustainedDps(
-  slot: WeaponSlot,
-  def: TowerDef,
-  supportBuffs: SupportBuffs,
-  edictAmmoMul = 1,
-  edictHeatMaxMul = 1,
-): number {
+export function slotSustainedDps(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
   const shots = slotShotsPerFire(def, slot.level);
-  const dmg = def.fx === FX_MORTAR ? effectiveAoeDamage(def, slot.level) : effectiveDamage(def, slot.level);
+  const dmg =
+    def.fx === FX_MORTAR
+      ? effectiveAoeDamage(def, slot.level, buffs.damageMul)
+      : effectiveDamage(def, slot.level, buffs.damageMul);
   const perFire = shots * dmg;
   let dps: number;
 
   switch (def.throttle) {
     case THR_AMMO: {
-      const interval = slotFireInterval(slot, def, supportBuffs, 1, edictAmmoMul);
+      const interval = slotFireInterval(slot, def, buffs);
       if (!(interval > 0)) return 0; // 表被改坏(充能系才许 0 间隔),不除 0
-      const reload = slotReload(slot, def, supportBuffs);
+      const reload = slotReload(slot, def, buffs);
       const magazine = towerMagazine(def, slot.level);
       if (!(reload > 0) || !(magazine > 0)) {
         dps = perFire / interval; // 无装填(风暴机炮的买断/表调 0):硬停顿整条消失,纯射速
@@ -463,12 +424,12 @@ export function slotSustainedDps(
     }
 
     case THR_HEAT: {
-      const interval = slotFireInterval(slot, def, supportBuffs);
+      const interval = slotFireInterval(slot, def, buffs);
       if (!(interval > 0)) return 0;
       const burstDps = perFire / interval;
       // 满速连射的净热速率:≤ 0 = 收支平衡,永不停火(激光半速点射的分水岭、极光"无过热"签名)
       const heatRate = (def.heatPerShot * shots) / interval - def.coolPerSec;
-      const heatMax = slotHeatMax(slot, def, supportBuffs, edictHeatMaxMul);
+      const heatMax = slotHeatMax(slot, def, buffs);
       if (heatRate <= 0 || !(heatMax > 0) || !(def.overheatLock > 0)) {
         dps = burstDps;
       } else {
@@ -481,13 +442,13 @@ export function slotSustainedDps(
 
     case THR_CHARGE: {
       // 攒-放的全部节奏就是蓄力时长;表调 0 = 当场满充(stepThrottle 兜底),封在一帧一发
-      const t = slotChargeTime(slot, def, supportBuffs);
+      const t = slotChargeTime(slot, def, buffs);
       dps = perFire / (t > SIM_DT ? t : SIM_DT);
       break;
     }
 
     default: {
-      const interval = slotFireInterval(slot, def, supportBuffs);
+      const interval = slotFireInterval(slot, def, buffs);
       dps = interval > 0 ? perFire / interval : 0;
       break;
     }
@@ -520,14 +481,13 @@ function clamp01(v: number): number {
  * 这个槽"下一次发射"读数,写进调用方给的 out(HUD 每帧逐槽问,零分配)。
  * 判序与 canFire 一字同源(装填/锁死/蓄满是各系的放行门,冷却排在其后):
  * 读数与放行判据分叉的话,面板印着"就绪"炮却哑着,那读数就成了谎话。
- * 进度分母全走 slot* 包装(当前等级/支援/法令下的实际时长),与 stepThrottle 的逐帧夹取同源。
+ * 进度分母全走 slot* 包装(当前等级/法令下的实际时长),与 stepThrottle 的逐帧夹取同源。
  */
 export function slotFireReadout(
   slot: WeaponSlot,
   def: TowerDef,
-  supportBuffs: SupportBuffs,
+  buffs: EdictBuffs,
   out: FireReadout,
-  edictAmmoMul = 1,
 ): FireReadout {
   out.state = FIRE_READY;
   out.seconds = 0;
@@ -536,12 +496,12 @@ export function slotFireReadout(
   switch (def.throttle) {
     case THR_AMMO:
       if (slot.reloadLeft > 0) {
-        const max = slotReload(slot, def, supportBuffs);
+        const max = slotReload(slot, def, buffs);
         out.state = FIRE_RELOAD;
         out.seconds = slot.reloadLeft;
         out.ratio = max > 0 ? clamp01(1 - slot.reloadLeft / max) : 0;
       } else if (slot.cooldown > 0) {
-        const max = slotFireInterval(slot, def, supportBuffs, 1, edictAmmoMul);
+        const max = slotFireInterval(slot, def, buffs);
         out.state = FIRE_COOLDOWN;
         out.seconds = slot.cooldown;
         out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;
@@ -554,7 +514,7 @@ export function slotFireReadout(
         out.seconds = slot.coolLock;
         out.ratio = def.overheatLock > 0 ? clamp01(1 - slot.coolLock / def.overheatLock) : 0;
       } else if (slot.cooldown > 0) {
-        const max = slotFireInterval(slot, def, supportBuffs);
+        const max = slotFireInterval(slot, def, buffs);
         out.state = FIRE_COOLDOWN;
         out.seconds = slot.cooldown;
         out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;
@@ -564,14 +524,14 @@ export function slotFireReadout(
     case THR_CHARGE:
       if (slot.charge < 1) {
         out.state = FIRE_CHARGING;
-        out.seconds = clamp01(1 - slot.charge) * slotChargeTime(slot, def, supportBuffs);
+        out.seconds = clamp01(1 - slot.charge) * slotChargeTime(slot, def, buffs);
         out.ratio = clamp01(slot.charge);
       }
       break;
 
     default:
       if (slot.cooldown > 0) {
-        const max = slotFireInterval(slot, def, supportBuffs);
+        const max = slotFireInterval(slot, def, buffs);
         out.state = FIRE_COOLDOWN;
         out.seconds = slot.cooldown;
         out.ratio = max > 0 ? clamp01(1 - slot.cooldown / max) : 0;

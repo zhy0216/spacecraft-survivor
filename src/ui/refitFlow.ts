@@ -52,6 +52,7 @@ import {
   type World,
 } from '../sim/world';
 import { audioBus } from '../render/audio';
+import { edictDesc } from './upgradeFlow';
 
 const OK_COLOR = '#9adcff';
 const DENY_COLOR = '#ff7a6b';
@@ -159,22 +160,15 @@ function round(value: number): string {
 }
 
 /**
- * 一张法令的效果文案 —— **逐字取自数值表**(EDICTS 的中性填档:乘法 1、加法 0),
- * ui 不许抄第二份(与 upgrade.ts 的 optionLabel 同一条口径)。全中性的守卫只是
- * 数据表写坏的兜底,正常七条至少有一档非中性。
+ * 一张法令的效果文案 —— **转发 upgradeFlow 的 edictDesc**,不在这里念第二遍数值表。
+ * 升级三选一的法令卡与船坞货架的法令卡是同一批东西,文案分家的话改一次数值表就得改两处,
+ * 而"两处只改了一处"的症状是两个面板对同一条法令印出不同的数 —— 玩家没法判断哪个是真的。
+ * 型号越界的兜底也一并继承(不静默冒充第 0 条)。
  */
 export function dockEdictEffect(type: number): string {
   const def = EDICTS[type];
   if (!def) return '未知法令';
-  const parts: string[] = [];
-  if (def.ammoFireRateMul !== 1) parts.push(`弹药射速 ×${round(def.ammoFireRateMul)}`);
-  if (def.turnRateAdd !== 0) parts.push(`转向 +${round(def.turnRateAdd)}°/s`);
-  if (def.magnetRadiusMul !== 1) parts.push(`拾取半径 ×${round(def.magnetRadiusMul)}`);
-  if (def.heatMaxMul !== 1) parts.push(`过热上限 ×${round(def.heatMaxMul)}`);
-  if (def.hullHpAdd !== 0) parts.push(`船体 HP +${def.hullHpAdd}`);
-  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${round(def.cruiseSpeedMul)}`);
-  if (parts.length === 0) return '全船被动';
-  return parts.join(' · ');
+  return edictDesc(def);
 }
 
 /**

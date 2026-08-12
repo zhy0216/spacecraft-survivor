@@ -1,0 +1,32 @@
+{
+  "endpoint": "fal-ai/nano-banana-pro/edit",
+  "unit_cost": 0.15,
+  "resolution": "2K",
+  "aspect_ratio": "1:1",
+  "output_format": "png",
+  "note": "round-3: 骨架动画(cutout FK)第一批 —— 蜂群蛭(KIND_SWARM)与侧掠者(KIND_STRAFER)的分件图。换 nano-banana-pro/edit 而非 round-1/2 的 flux-2-pro:分件必须与已过审的单件图是同一只怪(同轮廓/同配色/同渲染),这要求模型吃参考图并保住角色同一性,flux-2-pro 是纯 text-to-image 做不到。色键 #00ff00 与验收口径沿用 round-1(docs/investigations/2026-08-02)。参考图用 round-1 的 512px RGBA 候选图(已过审的那一张)。",
+  "reference_images": {
+    "enemy-swarm-leech-01": "https://v3b.fal.media/files/b/0aa60c9b/xTtQ4F5ipdW0PdYzgddzn_enemy-swarm-leech-01.png",
+    "enemy-side-raider-01": "https://v3b.fal.media/files/b/0aa60c9d/5AfH1BkeLxJZPfNfXS4wd_enemy-side-raider-01.png"
+  },
+  "jobs": [
+    {
+      "id": "swarm-leech-parts-01",
+      "category": "enemies",
+      "kind": "KIND_SWARM",
+      "seed": 42301,
+      "key_color": "#00ff00",
+      "parts_expected": ["core", "lobe"],
+      "rig_note": "core = 环状口器盘(呼吸 + 慢自转);lobe 一张纹理放射实例化 6 份,根部为轴相位错开做蠕动脉冲"
+    },
+    {
+      "id": "side-raider-parts-01",
+      "category": "enemies",
+      "kind": "KIND_STRAFER",
+      "seed": 42302,
+      "key_color": "#00ff00",
+      "parts_expected": ["head", "thorax", "leg", "tail-a", "tail-b"],
+      "rig_note": "head→thorax→tail-a→tail-b 为 FK 链(冲刺绷直、脱离甩鞭);leg 一张纹理实例化 4 份,相位错开爬动"
+    }
+  ]
+}

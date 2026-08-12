@@ -69,27 +69,27 @@ import {
   DROP_MAX_ALIVE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
+  SHOP_BEACON_LIFETIME,
+  SHOP_BEACON_MAX_DIST,
+  SHOP_BEACON_MIN_DIST,
+  SHOP_BEACON_RADIUS,
   skipRefundFor,
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
 } from '../data/economy';
 import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import {
-  edictAmmoFireRateMul,
-  edictCruiseSpeedMul,
-  edictHeatMaxMul,
-  edictHullHpAdd,
-  edictMagnetRadiusMul,
-  edictMask,
-  edictTurnRateAdd,
+  createEdictLevels,
+  edictCanStack,
+  edictLevel,
   EDICT_KIND_COUNT,
-  hasEdict,
+  EDICT_MAX_LEVEL,
+  EDICTS,
 } from '../data/edicts';
 import {
   isMergeResult,
   mergeResultOf as dataMergeResultOf,
 } from '../data/merges';
-import { SUPPORTS } from '../data/supports';
 import {
   FX_LIFE_BEAM,
   FX_LIFE_BLAST,
@@ -105,14 +105,7 @@ import {
 } from '../data/towers';
 import { UNLOCK_EDICT, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
 import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
-import {
-  createSupportSlots,
-  createWeaponSlots,
-  type SupportSlot,
-  type WeaponSlot,
-  WEAPON_SLOT_COUNT,
-  SUPPORT_SLOT_COUNT,
-} from './armory';
+import { createWeaponSlots, swapWeaponSlots, type WeaponSlot, WEAPON_SLOT_COUNT } from './armory';
 import { type Bullet, createBullet, resetBullet, stepBullets } from './bullet';
 import { tuning } from './config';
 import { hullDamageTaken, hullMaxHp, shipRadius } from './damage';
@@ -165,12 +158,11 @@ import {
 } from './fx';
 import type { EnemyBulletSink } from './enemyBullet';
 import { createShip, DEG2RAD, type Ship, type ShipCommand, stepShip, type Vec2 } from './ship';
-import { aggregateSupportBuffs, createSupportBuffs, type SupportBuffs } from './support';
+import { aggregateEdictBuffs, createEdictBuffs, type EdictBuffs } from './edictBuffs';
 import { stepTurrets } from './turret';
 import {
   OFFER_EDICT,
   OFFER_NEW_WEAPON,
-  OFFER_SUPPORT,
   OFFER_WEAPON_UPGRADE,
   type UpgradeOption,
   rollUpgradeOffer,
@@ -353,12 +345,18 @@ export const REPLACE_OK = 0;
 export const REPLACE_BAD_SLOT = -60;
 /** 替换失败:武器型越界(数值表写坏)。 */
 export const REPLACE_INVALID_TYPE = -61;
-/** 获得支援成功(已入槽)。 */
-export const SUPPORT_OK = 0;
-/** 支援槽已满(4 个全占;支援可重复持有,满槽后不再允许)。 */
-export const SUPPORT_FULL = -53;
-/** 支援型越界(数值表写坏):SUPPORTS[type] 取不到。 */
-export const SUPPORT_INVALID_TYPE = -54;
+/** 授予法令成功(层数 +1)。 */
+export const EDICT_OK = 0;
+/**
+ * 这条法令已经满层(EDICT_MAX_LEVEL)。正常玩不出来 —— 满层的法令由卡池与船坞货架双双过滤
+ * (sim/upgrade.ts 的 collectPool / World.rollDockEdicts),这一码是**兜底而不是流程**:
+ * 过滤与授予各判各的,少了它,一次过滤疏漏就会变成"点了卡、扣了钱、什么都没加"的静默吞卡。
+ */
+export const EDICT_MAXED = -53;
+/** 法令型越界(数值表写坏):EDICTS[type] 取不到。 */
+export const EDICT_INVALID_TYPE = -54;
+/** 换位失败:两个下标里有越界的,或两个是同一个槽(换了等于没换)。 */
+export const SWAP_BAD_SLOT = -80;
 /** 商店买武器失败:货架这一格已经卖出(或下标越界)。 */
 export const SHOP_WEAPON_SOLD = -70;
 /** 商店买武器失败:星币不足(价 = data/economy 的 DOCK_WEAPON_PRICE)。 */
@@ -426,11 +424,17 @@ export class World {
   readonly weapons: WeaponSlot[] = createWeaponSlots();
 
   /**
-   * 支援槽(改版 06 号):长度 = SUPPORT_SLOT_COUNT 的定长数组,type = -1 = 空槽。
-   * 支援 = 全船被动,重复持有允许(= 叠效,聚合规则见 sim/support.ts)。
-   * 一局只变几次(获得),但聚合每帧现算(4 个槽便宜),进 checksum。
+   * **已持有法令的层数表**(用户设计会:支援并入法令),长度 = EDICT_KIND_COUNT,下标 = EDICT_*。
+   * 0 = 未持有,上限 EDICT_MAX_LEVEL(5)。法令**不占任何槽位**、可重复持有 = 叠层
+   * (聚合规则见 sim/edictBuffs.ts:乘法档 base^层、加法档 add×层)。
+   *
+   * 取代了旧的两样东西:支援槽数组(supports)与法令位掩码(edicts)。掩码换成层数表是
+   * "最多拿 5 次"这条规则的直接落地 —— 一位存不下五层,而两套并行的被动本就该只有一套。
+   * 它是逐帧演化的真状态、**不是派生量**,逐条进 checksum(与槽位等级同口径):
+   * 法令只改 effective 数值,而那些数值本就参与判定(谁开火、转到哪、捡不捡得到),
+   * 漏了它重放当场失配。
    */
-  readonly supports: SupportSlot[] = createSupportSlots();
+  readonly edictLevels: number[] = createEdictLevels();
 
   /**
    * 每型武器的**存档等级**(改版,下标 = TOWER_*):给**未拥有**的武器升级时 +1
@@ -440,11 +444,12 @@ export class World {
   weaponBankedLevels: number[] = new Array<number>(TOWER_KIND_COUNT).fill(0);
 
   /**
-   * 本帧的全船支援聚合(改版 06 号)。每帧 step 帧首由 aggregateSupportBuffs 就地重写,
-   * 再传给 sim/turret(开火节奏)、sim/tower(节流包装)、sim/damage(船体 HP/减伤)
-   * 与 stepDrops(经验倍率)。它不在 checksum 里:是 supports(已逐槽哈希)与数据表的纯函数。
+   * 本帧的**全船法令聚合**。每帧 step 帧首由 aggregateEdictBuffs 就地重写,再传给
+   * sim/turret(开火节奏)、sim/tower(节流包装)、sim/damage(船体 HP/减伤)、
+   * sim/ship(转向/巡航)与 stepDrops(经验倍率/磁吸)。
+   * 它不在 checksum 里:是 edictLevels(已逐条哈希)与数据表的纯函数,哈它是把同一件事哈两遍。
    */
-  readonly supportBuffs: SupportBuffs = createSupportBuffs();
+  readonly buffs: EdictBuffs = createEdictBuffs();
 
   /**
    * 本局的波次脚本进度(08 号 issue)。整局同一个对象,由 stepWaves 每帧就地推进。
@@ -632,18 +637,6 @@ export class World {
   offerRerolled = false;
 
   /**
-   * 已持有的法令位掩码(18 号)。data/edicts 的 EDICT_* 各占一位,抽到即置位、**不叠级**:
-   * rollUpgradeOffer 把已持有的从候选里剔掉(heldEdicts 参数),卡面上永远不会出现
-   * "重复法令无效"的沉默陷阱。
-   *
-   * 效果**不在这里算** —— 六个现读点(弹药射速 / 转向 / 拾取半径 / 过热上限 / 船体 HP /
-   * 巡航速度)各自按位查表(edictXxx 聚合函数),于是改 data/edicts 即热调,与 tuning 同口径。
-   * 它是逐帧演化的真状态、**不是派生量**,进 checksum(与槽位等级同口径):法令只改 effective
-   * 数值,而那些数值本就参与判定(谁开火、转到哪、捡不捡得到),漏了它重放当场失配。
-   */
-  edicts = 0;
-
-  /**
    * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
    * 回调也不会重复响。停 loop / 放大 / 弹卡全在 main.ts,World 不认识流程层。
    */
@@ -655,8 +648,28 @@ export class World {
    * (旧版的 refitWelded"每轮只焊一块甲板"随焊接删除 —— 整备现在只逛商店,没有次数限制。)
    */
   refitPending = false;
-  /** 参数 = 即将开始的航段下标。 */
+  /** 参数 = 开出这个商店的航段下标。 */
   onRefitOffer: ((segment: number) => void) | null = null;
+
+  /**
+   * —— 地图商店信标(用户设计会:取消"每跨一段自动弹面板")——
+   * 每跨一个航段(约两分钟)在船周围随机方位、随机距离处生成一个信标,只存在
+   * SHOP_BEACON_LIFETIME 秒;玩家**开船撞上去**才开商店面板(时停)、才拿免费回血。
+   * 没赶到就随信标一起消失,这一轮什么都没有 —— 于是"要不要冒着虫潮横穿半张图"
+   * 成了每两分钟一次的真取舍(把面板搬上地图的全部意义就在这一句)。
+   *
+   * 四个字段全是**逐帧演化的真状态**(位置消耗过 rng、计时决定还剩几帧可接),进 checksum。
+   * 渲染层按 active 画信标与屏边指示箭头,HUD 按 ttl 画倒计时。
+   */
+  shopBeaconActive = false;
+  shopBeaconX = 0;
+  shopBeaconY = 0;
+  /** 剩余存活秒数(≤ 0 = 本轮作废)。active = false 时恒 0 */
+  shopBeaconTtl = 0;
+  /** 开出这个信标的航段下标(接上时喂给 onRefitOffer,面板标题读它) */
+  shopBeaconSegment = 0;
+  /** 信标生成那一帧的一次性出口(HUD 弹"商店已开启"提示 / 播音效)。参数 = 航段下标 */
+  onShopBeacon: ((segment: number) => void) | null = null;
 
   /**
    * 本轮整备的船坞法令货架(21 号):每个元素是一条**还没卖出**的法令号,卖出一格当场写成 -1;
@@ -812,10 +825,9 @@ export class World {
     this.bullets = new Pool<Bullet>(createBullet, resetBullet);
     this.enemyBullets = new Pool<EnemyBullet>(createEnemyBullet, resetEnemyBullet);
     this.drops = new Pool<Drop>(createDrop, resetDrop);
-    // HP 上限问 damage.hullMaxHp 而不是直接读 tuning:支援聚合(改版 06 号装甲舱 +15)会让它
-    // 变成**支援槽的派生量**,调用点今天就接好 —— 构造时空支援 = 聚合全中性,上限 = 基准 100。
-    // 法令点数(18 号结构加固)同样从这里进 —— 新世界必然空法令,故构造时显式传 0。
-    this.ship.hp = this.ship.maxHp = hullMaxHp(this.supportBuffs, 0);
+    // HP 上限问 damage.hullMaxHp 而不是直接读 tuning:法令聚合(装甲协议 +15/层)让它
+    // 成为**法令层数的派生量** —— 构造时零法令 = 聚合全中性,上限 = 基准 100。
+    this.ship.hp = this.ship.maxHp = hullMaxHp(this.buffs);
   }
 
   /** 开局至今的秒数。HP 时间缩放(GDD §14)的唯一时间源:挂在 tick 上才与 checksum 同口径 */
@@ -833,7 +845,7 @@ export class World {
    * (旧版的"每扩建一格 −1°/s"随甲板删除 —— 槽位制没有扩建,转向只有基准与法令两档。)
    */
   get turnRate(): number {
-    return tuning.shipTurnRate + edictTurnRateAdd(this.edicts);
+    return tuning.shipTurnRate + this.buffs.turnRateAdd;
   }
 
   /**
@@ -931,17 +943,17 @@ export class World {
     }
     if (dpsSum > this.peakDps) this.peakDps = dpsSum;
 
-    // 支援聚合与 HP 上限两样派生量在帧首统一刷,于是"这一帧"的塔与"这一帧"的撞击
-    // 读到的都是最新的支援(改版 06 号)。聚合每帧全量重算:4 个槽的几遍乘法,
-    // 比维护 revision 守卫便宜(旧版那套守卫是几十格甲板遍历的遗产,槽位制不需要)。
-    aggregateSupportBuffs(this.supports, this.supportBuffs);
-    // HP 上限同理是**支援槽的派生量**(装甲舱 +15,damage.hullMaxHp):买下支援的当帧就该生效,
-    // 这正是改版 06 号验收"购买即时生效"要的即时性 —— 每帧现算而不是记个脏标记。
+    // 法令聚合与 HP 上限两样派生量在帧首统一刷,于是"这一帧"的塔与"这一帧"的撞击
+    // 读到的都是最新的法令。聚合每帧全量重算:10 条法令的几次 pow,
+    // 比维护 revision 守卫便宜(旧版那套守卫是几十格甲板遍历的遗产,层数表不需要)。
+    // 它也是转向/巡航/磁吸/星币概率的来源 —— 帧首刷一次,后面每一处现读同一份。
+    aggregateEdictBuffs(this.edictLevels, this.buffs);
+    // HP 上限同理是**法令层数的派生量**(装甲协议 +15/层,damage.hullMaxHp):拿到的当帧就该生效,
+    // 每帧现算而不是记个脏标记。
     //
     // **只夹不涨**:上限回落时把 hp 压进新上限(否则会留下一艘 hp > maxHp 的船,
-    // 血条画出去满出来),但上限涨上去时 hp 一分不还 —— 装甲舱是船的规格,不是治疗。
-    // 法令点数(18 号结构加固)每帧现算:抽到/没抽到,当帧的上限就改(现读点口径,与 tuning 同源)
-    this.ship.maxHp = hullMaxHp(this.supportBuffs, edictHullHpAdd(this.edicts));
+    // 血条画出去满出来),但上限涨上去时 hp 一分不还 —— 装甲协议是船的规格,不是治疗。
+    this.ship.maxHp = hullMaxHp(this.buffs);
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
 
     // 加速技能(空格):触发判定在计时递减**之前** —— 触发那一帧就是加速的第一帧,
@@ -973,9 +985,39 @@ export class World {
       desiredHeading,
       SIM_DT,
       this.turnRate,
-      edictCruiseSpeedMul(this.edicts) * (boosting ? tuning.boostSpeedMul : 1),
+      this.buffs.cruiseSpeedMul * (boosting ? tuning.boostSpeedMul : 1),
       boosting ? tuning.boostAccelMul : 1,
     );
+
+    // 商店信标:计时 + 接触判定。排在 stepShip **之后**,于是判的是船**本帧**的位置 ——
+    // 晚一帧的话高速冲刺穿过信标会出现"明明擦过去了却没接上"。
+    // **先判到店、后判到期**:同一帧既撞上又走完计时算到店(玩家赶上了就是赶上了)。
+    if (this.shopBeaconActive) {
+      this.shopBeaconTtl -= SIM_DT;
+      const bdx = ship.x - this.shopBeaconX;
+      const bdy = ship.y - this.shopBeaconY;
+      // 判定半径 = 信标半径 + 船体受击圆(damage.shipRadius 的唯一口径,与撞击精筛同一份几何)
+      const br = SHOP_BEACON_RADIUS + shipRadius(tuning.shipLength);
+      if (bdx * bdx + bdy * bdy <= br * br) {
+        // 到店:信标当场熄灭(一轮一次,面板关掉也不许再接一次),开面板 + 免费回血。
+        // 回血挂在**接上的这一刻**而不是关面板时:玩家要能在店里看着血条回上去,
+        // 再决定这 25 星币的付费修复还买不买(data/economy 的 REFIT_HEAL_FRACTION 那段)
+        this.shopBeaconActive = false;
+        this.shopBeaconTtl = 0;
+        this.refitPending = true;
+        this.ship.hp = Math.min(
+          this.ship.maxHp,
+          this.ship.hp + Math.ceil(this.ship.maxHp * REFIT_HEAL_FRACTION),
+        );
+        openedRefit = true;
+      } else if (this.shopBeaconTtl <= 0) {
+        // 没赶到:信标熄灭,两张货架一起作废 —— 留着的话下一轮会拿到过期货
+        this.shopBeaconTtl = 0;
+        this.shopBeaconActive = false;
+        this.dockEdictOffers.length = 0;
+        this.shopWeapons.length = 0;
+      }
+    }
 
     // 出怪。正式路径是波次脚本的运行器(sim/waves.ts):它一个字都不认识世界,只说"朝这个方向
     // 出一只这型的怪",落点由 waveSink → spawnFromWave 补完。
@@ -989,17 +1031,19 @@ export class World {
     if (tuning.stressSpawn) this.stressSyncCounts();
     else if (!this.refitPending) {
       const segmentBefore = this.wave.segment;
-      // 正式流程在段边界停住:下一段的编号/预告已经可读，但它的第一只怪要等整备完成后再出生。
-      stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, true);
+      // 商店搬上地图之后**段边界不再停顿**(stopAtSegmentBoundary = false):虫潮连续流动,
+      // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
+      stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
       if (this.wave.segment !== segmentBefore && !this.wave.done) {
-        this.refitPending = true;
-        // 改版 21 号:跨段那一帧掷定本轮船坞的**两张货架**(法令 + 商店武器)——与出怪同一条
-        // "帧首、定死顺序"的确定性,玩家在整备面板上买不买都扰动不到这条随机序列(购买零 rng,
-        // 见 buyDockEdict / buyShopWeapon)。两个货架各掷各的、顺序定死:先法令后武器,同 seed
-        // 逐位可复现。
+        // 跨段那一帧一次掷定三样,**顺序定死**(信标位置 → 法令货架 → 武器货架):
+        // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
+        // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
+        // 货架在**信标生成时**就掷定而不是接上时才掷:接不接得上取决于玩家操作,
+        // 让它决定 rng 时点等于把随机序列交给玩家手速 —— 同 seed 同操作序列的回放当场作废。
+        this.spawnShopBeacon();
         this.rollDockEdicts();
         this.rollShopWeapons();
-        openedRefit = true;
+        this.onShopBeacon?.(this.wave.segment);
       }
     }
 
@@ -1058,9 +1102,9 @@ export class World {
       }
       if (hasAffix(c, AFFIX_MAGNETIC)) magnetMul = magnetPickupMul;
     }
-    // 18 号磁力过载(拾取半径 +30%):与词缀干扰同一个倍率连乘 —— 法令只在已持有那几帧生效,
-    // 授予/回滚当帧即读(现读点口径,与 tuning 同源)。未持有 = ×1,既有链路逐位一字不差
-    magnetMul *= edictMagnetRadiusMul(this.edicts);
+    // 磁力协议(拾取半径 +30%/层):与词缀干扰同一个倍率连乘 —— 层数变了当帧即读
+    // (聚合在帧首刷过)。未持有 = ×1,既有链路逐位一字不差
+    magnetMul *= this.buffs.magnetRadiusMul;
     // 粗筛半径 = 船体受击圆(damage.shipRadius 的唯一口径,与精筛同一份几何)
     const contactR = shipRadius(tuning.shipLength);
 
@@ -1177,33 +1221,14 @@ export class World {
     // 同时在射界内时,点防先把这一发打给弹丸;onFired 写下的 cooldown 把 stepTurrets 的
     // canFire 当场闸住,天然不会双射(设计决策与理由全文见 sim/intercept.ts 的文件头)。
     // 零 rng:拦截一步都不掷,出怪/召唤的随机序列不受影响
-    stepInterception(
-      this.weapons,
-      ship,
-      this.enemyBullets.items,
-      SIM_DT,
-      this.sink,
-      this.supportBuffs,
-      edictAmmoFireRateMul(this.edicts),
-      edictHeatMaxMul(this.edicts),
-    );
+    stepInterception(this.weapons, ship, this.enemyBullets.items, SIM_DT, this.sink, this.buffs);
 
     // 炮管:朝射界内最近的敌人转,没得打就归位(04 号 issue),够得着又转得过来就开火(05 号)。
     // 传 this.grid 而不是 enemies:1000 敌 × 四座塔的线性扫描是 GDD §13 明令要用哈希避开的那件事;
     // 传 this.sink 而不是 this:开火侧只认识 FireSink 那份契约,永远不认识 World(见 sim/fx.ts);
-    // 传 this.supportBuffs:全船支援聚合,开火节奏的倍率来源(改版 06 号);
-    // 传两个法令倍率(18 号):曳光协议(弹药射速)与散热协议(过热上限)的现读点就在 stepTurrets,
-    // 由它按槽上节流系折进塔(未持有 = 1,逐位恒等)
-    stepTurrets(
-      this.weapons,
-      ship,
-      this.grid,
-      SIM_DT,
-      this.sink,
-      this.supportBuffs,
-      edictAmmoFireRateMul(this.edicts),
-      edictHeatMaxMul(this.edicts),
-    );
+    // 传 this.buffs:全船法令聚合,开火节奏与伤害倍率的唯一来源 ——
+    // "哪一系吃哪条法令"已在聚合里按 throttle 折过,故这里不再逐槽挑倍率
+    stepTurrets(this.weapons, ship, this.grid, SIM_DT, this.sink, this.buffs);
 
     // 子弹:积分 → 命中 → 迫击炮到期在落点炸 AoE(规则全在 sim/bullet.ts,本文件只给它一个 sink)
     stepBullets(this.bullets, SIM_DT, this.sink);
@@ -1223,8 +1248,8 @@ export class World {
     // 船心传的是本帧**积分之后**的位置:残骸追的是船现在在哪 ——
     // 晚一帧的话,高速航行时整串残骸会恒定拖在船身后(与出怪环以船本帧位置为心同一条理由)。
     // magnetMul 是帧首扫出来的磁力修正(词缀干扰 × 法令过载,14/18 号);
-    // 经验倍率(supportBuffs.xpMul)由 stepDrops 内部乘好 —— 这一句只进账
-    this.scrap += stepDrops(this.drops, ship.x, ship.y, SIM_DT, magnetMul, this.supportBuffs.xpMul);
+    // 经验倍率(buffs.xpMul)由 stepDrops 内部乘好 —— 这一句只进账
+    this.scrap += stepDrops(this.drops, ship.x, ship.y, SIM_DT, magnetMul, this.buffs.xpMul);
 
     // 船体受击结算:粗筛名单 → 受击圆精筛 → 扣血(顺序理由见块注释与 settleHullDamage)
     this.settleHullDamage();
@@ -1245,9 +1270,9 @@ export class World {
     // 停不停是 main.ts 的事
     this.settleOutcome();
 
-    // 同一帧若沉船/通关，结算优先，不能在结算面板下面再弹一层整备。
+    // 同一帧若沉船/通关，结算优先，不能在结算面板下面再弹一层商店。
     if (openedRefit) {
-      if (this.result === RESULT_RUNNING) this.onRefitOffer?.(this.wave.segment);
+      if (this.result === RESULT_RUNNING) this.onRefitOffer?.(this.shopBeaconSegment);
       else {
         this.refitPending = false;
         // 整备被局终吞掉:两张货架一起清空,免得下一轮(不会有)或任何读它的路径拿到过期货
@@ -1311,17 +1336,16 @@ export class World {
       this.scrap < this.upgradeCost
     )
       return;
-    // 战斗内升级在槽位上新增/强化武器、买支援或抽法令(改版:四类权重见 data/economy.ts);
-    // 商店专属于两分钟整备。heldEdicts 让法令候选剔掉已持有(不叠级);
+    // 战斗内升级在槽位上新增/强化武器,或叠一层法令(三类权重见 data/economy.ts);
+    // 商店专属于地图信标。edictLevels 让**满层**的法令剔出候选(不是"已持有"——法令可叠到 5 层);
     // unlockMask(19 号)让未解锁的塔/法令不进候选 —— 两者同一条"只收窄可选表、不碰 rng"口径
     if (
       rollUpgradeOffer(
         this.rng,
         this.offer,
-        this.edicts,
+        this.edictLevels,
         this.unlockMask,
         this.weapons,
-        this.supports,
         this.weaponBankedLevels,
       ) === 0
     ) {
@@ -1412,16 +1436,19 @@ export class World {
    * 规则在别处,这里只补世界这一层才知道的三件事:掉在哪、值多少、在场上限)。
    * 只在 reap 里、对象回池之前调用:坐标必须当场读走。
    *
-   * 改版后它同时管两本账(用户设计会:**所有击杀都双轨进账**):
-   *   **星币**(改版 16 号):击杀当场 `starCoins += 面额` —— 普通怪按型
-   *     (ENEMIES[kind].starCoins,1-4)、精英固定 ELITE.starCoins(10)、Boss 固定
-   *     BOSS.starCoins(30)。**不造掉落物**:星币没有"掉在地上捡不到"的问题,
+   * 改版后它同时管两本账:
+   *   **星币**(用户设计会:改成**概率掉落**):每次击杀**恒掷 1 次 rng**,命中
+   *     buffs.starCoinChance(基础 10%,星图协议每层 +8 个点)才进账,面额一个字不改 ——
+   *     普通怪按型(ENEMIES[kind].starCoins,1-4)、精英 ELITE.starCoins(10)、
+   *     Boss BOSS.starCoins(30)。**不造掉落物**:星币没有"掉在地上捡不到"的问题,
    *     也不占 DROP_MAX_ALIVE、不走磁吸;
    *   **经验**(改版 10 号):每只死者在原地掉一颗 XP 掉落物,面额 = 该敌型 scrap 面值,
    *     精英 ×3 / Boss ×12(读数据表,见下)—— 掉落物承载经验,磁吸拾取才有"捡得到才升级"的取舍。
-   * 两条路都**一次 rng 都不掷**:每只必掉、面额按型定死 ——
-   * 于是战斗打得好不好(死了几只、什么时候死)反过来扰动不到出怪的随机序列,
-   * 08 号那条"同 seed 同出怪序列"照旧成立。
+   *
+   * **rng 消耗口径(定死)**:星币那一掷**无条件发生**,与命中与否、有没有星图协议、
+   * 是不是 Boss 全无关 —— 与 sim/upgrade.ts 那条"每个候选位恒 2 次"一字同源。
+   * 少了这条,拿一层星图协议就会把整条随机序列往前挪,同 seed 的出怪序列当场作废。
+   * 经验那条路仍是零 rng(每只必掉、面额按型定死)。
    *
    * 经验掉落物:速度不填,池里取出来的那颗刚走过 resetDrop,vx/vy = 0 就是"停在尸体上等人来捡";
    * 面额 ≤ 0 的型**不掉**(数值表允许 0,见 enemies.test.ts 的表级不变量):
@@ -1432,10 +1459,14 @@ export class World {
    */
   private spawnDrop(e: Enemy): void {
     const isBoss = e.kind === KIND_BOSS;
-    // 星币:所有击杀都进账。精英判定与 eliteKills 同一条(affixes ≠ 0),Boss 走专用 kind。
-    if (isBoss) this.starCoins += BOSS.starCoins;
-    else if (e.affixes !== 0) this.starCoins += ELITE.starCoins;
-    else this.starCoins += ENEMIES[e.kind]!.starCoins;
+    // 星币:**先掷、后判**(掷在最前面且无条件 —— 见上面那段 rng 消耗口径)。
+    // 精英判定与 eliteKills 同一条(affixes ≠ 0),Boss 走专用 kind
+    const coinRoll = this.rng.next();
+    if (coinRoll < this.buffs.starCoinChance) {
+      if (isBoss) this.starCoins += BOSS.starCoins;
+      else if (e.affixes !== 0) this.starCoins += ELITE.starCoins;
+      else this.starCoins += ENEMIES[e.kind]!.starCoins;
+    }
 
     // 经验掉落物:面额 = 该敌型的 scrap 面值 × 档位倍率 ——
     // 精英 ×3 读 ELITE.scrapMul(旧"3× 残骸"占位字段,16 号后 sim 不再读它,这里重新启用);
@@ -1527,7 +1558,7 @@ export class World {
    */
   shipDamageTakenMul(): number {
     const boostMul = this.boostTime > 0 ? Math.max(0, tuning.boostDamageTakenMul) : 1;
-    return hullDamageTaken(this.supportBuffs) * boostMul;
+    return hullDamageTaken(this.buffs) * boostMul;
   }
 
   damageShip(amount: number): boolean {
@@ -1597,16 +1628,16 @@ export class World {
    * @param slotIndex 武器槽已满时的替换位(缺省 -1 = 不替换):OFFER_NEW_WEAPON 遇到
    *   ACQUIRE_REPLACE_NEEDED 且给定了合法槽位时,当场走 replaceWeapon 完成这一张卡 ——
    *   UI 的流程是"点卡 → 弹替换选择 → 再点同一张卡(slotIndex 带上)"。
-   * @returns 成功 = 0(ACQUIRE_OK / REPLACE_OK / SUPPORT_OK 共用);负数 = 理由码
-   *   (UPGRADE_NO_OFFER / ACQUIRE_REPLACE_NEEDED / SUPPORT_FULL / 各 INVALID_*)。
+   * @returns 成功 = 0(ACQUIRE_OK / REPLACE_OK / EDICT_OK 共用);负数 = 理由码
+   *   (UPGRADE_NO_OFFER / ACQUIRE_REPLACE_NEEDED / EDICT_MAXED / 各 INVALID_*)。
    */
   takeUpgrade(choice: number, slotIndex: number = -1): number {
     const opt = this.offer[choice];
     if (!opt) return UPGRADE_NO_OFFER;
     let code = 0;
     if (opt.kind === OFFER_EDICT) {
-      // 法令:不占槽 —— 直接授予,与改版 21 号 buyDockEdict 同一条授予路径
-      this.edicts |= edictMask(opt.type);
+      // 法令:不占槽 —— 层数 +1,与 buyDockEdict 同一条授予路径(grantEdict 是唯一入口)
+      code = this.grantEdict(opt.type);
     } else if (opt.kind === OFFER_NEW_WEAPON) {
       code = this.acquireWeapon(opt.type);
       // 槽满且没合成:玩家选好替换槽后带着 slotIndex 再点一次,当场换下旧的
@@ -1616,8 +1647,6 @@ export class World {
     } else if (opt.kind === OFFER_WEAPON_UPGRADE) {
       // 武器升级:升一把已拥有的(最高级那把)或给未拥有的存档等级(见 upgradeWeapon)
       if (!this.upgradeWeapon(opt.type)) code = ACQUIRE_INVALID_TYPE;
-    } else if (opt.kind === OFFER_SUPPORT) {
-      code = this.acquireSupport(opt.type);
     }
     if (code >= 0) this.completeUpgrade(0);
     return code;
@@ -1664,19 +1693,36 @@ export class World {
   }
 
   /**
-   * 获得一座支援(改版 06 号):放进**第一个空支援槽**。支援 = 全船被动,重复持有允许(叠效)。
-   * @returns SUPPORT_OK(0)= 已入槽;SUPPORT_FULL = 4 个支援槽全占;SUPPORT_INVALID_TYPE = 型越界。
-   * 零 rng;聚合由帧首的 aggregateSupportBuffs 自动跟上,这里不用重刷任何缓存。
+   * 授予一层法令(用户设计会)—— **法令的唯一入口**(升级三选一与船坞货架都走它)。
+   * 法令不占槽、可重复持有,每条最多 EDICT_MAX_LEVEL 层;层数 +1 即"叠一层"。
+   * @returns EDICT_OK(0)= 层数 +1;EDICT_MAXED = 这条已满层;EDICT_INVALID_TYPE = 型越界。
+   * 零 rng;聚合由帧首的 aggregateEdictBuffs 自动跟上,这里不用重刷任何缓存 ——
+   * 唯一要当场同步的是 HP 上限(装甲协议那一层的 +15 必须在**这一帧**就能看见,
+   * 而帧首的刷新已经过去了;晚一帧的话玩家点下卡片时血条不动,那正是最该有反馈的一瞬)。
    */
-  acquireSupport(type: number): number {
-    if (SUPPORTS[type] === undefined) return SUPPORT_INVALID_TYPE;
-    for (let i = 0; i < SUPPORT_SLOT_COUNT; i++) {
-      if (this.supports[i]!.type < 0) {
-        this.supports[i]!.type = type;
-        return SUPPORT_OK;
-      }
-    }
-    return SUPPORT_FULL;
+  grantEdict(type: number): number {
+    if (EDICTS[type] === undefined) return EDICT_INVALID_TYPE;
+    if (!edictCanStack(this.edictLevels, type)) return EDICT_MAXED;
+    this.edictLevels[type] = edictLevel(this.edictLevels, type) + 1;
+    aggregateEdictBuffs(this.edictLevels, this.buffs);
+    this.ship.maxHp = hullMaxHp(this.buffs);
+    return EDICT_OK;
+  }
+
+  /**
+   * 交换两个武器槽的内容(按 I 打开的武器面板,ui/armoryPanel.ts)。
+   * 八个槽围成一圈、每槽朝向固定(sim/armory 的 WEAPON_SLOT_FACING),于是"把哪门炮摆到船头"
+   * 是玩家唯一能主动调的火控决策 —— 换位本身零成本、零 rng、不消耗任何资源,
+   * 它调的是**布局**而不是强度(强度的出口是升级与合成)。
+   * 空槽也允许参与:把一门炮换到空槽 = 把它挪个朝向,那正是面板最常见的用法。
+   * @returns 0 = 已交换;SWAP_BAD_SLOT = 下标越界或两个下标相同(换了等于没换)。
+   */
+  swapWeapons(a: number, b: number): number {
+    const sa = this.weapons[a];
+    const sb = this.weapons[b];
+    if (!sa || !sb || a === b) return SWAP_BAD_SLOT;
+    swapWeaponSlots(sa, sb);
+    return 0;
   }
 
   /**
@@ -1785,14 +1831,31 @@ export class World {
     //(与 offer 结算清空的同一条生命周期)
     this.dockEdictOffers.length = 0;
     this.shopWeapons.length = 0;
-    // GDD §9 的船坞回血:整局唯一修复点。整备天然两分钟一次,与"逛商店"共用同一段休整时刻;
-    // 回血是确定性算术(不掷 rng),hp 本就在 checksum 里,同 seed 回放逐位不变。
-    this.ship.hp = Math.min(
-      this.ship.maxHp,
-      this.ship.hp + Math.ceil(this.ship.maxHp * REFIT_HEAL_FRACTION),
-    );
+    // 免费回血**不在这里** —— 它挂在"接上信标"那一刻(见 step 里的接触分支):
+    // 关面板才回血的话,玩家在店里没法判断那 25 星币的付费修复还要不要买。
     this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
     return true;
+  }
+
+  /**
+   * 掷定本轮**商店信标**的落点(用户设计会)。只在 step 里跨段那一帧调用,排在两张货架之前 ——
+   * 三者的顺序定死(信标 → 法令货架 → 武器货架),同 seed 逐位可复现。
+   *
+   * rng 消耗口径(定死):**恰好 2 次**(方位角 + 距离),与"这一轮玩家去没去"无关。
+   * 极坐标而不是矩形抖动:方位均匀 = 信标不会偏爱某个象限;距离夹在
+   * [SHOP_BEACON_MIN_DIST, SHOP_BEACON_MAX_DIST] 之间 —— 下界保证它不会贴脸白送,
+   * 上界保证 30 秒的存活时间里跑得到(理由与数值见 data/economy.ts)。
+   * 以**船当前位置**为心而不是世界原点:地图无限,离原点的绝对坐标没有意义,
+   * "离我多远"才是玩家判断"这趟跑不跑得赢"的唯一读数。
+   */
+  private spawnShopBeacon(): void {
+    const ang = this.rng.next() * Math.PI * 2;
+    const dist = SHOP_BEACON_MIN_DIST + this.rng.next() * (SHOP_BEACON_MAX_DIST - SHOP_BEACON_MIN_DIST);
+    this.shopBeaconX = this.ship.x + Math.cos(ang) * dist;
+    this.shopBeaconY = this.ship.y + Math.sin(ang) * dist;
+    this.shopBeaconTtl = SHOP_BEACON_LIFETIME;
+    this.shopBeaconActive = true;
+    this.shopBeaconSegment = this.wave.segment;
   }
 
   /**
@@ -1813,7 +1876,7 @@ export class World {
       pool.length = 0;
       for (let type = 0; type < EDICT_KIND_COUNT; type++) {
         if (offers.includes(type)) continue; // 本轮已上架:不摆重复卡
-        if (hasEdict(this.edicts, type)) continue; // 已持有:不摆重复卡
+        if (!edictCanStack(this.edictLevels, type)) continue; // 已满层:不摆买了也白买的卡
         const unlockBit = DOCK_EDICT_UNLOCK_BIT[type]!;
         if (unlockBit >= 0 && (this.unlockMask & (1 << unlockBit)) === 0) continue; // 未解锁
         pool.push(type);
@@ -1846,8 +1909,7 @@ export class World {
     if (this.starCoins < DOCK_EDICT_PRICE) return DOCK_NO_STARCOINS;
     this.starCoins -= DOCK_EDICT_PRICE;
     this.dockEdictOffers[index] = -1; // 一卡一售:当场下架,本轮不再出现
-    this.edicts |= edictMask(type);
-    this.ship.maxHp = hullMaxHp(this.supportBuffs, edictHullHpAdd(this.edicts));
+    this.grantEdict(type); // 唯一授予入口(层数 +1 + 当帧同步 HP 上限)
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
     return 0;
   }
@@ -2005,10 +2067,9 @@ export class World {
     return rollUpgradeOffer(
       this.rng,
       this.offer,
-      this.edicts,
+      this.edictLevels,
       this.unlockMask,
       this.weapons,
-      this.supports,
       this.weaponBankedLevels,
     );
   }
@@ -2242,7 +2303,7 @@ export class World {
     // 全都会从确定性口径下漏掉。不放大 100 倍 —— HP 是 100 量级的量,acc 内部量化到 1/8 绰绰有余。
     //
     // **maxHp / shipDead / result 都不进**,它们是派生量:
-    //   maxHp = damage.hullMaxHp(supportBuffs, edicts),而支援槽与法令掩码下面都单独哈过了 ——
+    //   maxHp = damage.hullMaxHp(buffs, edicts),而支援槽与法令掩码下面都单独哈过了 ——
     //     哈它就是把同一件事哈两遍;
     //   shipDead 除了"hp 归零那一刻置位"没有第二条来路,hp 已经进来了,它就没有独立信息;
     //   result 又是 shipDead / wave.done / bossPhase 的纯函数(settleOutcome 只读这三样;
@@ -2272,10 +2333,6 @@ export class World {
       acc(s.coolLock * 100);
       acc(s.charge * 100);
     }
-    // 支援槽型号紧跟着武器槽:漏了它,"该放弹药库却放成了散热器"这类回归会从确定性口径下漏掉 ——
-    // 而两者对同一门炮一个提速一个不提速,下一帧谁开火就此不同。空槽哈 -1。
-    // 支援聚合(supportBuffs)不进:它是 supports + 数据表的纯函数,哈它只是把同一件事哈两遍。
-    for (let i = 0; i < SUPPORT_SLOT_COUNT; i++) acc(this.supports[i]!.type);
     // 武器存档等级(改版):决定"下一把获得时是几级",逐项哈(与槽位同一条"真状态"口径)
     for (let i = 0; i < this.weaponBankedLevels.length; i++) acc(this.weaponBankedLevels[i]!);
     // 波次进度紧跟着槽位(08 号):它是这一局的推进进度,逐帧演化(段内计时 → 段推进 → 逐流的出怪账),
@@ -2357,19 +2414,29 @@ export class World {
     // 随机序列错位。× 100 的理由与那批秒数字段一字同源(量化到 1/8 抓不住单帧差)
     acc(this.offerCooldown * 100);
     acc(this.refitPending ? 1 : 0);
+    // 商店信标:位置消耗过 rng、计时决定还剩几帧可接、active 决定接不接得上 —— 全是真状态。
+    // 坐标是世界 px(量级上千),照 ship.x/y 的口径不放大;ttl × 100 与那批秒数字段同源
+    // (量化到 1/8 抓不住单帧差)。**shopBeaconSegment 不进**:它是 wave.segment 在
+    // 生成那一帧的快照,而 segment 本身下面就哈过 —— 派生量口径,哈它是把同一件事哈两遍
+    acc(this.shopBeaconActive ? 1 : 0);
+    acc(this.shopBeaconX);
+    acc(this.shopBeaconY);
+    acc(this.shopBeaconTtl * 100);
     for (const opt of this.offer) {
       acc(opt.kind);
       acc(opt.type);
       acc(opt.level);
     }
-    // 已持有法令(18 号)紧跟候选:它是逐帧演化的真状态(抽卡授予、永不撤销),而它只改
-    // effective 数值(射速/转向/拾取半径/过热/HP/巡航) —— 那些数值本就参与判定,
-    // 漏了它,"同 seed 一边抽到曳光协议一边没抽到"就会在若干帧后以"谁的塔先开火"
-    // 的形式分叉,却查不出是哪一帧走岔的。整数掩码,不放大(与 offer 的 kind/type 同口径)。
+    // 法令层数表紧跟候选:它是逐帧演化的真状态(抽卡叠层、永不撤销),而它只改
+    // effective 数值(射速/伤害/转向/拾取半径/过热/HP/巡航/星币概率) —— 那些数值本就参与判定,
+    // 漏了它,"同 seed 一边叠到第 2 层散热协议一边只有 1 层"就会在若干帧后以"谁的塔先开火"
+    // 的形式分叉,却查不出是哪一帧走岔的。**逐条哈层数而不是哈一个掩码**:
+    // 掩码存不下"叠了几层",而层数正是效果强度本身。整数,不放大(与 offer 的 kind/type 同口径)。
+    // 法令聚合(buffs)不进:它是本表 + 数据表的纯函数,哈它只是把同一件事哈两遍。
     // **unlockMask(19 号)不进**:它是开局定死的跨局存档输入,只收窄候选集合与解锁槽位
     // 出不出,不参与任何判定、不移动 rng 消耗 —— 与跨 seed 同一条口径,哈它只是把
     // "同一份存档"哈一遍;eliteKills 同理不进(与 kills 同一条派生量口径,见字段注释)
-    acc(this.edicts);
+    for (let i = 0; i < EDICT_KIND_COUNT; i++) acc(this.edictLevels[i]!);
     // 船坞法令货架(21 号)紧跟法令掩码:它消耗了 rng、决定玩家这轮能买什么,不是任何
     // 派生量 —— 漏了它,"同 seed 两局货架摆出不同两张卡"要等买完、法令掩码分叉后才
     // 看得见(与 offer 逐项进哈希同一条理由);已售出的格子哈成 -1,售出与否同样在哈希里

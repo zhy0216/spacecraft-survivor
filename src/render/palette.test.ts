@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ENEMIES } from '../data/enemies';
-import { SUPPORTS } from '../data/supports';
+import { EDICTS } from '../data/edicts';
 import { TOWERS } from '../data/towers';
 import { ENEMY_BODY_FILL, SHIP_EDGE, SHIP_FILL, enemyTint } from './palette';
 
@@ -90,7 +90,7 @@ describe('敌我配色审计(H5)', () => {
       SHIP_FILL,
       SHIP_EDGE,
       ...TOWERS.map((d) => d.tint),
-      ...SUPPORTS.map((d) => d.tint),
+      ...EDICTS.map((d) => d.tint),
     ];
     for (const color of allied) {
       const r = (color >> 16) & 0xff;
@@ -105,7 +105,7 @@ describe('敌我配色审计(H5)', () => {
       SHIP_FILL,
       SHIP_EDGE,
       ...TOWERS.map((d) => d.tint),
-      ...SUPPORTS.map((d) => d.tint),
+      ...EDICTS.map((d) => d.tint),
     ];
     for (let kind = 0; kind < ENEMIES.length; kind++) {
       const renderedBody = multiplyTint(ENEMY_BODY_FILL, enemyTint(kind));

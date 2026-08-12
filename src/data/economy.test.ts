@@ -24,7 +24,6 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_NEW_WEAPON,
-  OFFER_WEIGHT_SUPPORT,
   OFFER_WEIGHT_WEAPON_UPGRADE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
@@ -137,14 +136,9 @@ describe('三选一与跳过', () => {
     expect(Number.isInteger(UPGRADE_CHOICE_COUNT)).toBe(true);
   });
 
-  it('四类权重固定为 5/25/35/35,总和为 100', () => {
-    const weights = [
-      OFFER_WEIGHT_NEW_WEAPON,
-      OFFER_WEIGHT_WEAPON_UPGRADE,
-      OFFER_WEIGHT_SUPPORT,
-      OFFER_WEIGHT_EDICT,
-    ];
-    expect(weights).toEqual([5, 25, 35, 35]);
+  it('三类权重固定为 20/30/50,总和为 100(支援并入法令后从四类收成三类)', () => {
+    const weights = [OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_WEAPON_UPGRADE, OFFER_WEIGHT_EDICT];
+    expect(weights).toEqual([20, 30, 50]);
     expect(weights.reduce((sum, weight) => sum + weight, 0)).toBe(100);
   });
 

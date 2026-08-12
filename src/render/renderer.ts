@@ -56,7 +56,6 @@ import {
   KIND_TRAILER,
   type EnemyDef,
 } from '../data/enemies';
-import { edictHeatMaxMul } from '../data/edicts';
 import {
   FX_BULLET,
   FX_LIFE_BEAM,
@@ -74,6 +73,7 @@ import {
   towerMagazine,
   towerRange,
 } from '../data/towers';
+import { SHOP_BEACON_LIFETIME, SHOP_BEACON_RADIUS } from '../data/economy';
 import { SPAWN_RADIUS } from '../data/waves';
 import { type Arc, slotArc } from '../sim/arc';
 import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT } from '../sim/armory';
@@ -102,8 +102,10 @@ import { slotHeatMax, slotReload } from '../sim/tower';
 import { peekNextElite, type ElitePeek } from '../sim/waves';
 import type { Bullet, Enemy, EnemyBullet, World } from '../sim/world';
 import { audioBus } from './audio';
+import { ENEMY_RIGS, RIG_UNIT, type RigDef } from './enemyRig';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
+import { RigLayer, type RigDrive, type RigDriver, type RigEntity } from './rigLayer';
 import { Starfield } from './starfield';
 
 /** 未使用粒子的"停车位":粒子只增不删,多余的挪出视野(避免运行期增删 GPU 缓冲) */
@@ -394,6 +396,16 @@ export function hitFlashMix(hitFlash: number): number {
 }
 
 /** 渲染帧 dt 的上限(秒):切后台回来时 deltaMS 会是好几秒,不夹住就等于把反馈一口气跳完 */
+/** 商店信标的颜色(冷青:我方色域,GDD §12 —— 它是补给点不是威胁) */
+const BEACON_COLOR = 0x7ce8d8;
+/**
+ * 屏边指示箭头挂在离船多远的一圈上(世界 px)。取得比船体大一圈、比屏幕短边小 ——
+ * 箭头是"往那边走"的读数,贴在船身上会与炮位挤成一团,贴到视野外就等于没画。
+ */
+const BEACON_ARROW_RADIUS = 150;
+/** 离得比这更近就不画箭头(判定环已经在视野里,本体与箭头同时出现是噪声) */
+const BEACON_ARROW_MIN_DIST = 420;
+
 const MAX_RENDER_DT = 0.1;
 
 /**
@@ -590,6 +602,68 @@ const ENEMY_ANIM: readonly EnemyAnim[] = [
 const animFrameScratch = { scale: 0, spin: 0, wobble: 0 };
 
 /**
+ * 骨架的"状态 → 动画"映射表(24 号 issue):下标 === ST_*(sim/enemy.ts 的状态码)。
+ *
+ * 骨架真正比单件贴图多出来的表达力就在这张表上 —— 同一套骨骼,靠提频/改摆幅把状态机演出来:
+ *   接近:常态爬动;
+ *   **前摇:提频到 3 倍、摆幅压到 0.55** —— 高频小幅 = 绷紧发抖,而不是"摆得更大";
+ *     它与 drawTelegraph 的锁定线是同一件事的两条通道(GDD §6 前摇必须可读),
+ *     锁定线交代"往哪冲",发抖交代"就是现在";
+ *   冲刺:摆幅 1.5 倍、频率 1.6 倍 —— 尾鞭甩开、爪足向后蹬;
+ *   硬直:半速小摆 = 啃咬后脱离时的脱力感。
+ * 数值是表现旋钮,不进 checksum、不影响任何判定(与 ENEMY_ANIM 同一条"渲染只读"口径)。
+ */
+const RIG_STATE_DRIVE: readonly RigDrive[] = [
+  { freqMul: 1, swingMul: 1 }, // ST_APPROACH
+  { freqMul: 3, swingMul: 0.55 }, // ST_WINDUP
+  { freqMul: 1.6, swingMul: 1.5 }, // ST_DASH
+  { freqMul: 0.5, swingMul: 0.7 }, // ST_RECOVER
+  { freqMul: 0.7, swingMul: 0.8 }, // ST_ANCHOR(孢子炮手用,两型首批骨架走不到)
+  { freqMul: 2.6, swingMul: 0.5 }, // ST_SPORE_WINDUP(同上)
+];
+const RIG_DRIVE_FALLBACK: RigDrive = { freqMul: 1, swingMul: 1 };
+
+/**
+ * 骨架驱动器:整个渲染器共用一个实例(建一次长期持有)。
+ * 每帧每只怪要调它三次,现造闭包等于每帧上千次堆分配 —— 故做成对象而不是传闭包进 RigLayer。
+ */
+const rigDriver: RigDriver = {
+  bodyAngle(e: RigEntity, animClock: number, rig: RigDef): number {
+    // 自转型(蜂群蛭):不跟速度朝向,口器绕圈就是它的"活着" —— 与单件贴图年代 ENEMY_ANIM.spin 同一条口径
+    if (rig.spin !== 0) return animClock * rig.spin + e.animSeed * Math.PI * 2;
+    let vx = e.vx;
+    let vy = e.vy;
+    // 冲锋前摇会刹停,但方向已锁死:用锁定向量,免得怪在预警环里停在上一方向
+    if (e.state === ST_WINDUP || e.state === BOSS_WINDUP) {
+      vx = e.lockX;
+      vy = e.lockY;
+    }
+    if (vx * vx + vy * vy <= 1e-6) {
+      // 速度与锁向都退化(刚出生的那一帧/被推到静止):退回锁向,再退回 0。
+      // 单件贴图那条路在这种帧上是"不写 rotation、留着上一帧的值",骨架必须给出一个确定角,
+      // 于是这里把它钉成纯函数 —— 同一状态永远解出同一位姿,不带帧间隐藏状态。
+      vx = e.lockX;
+      vy = e.lockY;
+      if (vx * vx + vy * vy <= 1e-6) return GENERATED_ART_FORWARD_OFFSET;
+    }
+    return Math.atan2(vy, vx) + GENERATED_ART_FORWARD_OFFSET;
+  },
+  drive(e: RigEntity, out: RigDrive): void {
+    const d = RIG_STATE_DRIVE[e.state] ?? RIG_DRIVE_FALLBACK;
+    out.freqMul = d.freqMul;
+    out.swingMul = d.swingMul;
+  },
+  tint(_e: RigEntity): number {
+    // 恒白 = 部件图原色。**受击闪白在这里是空操作,和单件贴图那条路一样** ——
+    // 粒子 tint 是相乘的,生成图的基准 tint 已经是 0xffffff,朝白色混合等于不动
+    // (enemyTextureTints 在生成图加载成功时就是 0xffffff,而它实际上总是加载成功)。
+    // 这是既有的哑火,不是骨架引入的:要让满色贴图"闪一下"得换通道(加色滤镜/额外一层),
+    // 不在本次改动范围内 —— 但也不在这里写个 lerp(白,白) 假装它在工作。
+    return 0xffffff;
+  },
+};
+
+/**
  * 单帧动画读数的纯计算:给同步循环一次算出缩放乘数 / 自转角 / 摆动角。
  * 拆出来就是为了 Node 单测 —— 热路径之外的三个 sin 换来的可测性值得(renderer.test.ts 钉边界)。
  * 写进调用方给的 out(缺省 = 模块级 scratch),绝不 new:syncParticles 每帧要为 1000 只怪调它。
@@ -756,6 +830,15 @@ export class Renderer {
   private eliteParticles: Particle[][] = [];
   private eliteBuckets: Enemy[][] = [];
   /**
+   * 逐型 cutout 骨架层(24 号 issue),下标 === EnemyKind。
+   * 非 null = 这一型改走"每部件一个粒子"的骨架路径,上面那套单件贴图的容器**一个粒子都不建**
+   * (syncParticles 是按需扩容的,不调它就永远是空容器),于是不会双重绘制。
+   * null = 这一型没做骨架或部件图缺失,照旧走单件贴图 —— 逐型回退,做一型接一型。
+   */
+  private enemyRigLayers: (RigLayer | null)[] = [];
+  /** 精英骨架:与普通型同一套部件纹理,只是 baseScale 乘了 ELITE.scale(与单件贴图那条路同一个乘数) */
+  private eliteRigLayers: (RigLayer | null)[] = [];
+  /**
    * Boss(15 号)的专属容器:底座型(冲撞甲虫)的**同一张纹理、同一个 tint**,只是静态缩放
    * 让剪影外接半径 = bossRadius() —— 判定体多大画多大。独立容器而不是塞进 kind 桶:
    * kind = KIND_BOSS 不在 ENEMIES 表里,普通桶的越界兜底是"不画这一只" —— Boss 必须画。
@@ -826,6 +909,12 @@ export class Renderer {
   private deathG = new Graphics();
   private deathDebris: DeathDebris[] = [];
   private telegraphG: Graphics;
+  /**
+   * 地图商店信标(用户设计会):一枚脉冲的菱形 + 一圈接触判定环 + 屏边指示箭头。
+   * 独立一层而不是并进 telegraphG:预告层每帧 clear 后按敌人重画,而信标是**世界里的一个地点**,
+   * 两者的生命周期不同(一个逐帧、一个 30 秒),混在一起迟早互相清掉。
+   */
+  private beaconG: Graphics;
   /**
    * 船体容器:壳图 / 程序化船身 / 炮位贴图 / 炮口线 / 射界扇形 / 节流读数全部画在
    * 船体局部空间,它自己每帧只吃插值位姿(见文件头)——"炮口与船体一同旋转"由此在结构上成立。
@@ -1003,6 +1092,21 @@ export class Renderer {
       );
       this.eliteParticles.push([]);
       this.eliteBuckets.push([]);
+
+      // —— 骨架(24 号):这一型有骨架表且部件图齐全,就建骨架层,否则留 null 走上面那条单件贴图路 ——
+      // baseScale 把单位空间(512)映到与单件贴图**完全相同**的世界视觉跨度:
+      // 单件路是 128px 纹理 → generatedEnemySpan,而 128 纹理像素就是 512 单位,于是同一个尺寸。
+      // 换骨架不改这一型多大 —— 一次只改一件事(它现在会动了),不顺手动尺寸。
+      const rig = ENEMY_RIGS[k] ?? null;
+      const rigParts = generatedArt.enemyRigParts[k] ?? null;
+      if (rig && rigParts && rigParts.length === rig.textureCount) {
+        const rigScale = generatedEnemySpan(def) / RIG_UNIT;
+        this.enemyRigLayers.push(new RigLayer(rig, rigParts, bounds, rigScale));
+        this.eliteRigLayers.push(new RigLayer(rig, rigParts, bounds, rigScale * ELITE.scale));
+      } else {
+        this.enemyRigLayers.push(null);
+        this.eliteRigLayers.push(null);
+      }
     }
 
     // —— Boss(15 号):round-2 的专属贴图,加载失败回退底座型纹理放大 ——
@@ -1076,6 +1180,7 @@ export class Renderer {
 
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变)
     this.telegraphG = new Graphics();
+    this.beaconG = new Graphics();
 
     // 船体 = shipG 一个容器:七个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
     // 子层序:射界扇形(底衬)→ 加速尾焰(长在船尾、压不住船身)→ 舰壳图 → 程序化船身兜底
@@ -1098,9 +1203,23 @@ export class Renderer {
     // 飘字与爆炸层压在一切世界层之上(包括船体与炮口闪):"这一发多痛 / 船没了"是
     // 场上优先级最高的两类读数。
     this.worldLayer.addChild(this.telegraphG);
-    for (let k = 0; k < this.enemyPcs.length; k++) this.worldLayer.addChild(this.enemyPcs[k]!);
+    // 信标压在预告之上、敌剪影之下:它是"这里有个地点"的读数,不该糊住虫群,
+    // 但也不能被一层虫子完全埋掉(埋掉就等于这一轮商店不存在)
+    this.worldLayer.addChild(this.beaconG);
+    // 骨架型与单件型混排在同一段层序里:骨架型加的是它那几个部件容器(数组下标即画序,
+    // 小的在后面 —— 侧掠者的尾尖在最底、头在最上),单件型仍是一个容器。
+    // 未接骨架的型的单件容器照旧加进来(它永远是空的,不会双重绘制,见 enemyRigLayers 注释)。
+    for (let k = 0; k < this.enemyPcs.length; k++) {
+      this.worldLayer.addChild(this.enemyPcs[k]!);
+      const rl = this.enemyRigLayers[k];
+      if (rl) for (const pc of rl.containers) this.worldLayer.addChild(pc);
+    }
     // 精英容器压在普通型之上:大个体不该被身后小个体的剪影啃掉边(与"甲虫排最后"同一条取舍)
-    for (let k = 0; k < this.elitePcs.length; k++) this.worldLayer.addChild(this.elitePcs[k]!);
+    for (let k = 0; k < this.elitePcs.length; k++) {
+      this.worldLayer.addChild(this.elitePcs[k]!);
+      const rl = this.eliteRigLayers[k];
+      if (rl) for (const pc of rl.containers) this.worldLayer.addChild(pc);
+    }
     // Boss 容器压在一切敌剪影之上:它是这一战最大的个体,任何虫群都不许啃它的边
     this.worldLayer.addChild(this.bossPc);
     this.worldLayer.addChild(this.dropPc);
@@ -1229,27 +1348,35 @@ export class Renderer {
     for (let k = 0; k < buckets.length; k++) {
       const def = ENEMIES[k]!;
       const bucket = buckets[k]!;
-      this.syncParticles(this.enemyParticles[k]!, this.enemyPcs[k]!, bucket, {
-        texture: this.enemyTextures[k]!,
-        tint: this.enemyTextureTints[k]!,
-        scale: this.enemyTextureScales[k]!,
-        rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
-        anim: ENEMY_ANIM[k]!,
-        alpha,
-        flashBase: this.enemyTextureTints[k]!,
-      });
-      // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
-      // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
       const eliteBucket = this.eliteBuckets[k]!;
-      this.syncParticles(this.eliteParticles[k]!, this.elitePcs[k]!, eliteBucket, {
-        texture: this.enemyTextures[k]!,
-        tint: this.enemyTextureTints[k]!,
-        scale: this.enemyTextureScales[k]! * ELITE.scale,
-        rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
-        anim: ENEMY_ANIM[k]!,
-        alpha,
-        flashBase: this.enemyTextureTints[k]!,
-      });
+      const rigLayer = this.enemyRigLayers[k];
+      const eliteRigLayer = this.eliteRigLayers[k];
+      if (rigLayer && eliteRigLayer) {
+        // 骨架型:整型改走部件路径,上面那套单件容器一个粒子都不建(syncParticles 按需扩容,不调它就是空的)
+        rigLayer.sync(bucket, alpha, this.animClock, rigDriver);
+        eliteRigLayer.sync(eliteBucket, alpha, this.animClock, rigDriver);
+      } else {
+        this.syncParticles(this.enemyParticles[k]!, this.enemyPcs[k]!, bucket, {
+          texture: this.enemyTextures[k]!,
+          tint: this.enemyTextureTints[k]!,
+          scale: this.enemyTextureScales[k]!,
+          rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
+          anim: ENEMY_ANIM[k]!,
+          alpha,
+          flashBase: this.enemyTextureTints[k]!,
+        });
+        // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
+        // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
+        this.syncParticles(this.eliteParticles[k]!, this.elitePcs[k]!, eliteBucket, {
+          texture: this.enemyTextures[k]!,
+          tint: this.enemyTextureTints[k]!,
+          scale: this.enemyTextureScales[k]! * ELITE.scale,
+          rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
+          anim: ENEMY_ANIM[k]!,
+          alpha,
+          flashBase: this.enemyTextureTints[k]!,
+        });
+      }
       // 前摇指示按型共享配额:精英与普通怪同型,合起来不能超过一型的预算
       let budget = TELEGRAPH_MAX_PER_KIND;
       budget = this.drawTelegraph(bucket, def, alpha, budget);
@@ -1311,6 +1438,7 @@ export class Renderer {
 
     // 船体:炮位只在槽位内容变化时重建(签名检查),炮管旋转与炮口线每帧同步(它们跟着炮管转),
     // 容器只吃插值位姿,子层几何一律是局部坐标 —— 船与炮位一同旋转由此成立(见文件头)
+    this.drawShopBeacon(sx, sy);
     this.syncWeaponSprites();
     this.syncWeaponRotations();
     this.drawSlotMuzzles();
@@ -1529,6 +1657,62 @@ export class Renderer {
    * 证不出炮真的在转、真的会回中(而这正是 04 号里唯一需要肉眼抽查的一条)。
    * 战斗态常驻(与旧"炮口线压住底板"同一条层序:它长在炮位上,理应压住炮位贴图)。
    */
+  /**
+   * 商店信标:世界里的一枚脉冲菱形 + 接触环;**船离得远时在屏边画一枚指向箭头**。
+   * 箭头是这套设计成立的关键 —— 信标只活 30 秒且生成在 600..1400px 外,
+   * 没有指向的话玩家得先绕一圈找它,那 30 秒就成了纯粹的运气。
+   * 剩余时间靠**环的缺口**表达(走完一圈 = 到期):不印数字,读数由 HUD 那一行管,
+   * 世界层只负责"它在那边、还剩多久"这两件事的空间表达。
+   * @param sx/@param sy 船的插值位置(镜头同源;箭头挂在船周围一圈上,不是屏幕边缘的绝对像素)
+   */
+  private drawShopBeacon(sx: number, sy: number): void {
+    const g = this.beaconG;
+    g.clear();
+    const w = this.world;
+    if (!w.shopBeaconActive) return;
+    const bx = w.shopBeaconX;
+    const by = w.shopBeaconY;
+    // 脉冲:1Hz 的呼吸,与预告层的闪烁同一条"程序化动画时钟"口径(animClock 随渲染帧走)
+    const pulse = 0.75 + 0.25 * Math.sin(this.animClock * Math.PI * 2);
+    const r = SHOP_BEACON_RADIUS;
+    // 菱形本体(冷青:我方色域,GDD §12 —— 它是玩家的补给点,不是威胁)
+    g.moveTo(bx, by - r * 0.5 * pulse)
+      .lineTo(bx + r * 0.38 * pulse, by)
+      .lineTo(bx, by + r * 0.5 * pulse)
+      .lineTo(bx - r * 0.38 * pulse, by)
+      .closePath()
+      .fill({ color: BEACON_COLOR, alpha: 0.5 });
+    // 接触环 = 真判定半径(与 sim 那句 SHOP_BEACON_RADIUS + shipRadius 的前半段同源):
+    // 画得比判定大或小都会让"明明碰到了却没进店"变成一个查不出的抱怨
+    g.circle(bx, by, r).stroke({ width: 2, color: BEACON_COLOR, alpha: 0.55 * pulse });
+    // 剩余时间环:按 ttl 比例画一段弧,走完一圈就是到期。
+    // **arc 之前必须 moveTo 到弧起点**:Graphics 的路径是连续的,不挪笔的话它会从上一条
+    // 子路径的收笔处拉一条直线连过来 —— 屏幕上就是一条横穿半个战场的青线
+    const frac = Math.max(0, Math.min(1, w.shopBeaconTtl / SHOP_BEACON_LIFETIME));
+    if (frac > 0) {
+      const ringR = r + 6;
+      g.moveTo(bx, by - ringR) // 弧起点 = -π/2 方向(正上),与下面那句的起始角同源
+        .arc(bx, by, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac)
+        .stroke({ width: 3, color: BEACON_COLOR, alpha: 0.8 });
+    }
+    // 屏边指示箭头:离得近(判定环已经在视野里)就不画 —— 画面上同时有本体和箭头是噪声
+    const dx = bx - sx;
+    const dy = by - sy;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= BEACON_ARROW_MIN_DIST) return;
+    const ang = Math.atan2(dy, dx);
+    const ax = sx + Math.cos(ang) * BEACON_ARROW_RADIUS;
+    const ay = sy + Math.sin(ang) * BEACON_ARROW_RADIUS;
+    const c = Math.cos(ang);
+    const sn = Math.sin(ang);
+    // 一枚朝向信标的实心三角(局部系:尖端 +X),按 ang 旋转到位
+    g.moveTo(ax + c * 11, ay + sn * 11)
+      .lineTo(ax - sn * 6 - c * 6, ay + c * 6 - sn * 6)
+      .lineTo(ax + sn * 6 - c * 6, ay - c * 6 - sn * 6)
+      .closePath()
+      .fill({ color: BEACON_COLOR, alpha: 0.85 * pulse });
+  }
+
   private drawSlotMuzzles(): void {
     const g = this.muzzleG;
     g.clear();
@@ -1615,9 +1799,8 @@ export class Renderer {
     const g = this.throttleG;
     g.clear();
     const w = this.world.weapons;
-    const buffs = this.world.supportBuffs;
-    // 法令的过热上限倍率(18 号散热协议):与 sim/turret 的 onFired 同一个分母,热条才画得准
-    const heatEdict = edictHeatMaxMul(this.world.edicts);
+    // 法令聚合已含散热协议的热上限倍率:与 sim/turret 的 onFired 同一个分母,热条才画得准
+    const buffs = this.world.buffs;
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       const slot = w[i]!;
       if (slot.type < 0) continue;
@@ -1664,10 +1847,10 @@ export class Renderer {
             color: THR_TRACK_COLOR,
             alpha: THR_TRACK_ALPHA,
           });
-          // 上限走 sim/tower 的 slotHeatMax(而不是裸 towerHeatMax):散热器/法令把上限抬高之后,
+          // 上限走 sim/tower 的 slotHeatMax(而不是裸 towerHeatMax):散热协议把上限抬高之后,
           // 拿基准值当分母的热量条会在塔还远没锁死时就画满 —— 而"收支平衡点"正是过热系的全部手感,
           // 读数与 sim 用的必须是同一个数(理由同上面那条 slotReload)
-          const max = slotHeatMax(slot, def, buffs, heatEdict);
+          const max = slotHeatMax(slot, def, buffs);
           const t = max > 0 ? clamp01(slot.heat / max) : 0;
           // 过热锁死:整条满长闪暖红。暖色是敌人的色域(GDD §12),故只许**这么小一条、这么短一阵**,
           // 而且必须是"闪"不是常亮 —— 常亮的暖条等于在自家船上钉死一块假的敌方色。
@@ -1758,7 +1941,7 @@ export class Renderer {
       if (slot.type !== towerType) continue;
       switch (def.throttle) {
         case THR_HEAT: {
-          const max = slotHeatMax(slot, def, this.world.supportBuffs, edictHeatMaxMul(this.world.edicts));
+          const max = slotHeatMax(slot, def, this.world.buffs);
           return max > 0 ? clamp01(slot.heat / max) : 1;
         }
         case THR_CHARGE:

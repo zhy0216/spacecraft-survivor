@@ -186,9 +186,9 @@ describe('collectionCategoryName / collectionItemName(19 号图鉴,20 号加起�
   });
 
   it('条目名从内容表读:塔/法令取数据表名,精英条目带底敌型名,起手配置取 LOADOUTS 名', () => {
-    // 导弹巢 / 急速协议在内容表与 UNLOCKS 表同名 —— 数据表改名,图鉴跟着走
+    // 导弹巢 / 超载协议在内容表与 UNLOCKS 表同名 —— 数据表改名,图鉴跟着走
     expect(collectionItemName(UNLOCKS[0]!)).toBe('导弹巢');
-    expect(collectionItemName(UNLOCKS[1]!)).toBe('急速协议');
+    expect(collectionItemName(UNLOCKS[1]!)).toBe('超载协议');
     // 虫群母巢的底敌型 = WAVE_LOCKED_ELITES[0].kind → 冲撞甲虫(这条钉着两表的下标咬合)
     expect(collectionItemName(UNLOCKS[2]!)).toBe('虫群母巢(冲撞甲虫精英)');
     expect(collectionItemName(UNLOCKS[3]!)).toBe('船形收藏');
@@ -502,7 +502,7 @@ describe('createGameOverUi', () => {
     const tower = findEl(cardEl, (el) => el.textContent === '导弹巢')!;
     expect(tower.style.cssText).toContain('#c8dcf0');
     expect(tower.style.cssText).not.toContain('opacity');
-    const edict = findEl(cardEl, (el) => el.textContent === '急速协议(未解锁)')!;
+    const edict = findEl(cardEl, (el) => el.textContent === '超载协议(未解锁)')!;
     expect(edict.style.cssText).toContain('#5f7a99');
     expect(edict.style.cssText).toContain('opacity:.45');
     const elite = findEl(cardEl, (el) => el.textContent === '虫群母巢(冲撞甲虫精英)(未解锁)')!;
@@ -571,7 +571,7 @@ describe('createGameOverUi', () => {
     const ui = make();
     ui.show(summary({ result: RESULT_LOSE, newUnlocks: [1] }));
     expect(unlockBlock(dom).style.display).toBe('block');
-    expect(unlockBlock(dom).textContent).toBe('解锁:急速协议');
+    expect(unlockBlock(dom).textContent).toBe('解锁:超载协议');
     // 失败局图鉴照常铺(未解锁灰显、计数如实),不看胜负
     expect(findEl(panel(dom), (el) => el.textContent === '导弹巢(未解锁)')).toBeDefined();
   });

@@ -28,18 +28,18 @@ import {
 } from './loadoutFlow';
 
 describe('loadoutDiagram', () => {
-  it('标准起手:槽位文本图,双机炮占前两个武器槽,弹药库占首个支援槽,空槽用 ·', () => {
+  it('标准起手:槽位文本图,双机炮占前两个武器槽(共 8 格),法令行印开局那一条', () => {
     const diagram = loadoutDiagram(LOADOUTS[0]!);
     const lines = diagram.split('\n');
-    expect(lines[0]).toBe('武器 [机][机][·][·]');
-    expect(lines[1]).toBe('支援 [弹][·][·][·]');
+    expect(lines[0]).toBe('武器 [机][机][·][·][·][·][·][·]');
+    expect(lines[1]).toBe('法令 弹');
     expect(lines[2]).toBe('↑ 船头');
-    expect(lines).toHaveLength(3); // 只有武器/支援/船头三行,没有别的
+    expect(lines).toHaveLength(3); // 只有武器/法令/船头三行,没有别的
   });
 
   it('狙击开局:双磁轨炮并踞前两个武器槽', () => {
     const diagram = loadoutDiagram(LOADOUTS[3]!);
-    expect(diagram.split('\n')[0]).toBe('武器 [轨][轨][·][·]');
+    expect(diagram.split('\n')[0]).toBe('武器 [轨][轨][·][·][·][·][·][·]');
   });
 });
 

@@ -4,7 +4,7 @@ import { TOWER_AUTOCANNON, TOWER_PD, towerMagazine, TOWERS } from '../data/tower
 import { createWeaponSlots } from './armory';
 import { createBullet, resetBullet } from './bullet';
 import { createEnemyBullet, resetEnemyBullet } from './enemyBullet';
-import { createSupportBuffs } from './support';
+import { createEdictBuffs } from './edictBuffs';
 import { createShip } from './ship';
 import { stepInterception, stepInterceptHits } from './intercept';
 import type { FireSink } from './fx';
@@ -20,11 +20,11 @@ describe('槽位点防拦截', () => {
     weapons[0]!.level = 1;
     weapons[0]!.ammo = towerMagazine(TOWERS[TOWER_AUTOCANNON]!, 1);
     const bullets = new Pool(createBullet, resetBullet);
-    stepInterception(weapons, createShip(), [], 1 / 60, sinkFor(bullets), createSupportBuffs());
+    stepInterception(weapons, createShip(), [], 1 / 60, sinkFor(bullets), createEdictBuffs());
     expect(bullets.size).toBe(0);
     weapons[0]!.type = TOWER_PD;
     weapons[0]!.ammo = towerMagazine(TOWERS[TOWER_PD]!, 1);
-    stepInterception(weapons, createShip(), [], 1 / 60, sinkFor(bullets), createSupportBuffs());
+    stepInterception(weapons, createShip(), [], 1 / 60, sinkFor(bullets), createEdictBuffs());
     expect(bullets.size).toBe(0);
   });
 });

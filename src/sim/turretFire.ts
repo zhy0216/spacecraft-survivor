@@ -51,6 +51,10 @@ const chained: Enemy[] = [];
  * 按塔型分派一次开火。
  * @param aim 炮口的世界朝向(弧度)—— 弹道一律沿它,而不是直指目标:
  *   容差之内的那点偏差正是"炮管刚刚转到"的手感,直指目标等于把容差这道门槛白设了
+ * @param damageMul 法令聚合的全武器伤害倍率(sim/edictBuffs 的 EdictBuffs.damageMul),缺省 1。
+ *   五条开火路径**各自把它乘进自己那份伤害**,而不是在这里先算一个数再分发:
+ *   直击与落点 AoE 走的是两个不同的取值函数(effectiveDamage / effectiveAoeDamage),
+ *   在这里合并就得替 FX_MORTAR 记一条例外 —— 而那正是"迫击炮升级不加伤"那类 bug 的老巢。
  * @returns 这一次实际打出去几发(喂给 onFired 记代价)。0 = 没打出去,调用方不记代价
  */
 export function fire(
@@ -60,18 +64,19 @@ export function fire(
   aim: number,
   range: number,
   sink: FireSink,
+  damageMul = 1,
 ): number {
   switch (def.fx) {
     case FX_BULLET:
-      return fireBullets(slot, def, aim, range, sink);
+      return fireBullets(slot, def, aim, range, sink, damageMul);
     case FX_MORTAR:
-      return fireMortar(slot, def, target, aim, range, sink);
+      return fireMortar(slot, def, target, aim, range, sink, damageMul);
     case FX_BEAM:
-      return fireBeam(slot, def, target, sink);
+      return fireBeam(slot, def, target, sink, damageMul);
     case FX_CHAIN:
-      return fireChain(slot, def, target, sink);
+      return fireChain(slot, def, target, sink, damageMul);
     case FX_LANCE:
-      return fireLance(slot, def, aim, range, sink);
+      return fireLance(slot, def, aim, range, sink, damageMul);
     default:
       // 认不出的 fx(数值表被改坏)一律哑火,而不是随便挑一种表现顶上:
       // 顶上去的话现场看到的是"这门炮打出了别人的弹",离"表填错了"这个真因十万八千里
@@ -89,6 +94,7 @@ function fireBullets(
   aim: number,
   range: number,
   sink: FireSink,
+  damageMul: number,
 ): number {
   // 弹速非正 = 数值表被改坏:life = 射程/弹速 会变成 Infinity 或 NaN,那颗弹永不回收,
   // 子弹池会一路涨到掉帧。当场哑火,代价是"这门炮不响",而不是一个越跑越卡的世界
@@ -97,7 +103,7 @@ function fireBullets(
   // 发数走 slotShotsPerFire(恒发数 × Lv3 跳变):风暴机炮的"双管齐射"是恒发签名(def.burst = 2),
   // 只读 towerBurst 会把它漏成单管 —— 面板理论 DPS 与真开火必须同一份口径
   const n = slotShotsPerFire(def, slot.level);
-  const damage = effectiveDamage(def, slot.level);
+  const damage = effectiveDamage(def, slot.level, damageMul);
   const pierce = towerPierce(def, slot.level);
   const life = range / def.bulletSpeed;
   // 多发扇开的整束宽度 = **瞄准容差**,不为它新造一个旋钮:
@@ -143,6 +149,7 @@ function fireMortar(
   aim: number,
   range: number,
   sink: FireSink,
+  damageMul: number,
 ): number {
   if (!(def.bulletSpeed > 0)) return 0; // 理由同 fireBullets:Infinity 的 life 是个不回收的弹
 
@@ -152,7 +159,7 @@ function fireMortar(
   // 夹在射程内是给浮点边界与将来的规则变动兜底(findArcTarget 已保证 ≤ range):
   // 落点绝不许跑到射界叠加层画出来的那个圆之外 —— 那条圆就是玩家读到的"这门炮够得到哪"
   const dist = Math.min(Math.hypot(dx, dy), range);
-  const damage = effectiveAoeDamage(def, slot.level);
+  const damage = effectiveAoeDamage(def, slot.level, damageMul);
   const step = n > 1 ? (def.aimTolDeg * DEG2RAD) / (n - 1) : 0;
   const base = -((n - 1) / 2) * step;
 
@@ -185,9 +192,9 @@ function fireMortar(
  * lanceWidth)。首目标必在线上,故不存在"打空了还要不要记代价"的分叉,代价口径与单体一致。
  * 线画到射程尽头:画面上的那束光就是它的全部作用范围(画到哪儿就是打到哪儿)。
  */
-function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink): number {
+function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink, damageMul: number): number {
   // 节流系跟进去:词缀抗性(14 号:装甲/相位)在伤害结算处认 def.throttle
-  const damage = effectiveDamage(def, slot.level);
+  const damage = effectiveDamage(def, slot.level, damageMul);
   const dx = target.x - muzzle.x;
   const dy = target.y - muzzle.y;
   const dist = Math.hypot(dx, dy);
@@ -224,9 +231,9 @@ function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink
  * @returns 恒 1 —— 一次放电就是"一发":代价按发算,与它跳了几只无关
  *   (按跳数扣热量的话,电弧塔在人堆里会瞬间过热,而"清蜂群"正是它的定位)
  */
-function fireChain(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink): number {
+function fireChain(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink, damageMul: number): number {
   const total = towerChainCount(def, slot.level);
-  let damage = effectiveDamage(def, slot.level);
+  let damage = effectiveDamage(def, slot.level, damageMul);
   let hop: Enemy | null = target;
   let fromX = muzzle.x;
   let fromY = muzzle.y;
@@ -289,10 +296,11 @@ function fireLance(
   aim: number,
   range: number,
   sink: FireSink,
+  damageMul: number,
 ): number {
   const ux = Math.cos(aim);
   const uy = Math.sin(aim);
-  const damage = effectiveDamage(def, slot.level);
+  const damage = effectiveDamage(def, slot.level, damageMul);
 
   for (let i = 0; i < candidates.length; i++) {
     const e = candidates[i]!;

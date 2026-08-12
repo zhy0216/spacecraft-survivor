@@ -272,7 +272,8 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
   it('召唤 rng 口径:每只召唤怪恰好一次角度(型号/数量直给不掷随机)', () => {
     const a = bossWorld(42);
     const b = bossWorld(42);
-    // b 的 Boss 当场击杀(击杀本身零 rng):从此 b 不再召唤,随机流就停在那里
+    // b 的 Boss 当场击杀:从此 b 不再召唤。**击杀会掷一次星币判定**(用户设计会:10% 概率掉),
+    // 那一掷发生在下一帧的 reap 里,故下面两条流的对齐要把它算进去(见循环后的补掷)
     const bb = b.enemies.items.find((e) => e.kind === KIND_BOSS)!;
     expect(b.damageEnemy(bb, 9999)).toBe(true);
 
@@ -288,8 +289,10 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     const total = BOSS.summonCounts.reduce((s, n) => s + n, 0);
     expect(a.enemies.size - 1).toBe(total);
 
-    // 这次召唤恰好吃掉 total 次 rng:把 b 的随机流补上同样多次,两条流站回同一格
+    // 这次召唤恰好吃掉 total 次 rng(每只一次出生角);而 b 那边多掷了一次星币判定
+    // (Boss 被回收那一帧),故补给 a:两条流站回同一格
     for (let i = 0; i < total; i++) b.rng.next();
+    a.rng.next();
     expect(a.rng.next()).toBe(b.rng.next());
   });
 
@@ -304,7 +307,7 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     fill(a);
     const b = bossWorld(13);
     const bb = b.enemies.items.find((e) => e.kind === KIND_BOSS)!;
-    expect(b.damageEnemy(bb, 9999)).toBe(true); // 对照:没有召唤的世界,随机流停着不动
+    expect(b.damageEnemy(bb, 9999)).toBe(true); // 对照:没有召唤的世界,随机流只走星币那一掷
     fill(b);
 
     const sizeBefore = a.enemies.size;
@@ -314,7 +317,9 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(a.bossSummonN).toBe(1); // 事件"到点即消费"(游标照 eliteNext 先例)
     expect(a.enemies.size).toBe(sizeBefore); // 一只都没落地:触顶丢弃、不留账
     expect(a.enemies.size).toBe(WAVE_MAX_ALIVE);
-    expect(a.rng.next()).toBe(b.rng.next()); // 触顶帧一次 rng 都不掷,两条流仍同格
+    // 触顶帧**召唤**一次 rng 都不掷;b 那边多掷的是 Boss 回收那一帧的星币判定,补给 a 后同格
+    a.rng.next();
+    expect(a.rng.next()).toBe(b.rng.next());
   });
 
   it('同 seed 两局:Boss 行为与召唤逐位可复现(15 验收),换 seed 才换', () => {
@@ -369,8 +374,10 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(w.result).toBe(RESULT_WIN);
     expect(over).toBe(RESULT_WIN);
 
-    // 双轨进账(见 World.spawnDrop):星币固定面额、零 rng、击杀当场直接入账,不经掉落物池;
-    expect(w.starCoins).toBe(BOSS.starCoins);
+    // 双轨进账(见 World.spawnDrop):星币**按概率**入账(用户设计会:每次击杀恒掷一次、
+    // 命中 buffs.starCoinChance 才给),故这里只钉两档合法读数 —— 要么 0、要么整额 BOSS.starCoins,
+    // 绝不会是别的数(面额本身没变,变的只是给不给)。命中与否由那一掷决定,与 seed 绑定
+    expect([0, BOSS.starCoins]).toContain(w.starCoins);
     // 经验走掉落物:原地必掉一颗,面额 = 底座 scrap × BOSS.hpMul(Boss 档 12 倍)
     expect(w.drops.size).toBe(1);
     expect(w.drops.items[0]!.value).toBe(ENEMIES[BOSS.baseKind]!.scrap * BOSS.hpMul);

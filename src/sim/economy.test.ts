@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_SUPPORT, OFFER_WEIGHT_WEAPON_UPGRADE, upgradeCost, skipRefundFor } from '../data/economy';
+import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_WEAPON_UPGRADE, upgradeCost, skipRefundFor } from '../data/economy';
+import { WEAPON_SLOT_COUNT } from './armory';
 import { applyStartingLoadout } from './loadout';
 import { World } from './world';
 
@@ -10,14 +11,15 @@ describe('槽位制经济参数', () => {
     expect(skipRefundFor(upgradeCost(2))).toBeLessThan(upgradeCost(2));
   });
 
-  it('候选四类权重总和为 100', () => {
-    expect(OFFER_WEIGHT_NEW_WEAPON + OFFER_WEIGHT_WEAPON_UPGRADE + OFFER_WEIGHT_SUPPORT + OFFER_WEIGHT_EDICT).toBe(100);
+  it('候选三类权重总和为 100', () => {
+    expect(OFFER_WEIGHT_NEW_WEAPON + OFFER_WEIGHT_WEAPON_UPGRADE + OFFER_WEIGHT_EDICT).toBe(100);
   });
 
   it('起始装配与商店都读取固定武器槽而非甲板边界', () => {
     const world = new World(1);
     applyStartingLoadout(world);
     expect(world.weapons.some((slot) => slot.type >= 0)).toBe(true);
-    expect(world.weapons).toHaveLength(4);
+    // 槽位数从 armory 现读:8 个槽围成一圈是设计口径,写死数字的话改口径这条就成了假绿
+    expect(world.weapons).toHaveLength(WEAPON_SLOT_COUNT);
   });
 });

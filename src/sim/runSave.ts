@@ -12,7 +12,7 @@
  * 那份清单已经把"什么是真状态、什么是派生量"辩论完了,存档没有资格再辩一遍。
  *
  * 由此推出三类**不存**的字段,每一类都在下面的 EN_* / BU_* 常量处逐条记了名:
- * 1. **派生量**(ship.maxHp / wave.dirRad / supportBuffs / upgradeCost / result / shipDead):
+ * 1. **派生量**(ship.maxHp / wave.dirRad / buffs / upgradeCost / result / shipDead):
  *    step() 帧首统一现算,存了反而会在"存档时的数据表"与"读档时的数据表"之间造出矛盾 ——
  *    改了 tuning 再读档,存的是旧上限、算的是新上限,血条当场对不上。
  * 2. **纯表现**(px/py/pheading 插值基准、hitFlash 闪白、fx 事件池、dpsByType 平滑读数、
@@ -36,17 +36,12 @@
  * "读档后船原地爆炸"的形式发作,远不如干脆判废、让玩家重开一局来得诚实。
  */
 import { SIM_DT } from '../core/loop';
-import { edictHullHpAdd } from '../data/edicts';
+import { EDICT_KIND_COUNT } from '../data/edicts';
 import { TOWER_KIND_COUNT } from '../data/towers';
 import { WAVE_SEGMENTS } from '../data/waves';
-import {
-  createSupportSlots,
-  SUPPORT_SLOT_COUNT,
-  WEAPON_SLOT_COUNT,
-  type SupportSlot,
-} from './armory';
+import { WEAPON_SLOT_COUNT } from './armory';
 import { hullMaxHp } from './damage';
-import { aggregateSupportBuffs, createSupportBuffs } from './support';
+import { aggregateEdictBuffs, createEdictBuffs } from './edictBuffs';
 import { restoreWaveState } from './waves';
 import { RESULT_RUNNING, World } from './world';
 
@@ -55,7 +50,7 @@ import { RESULT_RUNNING, World } from './world';
  * 旧档此后判废(见文件头"版本号进结构"那段)。stride 常量的单测会替你记住这件事:
  * 往 Enemy 里加一个字段而忘了这里,runSave.test.ts 的字段数守卫当场变红。
  */
-export const RUN_SAVE_VERSION = 1;
+export const RUN_SAVE_VERSION = 2;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -108,16 +103,18 @@ export interface RunSnapshot {
   ship: number[];
   /** 武器槽,WEAPON_SLOT_COUNT × WP_STRIDE */
   weapons: number[];
-  /** 支援槽型号,长度 SUPPORT_SLOT_COUNT(SupportSlot 只有 type 一个字段) */
-  supports: number[];
+  /** 法令层数表,长度 EDICT_KIND_COUNT(下标 = EDICT_*,值 = 层数 0..EDICT_MAX_LEVEL) */
+  edicts: number[];
   /** 逐型武器存档等级,长度 TOWER_KIND_COUNT */
   banked: number[];
   /** 波次进度:segment, segTime, burstNext, eliteNext(elites/dirRad/intensity/done 是派生量) */
   wave: number[];
   /** 逐流出怪账 */
   debt: number[];
-  /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolled(0/1), refitPending(0/1), edicts, boostTime, boostCooldown */
+  /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolled(0/1), refitPending(0/1), boostTime, boostCooldown */
   econ: number[];
+  /** 地图商店信标:active(0/1), x, y, ttl, segment */
+  beacon: number[];
   /** 待选候选卡,N × OF_STRIDE(长度 0 = 没有待选) */
   offer: number[];
   /** 本轮船坞法令货架(已售出的格子是 -1) */
@@ -187,8 +184,8 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       s.turretOffset,
     );
   }
-  const supports: number[] = [];
-  for (let i = 0; i < SUPPORT_SLOT_COUNT; i++) supports.push(world.supports[i]!.type);
+  const edicts: number[] = [];
+  for (let i = 0; i < EDICT_KIND_COUNT; i++) edicts.push(world.edictLevels[i]!);
 
   const offer: number[] = [];
   for (const o of world.offer) offer.push(o.kind, o.type, o.level);
@@ -250,7 +247,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     tick: world.tick,
     ship: [ship.x, ship.y, ship.vx, ship.vy, ship.heading, ship.hp],
     weapons,
-    supports,
+    edicts,
     banked: world.weaponBankedLevels.slice(),
     wave: [world.wave.segment, world.wave.segTime, world.wave.burstNext, world.wave.eliteNext],
     debt: world.wave.debt.slice(),
@@ -261,9 +258,15 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       world.offerCooldown,
       world.offerRerolled ? 1 : 0,
       world.refitPending ? 1 : 0,
-      world.edicts,
       world.boostTime,
       world.boostCooldown,
+    ],
+    beacon: [
+      world.shopBeaconActive ? 1 : 0,
+      world.shopBeaconX,
+      world.shopBeaconY,
+      world.shopBeaconTtl,
+      world.shopBeaconSegment,
     ],
     offer,
     dockEdicts: world.dockEdictOffers.slice(),
@@ -315,7 +318,7 @@ export function restoreRun(snap: RunSnapshot): World {
     s.charge = snap.weapons[o + 7]!;
     s.turretOffset = snap.weapons[o + 8]!;
   }
-  for (let i = 0; i < SUPPORT_SLOT_COUNT; i++) world.supports[i]!.type = snap.supports[i]!;
+  for (let i = 0; i < EDICT_KIND_COUNT; i++) world.edictLevels[i] = snap.edicts[i]!;
   for (let i = 0; i < world.weaponBankedLevels.length; i++) {
     world.weaponBankedLevels[i] = snap.banked[i] ?? 0;
   }
@@ -328,9 +331,13 @@ export function restoreRun(snap: RunSnapshot): World {
   world.offerCooldown = snap.econ[3]!;
   world.offerRerolled = snap.econ[4]! !== 0;
   world.refitPending = snap.econ[5]! !== 0;
-  world.edicts = snap.econ[6]!;
-  world.boostTime = snap.econ[7]!;
-  world.boostCooldown = snap.econ[8]!;
+  world.boostTime = snap.econ[6]!;
+  world.boostCooldown = snap.econ[7]!;
+  world.shopBeaconActive = snap.beacon[0]! !== 0;
+  world.shopBeaconX = snap.beacon[1]!;
+  world.shopBeaconY = snap.beacon[2]!;
+  world.shopBeaconTtl = snap.beacon[3]!;
+  world.shopBeaconSegment = snap.beacon[4]!;
 
   world.offer.length = 0;
   for (let o = 0; o + OF_STRIDE <= snap.offer.length; o += OF_STRIDE) {
@@ -432,16 +439,14 @@ export interface RunSaveDigest {
  * 世界里根本不存在的上限 —— 唯一真相只有一处,这里照着算一遍,而不是抄一遍。
  */
 export function digestRunSnapshot(snap: RunSnapshot): RunSaveDigest {
-  const slots: SupportSlot[] = createSupportSlots();
-  for (let i = 0; i < slots.length; i++) slots[i]!.type = snap.supports[i] ?? -1;
-  const buffs = aggregateSupportBuffs(slots, createSupportBuffs());
+  const buffs = aggregateEdictBuffs(snap.edicts, createEdictBuffs());
   return {
     elapsedSec: snap.tick * SIM_DT,
     segment: snap.wave[0] ?? 0,
     segmentCount: WAVE_SEGMENTS.length,
     kills: snap.tally[0] ?? 0,
     hp: snap.ship[5] ?? 0,
-    maxHp: hullMaxHp(buffs, edictHullHpAdd(snap.econ[6] ?? 0)),
+    maxHp: hullMaxHp(buffs),
   };
 }
 
@@ -493,11 +498,12 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   }
   const ship = nums('ship', 6);
   const weapons = nums('weapons', WEAPON_SLOT_COUNT * WP_STRIDE);
-  const supports = nums('supports', SUPPORT_SLOT_COUNT);
+  const edicts = nums('edicts', EDICT_KIND_COUNT);
   const banked = nums('banked', TOWER_KIND_COUNT);
   const wave = nums('wave', 4);
   const debt = nums('debt', -1);
-  const econ = nums('econ', 9);
+  const econ = nums('econ', 8);
+  const beacon = nums('beacon', 5);
   const offer = nums('offer', -1, OF_STRIDE);
   const dockEdicts = nums('dockEdicts', -1);
   const shopWeapons = nums('shopWeapons', -1);
@@ -511,7 +517,8 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   if (
     ship === null ||
     weapons === null ||
-    supports === null ||
+    edicts === null ||
+    beacon === null ||
     banked === null ||
     wave === null ||
     debt === null ||
@@ -540,11 +547,12 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     tick: Math.max(0, Math.floor(tick)),
     ship,
     weapons,
-    supports,
+    edicts,
     banked,
     wave,
     debt,
     econ,
+    beacon,
     offer,
     dockEdicts,
     shopWeapons,

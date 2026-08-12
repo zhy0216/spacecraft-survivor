@@ -8,9 +8,18 @@ import {
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
 } from '../data/economy';
-import { EDICT_COOLANT, EDICT_CRUISE, EDICT_GYRO, EDICT_HULL, EDICT_MAGNET, EDICT_RAPID, EDICT_TRACER, EDICTS } from '../data/edicts';
+import {
+  EDICT_AMMO,
+  EDICT_ARMOR,
+  EDICT_COOLANT,
+  EDICT_CRUISE,
+  EDICT_GYRO,
+  EDICT_MAGNET,
+  EDICT_OVERDRIVE,
+  EDICTS,
+} from '../data/edicts';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWER_RAILGUN, TOWERS } from '../data/towers';
-import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
+import { createWeaponSlots, WEAPON_SLOT_COUNT, type WeaponSlot } from '../sim/armory';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -47,14 +56,14 @@ describe('整备面板纯文案', () => {
     expect(refitDenyMessage(-999)).toContain('-999');
   });
 
-  it('法令效果文案逐项取自数值表', () => {
-    expect(dockEdictEffect(EDICT_TRACER)).toBe('弹药射速 ×1.1');
+  it('法令效果文案逐项取自数值表(与升级三选一同一份 edictDesc,两处不许各念各的)', () => {
+    expect(dockEdictEffect(EDICT_AMMO)).toBe('全船弹药系 射速 ×1.25 / 装填 ×0.7');
+    expect(dockEdictEffect(EDICT_COOLANT)).toBe('全船过热系 热上限 ×1.5');
+    expect(dockEdictEffect(EDICT_ARMOR)).toBe('船体 HP +15 · 受击 ×0.8');
     expect(dockEdictEffect(EDICT_GYRO)).toBe('转向 +10°/s');
-    expect(dockEdictEffect(EDICT_MAGNET)).toBe('拾取半径 ×1.3');
-    expect(dockEdictEffect(EDICT_COOLANT)).toBe('过热上限 ×1.2');
-    expect(dockEdictEffect(EDICT_HULL)).toBe('船体 HP +20');
+    expect(dockEdictEffect(EDICT_MAGNET)).toBe('磁吸半径 ×1.3');
     expect(dockEdictEffect(EDICT_CRUISE)).toBe('巡航速度 ×1.1');
-    expect(dockEdictEffect(EDICT_RAPID)).toBe('弹药射速 ×1.25');
+    expect(dockEdictEffect(EDICT_OVERDRIVE)).toBe('全武器伤害 ×1.15');
     expect(dockEdictEffect(999)).toBe('未知法令');
   });
 });
@@ -164,7 +173,7 @@ function createStubWorld(): StubWorld {
     starCoins: 100,
     ship: { hp: 60, maxHp: 100 },
     shopWeapons: [TOWER_AUTOCANNON, -1],
-    dockEdictOffers: [EDICT_TRACER, EDICT_GYRO],
+    dockEdictOffers: [EDICT_AMMO, EDICT_GYRO],
     weapons: createWeaponSlots(),
     weaponCalls: [],
     weaponCode: 0,
@@ -323,8 +332,8 @@ describe('createRefitFlow 纯商店流程', () => {
 
   it('法令行显示名称、效果与 25 星币价格，购买后下架', () => {
     setup();
-    expect(edictOf(dom, 0).innerHTML).toContain(EDICTS[EDICT_TRACER]?.name);
-    expect(edictOf(dom, 0).innerHTML).toContain(dockEdictEffect(EDICT_TRACER));
+    expect(edictOf(dom, 0).innerHTML).toContain(EDICTS[EDICT_AMMO]!.name);
+    expect(edictOf(dom, 0).innerHTML).toContain(dockEdictEffect(EDICT_AMMO));
     expect(edictOf(dom, 0).innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
     fire(edictOf(dom, 0), 'click');
     expect(world.edictCalls).toEqual([0]);
@@ -369,4 +378,6 @@ describe('createRefitFlow 纯商店流程', () => {
   });
 });
 
-const WEAPON_PICKER_CANCEL_INDEX = 1 + 4;
+// 替换层 = 一行标题 + WEAPON_SLOT_COUNT 个槽按钮 + 一颗取消:槽位数从 armory 现读,
+// 写死数字的话槽位一扩(4 -> 8)这一条就点到了某个槽而不是取消,症状还长得像「取消没反应」
+const WEAPON_PICKER_CANCEL_INDEX = 1 + WEAPON_SLOT_COUNT;

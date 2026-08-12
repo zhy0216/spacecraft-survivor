@@ -3,13 +3,14 @@
  * 末尾的小 DOM 桩只守重开/时停这两条流程约束:单实例换 World,不重复挂节点或监听器。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EDICT_GYRO, EDICT_HULL, EDICT_TRACER, EDICTS, edictMask } from '../data/edicts';
+import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS } from '../data/edicts';
+import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
 import type { WeaponSlot } from '../sim/armory';
-import { createSupportBuffs, type SupportBuffs } from '../sim/support';
+import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
 import {
   FIRE_CHARGING,
   FIRE_COOLDOWN,
@@ -191,7 +192,8 @@ interface StubEnemy {
 }
 
 interface StubWorld {
-  ship: { hp: number; maxHp: number };
+  /** x/y 是商店信标那一行要的:HUD 报「还剩几秒 · 还有多远」,距离取船心到信标 */
+  ship: { hp: number; maxHp: number; x: number; y: number };
   scrap: number;
   starCoins: number;
   upgradeCost: number;
@@ -201,14 +203,19 @@ interface StubWorld {
   threatIntensity: number;
   burstWarning(): { etaSeconds: number; dirRad: number } | null;
   enemies: { items: StubEnemy[] };
-  /** 已持有法令掩码(18 号):HUD 徽记按它逐位查名字 */
-  edicts: number;
+  /** 已持有法令的层数表:HUD 徽记按它逐条查名字,层数 ≥ 2 的挂 ×N */
+  edictLevels: number[];
+  /** 地图商店信标:HUD 那一行倒计时按它显示"还剩几秒 · 还有多远" */
+  shopBeaconActive: boolean;
+  shopBeaconX: number;
+  shopBeaconY: number;
+  shopBeaconTtl: number;
   /** 解锁状态掩码(19 号):位 i = UNLOCKS[i] 开没开;图鉴计数按它数置位 */
   unlockMask: number;
   /** 火力统计面板:击杀数 + 武器槽(名字/等级/节流状态出格)+ 支援聚合(理论 DPS 的倍率来源) */
   kills: number;
   weapons: WeaponSlot[];
-  supportBuffs: SupportBuffs;
+  buffs: EdictBuffs;
   /** 加速技能(空格)的两个计时器:HUD 冷却条读它们 */
   boostTime: number;
   boostCooldown: number;
@@ -232,7 +239,7 @@ function stubWeapon(type: number, level: number, over: Partial<WeaponSlot> = {})
 
 function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
   return {
-    ship: { hp: 75, maxHp: 100 },
+    ship: { hp: 75, maxHp: 100, x: 0, y: 0 },
     scrap: 10,
     starCoins: 10,
     upgradeCost: 40,
@@ -242,11 +249,15 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     threatIntensity: THREAT_INTENSITY_MAX * 0.5,
     burstWarning: () => null,
     enemies: { items: [] },
-    edicts: 0,
+    edictLevels: createEdictLevels(),
+    shopBeaconActive: false,
+    shopBeaconX: 0,
+    shopBeaconY: 0,
+    shopBeaconTtl: 0,
     unlockMask: 0,
     kills: 0,
     weapons: [],
-    supportBuffs: createSupportBuffs(),
+    buffs: createEdictBuffs(),
     boostTime: 0,
     boostCooldown: 0,
     ...over,
@@ -330,21 +341,23 @@ describe('createHud', () => {
     expect(value.textContent).toBe('4');
   });
 
-  it('法令徽记:无法令时隐藏,持有后按掩码印出名字,setWorld 换世界同步更新', () => {
+  it('法令徽记:无法令时隐藏,持有后印名字、叠层挂 ×N,setWorld 换世界同步更新', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const edicts = root.children[0]!.children[0]!.children[2]!;
+    const edicts = root.children[0]!.children[0]!.children[3]!;
     expect(edicts.title).toBe('已生效法令');
     // 简单口径:无法令整体隐藏(display:none),持有才亮
     expect(edicts.style.display).toBe('none');
 
-    // 抽到曳光协议 + 结构加固:掩码两位置位,徽记按名字显示,未持有的不出现
-    hud.setWorld(
-      stubWorld({ edicts: edictMask(EDICT_TRACER) | edictMask(EDICT_HULL) }) as unknown as World,
-    );
+    // 弹药协议 1 层 + 装甲协议 2 层:徽记按名字显示,叠到 2 层的那条挂 ×2,未持有的不出现
+    const levels = createEdictLevels();
+    levels[EDICT_AMMO] = 1;
+    levels[EDICT_ARMOR] = 2;
+    hud.setWorld(stubWorld({ edictLevels: levels }) as unknown as World);
     expect(edicts.style.display).toBe('block');
-    expect(findText(root, EDICTS[EDICT_TRACER]!.name)).toBeDefined();
-    expect(findText(root, EDICTS[EDICT_HULL]!.name)).toBeDefined();
+    expect(findText(root, EDICTS[EDICT_AMMO]!.name)).toBeDefined();
+    // "拿过两次过热上限就显示 过热上限 ×2" —— 这一行就是那条要求的落点
+    expect(findText(root, `${EDICTS[EDICT_ARMOR]!.name}×2`)).toBeDefined();
     expect(findText(root, EDICTS[EDICT_GYRO]!.name)).toBeUndefined();
 
     // 重开一局(新世界无法令):徽记当帧收起
@@ -355,7 +368,7 @@ describe('createHud', () => {
   it('图鉴读数:按 world.unlockMask 置位数显示已解锁数/总数,setWorld 换世界当帧跟上', () => {
     const hud = createHud({ world: stubWorld({ unlockMask: 0b011 }) as unknown as World });
     const root = dom.ui.children[0]!;
-    const collection = root.children[0]!.children[0]!.children[3]!;
+    const collection = root.children[0]!.children[0]!.children[4]!;
     expect(collection.title).toBe('图鉴');
     expect(findText(root, '图鉴')).toBeDefined();
     const value = collection.children[0]!.children[1]!;
@@ -504,7 +517,7 @@ describe('createHud', () => {
     expect(root.style.opacity).toBe('1');
 
     const next = stubWorld({
-      ship: { hp: 12, maxHp: 90 },
+      ship: { hp: 12, maxHp: 90, x: 0, y: 0 },
       scrap: 33,
       upgradeCost: 55,
       elapsed: 130,
@@ -550,12 +563,12 @@ describe('createHud', () => {
     });
     const hud = createHud({ world: world as unknown as World });
     const root = dom.ui.children[0]!;
-    const firepower = root.children[0]!.children[0]!.children[4]!;
+    const firepower = root.children[0]!.children[0]!.children[5]!;
     expect(firepower.title).toBe('火力统计');
     expect(findText(firepower, '击杀')).toBeDefined();
     expect(findText(firepower, '42')).toBeDefined();
     // DPS 是固定理论值(slotSustainedDps),不随实时输出漂:期望值用同一份纯函数现算
-    const buffs = createSupportBuffs();
+    const buffs = createEdictBuffs();
     const acDps =
       slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 2), TOWERS[TOWER_AUTOCANNON]!, buffs) +
       slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 1), TOWERS[TOWER_AUTOCANNON]!, buffs);
@@ -568,9 +581,10 @@ describe('createHud', () => {
     // 发射读数:机炮格就绪(装填那把不拖累),激光格报过热剩余秒
     expect(findText(firepower, '就绪')).toBeDefined();
     expect(findText(firepower, '过热 1.2s')).toBeDefined();
-    // 格节点按槽上限预建:两格点亮,其余藏着(display:none),节点数不随内容涨
+    // 格节点按槽上限预建:两格点亮,其余藏着(display:none),节点数不随内容涨。
+    // 上限从 armory 现读(8 个槽):写死数字的话槽位一扩这一条就是假绿
     const rows = firepower.children;
-    expect(rows.length).toBe(2 + 4);
+    expect(rows.length).toBe(2 + WEAPON_SLOT_COUNT);
     expect(rows[2]!.style.display).toBe('block');
     expect(rows[3]!.style.display).toBe('block');
     expect(rows[4]!.style.display).toBe('none');

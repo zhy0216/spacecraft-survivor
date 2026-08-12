@@ -4,7 +4,7 @@ import { TOWER_AUTOCANNON, TOWERS, towerMagazine } from '../data/towers';
 import { createWeaponSlots, slotMuzzleWorld } from './armory';
 import { createEnemy } from './enemy';
 import { createShip } from './ship';
-import { createSupportBuffs } from './support';
+import { createEdictBuffs } from './edictBuffs';
 import { stepTurrets } from './turret';
 
 describe('stepTurrets 槽位接线', () => {
@@ -13,7 +13,7 @@ describe('stepTurrets 槽位接线', () => {
     const ship = createShip();
     ship.heading = 0;
     const grid = new SpatialHash<ReturnType<typeof createEnemy>>(64);
-    stepTurrets(weapons, ship, grid, 1 / 60, null, createSupportBuffs());
+    stepTurrets(weapons, ship, grid, 1 / 60, null, createEdictBuffs());
     weapons[0]!.type = TOWER_AUTOCANNON;
     weapons[0]!.level = 1;
     weapons[0]!.ammo = towerMagazine(TOWERS[TOWER_AUTOCANNON]!, 1);
@@ -23,7 +23,7 @@ describe('stepTurrets 槽位接线', () => {
     enemy.x = muzzle.x + 100;
     enemy.y = muzzle.y + 20;
     grid.insert(enemy);
-    for (let i = 0; i < 20; i++) stepTurrets(weapons, ship, grid, 1 / 60, null, createSupportBuffs());
+    for (let i = 0; i < 20; i++) stepTurrets(weapons, ship, grid, 1 / 60, null, createEdictBuffs());
     expect(weapons[0]!.turretOffset).toBeGreaterThan(0);
   });
 });

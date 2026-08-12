@@ -22,13 +22,12 @@
  * 同一条 URL 判定)才印 残骸/花费。
  */
 import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
-import { type EdictDef, EDICTS } from '../data/edicts';
+import { type EdictDef, edictLevel, EDICT_MAX_LEVEL, EDICTS, EDICT_THR_NONE } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
-import { type SupportDef, SUPPORTS } from '../data/supports';
 import { THR_AMMO, THR_CHARGE, THR_HEAT, TOWER_MAX_LEVEL, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_SUPPORT, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
-import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, SUPPORT_FULL, SUPPORT_INVALID_TYPE, type World } from '../sim/world';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 
 // 提示文字配色:成功 = 冷青蓝、拒绝 = 暖红(与渲染层高亮同色;冷色是我方色域,GDD §12)
@@ -75,8 +74,14 @@ const TOAST_CSS =
   'pointer-events:none;user-select:none;';
 const FLASH_MS = 1400; // 提示条存留时长(ms)
 
-/** 玩家模式不印残骸/花费(残骸数由 HUD 管);与 main.ts 同一条 ?debug 判定 */
-const DEBUG = location.search.includes('debug');
+/**
+ * 玩家模式不印残骸/花费(残骸数由 HUD 管);与 main.ts 同一条 ?debug 判定。
+ * `typeof location !== 'undefined'` 那一手是给 Node 端的调用方兜底:本模块的**纯函数部分**
+ * (edictDesc / cardDesc / denyMessage)被 ui/refitFlow.ts 复用,而那边的单测跑在无 DOM 的
+ * Node 环境里 —— 模块级裸读 location 会让整个文件在 import 那一刻就炸,
+ * 而它想要的只是两句文案。
+ */
+const DEBUG = typeof location !== 'undefined' && location.search.includes('debug');
 
 // —— 流程阶段。三个值互斥:**收着 / 选卡 / 换槽** ——
 const PHASE_OFF = 0;
@@ -86,12 +91,12 @@ const PHASE_REPLACE = 2;
 /** 理由码 → 中文拒绝文案。独立成纯函数、不碰 DOM,于是能在 Node 里单测:漏码会静默退化成兜底串 */
 const DENY_MSGS: Record<number, string> = {
   [UPGRADE_NO_OFFER]: '这一次升级已经不在了(卡片过期,已恢复战斗)',
-  [SUPPORT_FULL]: '支援槽已满(4 格全占)—— 这张支援卡用不掉,换一张或跳过',
+  [EDICT_MAXED]: `这条法令已经满层(${EDICT_MAX_LEVEL} 层封顶)—— 换一张或跳过`,
   [ACQUIRE_REPLACE_NEEDED]: '武器槽已满 —— 从替换层选一个槽,换下旧武器',
   [REPLACE_BAD_SLOT]: '这个槽不能替换(下标越界或空槽)',
   [ACQUIRE_INVALID_TYPE]: '没有这种塔型(数值表里查不到)',
   [REPLACE_INVALID_TYPE]: '没有这种塔型(数值表里查不到)',
-  [SUPPORT_INVALID_TYPE]: '没有这种支援(数值表里查不到)',
+  [EDICT_INVALID_TYPE]: '没有这条法令(数值表里查不到)',
   [REROLL_NO_STARCOINS]: `星币不足(重摇需要 ${REROLL_PRICE})`,
   [REROLL_ALREADY_DONE]: '本档已经摇过一次,不能再摇',
 };
@@ -106,11 +111,11 @@ export function cardTitle(opt: UpgradeOption): string {
 }
 
 // 无外部资产的卡片图标:型号 = 数值表下标 → 几何符号,改名不会让图标走丢;未知型号显式报 ?。
-// 三套符号各自独立(下标互不相干),一律按 data/towers(TOWER_*)、data/supports(SUP_*)、
-// data/edicts(EDICT_*)的编号排列;TOWER_ICONS 里 6..11 是合成塔(卡池不进,恒空位)
+// 两套符号各自独立(下标互不相干),按 data/towers(TOWER_*)与 data/edicts(EDICT_*)的编号排列;
+// TOWER_ICONS 里 6..11 是合成塔(卡池不进,恒空位)。
+// EDICT_ICONS 十条:弹药/散热/电容/装甲/增幅/磁力/重心/巡航/星图/超载
 const TOWER_ICONS: string[] = ['▰', '◇', 'ϟ', '➠', '✣', '◉', '', '', '', '', '', '', '♁'];
-const SUPPORT_ICONS: string[] = ['▦', '≋', '⚡', '⬢', '✚', '◈'];
-const EDICT_ICONS: string[] = ['▸', '⟲', '✧', '❄', '▣', '➤', '≫'];
+const EDICT_ICONS: string[] = ['▦', '≋', '⚡', '⬢', '✚', '◈', '⟲', '➤', '✧', '≫'];
 
 function kindIcon(list: string[], type: number): string {
   return list[type] || '?';
@@ -118,7 +123,6 @@ function kindIcon(list: string[], type: number): string {
 
 export function cardIcon(opt: UpgradeOption): string {
   if (opt.kind === OFFER_NEW_WEAPON || opt.kind === OFFER_WEAPON_UPGRADE) return kindIcon(TOWER_ICONS, opt.type);
-  if (opt.kind === OFFER_SUPPORT) return kindIcon(SUPPORT_ICONS, opt.type);
   return kindIcon(EDICT_ICONS, opt.type);
 }
 
@@ -127,7 +131,7 @@ function num(v: number): string {
   return String(Math.round(v * 100) / 100);
 }
 
-// 节流系的名字与手感一句话(THR_*;三档正是三种支援的作用锚点,故编号与语义都不许合并)
+// 节流系的名字与手感一句话(THR_*;三档正是三条系限定法令的作用锚点,故编号与语义都不许合并)
 const THROTTLE_NAMES = ['弹药系', '过热系', '充能系'];
 const THROTTLE_DESCS = ['弹药系(打空要装填)', '过热系(贪连射会锁死)', '充能系(攒满才放)'];
 
@@ -140,39 +144,38 @@ function throttleDesc(throttle: number): string {
 }
 
 /**
- * 支援卡的一句话 = **念数值表里那几项非中性的字段**(乘法档 1、加法档 0 = "这档用不上",调回中性
- * 那一句自己就消失)。甲板删除后支援是**全船被动**:作用系限定(throttle ≥ 0)的前缀读作「全船 X 系塔」;
- * 装甲舱/经验增幅器/磁力收集器(-1)不作用于特定系,落在无前缀那几句。
+ * 法令卡的一句话 = **念数值表里那几项非中性的字段**(船坞商店的法令卡也念它,见 refitFlow —— 
+ * 同一张表两处各念一遍必然走散)(乘法档 1、加法档 0 = "这档用不上",
+ * 调回中性那一句自己就消失)。法令是**全船被动**:作用系限定(throttle ≥ 0)的前缀读作
+ * 「全船 X 系」;船体/经济/机动那几条(EDICT_THR_NONE)不作用于特定系,落在无前缀那几句。
+ *
+ * 念的是**一层的效果**而不是"当前总量":卡片上写的是"点下去会多出什么",
+ * 而"已经叠到几层"由 cardLevelText 那一行单独报(「散热协议 ×2 → ×3」)—— 两件事分开说,
+ * 玩家才不会把"这条法令有多强"和"这一张卡给多少"看混。
  */
-function supportDesc(def: SupportDef): string {
+export function edictDesc(def: EdictDef): string {
   const parts: string[] = [];
-  if (def.throttle >= 0) {
+  if (def.throttle !== EDICT_THR_NONE) {
     const muls: string[] = [];
     if (def.fireRateMul !== 1) muls.push(`射速 ×${num(def.fireRateMul)}`);
     if (def.reloadMul !== 1) muls.push(`装填 ×${num(def.reloadMul)}`);
     if (def.heatMaxMul !== 1) muls.push(`热上限 ×${num(def.heatMaxMul)}`);
     if (def.chargeRateMul !== 1) muls.push(`充能 ×${num(def.chargeRateMul)}`);
-    if (muls.length > 0) parts.push(`全船${throttleName(def.throttle)}塔 ${muls.join(' / ')}`);
+    if (muls.length > 0) parts.push(`全船${throttleName(def.throttle)} ${muls.join(' / ')}`);
   }
-  if (def.hullHp !== 0) parts.push(`船体 HP ${def.hullHp > 0 ? '+' : ''}${num(def.hullHp)}`);
+  if (def.damageMul !== 1) parts.push(`全武器伤害 ×${num(def.damageMul)}`);
+  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
   if (def.damageTakenMul !== 1) parts.push(`受击 ×${num(def.damageTakenMul)}`);
   if (def.xpMul !== 1) parts.push(`经验 ×${num(def.xpMul)}`);
   if (def.magnetRadiusMul !== 1) parts.push(`磁吸半径 ×${num(def.magnetRadiusMul)}`);
-  // 一项都没有 = 数值表把这一型的效果全调成中性了。**不许印成空串**
-  return parts.length > 0 ? parts.join(' · ') : '这一型在数值表里没有任何效果';
-}
-
-/** 法令卡的一句话 = 念数值表里非中性的字段(与 supportDesc 同口径)。法令是**全船被动**,没有"相邻" */
-function edictDesc(def: EdictDef): string {
-  const parts: string[] = [];
-  if (def.ammoFireRateMul !== 1) parts.push(`弹药系射速 ×${num(def.ammoFireRateMul)}`);
   if (def.turnRateAdd !== 0) {
     parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
   }
-  if (def.magnetRadiusMul !== 1) parts.push(`拾取半径 ×${num(def.magnetRadiusMul)}`);
-  if (def.heatMaxMul !== 1) parts.push(`过热上限 ×${num(def.heatMaxMul)}`);
-  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
   if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
+  if (def.starCoinChanceAdd !== 0) {
+    parts.push(`星币概率 ${def.starCoinChanceAdd > 0 ? '+' : ''}${num(def.starCoinChanceAdd * 100)}%`);
+  }
+  // 一项都没有 = 数值表把这一条的效果全调成中性了。**不许印成空串**
   return parts.length > 0 ? parts.join(' · ') : '这一条在数值表里没有任何效果';
 }
 
@@ -208,8 +211,8 @@ function newWeaponGranted(world: World, opt: UpgradeOption): number {
 
 /**
  * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头)。塔(新武器/武器升级)报
- * "射界档 / 射程 / 表面 DPS / 节流系"四样,升级卡再报 X→Y 跳变;支援/法令各自念数值表里
- * 非中性的字段。world 只在读新武器的存档级时用到(新武器卡 level 恒 0,见 upgrade.ts)。
+ * "射界档 / 射程 / 表面 DPS / 节流系"四样,升级卡再报 X→Y 跳变;法令念数值表里非中性的字段。
+ * world 只在读新武器的存档级时用到。
  */
 export function cardDesc(opt: UpgradeOption, world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
@@ -227,26 +230,26 @@ export function cardDesc(opt: UpgradeOption, world?: World): string {
     // 未拥有:level = 存档等级(opt.level 口径见 upgrade.ts),点了存到 lv+1,获得时兑现
     return `未持有 · 等级存档 Lv${Math.max(1, lv + 1)}(获得时生效)`;
   }
-  if (opt.kind === OFFER_SUPPORT) {
-    const def = SUPPORTS[opt.type];
-    if (!def) return `数值表里查不到这种支援(型号 ${opt.type})`;
-    return `${supportDesc(def)} · 可重复持有`;
-  }
   const def = EDICTS[opt.type];
   if (!def) return `数值表里查不到这条法令(型号 ${opt.type})`;
   return edictDesc(def);
 }
 
 /**
- * 卡片上的等级行。四类各有各的话要说:新武器报"拿到手从几级起步"(存档级 + 1),合成材料再挂一句
- * 提示;武器升级已拥有 = 当前级、未拥有 = 存档等级;支援可叠效、占槽;法令不占槽、不叠级 ——
- * 不写清楚的话,玩家会拿"又抽到同一张 = 更强的同名卡"的直觉去理解重复,而那是错的。
+ * 卡片上的等级行。三类各有各的话要说:新武器报"拿到手从几级起步"(存档级 + 1),
+ * 已有同型再挂一句"第 N 把 · 三把合成"(那是合成的唯一入口,不写清楚玩家不会知道重复有用);
+ * 武器升级已拥有 = 当前级、未拥有 = 存档等级;
+ * 法令报**当前层 → 下一层**(「散热协议 ×2 → ×3」)—— 这就是"拿过两次就显示 ×2"那条要求的落点。
  */
 export function cardLevelText(opt: UpgradeOption, world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
     const lv = world ? newWeaponGranted(world, opt) : 1;
-    const mergeHint = mergeResultOf(opt.type) >= 0 ? ' · 可三合一合成' : '';
-    return `新武器 · 获得后从 Lv${lv} 起步${mergeHint}`;
+    // opt.level = 槽里已有几把同型的最高等级(0 = 一把都没有,见 upgrade.ts 的 level 口径);
+    // 有同型且这一型有配方时,这张卡的真正价值是"往三合一凑一把",标题必须先说这件事
+    const owned = opt.level > 0;
+    const mergeable = mergeResultOf(opt.type) >= 0;
+    if (owned && mergeable) return `已有同型 · 再拿一把 · 凑满 3 把当场合成`;
+    return `新武器 · 获得后从 Lv${lv} 起步${mergeable ? ' · 可三合一合成' : ''}`;
   }
   if (opt.kind === OFFER_WEAPON_UPGRADE) {
     const lv = opt.level;
@@ -254,8 +257,11 @@ export function cardLevelText(opt: UpgradeOption, world?: World): string {
     if (lv >= 1) return `当前 Lv${Math.floor(lv)}`;
     return '未持有 · 存档等级';
   }
-  if (opt.kind === OFFER_SUPPORT) return '支援槽 · 全船被动 · 可叠效';
-  return '法令 · 不占槽 · 不叠级';
+  // 法令:当前层 → 下一层。满层那一档正常不会出现在候选里(卡池已剔),留一句兜底文案
+  const lv = Math.max(0, Math.floor(opt.level));
+  if (lv >= EDICT_MAX_LEVEL) return `法令 · 已满层(×${EDICT_MAX_LEVEL})`;
+  if (lv <= 0) return `法令 · 不占槽 · 可叠到 ×${EDICT_MAX_LEVEL}`;
+  return `法令 · 当前 ×${lv} → ×${lv + 1}(上限 ×${EDICT_MAX_LEVEL})`;
 }
 
 /** 跳过返还 = cost − 手续费。**与 World.skipUpgrade 调的是同一个 skipRefundFor**:分家的话提示与到账会各走各的 */
@@ -448,17 +454,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     return lv;
   }
 
-  /** 这一型支援的持有数(取用后现读) */
-  function countSupport(type: number): number {
-    let count = 0;
-    for (let i = 0; i < world.supports.length; i++) {
-      if (world.supports[i]!.type === type) count++;
-    }
-    return count;
-  }
-
   /**
-   * 取用成功后的回执文案,按四类各说各的话。**在 takeUpgrade 之后调用**,等级/持有数
+   * 取用成功后的回执文案,按三类各说各的话。**在 takeUpgrade 之后调用**,等级/层数
    * 一律现读 World —— 卡片承诺的是"点下去之后",回执说的就是"点下去之后"。
    */
   function successToast(opt: UpgradeOption): string {
@@ -470,11 +467,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       if (lv >= 1) return `${label} 升到 Lv${lv}`;
       return `${label} 等级存档 Lv${world.weaponBankedLevels[opt.type] ?? 0}(获得时生效)`;
     }
-    if (opt.kind === OFFER_SUPPORT) {
-      const count = countSupport(opt.type);
-      return count >= 2 ? `${label} ×${count} 叠效` : `获得支援:${label}`;
-    }
-    return `法令生效:${label} · 全船被动`;
+    // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
+    const lv = edictLevel(world.edictLevels, opt.type);
+    return lv >= 2 ? `${label} ×${lv}` : `法令生效:${label} · 全船被动`;
   }
 
   /**

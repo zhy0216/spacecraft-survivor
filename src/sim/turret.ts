@@ -25,14 +25,7 @@
  * 只能靠转船去喂它,这正是"走位即火控"落到单座塔上的样子。
  */
 import type { SpatialHash } from '../core/spatialHash';
-import {
-  THR_AMMO,
-  THR_HEAT,
-  type TowerDef,
-  towerArcDeg,
-  towerChainCount,
-  towerRange,
-} from '../data/towers';
+import { type TowerDef, towerArcDeg, towerChainCount, towerRange } from '../data/towers';
 import { type Arc, findArcTarget, slotArc } from './arc';
 import { type WeaponSlot, WEAPON_SLOT_COUNT, slotMuzzleWorld } from './armory';
 import { tuning } from './config';
@@ -40,7 +33,7 @@ import { shipRadius } from './damage';
 import { type Enemy } from './enemy';
 import { type FireSink, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
-import type { SupportBuffs } from './support';
+import type { EdictBuffs } from './edictBuffs';
 import { canFire, onFired, slotTowerDef, stepThrottle } from './tower';
 import { candidates, fire, muzzle } from './turretFire';
 
@@ -69,13 +62,10 @@ function towerOutreach(def: TowerDef, level: number): number {
  * @param sink 开火的去处(World 实现)。**传 null = 只追瞄、不开火** ——
  *   04 号那批纯几何用例因此不必造一整套世界,而"炮管朝哪"这件事本就不该依赖"打得出打不出"。
  *   节流(装填/降温/蓄力)无论有没有 sink 都照常推进:它是时间的函数,不是开火的副作用。
- * @param supportBuffs 本帧的支援聚合(sim/support.ts 现算):四个 slot* 包装的倍率来源,
+ * @param buffs 本帧的法令聚合(sim/edictBuffs.ts 现算):四个 slot* 包装的倍率来源,
  *   由 World 每帧算好传进来 —— 全船被动没有"这一座塔"的归属问题,全部槽共用一份。
- * @param edictAmmoMul 法令的弹药系射速倍率(18 号曳光协议),缺省 1 = 未持有。
- *   **只折进弹药系塔**(def.throttle === THR_AMMO):"曳光协议:所有弹药系射速 +10%"的
- *   "弹药系"三个字就在这一句按节流系落地,其余两系一行都不碰。
- * @param edictHeatMaxMul 法令的过热上限倍率(18 号散热协议),缺省 1 = 未持有。
- *   只折进过热系塔(THR_HEAT),且只进 onFired 的热上限(slotHeatMax)。
+ *   **"哪一系吃哪条法令"已经在聚合里按 throttle 折过**(弹药协议只落进 THR_AMMO 那一族),
+ *   故本函数不再逐槽挑倍率:少了那一步,"射速加成漏了某一系"这类 bug 没有落脚点。
  *
  * 三条性能口径(1000 敌 + 满槽武器是 01 号压测场景的常态):
  *   一、没有一座武器就**直接返回** —— 压测场景默认空槽,不该为它白掏一次查询;
@@ -101,9 +91,7 @@ export function stepTurrets(
   grid: SpatialHash<Enemy>,
   dt: number,
   sink: FireSink | null,
-  supportBuffs: SupportBuffs,
-  edictAmmoMul: number = 1,
-  edictHeatMaxMul: number = 1,
+  buffs: EdictBuffs,
 ): void {
   // 一趟扫出两件事:有没有武器、全船最大射程是多少。
   // 塔型非法(数值表被改坏 / 将来某处漏了校验)的槽在这里就不算数:它下面那个循环也会跳过,
@@ -133,14 +121,10 @@ export function stepTurrets(
     if (!def) continue;
     const level = slot.level;
 
-    // 18 号法令按节流系挑倍率:曳光协议只折弹药系(射速),散热协议只折过热系(热上限),
-    // 其余两系走恒 1 —— 未持有时两个倍率都是 1,与既有链路逐位一字不差
-    const edictMul = def.throttle === THR_AMMO ? edictAmmoMul : 1;
-
     // 节流**有没有目标都要推进**:装填、降温、蓄力都在这里,只在有目标时跑的话,
     // 弹药塔会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
-    // 受击射速惩罚已随四舷删除,故这里不再有 fireMul —— 支援与法令倍率从聚合进
-    stepThrottle(slot, def, dt, supportBuffs, edictMul);
+    // 受击射速惩罚已随四舷删除,故这里不再有 fireMul —— 法令倍率全部从聚合进
+    stepThrottle(slot, def, dt, buffs);
 
     slotArc(i, ship.heading, towerArcDeg(def, level), arc);
     slotMuzzleWorld(ship, i, muzzle);
@@ -175,16 +159,16 @@ export function stepTurrets(
     // 第三道:节流放不放行(弹夹/热量/充能,规则全在 sim/tower.ts,这里不复述)
     if (!canFire(slot, def)) continue;
 
-    const shots = fire(slot, def, target, aim, range, sink);
+    const shots = fire(slot, def, target, aim, range, sink, buffs.damageMul);
     // shots = 0 只可能是数值表被改坏(弹速非正、fx 越界):那种塔当场哑火,
     // 而**不记代价** —— 记了就会白扣一发弹药/一份热量,现场看上去像"塔在打但没伤害"
     if (shots <= 0) continue;
     // 所有塔型共用的一次短促炮口闪:只在真正打出至少一发/一次结算后推事件,哑火不闪。
     // 一次 trigger 只推一条(双管仍是一座塔开了一次火),渲染层按 towerType 取同源冷色。
     sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
-    // 与 stepThrottle 传同一个 supportBuffs/edictMul:写进 cooldown 的那个间隔和逐帧夹取它的
-    // 那个上限必须同源,否则支援/法令倍率变化时写进去的新间隔会被下一帧按旧上限夹回去
-    onFired(slot, def, shots, supportBuffs, edictMul, def.throttle === THR_HEAT ? edictHeatMaxMul : 1);
+    // 与 stepThrottle 传同一个 buffs:写进 cooldown 的那个间隔和逐帧夹取它的那个上限必须同源,
+    // 否则法令倍率变化时写进去的新间隔会被下一帧按旧上限夹回去
+    onFired(slot, def, shots, buffs);
     sink.fired(i);
   }
 

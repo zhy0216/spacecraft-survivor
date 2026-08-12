@@ -21,7 +21,7 @@
  * 卡池过滤在 sim/upgrade.ts 的 collectTypes 里与 offerLegal 同位置落地(后续 issue),
  * 本表只声明"哪一号内容被哪一条条件挡着"。
  */
-import { EDICT_RAPID } from './edicts';
+import { EDICT_OVERDRIVE } from './edicts';
 import { LOADOUT_BOMBARD, LOADOUT_SNIPER } from './loadout';
 import { TOWER_MISSILE_NEST } from './towers';
 
@@ -86,10 +86,13 @@ export const UNLOCKS: UnlockEntry[] = [
     condition: { kind: COND_FIRST_WIN, target: 0 },
   },
   {
+    // **id 与下标都不许改**(progress.unlockMask 的位 i = UNLOCKS[i],旧存档的掩码指着它);
+    // 支援并入法令后"急速协议"随同轴合并消失,这一条改指进阶法令"超载协议" ——
+    // 换的是解锁内容(kind/type 两行),不是这条锁本身
     id: 'edict-rapid',
-    name: '急速协议',
+    name: '超载协议',
     kind: UNLOCK_EDICT,
-    type: EDICT_RAPID, // 单局击杀达标才进三选一池(与 18 号同一条法令池)
+    type: EDICT_OVERDRIVE, // 单局击杀达标才进三选一池(与法令池同一条闸门)
     condition: { kind: COND_KILLS, target: 300 }, // 单局 300 杀 ≈ 中盘偏后,占位待调
   },
   {

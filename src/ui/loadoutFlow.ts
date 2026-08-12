@@ -21,7 +21,8 @@ import {
   type UnlockEntry,
 } from '../data/unlocks';
 import { TOWER_KIND_COUNT, TOWERS } from '../data/towers';
-import { SUPPORT_KIND_COUNT, SUPPORTS } from '../data/supports';
+import { EDICT_KIND_COUNT } from '../data/edicts';
+import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { isTyping } from './isTyping';
 
 /** 冷色域与结算界面同一支:我方废铁的青蓝系(GDD §12,敌我色域分离) */
@@ -80,28 +81,29 @@ const TOWER_GLYPH: string[] = [
   '荆', // TOWER_THORN
   '弹', // TOWER_MISSILE_NEST
 ];
-const SUPPORT_GLYPH: string[] = ['弹', '散', '容', '甲', '验', '磁'];
+// 十条法令的单字:弹药/散热/电容/装甲/增幅/磁力/重心/巡航/星图/超载
+const EDICT_GLYPH: string[] = ['弹', '散', '容', '甲', '验', '磁', '心', '航', '星', '载'];
 
 function glyphForTower(type: number): string {
   return type >= 0 && type < TOWER_KIND_COUNT ? TOWER_GLYPH[type]! : '?';
 }
 
-function glyphForSupport(type: number): string {
-  return type >= 0 && type < SUPPORT_KIND_COUNT ? SUPPORT_GLYPH[type]! : '?';
+function glyphForEdict(type: number): string {
+  return type >= 0 && type < EDICT_KIND_COUNT ? EDICT_GLYPH[type]! : '?';
 }
 
 /**
- * 起手配置示意图:两行文本 —— 武器槽(4 个)+ 支援槽(4 个),空格用 '·'。
- * 一行直接读出"开局带几门炮、什么炮、几个支援",与槽位制的装配心智一致。
+ * 起手配置示意图:两行文本 —— 武器槽(WEAPON_SLOT_COUNT 个,空格用 '·')+ 开局法令。
+ * 一行直接读出"开局带几门炮、什么炮、带哪几条法令",与槽位制的装配心智一致。
+ * 槽位数从 sim/armory 现读而不是写死 4:槽位扩到 8 之后写死的那个数会画出一张少一半的图。
  */
 export function loadoutDiagram(def: LoadoutDef): string {
-  const weapons = Array.from({ length: 4 }, (_, i) =>
+  const weapons = Array.from({ length: WEAPON_SLOT_COUNT }, (_, i) =>
     i < def.weapons.length ? glyphForTower(def.weapons[i]!) : '·',
   );
-  const supports = Array.from({ length: 4 }, (_, i) =>
-    i < def.supports.length ? glyphForSupport(def.supports[i]!) : '·',
-  );
-  const lines = [`武器 [${weapons.join('][')}]`, `支援 [${supports.join('][')}]`];
+  const edicts = def.edicts.map((t) => glyphForEdict(t));
+  const lines = [`武器 [${weapons.join('][')}]`];
+  lines.push(edicts.length > 0 ? `法令 ${edicts.join(' ')}` : '法令 —');
   lines.push('↑ 船头');
   return lines.join('\n');
 }

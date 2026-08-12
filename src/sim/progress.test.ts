@@ -11,7 +11,8 @@ import { Rng } from '../core/rng';
 import { isMergeResult } from '../data/merges';
 import { TOWER_KIND_COUNT } from '../data/towers';
 import { COND_ELITE_KILLS, COND_FIRST_WIN, COND_KILLS, UNLOCKS } from '../data/unlocks';
-import { createSupportSlots, createWeaponSlots } from './armory';
+import { createEdictLevels } from '../data/edicts';
+import { createWeaponSlots } from './armory';
 import {
   createProgress,
   evaluateRun,
@@ -275,7 +276,7 @@ describe('unlockMask 编码与 sim/upgrade.ts 的位约定一致', () => {
 
   it('evaluateRun 算出的掩码被 upgrade.ts 闸门直接消费:全解锁下导弹巢可被掷中', () => {
     const weapons = createWeaponSlots();
-    const supports = createSupportSlots();
+    const edicts = createEdictLevels();
     const banked = new Array<number>(TOWER_KIND_COUNT).fill(0);
     const mask = evaluateRun(createProgress(), {
       result: RESULT_WIN,
@@ -291,9 +292,9 @@ describe('unlockMask 编码与 sim/upgrade.ts 的位约定一致', () => {
     }
     for (const [pos, type] of towerPool.entries()) {
       const out: UpgradeOption[] = [];
-      const rng = new CountingRng([0.1, (pos + 0.5) / towerPool.length]);
+      const rng = new CountingRng([0.3, (pos + 0.5) / towerPool.length]);
       expect(
-        rollUpgradeOffer(rng as unknown as Rng, out, 0, mask, weapons, supports, banked),
+        rollUpgradeOffer(rng as unknown as Rng, out, edicts, mask, weapons, banked),
       ).toBeGreaterThan(0);
       expect(out[0]).toEqual({ kind: OFFER_WEAPON_UPGRADE, type, level: 0 });
     }

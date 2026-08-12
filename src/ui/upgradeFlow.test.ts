@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.hoisted(() => { vi.stubGlobal('location', { search: '' }); });
 import { REROLL_PRICE, UPGRADE_SKIP_FEE } from '../data/economy';
-import { EDICT_COOLANT, EDICT_CRUISE, EDICT_GYRO, EDICT_HULL, EDICT_MAGNET, EDICT_TRACER, EDICTS } from '../data/edicts';
+import {
+  createEdictLevels,
+  EDICT_AMMO,
+  EDICT_ARMOR,
+  EDICT_COOLANT,
+  EDICT_CRUISE,
+  EDICT_GYRO,
+  EDICT_MAGNET,
+  EDICT_MAX_LEVEL,
+  EDICT_OVERDRIVE,
+  EDICT_STARCHART,
+  EDICTS,
+} from '../data/edicts';
 import { isMergeResult } from '../data/merges';
-import { SUP_AMMO_BAY, SUP_ARMOR_BAY, SUP_RADIATOR, SUPPORTS } from '../data/supports';
 import { TOWER_AUTOCANNON, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
-import { createSupportSlots, createWeaponSlots, type SupportSlot, type WeaponSlot } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_SUPPORT, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import {
   ACQUIRE_INVALID_TYPE,
   ACQUIRE_REPLACE_NEEDED,
@@ -14,8 +25,8 @@ import {
   REROLL_NO_STARCOINS,
   REPLACE_BAD_SLOT,
   REPLACE_INVALID_TYPE,
-  SUPPORT_FULL,
-  SUPPORT_INVALID_TYPE,
+  EDICT_MAXED,
+  EDICT_INVALID_TYPE,
   type World,
 } from '../sim/world';
 import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps } from './upgradeFlow';
@@ -28,12 +39,8 @@ function weaponUpgradeOpt(type: number, level: number): UpgradeOption {
   return { kind: OFFER_WEAPON_UPGRADE, type, level };
 }
 
-function supportOpt(type: number): UpgradeOption {
-  return { kind: OFFER_SUPPORT, type, level: 0 };
-}
-
-function edictOpt(type: number): UpgradeOption {
-  return { kind: OFFER_EDICT, type, level: 0 };
+function edictOpt(type: number, level = 0): UpgradeOption {
+  return { kind: OFFER_EDICT, type, level };
 }
 
 const DENY_CODES = [
@@ -42,8 +49,8 @@ const DENY_CODES = [
   ACQUIRE_INVALID_TYPE,
   REPLACE_BAD_SLOT,
   REPLACE_INVALID_TYPE,
-  SUPPORT_FULL,
-  SUPPORT_INVALID_TYPE,
+  EDICT_MAXED,
+  EDICT_INVALID_TYPE,
   REROLL_NO_STARCOINS,
   REROLL_ALREADY_DONE,
 ];
@@ -61,7 +68,7 @@ describe('denyMessage', () => {
   it('关键拒绝原因把可恢复动作说清楚', () => {
     expect(denyMessage(UPGRADE_NO_OFFER)).toContain('升级');
     expect(denyMessage(ACQUIRE_REPLACE_NEEDED)).toContain('替换');
-    expect(denyMessage(SUPPORT_FULL)).toContain('4');
+    expect(denyMessage(EDICT_MAXED)).toContain(String(EDICT_MAX_LEVEL));
     expect(denyMessage(REROLL_NO_STARCOINS)).toContain(String(REROLL_PRICE));
     expect(denyMessage(REROLL_ALREADY_DONE)).toContain('摇过');
   });
@@ -72,21 +79,16 @@ describe('denyMessage', () => {
 });
 
 describe('升级卡片纯文案', () => {
-  it('四类标题都来自 optionLabel，互不串表', () => {
-    const options = [newWeaponOpt(TOWER_AUTOCANNON), weaponUpgradeOpt(TOWER_RAILGUN, 2), supportOpt(SUP_AMMO_BAY), edictOpt(EDICT_TRACER)];
+  it('三类标题都来自 optionLabel，互不串表', () => {
+    const options = [newWeaponOpt(TOWER_AUTOCANNON), weaponUpgradeOpt(TOWER_RAILGUN, 2), edictOpt(EDICT_AMMO)];
     for (const option of options) expect(cardTitle(option)).toBe(optionLabel(option));
   });
 
   it('所有可出卡型号都有内建图标，未知型号明确报问号', () => {
     const towerOptions = TOWERS.filter((def) => !isMergeResult(def.type)).map((def) => newWeaponOpt(def.type));
-    const options = [
-      ...towerOptions,
-      ...SUPPORTS.map((def) => supportOpt(def.type)),
-      ...EDICTS.map((def) => edictOpt(def.type)),
-    ];
+    const options = [...towerOptions, ...EDICTS.map((def) => edictOpt(def.type))];
     for (const option of options) expect(cardIcon(option)).not.toBe('?');
     expect(cardIcon(newWeaponOpt(99))).toBe('?');
-    expect(cardIcon(supportOpt(99))).toBe('?');
     expect(cardIcon(edictOpt(99))).toBe('?');
   });
 
@@ -100,6 +102,10 @@ describe('升级卡片纯文案', () => {
     expect(desc).toContain(String(Math.round(towerRange(def, 3))));
     expect(desc).toContain(String(Math.round(towerDps(def, 3) * 100) / 100));
     expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toBe('新武器 · 获得后从 Lv3 起步 · 可三合一合成');
+    // 槽里已有同型(level > 0):卡面改口说"凑合成",那是这张卡此时的真正价值
+    expect(cardLevelText({ kind: OFFER_NEW_WEAPON, type: TOWER_AUTOCANNON, level: 2 }, worldAsWorld(world))).toContain(
+      '凑满 3 把',
+    );
   });
 
   it('武器升级分别显示 DPS 跳变、未持有存档和满级', () => {
@@ -115,30 +121,29 @@ describe('升级卡片纯文案', () => {
     expect(cardLevelText(weaponUpgradeOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toContain('满级');
   });
 
-  it('支援描述说明全船效果与重复持有，等级行说明可叠效', () => {
-    const ammo = cardDesc(supportOpt(SUP_AMMO_BAY));
+  it('法令描述逐条来自数值表:系限定档带「全船 X 系」前缀,全船档直接念', () => {
+    const ammo = cardDesc(edictOpt(EDICT_AMMO));
     expect(ammo).toContain('全船');
     expect(ammo).toContain('射速');
     expect(ammo).toContain('装填');
-    expect(ammo).toContain('可重复持有');
-    expect(cardDesc(supportOpt(SUP_ARMOR_BAY))).toContain('船体 HP');
-    expect(cardLevelText(supportOpt(SUP_RADIATOR))).toBe('支援槽 · 全船被动 · 可叠效');
+    expect(cardDesc(edictOpt(EDICT_COOLANT))).toContain('热上限');
+    expect(cardDesc(edictOpt(EDICT_ARMOR))).toContain('船体 HP');
+    expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('转向');
+    expect(cardDesc(edictOpt(EDICT_MAGNET))).toContain('磁吸半径');
+    expect(cardDesc(edictOpt(EDICT_CRUISE))).toContain('巡航速度');
+    expect(cardDesc(edictOpt(EDICT_STARCHART))).toContain('星币概率');
+    expect(cardDesc(edictOpt(EDICT_OVERDRIVE))).toContain('全武器伤害');
   });
 
-  it('法令描述逐条来自数值表，且不占槽不叠级', () => {
-    expect(cardDesc(edictOpt(EDICT_TRACER))).toContain('弹药系射速');
-    expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('转向');
-    expect(cardDesc(edictOpt(EDICT_MAGNET))).toContain('拾取半径');
-    expect(cardDesc(edictOpt(EDICT_COOLANT))).toContain('过热上限');
-    expect(cardDesc(edictOpt(EDICT_HULL))).toContain('船体 HP');
-    expect(cardDesc(edictOpt(EDICT_CRUISE))).toContain('巡航速度');
-    expect(cardLevelText(edictOpt(EDICT_TRACER))).toBe('法令 · 不占槽 · 不叠级');
+  it('法令等级行报当前层 → 下一层(「散热协议 ×2 → ×3」),没拿过时报上限', () => {
+    expect(cardLevelText(edictOpt(EDICT_COOLANT, 0))).toBe(`法令 · 不占槽 · 可叠到 ×${EDICT_MAX_LEVEL}`);
+    expect(cardLevelText(edictOpt(EDICT_COOLANT, 2))).toBe(`法令 · 当前 ×2 → ×3(上限 ×${EDICT_MAX_LEVEL})`);
+    expect(cardLevelText(edictOpt(EDICT_COOLANT, EDICT_MAX_LEVEL))).toContain('已满层');
   });
 
   it('越界型号不冒充第 0 型', () => {
     expect(cardDesc(newWeaponOpt(99))).toContain('99');
     expect(cardDesc(weaponUpgradeOpt(99, 1))).toContain('99');
-    expect(cardDesc(supportOpt(99))).toContain('99');
     expect(cardDesc(edictOpt(99))).toContain('99');
   });
 });
@@ -255,7 +260,7 @@ interface StubWorld {
   starCoins: number;
   offerRerolled: boolean;
   weapons: WeaponSlot[];
-  supports: SupportSlot[];
+  edictLevels: number[];
   weaponBankedLevels: number[];
   takeCalls: Array<[number, number | undefined]>;
   takeCode: number;
@@ -277,7 +282,7 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     starCoins: 30,
     offerRerolled: false,
     weapons: createWeaponSlots(),
-    supports: createSupportSlots(),
+    edictLevels: createEdictLevels(),
     weaponBankedLevels: Array(TOWERS.length).fill(0),
     takeCalls: [],
     takeCode: 0,
@@ -331,7 +336,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
 
   beforeEach(() => {
     dom = installDom();
-    world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON), supportOpt(SUP_AMMO_BAY), edictOpt(EDICT_TRACER)]);
+    world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON), edictOpt(EDICT_ARMOR), edictOpt(EDICT_AMMO)]);
     resolved = 0;
   });
 
@@ -394,12 +399,12 @@ describe('createUpgradeFlow 单阶段流程', () => {
   });
 
   it('普通拒绝留在选卡阶段，卡片过期则放行', () => {
-    world.takeCode = SUPPORT_FULL;
+    world.takeCode = EDICT_MAXED;
     setup();
     fire(cardsOf(dom).children[1] as StubEl, 'click');
     expect(resolved).toBe(0);
     expect(panelOf(dom).style.display).toBe('flex');
-    expect(toastOf(dom).textContent).toBe(denyMessage(SUPPORT_FULL));
+    expect(toastOf(dom).textContent).toBe(denyMessage(EDICT_MAXED));
     world.takeCode = UPGRADE_NO_OFFER;
     fire(cardsOf(dom).children[1] as StubEl, 'click');
     expect(resolved).toBe(1);
@@ -418,7 +423,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
 
   it('重摇成功后重绘候选但不结算，并立即置灰', () => {
     setup();
-    world.offer = [newWeaponOpt(TOWER_RAILGUN), supportOpt(SUP_RADIATOR)];
+    world.offer = [newWeaponOpt(TOWER_RAILGUN), edictOpt(EDICT_COOLANT)];
     fire(rerollOf(dom), 'click');
     expect(world.rerollCalls).toBe(1);
     expect(resolved).toBe(0);

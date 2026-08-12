@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { EDICTS, EDICT_HULL } from '../data/edicts';
-import { SUP_ARMOR_BAY, SUPPORTS } from '../data/supports';
-import { createSupportSlots } from './armory';
+import { createEdictLevels, EDICTS, EDICT_ARMOR } from '../data/edicts';
 import { tuning } from './config';
 import { hullDamageTaken, hullMaxHp, shipRadius } from './damage';
-import { aggregateSupportBuffs, createSupportBuffs } from './support';
+import { aggregateEdictBuffs, createEdictBuffs } from './edictBuffs';
 
 const baseHp = tuning.shipHullHp;
 afterEach(() => {
@@ -16,22 +14,21 @@ describe('船体圆与全局伤害模型', () => {
     expect(shipRadius(48)).toBe(24);
   });
 
-  it('HP 上限 = 基准 + 装甲舱加值 + 法令加值', () => {
+  it('HP 上限 = 基准 + 装甲协议每层 15(加法档,支援并入法令后只剩这一个来源)', () => {
     tuning.shipHullHp = 100;
-    const supports = createSupportSlots();
-    supports[0]!.type = SUP_ARMOR_BAY;
-    supports[1]!.type = SUP_ARMOR_BAY;
-    const buffs = aggregateSupportBuffs(supports, createSupportBuffs());
-    expect(SUPPORTS[SUP_ARMOR_BAY]!.hullHp).toBe(15);
-    expect(hullMaxHp(buffs)).toBe(130);
-    expect(hullMaxHp(buffs, EDICTS[EDICT_HULL]!.hullHpAdd)).toBe(150);
+    const levels = createEdictLevels();
+    expect(EDICTS[EDICT_ARMOR]!.hullHpAdd).toBe(15);
+    expect(hullMaxHp(aggregateEdictBuffs(levels, createEdictBuffs()))).toBe(100);
+    levels[EDICT_ARMOR] = 2;
+    expect(hullMaxHp(aggregateEdictBuffs(levels, createEdictBuffs()))).toBe(130);
+    levels[EDICT_ARMOR] = 5;
+    expect(hullMaxHp(aggregateEdictBuffs(levels, createEdictBuffs()))).toBe(175);
   });
 
-  it('装甲舱受击倍率按 0.8 连乘', () => {
-    const supports = createSupportSlots();
-    supports[0]!.type = SUP_ARMOR_BAY;
-    supports[1]!.type = SUP_ARMOR_BAY;
-    const buffs = aggregateSupportBuffs(supports, createSupportBuffs());
+  it('装甲协议受击倍率按 0.8 逐层连乘', () => {
+    const levels = createEdictLevels();
+    levels[EDICT_ARMOR] = 2;
+    const buffs = aggregateEdictBuffs(levels, createEdictBuffs());
     expect(hullDamageTaken(buffs)).toBeCloseTo(0.64, 12);
   });
 });

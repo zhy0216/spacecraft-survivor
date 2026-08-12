@@ -16,10 +16,10 @@
  * 依赖只有 ./config 与 ./support(类型),**绝不 import world / turret / tower**:
  * 那三个都是本文件的下游(World 每帧问结算、turret 每帧问查询圈),引回去就是运行期循环依赖。
  * 装甲舱/经验增幅器那几项(改版 06 号)只读 sim/support 的聚合结果,不碰数据表 ——
- * "持有了几块什么支援"由 aggregateSupportBuffs 全船算好,本文件只认那个聚合。
+ * "持有了几块什么支援"由 aggregateEdictBuffs 全船算好,本文件只认那个聚合。
  */
 import { tuning } from './config';
-import type { SupportBuffs } from './support';
+import type { EdictBuffs } from './edictBuffs';
 
 /**
  * 船体受击圆半径 = shipLength / 2。**全仓唯一口径**:World 的接触粗筛、
@@ -31,24 +31,26 @@ export function shipRadius(shipLength: number): number {
 }
 
 /**
- * 船体 HP 上限 = 基准(tuning.shipHullHp,GDD §14 锁定的 100)+ 全船支援的 hullHp 聚合
- * (改版 06 号:装甲舱 +15,两块 = +30)+ 已持有法令的 hullHpAdd(18 号结构加固 = +20)。
- * 旧版签名里的 deck 参数换成 supportBuffs:HP 上限从"甲板的派生量"变成"支援聚合的派生量"——
- * 聚合每帧由 World 现算(见 sim/support.ts),本函数只做加法,World 每帧现调,放置/购买当帧生效。
- * **加法叠加**(两块 = +30;法令点数同档):HP 是**点数**不是比例,这是本轮唯一一项加法。
+ * 船体 HP 上限 = 基准(tuning.shipHullHp,GDD §14 锁定的 100)+ 法令聚合的 hullHp
+ * (装甲协议 +15/层,2 层 = +30)。
+ * 旧版签名里的 deck 参数换成 buffs:HP 上限从"甲板的派生量"变成"法令聚合的派生量"——
+ * 装甲协议的 +15/层已经在 buffs.hullHp 里加过(支援并入法令后不再有第二个加点来源),
+ * 故旧的 edictHpAdd 第二参整条删除:一个数只在一处算。
+ * 聚合每帧由 World 现算(见 sim/edictBuffs.ts),本函数只做加法,World 每帧现调,拿到当帧生效。
+ * **加法叠加**(2 层 = +30):HP 是**点数**不是比例,这是全表唯一一项加法。
  * 每次现读 tuning 而不是模块加载时算死:shipHullHp 是面板上的旋钮,与 shipRadius 同口径。
  */
-export function hullMaxHp(buffs: SupportBuffs, edictHpAdd = 0): number {
-  return tuning.shipHullHp + buffs.hullHp + edictHpAdd;
+export function hullMaxHp(buffs: EdictBuffs): number {
+  return tuning.shipHullHp + buffs.hullHp;
 }
 
 /**
- * 受击伤害倍率 = 全船支援的 damageTakenMul 聚合(改版 06 号:装甲舱 ×0.8,两块 = ×0.64)。
- * 连乘而不是把 -20% 加起来:倍率连乘永远推不到 ≤ 0,而"每块 -20%"的加法在多块时会把
+ * 受击伤害倍率 = 法令聚合的 damageTakenMul(装甲协议 ×0.8,2 层 = ×0.64)。
+ * 连乘而不是把 -20% 加起来:倍率连乘永远推不到 ≤ 0,而"每层 -20%"的加法在 5 层时会把
  * 倍率抹成 0(撞上去一点都不疼)。代价是收益递减,但那正是要的:堆装甲该有天花板。
  * 它是 World.damageShip 与 sink.hullHit 计算"实际结算伤害"的**唯一**去处 ——
  * 飘字与血条扣掉的量永远一致,玩家不会读到两本账(旧版 edgeDamageMul 的同一条分工)。
  */
-export function hullDamageTaken(buffs: SupportBuffs): number {
+export function hullDamageTaken(buffs: EdictBuffs): number {
   return buffs.damageTakenMul;
 }

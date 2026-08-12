@@ -1,0 +1,19 @@
+{
+  "date": "2026-08-12",
+  "currency": "USD",
+  "hard_cap": 25,
+  "batch_spend": 0.3,
+  "cumulative_spend": 1.15,
+  "remaining_budget": 23.85,
+  "note": "round-3:骨架动画第一批分件图。换 nano-banana-pro/edit($0.15/张,比 flux-2-pro 贵 5 倍)是因为分件必须与已过审单件图同一只怪 —— 纯 text-to-image 保不住同一性。首次调用因 image_urls 传成裸串被 422 挡下,未计费,改 JSON 数组后通过。侧掠者五件一次到位;蜂群蛭 core 可用、lobe 出成连体双瓣废掉,但**不重生成**:core 是完整闭合件、装配时压在瓣根之上,于是花瓣直接从 round-1 原始 512px 图上按 ±31° 扇区切下,切口被 core 盖住,省掉一次 $0.15 且同一性天然完美。",
+  "jobs": [
+    {"id": "swarm-leech-parts-01", "endpoint": "fal-ai/nano-banana-pro/edit", "cost": 0.15, "status": "completed", "verdict": "部分选用:core 选用 → swarm-leech/core.png;lobe 出成两瓣连体,弃用,改由 round-1 原图切扇区"},
+    {"id": "side-raider-parts-01", "endpoint": "fal-ai/nano-banana-pro/edit", "cost": 0.15, "status": "completed", "verdict": "全部选用:head/thorax/leg/tail-a/tail-b 五件分离干净、朝向未被转、配色与 round-1 一致"}
+  ],
+  "rest_pose_calibration": {
+    "method": "部件按 rig 表装配后与 round-1 单件图并排比对 IoU;尾段用『扣掉已放部件的残差』做 FFT 互相关定位(纯剪影交集会给退化解,masked NCC 因两遍渲染明暗差异也不可靠)",
+    "swarm-leech_IoU": 0.9,
+    "side-raider_IoU": 0.665,
+    "note": "侧掠者 IoU 略低是有意的:tail-b 接在 tail-a 之后使尾巴比原图长约两成,换来第二节甩鞭;爪足下移到躯干下缘之外才看得见,也超出原图剪影一点"
+  }
+}

@@ -42,6 +42,7 @@ import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPane
 import { createGameOverUi } from './ui/gameOver';
 import { createHud, type HudUi } from './ui/hud';
 import { createLoadoutFlow } from './ui/loadoutFlow';
+import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
 import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
@@ -235,6 +236,28 @@ async function boot(): Promise<void> {
   }
 
   /**
+   * 武器布局面板(按 I)。与暂停菜单同一条时停口径:面板自己不动 loop,
+   * 冻结/恢复由这里的两个回调执行。**开发模式下也建**:换位是玩法而不是调试工具,
+   * 没有理由让它跟着 Tweakpane 一起消失。
+   * blocked:暂停菜单/设置页开着时那一记 I / Esc 归它们(理由见 armoryPanel 的 blocked)。
+   */
+  const armoryPanel: ArmoryPanelUi = createArmoryPanel({
+    canOpen: () => runActive && !run.paused,
+    onOpen: () => {
+      // 与弹卡那一处一字同源:run.paused 挡住下一次 advance,loop.halt() 让**本次**
+      // advance 当场停手并丢掉剩余累积时间(否则这一帧还会补跑最多 4 步 = 时停"漏"了 66ms)
+      run.paused = true;
+      loop.halt();
+      hud.setPaused(true);
+    },
+    onClose: () => {
+      run.paused = false;
+      hud.setPaused(false);
+    },
+    blocked: () => settingsMenu.visible() || (pauseMenu?.visible() ?? false),
+  });
+
+  /**
    * 这一局跑起来了没有。**存档的总闸**:boot 里那个预建的 World(标题界面背景里那艘
    * 没出港的船)也是一个合法的、result === RUNNING 的世界,canSaveRun 会痛快地放行 ——
    * 于是玩家在标题界面切一下浏览器标签,就会被存进一份 0 帧的"存档",
@@ -327,6 +350,7 @@ async function boot(): Promise<void> {
       loop.halt();
       upgradeFlow.hide();
       refitFlow.hide();
+      armoryPanel.hide();
       // 局终 = 删半局存档。留着它的话下次进标题那颗「继续」通向一场**已经结束**的战斗
       // (读进去 result 早已落定,settleOutcome 的结论永不再变,当场又弹一次结算)。
       // 排在结算之前:结算界面可能被延迟 SHIP_DEATH_FX_TIME 秒才弹,而"这一局结束了"
@@ -416,6 +440,12 @@ async function boot(): Promise<void> {
 
     // 航段跨过两分钟边界后，World 已经停住下一段的出怪；这里负责把当前固定步当场截住，
     // 并切到独立整备界面。普通升级即使同帧够钱也会被 World 延后，不会叠两层时停。
+    // 商店信标生成(每跨一个航段一次):世界**不停**,玩家自己决定去不去接 ——
+    // 这里只播一声提示,信标本体由渲染层画、倒计时由 HUD 报
+    world.onShopBeacon = () => {
+      audioBus.playEliteWarn();
+    };
+
     world.onRefitOffer = (segmentIndex) => {
       run.paused = true;
       loop.halt();
@@ -430,6 +460,8 @@ async function boot(): Promise<void> {
     renderer.setWorld(world);
     upgradeFlow.setWorld(world);
     refitFlow.setWorld(world);
+    armoryPanel.setWorld(world);
+    armoryPanel.hide(); // 上一局那张还开着的布局面板一并收掉(与 setWorld 同一条理由)
     hud.setWorld(world);
     gameOver.hide();
 
@@ -502,6 +534,7 @@ async function boot(): Promise<void> {
       input,
       upgradeFlow,
       refitFlow,
+      armoryPanel,
       hud,
       gameOver,
       loadoutFlow,
@@ -576,6 +609,7 @@ async function boot(): Promise<void> {
     gameOver.hide();
     upgradeFlow.hide();
     refitFlow.hide();
+    armoryPanel.hide();
     loadoutFlow.hide();
     titleScreen.show(titleDigest());
   }

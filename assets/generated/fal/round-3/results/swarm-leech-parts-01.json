@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro/edit",
+  "request_id": "019ff650-8e02-7203-b354-3ca55ea1aad4",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa60cb6/GqABy_jSU2bII8LgJkZ40_AOdpWFOT.png",
+        "content_type": "image/png",
+        "file_name": "GqABy_jSU2bII8LgJkZ40_AOdpWFOT.png",
+        "file_size": null,
+        "width": null,
+        "height": null
+      }
+    ],
+    "description": ""
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa60cb6/GqABy_jSU2bII8LgJkZ40_AOdpWFOT.png",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-3/enemies/swarm-leech-parts-01-source.png",
+      "size_bytes": 3985850,
+      "json_path": "images[0]"
+    }
+  ],
+  "gallery": {
+    "session_id": "97bb2f69e25b",
+    "path": "/Users/yang/.genmedia/gallery/sessions/97bb2f69e25b/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/97bb2f69e25b/index.html"
+  }
+}

@@ -26,14 +26,14 @@
  */
 import type { Pool } from '../core/pool';
 import { SIM_DT } from '../core/loop';
-import { THR_AMMO, THR_HEAT, towerArcDeg, towerPierce, towerRange, TOWERS } from '../data/towers';
+import { towerArcDeg, towerPierce, towerRange, TOWERS } from '../data/towers';
 import { type Arc, slotArc } from './arc';
 import { type WeaponSlot, WEAPON_SLOT_COUNT, slotMuzzleWorld } from './armory';
 import { BK_DIRECT } from './bullet';
 import { type EnemyBullet } from './enemyBullet';
 import { type FireSink, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, wrapAngle } from './ship';
-import type { SupportBuffs } from './support';
+import type { EdictBuffs } from './edictBuffs';
 import { canFire, effectiveDamage, onFired } from './tower';
 import type { Bullet } from './bullet';
 
@@ -67,7 +67,9 @@ const PROJ_DIST2_EPS = 1e-6;
  * @param weapons World.weapons(长度 = WEAPON_SLOT_COUNT 的槽位数组;type = -1 的空槽跳过)
  * @param projectiles 场上全部敌方弹丸(World.enemyBullets.items)。弹丸数量级是几十,
  *   逐塔线性扫是常数开销,不为它单开空间哈希
- * @param supportBuffs 本帧的支援聚合:传给 onFired 的节流包装(热上限/射击间隔的倍率来源)
+ * @param buffs 本帧的法令聚合:传给 onFired 的节流包装(热上限/射击间隔的倍率来源)
+ *   与拦截弹的伤害(buffs.damageMul)。**按系挑倍率那一步已经在聚合里做过**
+ *   (见 sim/edictBuffs.ts 的 throttle 路由),与 stepTurrets 逐字同款
  */
 export function stepInterception(
   weapons: readonly WeaponSlot[],
@@ -75,9 +77,7 @@ export function stepInterception(
   projectiles: readonly EnemyBullet[],
   dt: number,
   sink: FireSink,
-  supportBuffs: SupportBuffs,
-  edictAmmoMul: number = 1,
-  edictHeatMaxMul: number = 1,
+  buffs: EdictBuffs,
 ): void {
   // 场上没有弹丸 = 没有可拦的东西:一趟扫描都省了(点防的"本分"交给 stepTurrets)
   if (projectiles.length === 0) return;
@@ -90,9 +90,6 @@ export function stepInterception(
     // 拦截旗子:data/towers 的 interceptsProjectiles,荆棘壁垒与点防同筛(见该字段注释)
     if (!def.interceptsProjectiles) continue;
     const level = slot.level;
-
-    // 法令倍率与 stepTurrets 逐字同款(按节流系挑;未持有时恒 1)
-    const edictMul = def.throttle === THR_AMMO ? edictAmmoMul : 1;
 
     slotArc(i, ship.heading, towerArcDeg(def, level), arc);
     slotMuzzleWorld(ship, i, muzzle);
@@ -155,7 +152,7 @@ export function stepInterception(
     b.y = b.py = muzzle.y;
     b.vx = Math.cos(a) * def.bulletSpeed;
     b.vy = Math.sin(a) * def.bulletSpeed;
-    b.damage = effectiveDamage(def, level);
+    b.damage = effectiveDamage(def, level, buffs.damageMul);
     b.life = dist / def.bulletSpeed;
     b.pierce = towerPierce(def, level);
     b.radius = def.bulletRadius;
@@ -165,7 +162,7 @@ export function stepInterception(
 
     // 与 stepTurrets 同款:炮口闪、记节流代价、投一次"这座塔开火"的票
     sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
-    onFired(slot, def, 1, supportBuffs, edictMul, def.throttle === THR_HEAT ? edictHeatMaxMul : 1);
+    onFired(slot, def, 1, buffs);
     sink.fired(i);
   }
 }

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
-import { SUP_AMMO_BAY, SUP_CAPACITOR, SUP_RADIATOR } from '../data/supports';
+import { createEdictLevels, EDICT_AMMO, EDICT_CAPACITOR, EDICT_COOLANT, EDICT_OVERDRIVE } from '../data/edicts';
 import {
   THR_AMMO, THR_CHARGE, THR_HEAT,
   TOWER_AURORA, TOWER_AUTOCANNON, TOWER_DELUGE, TOWER_LASER, TOWER_MORTAR, TOWER_RAILGUN,
   TOWER_STORM_CANNON, TOWERS, towerMagazine,
 } from '../data/towers';
-import { createSupportSlots, createWeaponSlots } from './armory';
-import { aggregateSupportBuffs, createSupportBuffs } from './support';
+import { createWeaponSlots } from './armory';
+import { aggregateEdictBuffs, createEdictBuffs } from './edictBuffs';
 import {
   canFire, FIRE_CHARGING, FIRE_COOLDOWN, FIRE_LOCKED, FIRE_READY, FIRE_RELOAD, onFired,
   slotChargeTime, slotFireInterval, slotFireReadout, slotHeatMax, slotReload, slotShotsPerFire,
@@ -33,7 +33,7 @@ describe('slotTowerDef', () => {
 describe('三套槽位节流状态机', () => {
   it('弹药系开火扣弹并写入冷却,空弹后进入装填', () => {
     const { slot, def } = setup(TOWER_AUTOCANNON);
-    const buffs = createSupportBuffs();
+    const buffs = createEdictBuffs();
     onFired(slot, def, 1, buffs);
     expect(slot.ammo).toBe(towerMagazine(def, 1) - 1);
     expect(slot.cooldown).toBe(slotFireInterval(slot, def, buffs));
@@ -44,7 +44,7 @@ describe('三套槽位节流状态机', () => {
 
   it('过热系达到上限后锁定并随时间降温', () => {
     const { slot, def } = setup(TOWER_LASER);
-    const buffs = createSupportBuffs();
+    const buffs = createEdictBuffs();
     // 与 sim/turret.ts 的每帧顺序同口径:先推进节流,再问放行,能开就开。
     // onFired 每发都写入 fireInterval 冷却,一口气 while 连开只打得出第 1 发就被冷却挡住,
     // 必须逐帧贪连射才到得了顶(满速约 3s = 24 / (1.6/0.1 - 8));600 帧 = 10s 是宽裕的安全上限
@@ -68,7 +68,7 @@ describe('三套槽位节流状态机', () => {
 
   it('充能系蓄满才可开火,开火清空充能', () => {
     const { slot, def } = setup(TOWER_RAILGUN);
-    const buffs = createSupportBuffs();
+    const buffs = createEdictBuffs();
     expect(canFire(slot, def)).toBe(false);
     for (let i = 0; i < Math.ceil(slotChargeTime(slot, def, buffs) / SIM_DT); i++) stepThrottle(slot, def, SIM_DT, buffs);
     expect(canFire(slot, def)).toBe(true);
@@ -91,7 +91,7 @@ describe('slotShotsPerFire(恒发 × Lv3 跳变,与开火同一份口径)', () =
 });
 
 describe('slotSustainedDps(理论持续 DPS —— 火力面板的固定数值)', () => {
-  const buffs = createSupportBuffs();
+  const buffs = createEdictBuffs();
 
   it('弹药系摊上装填硬停顿:机炮 Lv1 = 20发×6 / (19×0.4 + 1.5) ≈ 13.2', () => {
     const { slot, def } = setup(TOWER_AUTOCANNON);
@@ -117,13 +117,25 @@ describe('slotSustainedDps(理论持续 DPS —— 火力面板的固定数值)'
     expect(slotSustainedDps(mortar.slot, mortar.def, buffs)).toBeCloseTo(34 / 3, 5);
   });
 
-  it('支援聚合抬得动它:弹药库(射速 + 装填)让机炮的持续 DPS 变大', () => {
+  it('法令聚合抬得动它:弹药协议(射速 + 装填)让机炮的持续 DPS 变大,叠第二层再变大', () => {
     const { slot, def } = setup(TOWER_AUTOCANNON);
     const base = slotSustainedDps(slot, def, buffs);
-    const supports = createSupportSlots();
-    supports[0]!.type = SUP_AMMO_BAY;
-    const buffed = aggregateSupportBuffs(supports, createSupportBuffs());
-    expect(slotSustainedDps(slot, def, buffed)).toBeGreaterThan(base);
+    const levels = createEdictLevels();
+    levels[EDICT_AMMO] = 1;
+    const one = slotSustainedDps(slot, def, aggregateEdictBuffs(levels, createEdictBuffs()));
+    levels[EDICT_AMMO] = 2;
+    const two = slotSustainedDps(slot, def, aggregateEdictBuffs(levels, createEdictBuffs()));
+    expect(one).toBeGreaterThan(base);
+    expect(two).toBeGreaterThan(one);
+  });
+
+  it('超载协议按层直乘进 DPS:2 层 = ×1.15²(全武器伤害是它独占的那条轴)', () => {
+    const { slot, def } = setup(TOWER_AUTOCANNON);
+    const base = slotSustainedDps(slot, def, buffs);
+    const levels = createEdictLevels();
+    levels[EDICT_OVERDRIVE] = 2;
+    const buffed = aggregateEdictBuffs(levels, createEdictBuffs());
+    expect(slotSustainedDps(slot, def, buffed)).toBeCloseTo(base * 1.15 * 1.15, 6);
   });
 });
 
@@ -132,7 +144,7 @@ describe('slotFireReadout(下一次发射读数)', () => {
 
   it('弹药系:装填优先于冷却(与 canFire 判序同源),清空报就绪', () => {
     const { slot, def } = setup(TOWER_AUTOCANNON);
-    const buffs = createSupportBuffs();
+    const buffs = createEdictBuffs();
     slotFireReadout(slot, def, buffs, out);
     expect(out).toEqual({ state: FIRE_READY, seconds: 0, ratio: 1 });
     slot.cooldown = 0.2;
@@ -150,7 +162,7 @@ describe('slotFireReadout(下一次发射读数)', () => {
   it('过热系:锁死报过热,进度按 overheatLock 回充', () => {
     const { slot, def } = setup(TOWER_LASER);
     slot.coolLock = 1;
-    slotFireReadout(slot, def, createSupportBuffs(), out);
+    slotFireReadout(slot, def, createEdictBuffs(), out);
     expect(out.state).toBe(FIRE_LOCKED);
     expect(out.seconds).toBe(1);
     expect(out.ratio).toBeCloseTo(1 - 1 / def.overheatLock);
@@ -159,27 +171,27 @@ describe('slotFireReadout(下一次发射读数)', () => {
   it('充能系:蓄力报充能(seconds = 未蓄部分 × 蓄力时长),蓄满就绪;NaN 不外漏', () => {
     const { slot, def } = setup(TOWER_RAILGUN);
     slot.charge = 0.25;
-    slotFireReadout(slot, def, createSupportBuffs(), out);
+    slotFireReadout(slot, def, createEdictBuffs(), out);
     expect(out.state).toBe(FIRE_CHARGING);
     expect(out.seconds).toBeCloseTo(0.75 * 2.4);
     expect(out.ratio).toBe(0.25);
     slot.charge = 1;
-    slotFireReadout(slot, def, createSupportBuffs(), out);
+    slotFireReadout(slot, def, createEdictBuffs(), out);
     expect(out).toEqual({ state: FIRE_READY, seconds: 0, ratio: 1 });
     slot.charge = Number.NaN;
-    slotFireReadout(slot, def, createSupportBuffs(), out);
+    slotFireReadout(slot, def, createEdictBuffs(), out);
     expect(Number.isFinite(out.seconds)).toBe(true);
     expect(Number.isFinite(out.ratio)).toBe(true);
   });
 });
 
-describe('支援聚合进入槽位数值包装', () => {
-  it('弹药库、散热器、电容组只强化对应节流族', () => {
-    const supports = createSupportSlots();
-    supports[0]!.type = SUP_AMMO_BAY;
-    supports[1]!.type = SUP_RADIATOR;
-    supports[2]!.type = SUP_CAPACITOR;
-    const buffs = aggregateSupportBuffs(supports, createSupportBuffs());
+describe('法令聚合进入槽位数值包装', () => {
+  it('弹药协议、散热协议、电容协议只强化对应节流族', () => {
+    const levels = createEdictLevels();
+    levels[EDICT_AMMO] = 1;
+    levels[EDICT_COOLANT] = 1;
+    levels[EDICT_CAPACITOR] = 1;
+    const buffs = aggregateEdictBuffs(levels, createEdictBuffs());
     const ammo = setup(TOWER_AUTOCANNON);
     const heat = setup(TOWER_LASER);
     const charge = setup(TOWER_RAILGUN);

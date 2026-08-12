@@ -32,7 +32,8 @@ import {
   serializeRunSnapshot,
   tryRestoreRun,
 } from './runSave';
-import { SUPPORT_SLOT_COUNT, WEAPON_SLOT_COUNT } from './armory';
+import { EDICT_KIND_COUNT } from '../data/edicts';
+import { WEAPON_SLOT_COUNT } from './armory';
 import type { ShipCommand } from './ship';
 import { RESULT_RUNNING, World } from './world';
 
@@ -230,15 +231,16 @@ describe('局内存档:stride 与结构对表', () => {
   it('Drop:6 存 + px/py 不存', () => {
     expect(Object.keys(createDrop()).length).toBe(DR_STRIDE + 2);
   });
-  it('武器槽 / 支援槽 / 候选卡:全字段都存,一个不落', () => {
+  it('武器槽 / 法令层数 / 候选卡:全字段都存,一个不落', () => {
     const world = new World(1);
     expect(Object.keys(world.weapons[0]!).length).toBe(WP_STRIDE);
-    expect(Object.keys(world.supports[0]!).length).toBe(1);
     const snap = captureRun(world, META);
     expect(snap.weapons.length).toBe(WEAPON_SLOT_COUNT * WP_STRIDE);
-    expect(snap.supports.length).toBe(SUPPORT_SLOT_COUNT);
+    expect(snap.edicts.length).toBe(EDICT_KIND_COUNT);
     expect(snap.banked.length).toBe(TOWER_KIND_COUNT);
     expect(snap.damageByType.length).toBe(TOWER_KIND_COUNT);
     expect(snap.offer.length % OF_STRIDE).toBe(0);
+    // 商店信标:五个数(active/x/y/ttl/segment)—— 少一个就是读档后信标位置对不上
+    expect(snap.beacon.length).toBe(5);
   });
 });

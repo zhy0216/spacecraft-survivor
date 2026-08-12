@@ -7,7 +7,7 @@
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
-import { edictAmmoFireRateMul, edictHeatMaxMul, EDICTS, edictMask } from '../data/edicts';
+import { edictLevel, EDICTS } from '../data/edicts';
 import { TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS } from '../data/waves';
@@ -99,6 +99,11 @@ const EDICTS_CSS = `${PANEL_CSS}display:none;`;
  * HUD 不需要单独接进度引用。
  */
 const COLLECTION_CSS = PANEL_CSS;
+/**
+ * 商店信标倒计时(用户设计会):与法令徽记同一条"没有就整块隐藏"的口径 ——
+ * 信标一局只在四个航段边界各亮 30 秒,常驻一块空面板等于把最该被注意到的那一行稀释掉。
+ */
+const BEACON_CSS = `${PANEL_CSS}display:none;`;
 
 /**
  * 火力统计面板:左列末块。行结构:击杀数 + 总 DPS 两行常驻,其下每**持有的武器型**一格:
@@ -577,6 +582,22 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   edictsRow.append(edictsLabel, edictsValue);
   edicts.appendChild(edictsRow);
 
+  // 商店信标倒计时:一行"商店"标签 + 剩余秒数与距离;节点只建一次,每帧现读世界。
+  // 距离也报:玩家判断"这趟跑不跑得赢"要的是**秒数与距离两个数一起看**
+  //(巡航 130px/s —— 剩 8 秒、还有 900px 就是明摆着的放弃)
+  const beacon = document.createElement('div');
+  beacon.style.cssText = BEACON_CSS;
+  beacon.title = '地图商店信标';
+  const beaconRow = document.createElement('div');
+  beaconRow.style.cssText = LABEL_ROW_CSS;
+  const beaconLabel = document.createElement('span');
+  beaconLabel.style.cssText = LABEL_CSS;
+  beaconLabel.textContent = '商店';
+  const beaconValue = document.createElement('span');
+  beaconValue.style.cssText = `${VALUE_CSS}color:${STAR_COLOR};`;
+  beaconRow.append(beaconLabel, beaconValue);
+  beacon.appendChild(beaconRow);
+
   // 图鉴读数(19 号):星币/法令同族的第三块左列面板,节点只建一次,每帧按掩码现算
   const collection = document.createElement('div');
   collection.style.cssText = COLLECTION_CSS;
@@ -683,7 +704,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 不再有任何一块自记 top 偏移(星币压血条那类失配从结构上消灭)
   const leftCol = document.createElement('div');
   leftCol.style.cssText = LEFT_COL_CSS;
-  leftCol.append(vitals, starCoins, edicts, collection, firepower);
+  leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 
   root.append(top, threat, warn, muteBtn, elite, boss, unlockToast, radar, vignette);
@@ -723,17 +744,33 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     const coins = finiteOrZero(world.starCoins);
     starValue.textContent = String(Math.max(0, Math.round(coins)));
 
-    // 法令徽记(18 号):每帧按 world.edicts 掩码现读已持有名单 —— 名字直取 data/edicts
-    // (ui 不抄第二份),无法令时整体隐藏;抽到 / 重开换世界,当帧跟上
+    // 法令徽记:每帧按 world.edictLevels 现读已持有名单 —— 名字直取 data/edicts(ui 不抄第二份),
+    // **层数 ≥ 2 的挂一个 ×N**(用户设计会:"拿过两次过热上限就显示 过热上限 ×2");
+    // 一层都没有时整体隐藏;叠层 / 重开换世界,当帧跟上
     const edictNames: string[] = [];
     for (let i = 0; i < EDICTS.length; i++) {
-      if ((world.edicts & edictMask(i)) !== 0) edictNames.push(EDICTS[i]!.name);
+      const lv = edictLevel(world.edictLevels, i);
+      if (lv <= 0) continue;
+      edictNames.push(lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : EDICTS[i]!.name);
     }
     if (edictNames.length > 0) {
       edicts.style.display = 'block';
       edictsValue.textContent = edictNames.join(' ');
     } else {
       edicts.style.display = 'none';
+    }
+
+    // 商店信标:亮着才显示,报"还剩几秒 · 还有多远"。距离取船心到信标的直线距离
+    // (与 sim 的接触判定同一对坐标),不减判定半径 —— 玩家读的是"要跑多远",不是"还差几像素"
+    if (world.shopBeaconActive) {
+      const dx = world.shopBeaconX - world.ship.x;
+      const dy = world.shopBeaconY - world.ship.y;
+      beacon.style.display = 'block';
+      beaconValue.textContent = `${Math.max(0, Math.ceil(finiteOrZero(world.shopBeaconTtl)))}s · ${Math.round(
+        Math.hypot(dx, dy),
+      )}px`;
+    } else {
+      beacon.style.display = 'none';
     }
 
     // 图鉴读数(19 号):已解锁计数 = world.unlockMask 置位数 / UNLOCKS 总数。
@@ -749,9 +786,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     // 下一次发射读数走 slotFireReadout,同型多把取"最快就绪那把"(下一发确实从它出膛)。
     // 同型合并成一格印 ×N;格数上限 = 武器槽数,这两层 O(4×4) 的小循环没有分配、没有排序
     killsRow.value.textContent = String(Math.max(0, Math.round(finiteOrZero(world.kills))));
-    const buffs = world.supportBuffs;
-    const ammoEdict = edictAmmoFireRateMul(world.edicts);
-    const heatEdict = edictHeatMaxMul(world.edicts);
+    const buffs = world.buffs;
     let boxCursor = 0;
     let totalDps = 0;
     const weapons = world.weapons;
@@ -774,8 +809,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
         count++;
         if (other.level > maxLevel) maxLevel = other.level;
         if (def) {
-          dps += slotSustainedDps(other, def, buffs, ammoEdict, heatEdict);
-          slotFireReadout(other, def, buffs, fireScratch, ammoEdict);
+          dps += slotSustainedDps(other, def, buffs);
+          slotFireReadout(other, def, buffs, fireScratch);
           if (count === 1 || fireScratch.seconds < fireBest.seconds) {
             fireBest.state = fireScratch.state;
             fireBest.seconds = fireScratch.seconds;
