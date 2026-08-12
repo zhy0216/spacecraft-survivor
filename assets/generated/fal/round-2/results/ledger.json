@@ -1,0 +1,15 @@
+{
+  "date": "2026-08-11",
+  "currency": "USD",
+  "hard_cap": 25,
+  "batch_spend": 0.12,
+  "cumulative_spend": 0.85,
+  "remaining_budget": 24.15,
+  "note": "round-2:补齐 22 号孢子炮手与 15 号 Boss。孢子选 02(锚定四肢剪影更清楚),Boss 选 01(绿底正确、与冲撞甲虫同族配色);boss-war-beetle-02 无视色键出了白底,弃用留档。",
+  "jobs": [
+    {"id": "enemy-spore-cannon-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed", "verdict": "备选:轮廓偏圆,64px 下与蜂群蛭略近"},
+    {"id": "enemy-spore-cannon-02", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed", "verdict": "选用 → assets/game/fal-round-2/enemies/spore-cannon.png"},
+    {"id": "boss-war-beetle-01", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed", "verdict": "选用 → assets/game/fal-round-2/enemies/boss-war-beetle.png"},
+    {"id": "boss-war-beetle-02", "endpoint": "fal-ai/flux-2-pro", "cost": 0.03, "status": "completed", "verdict": "弃用:白底(无视 #00ff00 色键),色键处理风险高"}
+  ]
+}

@@ -1,7 +1,7 @@
 import { Assets, type Texture } from 'pixi.js';
 
 /**
- * 第一轮 fal.ai 资源的运行时映射。
+ * fal.ai 生成资源的运行时映射(round-1 首批四敌/六塔/四支援;round-2 补孢子炮手与 Boss)。
  *
  * 这里故意引用 assets/game 下的运行时版本，而不是 investigations 里保留的生产源图：
  * 原图负责回溯生成结果，运行时图负责首屏体积与显存。背景与核心舰壳各一张；敌人、炮塔、
@@ -13,7 +13,16 @@ const ENEMY_URLS = [
   new URL('../../assets/game/fal-round-1/enemies/side-raider.png', import.meta.url).href,
   new URL('../../assets/game/fal-round-1/enemies/tail-maggot.png', import.meta.url).href,
   new URL('../../assets/game/fal-round-1/enemies/charging-beetle.png', import.meta.url).href,
+  // 22 号新增的孢子炮手补于 round-2(assets/generated/fal/round-2 有源图与回执),下标 = KIND_SPORE
+  new URL('../../assets/game/fal-round-2/enemies/spore-cannon.png', import.meta.url).href,
 ] as const;
+
+/**
+ * Boss 专属贴图(round-2):KIND_BOSS 不进 ENEMIES 表,故不占 ENEMY_URLS 下标,单独一张。
+ * 加载失败时 Renderer 回退到底座型(冲撞甲虫)的纹理放大 —— 与逐型回退同一条"坏一张不塌一局"的口径。
+ */
+const BOSS_URL = new URL('../../assets/game/fal-round-2/enemies/boss-war-beetle.png', import.meta.url)
+  .href;
 
 const TOWER_URLS = [
   new URL('../../assets/game/fal-round-1/towers/autocannon.png', import.meta.url).href,
@@ -45,6 +54,8 @@ export interface GeneratedArtTextures {
   readonly background: Texture | null;
   readonly shipHull: Texture | null;
   readonly enemies: readonly (Texture | null)[];
+  /** Boss 专属(round-2);null = 回退底座型纹理放大(见 BOSS_URL 注释) */
+  readonly boss: Texture | null;
   readonly towers: readonly (Texture | null)[];
   readonly supports: readonly (Texture | null)[];
 }
@@ -64,12 +75,13 @@ function loadTextureSet(urls: readonly string[], prefix: string): Promise<(Textu
 }
 
 export async function loadGeneratedArt(): Promise<GeneratedArtTextures> {
-  const [background, shipHull, enemies, towers, supports] = await Promise.all([
+  const [background, shipHull, enemies, boss, towers, supports] = await Promise.all([
     loadTexture(BACKGROUND_URL, 'background'),
     loadTexture(SHIP_HULL_URL, 'ship-hull'),
     loadTextureSet(ENEMY_URLS, 'enemy'),
+    loadTexture(BOSS_URL, 'boss'),
     loadTextureSet(TOWER_URLS, 'tower'),
     loadTextureSet(SUPPORT_URLS, 'support'),
   ]);
-  return { background, shipHull, enemies, towers, supports };
+  return { background, shipHull, enemies, boss, towers, supports };
 }

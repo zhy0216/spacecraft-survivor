@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/flux-2-pro",
+  "request_id": "019ff143-0f9c-74c0-9d9b-000a9719e5d2",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa5eb9a/O5fADAKsSL8jUay5hq1at_It1bQQNo.png",
+        "content_type": "image/png",
+        "file_name": "O5fADAKsSL8jUay5hq1at_It1bQQNo.png",
+        "file_size": null,
+        "width": 512,
+        "height": 512
+      }
+    ],
+    "seed": 42105
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa5eb9a/O5fADAKsSL8jUay5hq1at_It1bQQNo.png",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-2/enemies/enemy-spore-cannon-01-source.png",
+      "size_bytes": 264137,
+      "json_path": "images[0]"
+    }
+  ],
+  "gallery": {
+    "session_id": "d30f71a0eb4d",
+    "path": "/Users/yang/.genmedia/gallery/sessions/d30f71a0eb4d/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/d30f71a0eb4d/index.html"
+  }
+}

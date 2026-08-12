@@ -1,0 +1,37 @@
+{
+  "endpoint": "fal-ai/flux-2-pro",
+  "unit_cost": 0.03,
+  "image_size": "square",
+  "output_format": "png",
+  "note": "round-2: 补齐 22 号新增的孢子炮手(KIND_SPORE)与 15 号 Boss(冲撞甲虫底座放大)。提示词模板/色键/验收口径与 round-1 完全一致(docs/investigations/2026-08-02);新增约束:正面朝画面上方(-Y),与 GENERATED_ART_FORWARD_OFFSET 的既有惯例对齐。",
+  "jobs": [
+    {
+      "id": "enemy-spore-cannon-01",
+      "category": "enemies",
+      "seed": 42105,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down enemy sprite candidate for a PC survivors game. One original alien spore artillery organism that anchors itself at long range and lobs volleys of glowing spores: bulbous asymmetrical sac body, one large dorsal spore siphon like a short organic mortar barrel, three splayed anchor spikes gripping outward like a tripod, clusters of small glowing spore pods along the flanks, unmistakable stationary artillery silhouette, siphon orifice pointing toward the top of the frame. Strict orthographic top-down view, one full creature centered, strong anchored-tripod silhouette readable at 64 pixels, clearly distinct from a round leech: angular anchor limbs and a single big siphon. Dark crimson magenta and violet tissue with warm orange bioluminescent spore pods. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, no gradient, no texture, no floor, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth animal anatomy."
+    },
+    {
+      "id": "enemy-spore-cannon-02",
+      "category": "enemies",
+      "seed": 42115,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down enemy sprite candidate for a PC survivors game. One original alien spore artillery organism that anchors itself at long range and lobs volleys of glowing spores: bulbous asymmetrical sac body, one large dorsal spore siphon like a short organic mortar barrel, three splayed anchor spikes gripping outward like a tripod, clusters of small glowing spore pods along the flanks, unmistakable stationary artillery silhouette, siphon orifice pointing toward the top of the frame. Strict orthographic top-down view, one full creature centered, strong anchored-tripod silhouette readable at 64 pixels, clearly distinct from a round leech: angular anchor limbs and a single big siphon. Dark crimson magenta and violet tissue with warm orange bioluminescent spore pods. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, no gradient, no texture, no floor, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth animal anatomy."
+    },
+    {
+      "id": "boss-war-beetle-01",
+      "category": "enemies",
+      "seed": 42106,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down boss enemy sprite candidate for a PC survivors game. One original colossal alien war beetle, the alpha of a charging beetle brood: massive layered wedge of battle-scarred chitin armor plates at the front, cracked ridges glowing from within, six heavy armored legs, rows of pulsing egg sacs tucked along the rear flanks hinting it spawns lesser swarms, unmistakable forward charging direction with the armored wedge pointing toward the top of the frame. Strict orthographic top-down view, one full creature centered, strong armored wedge silhouette readable at 64 pixels, clearly bulkier and more heavily armored than a common beetle. Dark crimson magenta and violet chitin with warm orange glowing fissures and organs. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, no gradient, no texture, no floor, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth animal anatomy."
+    },
+    {
+      "id": "boss-war-beetle-02",
+      "category": "enemies",
+      "seed": 42116,
+      "key_color": "#00ff00",
+      "prompt": "Use case: stylized-concept. Asset type: single top-down boss enemy sprite candidate for a PC survivors game. One original colossal alien war beetle, the alpha of a charging beetle brood: massive layered wedge of battle-scarred chitin armor plates at the front, cracked ridges glowing from within, six heavy armored legs, rows of pulsing egg sacs tucked along the rear flanks hinting it spawns lesser swarms, unmistakable forward charging direction with the armored wedge pointing toward the top of the frame. Strict orthographic top-down view, one full creature centered, strong armored wedge silhouette readable at 64 pixels, clearly bulkier and more heavily armored than a common beetle. Dark crimson magenta and violet chitin with warm orange glowing fissures and organs. High-end graphic game sprite concept, controlled material rendering, crisp edges. Perfectly flat solid #00ff00 chroma-key background, no shadow, no gradient, no texture, no floor, generous padding. No green, blue, or cyan in the creature. No text, border, watermark, or Earth animal anatomy."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/flux-2-pro",
+  "request_id": "019ff144-135b-7e83-99c3-7cd32bfe9bc0",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa5eba0/6q2sC5Aixu4s2mw8KXZKj_wNxicJjf.png",
+        "content_type": "image/png",
+        "file_name": "6q2sC5Aixu4s2mw8KXZKj_wNxicJjf.png",
+        "file_size": null,
+        "width": 512,
+        "height": 512
+      }
+    ],
+    "seed": 42106
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa5eba0/6q2sC5Aixu4s2mw8KXZKj_wNxicJjf.png",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-2/enemies/boss-war-beetle-01-source.png",
+      "size_bytes": 358699,
+      "json_path": "images[0]"
+    }
+  ],
+  "gallery": {
+    "session_id": "d30f71a0eb4d",
+    "path": "/Users/yang/.genmedia/gallery/sessions/d30f71a0eb4d/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/d30f71a0eb4d/index.html"
+  }
+}

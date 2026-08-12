@@ -751,6 +751,9 @@ export class Renderer {
   private bossPc: ParticleContainer;
   private bossParticles: Particle[] = [];
   private bossBucket: Enemy[] = [];
+  /** Boss 的实际纹理与 tint(round-2 专属图,加载失败回退底座型;构造时定死,sync 只读) */
+  private bossTexture: Texture;
+  private bossTextureTint = 0xffffff;
   private bossTextureScale = 1;
   private bossRotationOffset = 0;
   /**
@@ -972,12 +975,18 @@ export class Renderer {
       this.eliteBuckets.push([]);
     }
 
-    // —— Boss(15 号):底座型的同一张纹理、同一个 tint,静态缩放使剪影外接半径 = bossRadius() ——
-    // 判定体 = 底座 radius × BOSS.scale(sim/boss.ts 的 bossRadius 是全仓唯一口径),
-    // 剪影就按它画 —— 与"灰盒阶段视觉 = 判定"同一条口径
-    const bossTex = this.enemyTextures[BOSS.baseKind]!;
+    // —— Boss(15 号):round-2 的专属贴图,加载失败回退底座型纹理放大 ——
+    // 静态缩放使剪影外接半径 = bossRadius()(sim/boss.ts 的唯一口径),
+    // 判定体多大画多大 —— 与"灰盒阶段视觉 = 判定"同一条口径,换不换贴图都不动摇
+    const bossGenerated = generatedArt.boss ?? null;
+    const bossTex = bossGenerated ?? this.enemyTextures[BOSS.baseKind]!;
+    this.bossTexture = bossTex;
+    // 回退底座纹理时它可能是程序化剪影(需要上底座 tint);专属图与生成图一律白 tint 原色
+    this.bossTextureTint = bossGenerated ? 0xffffff : this.enemyTextureTints[BOSS.baseKind]!;
     this.bossTextureScale = (bossRadius() * 2) / Math.max(bossTex.width, bossTex.height);
-    this.bossRotationOffset = this.enemyRotationOffsets[BOSS.baseKind]!;
+    this.bossRotationOffset = bossGenerated
+      ? GENERATED_ART_FORWARD_OFFSET
+      : this.enemyRotationOffsets[BOSS.baseKind]!;
     this.bossPc = new ParticleContainer({
       dynamicProperties: { ...dyn, rotation: true, vertex: true, color: true },
       boundsArea: bounds,
@@ -1213,16 +1222,16 @@ export class Renderer {
       budget = this.drawSporeTelegraph(bucket, def, alpha, budget);
       this.drawSporeTelegraph(eliteBucket, def, alpha, budget);
     }
-    // Boss:底座型同纹理同 tint,静态缩放使剪影外接半径 = bossRadius()(构造时算好)——
+    // Boss:构造时定死的专属纹理与 tint(回退时才是底座型的),静态缩放使剪影外接半径 = bossRadius()——
     // 与普通型分桶同一条 syncParticles 路径,判定体多大画多大
     this.syncParticles(this.bossParticles, this.bossPc, this.bossBucket, {
-      texture: this.enemyTextures[BOSS.baseKind]!,
-      tint: this.enemyTextureTints[BOSS.baseKind]!,
+      texture: this.bossTexture,
+      tint: this.bossTextureTint,
       scale: this.bossTextureScale,
       rotationOffset: this.bossRotationOffset,
       anim: ENEMY_ANIM[BOSS.baseKind]!,
       alpha,
-      flashBase: this.enemyTextureTints[BOSS.baseKind]!,
+      flashBase: this.bossTextureTint,
     });
     this.drawBossTelegraph(alpha);
 

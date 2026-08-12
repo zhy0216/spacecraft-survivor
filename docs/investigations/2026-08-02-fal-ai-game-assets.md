@@ -224,8 +224,9 @@ assets/generated/fal/round-1/
 | A1 | 美术方向探针 | Recraft V3 + FLUX 2 Pro | 4 | $0.150 | $0.150 | 完成 |
 | A2 | 冲撞甲虫四风格对比 | Recraft V3 + FLUX 2 Pro | 4 | $0.190 | $0.190 | 完成 |
 | B | 其余 3 敌、6 塔、4 支援 | FLUX 2 Pro | 13 | $0.390 | $0.390 | 完成 |
+| R2 | 孢子炮手 ×2、Boss 战甲虫 ×2（round-2，2026-08-11） | FLUX 2 Pro | 4 | $0.120 | $0.120 | 完成 |
 
-**累计记账：$0.730 / $25.000；剩余额度 $24.270。**
+**累计记账：$0.850 / $25.000；剩余额度 $24.150。**（round-2 账本见 `assets/generated/fal/round-2/results/ledger.json`）
 
 后续每完成一批，都必须更新本表和 `assets/generated/fal/round-1/results/ledger.json`。
 
