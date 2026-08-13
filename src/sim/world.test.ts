@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
-import { AFFIX_ARMORED, AFFIX_FRENZY, AFFIX_PHASED } from '../data/affixes';
+import { AFFIX_ARMORED, AFFIX_FRENZY } from '../data/affixes';
 import {
   DOCK_REPAIR_PRICE,
-  MAGNET_SURGE_ELITE,
-  MAGNET_SURGE_SEGMENT,
+  MAGNET_PICKUP_SURGE,
   STARTING_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
 import { TOWER_ARC, TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
 import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import { tuning } from './config';
+import { DROP_KIND_MAGNET } from './drop';
 import { FX_LIFE_RESONANCE, FXV_RESONANCE } from './fx';
 import { World } from './world';
 
@@ -374,36 +374,39 @@ describe('磁吸涌(26 号)', () => {
     world.step();
   };
 
-  it('跨段那一帧置 MAGNET_SURGE_SEGMENT(帧尾照 SIM_DT 减一格),此后逐帧衰减', () => {
-    // 段长刻意不取整帧(0.505s):跨段帧无歧义(与 boss.test.ts 同口径)
-    useScript(shortSeg('a', 0.505), shortSeg('b', 0.505));
-    const world = new World(40);
-    let guard = 0;
-    while (world.wave.segment === 0 && guard < 200) {
-      world.step();
-      guard++;
-    }
-    expect(world.wave.segment).toBe(1);
-    // 置位在跨段帧的出怪块、衰减排在 stepDrops 之后(同帧先吃满倍率再减一格)
-    expect(world.magnetSurgeTime).toBeCloseTo(MAGNET_SURGE_SEGMENT - SIM_DT, 6);
-    // 再走一帧恰好再少一格:计时是逐帧减 dt 的真状态
-    world.step();
-    expect(world.magnetSurgeTime).toBeCloseTo(MAGNET_SURGE_SEGMENT - 2 * SIM_DT, 6);
-  });
-
-  it('精英死亡置 MAGNET_SURGE_ELITE,涌进行中取 max 不叠加', () => {
+  it('精英死亡必掉一颗磁吸宝物,拾起置 MAGNET_PICKUP_SURGE;普通怪不掉', () => {
     const world = new World(41);
     killElite(world, AFFIX_FRENZY);
     expect(world.eliteKills).toBe(1);
-    expect(world.magnetSurgeTime).toBe(MAGNET_SURGE_ELITE);
-    // 余量 1.5s 时再杀:max(1.5 - SIM_DT, 2.0) = 2.0 —— 补满,不叠加成 3.5
+    // 掉落排在帧尾 reap(stepDrops 之后):killElite 那一帧宝物已躺在场上,涌还没置
+    expect(world.drops.items.filter((d) => d.kind === DROP_KIND_MAGNET).length).toBe(1);
+    expect(world.magnetSurgeTime).toBe(0);
+    // 敌人掉在原点、船停在原点:下一帧的 stepDrops 把它收下并报数,置位排在递减之后 ——
+    // 足额 MAGNET_PICKUP_SURGE,不缩一格
+    world.step();
+    expect(world.drops.items.some((d) => d.kind === DROP_KIND_MAGNET)).toBe(false);
+    expect(world.magnetSurgeTime).toBe(MAGNET_PICKUP_SURGE);
+    // 普通怪(无词缀)死亡:只掉经验残骸,不掉宝物
+    const normal = world.enemies.spawn();
+    normal.hp = normal.maxHp = 10;
+    world.damageEnemy(normal, 99);
+    world.step();
+    expect(world.drops.items.some((d) => d.kind === DROP_KIND_MAGNET)).toBe(false);
+  });
+
+  it('涌还醒着时拾起第二颗宝物取 max 不叠加', () => {
+    const world = new World(42);
+    // 余量 1.5s 时拾起:max(1.5 - SIM_DT, 2.0) = 2.0 —— 补满,不叠加成 3.5
     world.magnetSurgeTime = 1.5;
-    killElite(world, AFFIX_ARMORED);
-    expect(world.magnetSurgeTime).toBe(MAGNET_SURGE_ELITE);
-    // 余量高于 ELITE 时再杀:max 保留现值 —— 连杀精英不把涌抻成常态
+    killElite(world, AFFIX_FRENZY);
+    world.step();
+    expect(world.magnetSurgeTime).toBeCloseTo(MAGNET_PICKUP_SURGE, 6);
+    // 余量高于涌时长时再拾起:max 保留现值 —— 连拾两颗不把涌抻成常态。
+    // 置位前那两帧(杀精英帧 + 拾起帧)各减过一格:现值 = 2.3 - 2 × SIM_DT
     world.magnetSurgeTime = 2.3;
-    killElite(world, AFFIX_PHASED);
-    expect(world.magnetSurgeTime).toBeCloseTo(2.3 - SIM_DT, 6);
+    killElite(world, AFFIX_ARMORED);
+    world.step();
+    expect(world.magnetSurgeTime).toBeCloseTo(2.3 - 2 * SIM_DT, 6);
   });
 
   it('涌期间远处(> 基础半径 80、< 弃置半径 2000)掉落被锁定并收取;涌结束新掉落回基础半径', () => {
@@ -424,7 +427,7 @@ describe('磁吸涌(26 号)', () => {
 
     // 涌开始:同一颗下一帧起吸判定进半径(80 × 25 = 2000),当场锁定 ——
     // 锁定是单向的(进过半径一次就永不放手),此后照飞照收
-    world.magnetSurgeTime = MAGNET_SURGE_ELITE;
+    world.magnetSurgeTime = MAGNET_PICKUP_SURGE;
     world.step();
     expect(stray.magnet).toBe(true);
 
@@ -432,7 +435,7 @@ describe('磁吸涌(26 号)', () => {
     const before = world.scrap;
     while (world.drops.size > 0) world.step();
     expect(world.scrap).toBe(before + 10);
-    // 涌自然衰减归零(60s 短段内没有第二处触发点)
+    // 涌自然衰减归零(场上没有第二颗宝物可拾)
     while (world.magnetSurgeTime > 0) world.step();
     expect(world.magnetSurgeTime).toBe(0);
 
@@ -453,23 +456,21 @@ describe('磁吸涌(26 号)', () => {
     expect(a.checksum()).not.toBe(b.checksum());
   });
 
-  it('双世界同 seed 同操作:跨段置位与涌衰减不破 checksum 逐帧一致', () => {
-    useScript(shortSeg('a', 10), shortSeg('b', 10));
+  it('双世界同 seed 同操作:拾起宝物置位与涌衰减不破 checksum 逐帧一致', () => {
     const a = new World(45);
     const b = new World(45);
-    // 10s 段:第一段边界在 ~600 帧,700 帧时涌(2.5s)已走到还剩 ~0.8s ——
-    // 覆盖"跨段置位那一帧"与"涌衰减中的帧"两类逐帧哈希
-    let surgeAtCross = -1;
-    for (let i = 0; i < 700; i++) {
+    // 先各自杀一只精英(确定性时刻、零 rng),再各跑一帧把掉在原点的宝物拾起 ——
+    // 覆盖"拾起置位那一帧"与"涌衰减中的帧"两类逐帧哈希
+    killElite(a, AFFIX_FRENZY);
+    killElite(b, AFFIX_FRENZY);
+    expect(a.checksum()).toBe(b.checksum());
+    // 2.0s 涌 = 120 帧;跑 150 帧,涌已两边同归于 0
+    for (let i = 0; i < 150; i++) {
       a.step();
       b.step();
       expect(a.checksum()).toBe(b.checksum());
-      if (surgeAtCross < 0 && a.wave.segment === 1) surgeAtCross = a.magnetSurgeTime;
     }
-    expect(a.wave.segment).toBe(1);
-    // 跨段那一帧两边的涌计时逐位相同(置位同帧、衰减同帧)
-    expect(surgeAtCross).toBeCloseTo(MAGNET_SURGE_SEGMENT - SIM_DT, 6);
     expect(a.magnetSurgeTime).toBe(b.magnetSurgeTime);
-    expect(a.magnetSurgeTime).toBeGreaterThan(0);
+    expect(a.magnetSurgeTime).toBe(0);
   });
 });

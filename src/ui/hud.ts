@@ -14,6 +14,7 @@ import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import { audioBus } from '../render/audio';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { tuning } from '../sim/config';
+import { DROP_KIND_MAGNET } from '../sim/drop';
 import {
   FIRE_CHARGING,
   FIRE_COOLDOWN,
@@ -34,6 +35,8 @@ const LINE_COLOR = '#2b4a6e';
 const HP_COLOR = '#73d9e8';
 const SCRAP_COLOR = '#e6c878';
 const STAR_COLOR = '#ffd86e';
+/** 磁吸宝物(26 号改)的雷达色:与渲染层 MAGNET_ORB_TINT 同值,雷达与战场两块读数不打架 */
+const MAGNET_ORB_COLOR = '#ffd166';
 const THREAT_COLOR = '#ff5f77';
 /** 段落横幅的浅色大字(26 号):全 HUD 最亮的一档字 —— 信息条该比任何读数都亮 */
 const BANNER_COLOR = '#dceaff';
@@ -1060,14 +1063,21 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       c.moveTo(center, center - rim);
       c.lineTo(center, center + rim);
       c.stroke();
-      // 经验掉落:金色小点,画在敌点之下。圈外的不画 —— 捡不到的方位只是噪音
-      c.fillStyle = SCRAP_COLOR;
+      // 经验掉落:金色小点,画在敌点之下。圈外的不画 —— 捡不到的方位只是噪音。
+      // 磁吸宝物(26 号改):亮一号的大点(4px 金色),与经验小点(2px 沙金)分家 ——
+      // 宝物的方位值得专门跑一趟,雷达上必须一眼分得出
       const dropItems = world.drops.items;
       for (let i = 0; i < dropItems.length; i++) {
         const d = dropItems[i]!;
         const p = radarProject(d.x - shipX, d.y - shipY, RADAR_RANGE, rim, radarScratch);
         if (p.clamped) continue;
-        c.fillRect(center + p.x - 1, center + p.y - 1, 2, 2);
+        if (d.kind === DROP_KIND_MAGNET) {
+          c.fillStyle = MAGNET_ORB_COLOR;
+          c.fillRect(center + p.x - 2, center + p.y - 2, 4, 4);
+        } else {
+          c.fillStyle = SCRAP_COLOR;
+          c.fillRect(center + p.x - 1, center + p.y - 1, 2, 2);
+        }
       }
       // 敌人:普通 = 威胁红小点,精英 = 亮一号的大点,Boss = 深红大方块(与 Boss 血条同色)。
       // 钉在圈沿的(量程外)透明度减半:方向仍真,距离已饱和

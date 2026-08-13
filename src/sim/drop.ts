@@ -28,6 +28,11 @@
 import type { Pool } from '../core/pool';
 import { tuning } from './config';
 
+/** 经验掉落物:收下时 value 进账(26 号改之前全场残骸只有这一型) */
+export const DROP_KIND_XP = 0;
+/** 磁吸宝物(26 号改):精英死亡掉落的拾取物,收下时置磁吸涌而不是进账经验 */
+export const DROP_KIND_MAGNET = 1;
+
 /** px/py = 上一逻辑帧位置(铁律 2);字段一次性声明齐,运行期不新增 */
 export interface Drop {
   x: number;
@@ -44,7 +49,7 @@ export interface Drop {
   /**
    * 收下时进账多少残骸。**掉落那一刻定死**(= 该敌型的 scrap 面值 × 档位倍率,见 World.spawnDrop),
    * 与子弹的 damage 同口径:飞行途中绝不回查敌人(那只早就回池、甚至已经变成了另一只),
-   * 也绝不随时间衰减。
+   * 也绝不随时间衰减。磁吸宝物恒 0(它进账的是涌而不是经验,由 kind 分流)。
    */
   value: number;
   /**
@@ -53,6 +58,11 @@ export interface Drop {
    * 同一个位置的两颗残骸可以一颗被吸着走、一颗还躺着,差别只在它们各自进过半径没有。
    */
   magnet: boolean;
+  /**
+   * 掉落物类型(DROP_KIND_*):XP 收下进账经验,磁吸宝物收下置磁吸涌。
+   * 与 value 同口径 —— 掉落那一刻定死,飞行途中绝不改。渲染层与雷达照它分流显示。
+   */
+  kind: number;
 }
 
 /** 池 factory:字段在这里一次性声明齐,之后只被赋值、绝不新增(与 createBullet 同口径) */
@@ -66,13 +76,15 @@ export function createDrop(): Drop {
     vy: 0,
     value: 0,
     magnet: false,
+    kind: DROP_KIND_XP,
   };
 }
 
 /**
  * 池 reset:**逐字段清**,与 resetBullet / resetEnemy 同口径。
  * 漏一个,下一颗就会继承上一颗的状态 —— 最典型的是 magnet 没清:新掉的那颗一出生就自带磁吸,
- * 隔着半个屏幕从敌人尸体上直奔船而来;或者 value 没清,一颗蜂群蛭的残骸莫名其妙值 4 点。
+ * 隔着半个屏幕从敌人尸体上直奔船而来;或者 value 没清,一颗蜂群蛭的残骸莫名其妙值 4 点;
+ * 又或者 kind 没清,一颗经验残骸被当成磁吸宝物收下、凭空送一场涌。
  * 这类脏值只在池被压满(一场混战之后)才现形,是最难查的一类 bug,
  * 故单测按 Object.keys 逐字段比对,将来加字段忘了这里会被当场抓住。
  */
@@ -85,6 +97,7 @@ export function resetDrop(d: Drop): void {
   d.vy = 0;
   d.value = 0;
   d.magnet = false;
+  d.kind = DROP_KIND_XP;
 }
 
 /**
@@ -115,6 +128,9 @@ export const DROP_CULL_REFUND = 0.5;
  *   磁吸半径 = tuning.dropMagnetRadius × magnetMul(旧 magnetRadius() 占位钩子已删,半径现算)。
  * @param xpMul 经验获取倍率(改版 06 号经验增幅器的聚合,缺省 1 = 无增幅):
  *   **返回值整体 × 它** —— 经验增幅器"每颗经验掉落价值更高"的唯一落地(连乘,两座 = ×1.5²)。
+ * @param orbOut 磁吸宝物(26 号改)的本帧收取计数出口:传入时先清零,收下一颗 kind =
+ *   DROP_KIND_MAGNET 的掉落物就 +1。本文件不认识"涌"(那是 World 的账),只报数;
+ *   不传 = 只跑残骸经济(单测与旧调用点照旧)。
  * @returns **本帧收到的残骸总量 × xpMul**(收下的 value 之和 + 离场残骸的折半回收,没收到就是 0)——
  *   调用方直接 `scrap += stepDrops(...)`。不由本函数去写 World 的字段:掉落这一层不认识"经济",
  *   正如 bullet.ts 不认识"击杀数"。
@@ -130,7 +146,9 @@ export function stepDrops(
   dt: number,
   magnetMul = 1,
   xpMul = 1,
+  orbOut: { n: number } | null = null,
 ): number {
+  if (orbOut) orbOut.n = 0;
   const items = drops.items;
   // 三根旋钮**每帧现读一次**并 hoist 出循环(与 world.step 里 hoist enemySeparation 同口径):
   // 面板拖动照样即时生效,而一帧之内全场残骸必须用同一套数 —— 循环里逐颗现读的话,
@@ -199,7 +217,14 @@ export function stepDrops(
     const cdx = shipX - d.x;
     const cdy = shipY - d.y;
     if (cdx * cdx + cdy * cdy <= collectR2) {
-      got += d.value;
+      // 磁吸宝物(26 号改)不进经验账:只向 orbOut 报数,涌的置位是 World 的账。
+      // value 恒 0 只是数值兜底,分流必须问 kind —— 拿 value 判的话,数值表把面额改回非 0
+      // 就会把宝物当经验收下,还白报不了一场涌
+      if (d.kind === DROP_KIND_MAGNET) {
+        if (orbOut) orbOut.n++;
+      } else {
+        got += d.value;
+      }
       drops.despawnAt(i);
     }
   }

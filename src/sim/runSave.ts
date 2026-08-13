@@ -50,10 +50,12 @@ import { RESULT_RUNNING, World } from './world';
  * 旧档此后判废(见文件头"版本号进结构"那段)。stride 常量的单测会替你记住这件事:
  * 往 Enemy 里加一个字段而忘了这里,runSave.test.ts 的字段数守卫当场变红。
  *
- * v3(26 号磁吸涌):快照新增 magnetSurgeTime 标量 —— 它影响拾取半径、进 checksum,必须存;
- * **本批只有这一个 issue 升存档版本**,v2 旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
+ * v3(26 号磁吸涌):快照新增 magnetSurgeTime 标量 —— 它影响拾取半径、进 checksum,必须存。
+ * v4(26 号改):掉落物新增 kind 字段(磁吸宝物与经验分流,DR_STRIDE 6→7);磁吸涌的
+ *   触发从"跨段 / 精英死亡自动置位"改为"拾起磁吸宝物",magnetSurgeTime 标量原样保留。
+ * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 3;
+export const RUN_SAVE_VERSION = 4;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -76,8 +78,8 @@ export const EN_STRIDE = 15;
 export const BU_STRIDE = 14;
 /** 一颗敌方弹丸占几个格子:x, y, vx, vy, kind, damage, life, radius。不存 px/py */
 export const EB_STRIDE = 8;
-/** 一颗掉落物占几个格子:x, y, vx, vy, value, magnet(0/1)。不存 px/py */
-export const DR_STRIDE = 6;
+/** 一颗掉落物占几个格子:x, y, vx, vy, value, magnet(0/1), kind。不存 px/py */
+export const DR_STRIDE = 7;
 /** 一个武器槽占几个格子:type, level, cooldown, ammo, reloadLeft, heat, coolLock, charge, turretOffset(= WeaponSlot 的全部字段) */
 export const WP_STRIDE = 9;
 /** 一张候选卡占几个格子:kind, type, level(= UpgradeOption 的全部字段) */
@@ -117,9 +119,10 @@ export interface RunSnapshot {
   /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolled(0/1), refitPending(0/1), boostTime, boostCooldown */
   econ: number[];
   /**
-   * 磁吸涌剩余秒(26 号):0 = 无涌。它决定起吸半径(涌 × 25 ≈ 全场)→ 进 checksum,
+   * 磁吸涌剩余秒(26 号改):0 = 无涌。它决定起吸半径(涌 × 25 ≈ 全场)→ 进 checksum,
    * 照文件头"存的是 checksum 认的那一份状态"的清单口径,必须存 —— 漏了它,
    * 读档后涌消失,这一局的经济账从读档帧起与"没存过档"的局分叉。
+   * 涌的触发权在掉落物池里(磁吸宝物的 kind 见 drops),标量只记"还剩几秒"。
    */
   magnetSurgeTime: number;
   /** 地图商店信标:active(0/1), x, y, ttl, segment */
@@ -244,7 +247,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
   }
   const drops: number[] = [];
   for (const d of world.drops.items) {
-    drops.push(d.x, d.y, d.vx, d.vy, d.value, d.magnet ? 1 : 0);
+    drops.push(d.x, d.y, d.vx, d.vy, d.value, d.magnet ? 1 : 0, d.kind);
   }
 
   return {
@@ -425,6 +428,7 @@ export function restoreRun(snap: RunSnapshot): World {
     d.vy = snap.drops[o + 3]!;
     d.value = snap.drops[o + 4]!;
     d.magnet = snap.drops[o + 5]! !== 0;
+    d.kind = snap.drops[o + 6]!;
   }
 
   return world;

@@ -84,7 +84,7 @@ import { type Arc, slotArc } from '../sim/arc';
 import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
 import { tuning } from '../sim/config';
 import { shipRadius } from '../sim/damage';
-import type { Drop } from '../sim/drop';
+import { DROP_KIND_MAGNET, type Drop } from '../sim/drop';
 import { ENEMY_HIT_FLASH, enemyRadius, ST_SPORE_WINDUP, ST_WINDUP } from '../sim/enemy';
 import { BOSS_WINDUP, bossRadius } from '../sim/boss';
 import {
@@ -134,6 +134,19 @@ const DROP_EDGE_WIDTH = 1.2;
  * 满屏就是一片糊住虫潮的光斑,而它承诺的距离感还是错的。
  */
 const DROP_RADIUS = 5;
+
+// —— 磁吸宝物(26 号改)—— 精英死亡掉落的拾取物 ——
+// 金色:与低饱和钢白的经验残骸分家。暖色域(金)在 GDD §12 里归敌人侧,
+// 但金币读数是星币账本的颜色(ui/hud 的 SCRAP_COLOR 同款),且它只会躺在地上等人捡、
+// 从不作为威胁行动 —— 这里用暖金当"宝物"语汇,而不是"敌人"语汇。
+const MAGNET_ORB_TINT = 0xffd166;
+/**
+ * 宝物的外接半径(世界 px)。比经验残骸大一号:它是"特别的那一颗"——
+ * 形状(六角)+ 颜色(金)+ 个头三层读数里,颜色是第一眼、个头是余光里的那一层。
+ */
+const MAGNET_ORB_RADIUS = 7;
+/** 宝物的粒子缩放:渲染在 2x 纹理上,再乘 1.4 兜住"比残骸大一号"的承诺 */
+const MAGNET_ORB_SCALE = 1.4;
 
 // —— 船体局部几何的尺度基准 ——
 // 船是固定船壳(tuning.shipLength 48 × shipWidth 36,不再有可扩建的甲板),
@@ -766,6 +779,26 @@ function buildDropShape(): Graphics {
 }
 
 /**
+ * 磁吸宝物的剪影(26 号改):**正六角**(尖顶朝上),中间留一圈亮边。
+ * 形状通道:圆 / 飞镖 / 胶囊 / 六边被敌人占满,实心点与空心环被子弹占满,菱形归经验残骸 ——
+ * 六角是还空着的、与菱形一眼分得开的一档,再叠金色 tint 与放大一号的个头,
+ * "这一颗是宝物"不必靠任何一个单通道也能认得(色盲安全口径与 buildDropShape 同源)。
+ * 几何画成灰阶(暗面 + 亮边),颜色由粒子 tint 相乘得到,与敌人/子弹纹理同一套做法。
+ */
+function buildMagnetOrbShape(): Graphics {
+  const r = MAGNET_ORB_RADIUS;
+  const pts: number[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 3;
+    pts.push(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  return new Graphics()
+    .poly(pts)
+    .fill(DROP_FILL)
+    .stroke({ width: DROP_EDGE_WIDTH * 1.4, color: DROP_EDGE });
+}
+
+/**
  * 生成舰壳图缺失时的程序化船身(与旧"战斗态底板"同一条兜底契约:坏一张图
  * 不该让船在画面上消失)。固定船壳 → 构造时画一次,运行期零重建。
  * 局部 +X = 船头(与 WEAPON_HARDPOINTS 同一套坐标)。圆角矩形船体 + 舰艏楔形 +
@@ -898,12 +931,19 @@ export class Renderer {
   private bulletDefs: TowerDef[] = [];
   private bulletBuckets: Bullet[][] = [];
   /**
-   * 残骸掉落物(10 号 issue T4)。只有一个容器、不分型:形状恒为菱形、颜色恒为 DROP_TINT,
-   * 分了只是多挂几个永远为空却每帧被遍历的对象。池的 items 本就是致密数组,整池直接喂。
+   * 残骸掉落物(10 号 issue T4)。经验残骸一个容器:形状恒为菱形、颜色恒为 DROP_TINT。
+   * 磁吸宝物(26 号改)另开一个容器(dropOrbPc):形状/颜色/个头都不同,
+   * 与经验残骸分桶后各自整池直接喂,免得每帧给粒子改 tint/texture(它们是静态属性,改了要重传)。
    */
   private dropPc: ParticleContainer;
   private dropParticles: Particle[] = [];
   private dropTexture: Texture;
+  private dropOrbPc: ParticleContainer;
+  private dropOrbParticles: Particle[] = [];
+  private dropOrbTexture: Texture;
+  /** 分桶暂存:每帧清空重灌(与 bulletBuckets 同款),整帧复用、零分配 */
+  private dropXpBucket: Drop[] = [];
+  private dropOrbBucket: Drop[] = [];
   /**
    * 敌方弹丸(22 号)。与残骸同款"一个容器就够":全场只有孢子一种弹,
    * 形状(发光球)与 tint(enemyTint(KIND_SPORE) 暖红紫)都只有一份,不必分桶。
@@ -1202,6 +1242,17 @@ export class Renderer {
       boundsArea: bounds,
       texture: this.dropTexture,
     });
+    // 磁吸宝物(26 号改):同款做法、独立容器 —— 六角金色,与经验菱形分家
+    this.dropOrbTexture = app.renderer.generateTexture({
+      target: buildMagnetOrbShape(),
+      resolution: 2,
+      antialias: true,
+    });
+    this.dropOrbPc = new ParticleContainer({
+      dynamicProperties: dyn,
+      boundsArea: bounds,
+      texture: this.dropOrbTexture,
+    });
 
     // 敌方弹丸:同一套粒子做法,单容器就够(理由见 sporeBulletPc 字段注释)。
     this.sporeBulletTexture = app.renderer.generateTexture({
@@ -1260,6 +1311,8 @@ export class Renderer {
     // Boss 容器压在一切敌剪影之上:它是这一战最大的个体,任何虫群都不许啃它的边
     this.worldLayer.addChild(this.bossPc);
     this.worldLayer.addChild(this.dropPc);
+    // 磁吸宝物(26 号改)紧跟经验残骸:同一层带,宝物压在上——"特别的那一颗"读得出来
+    this.worldLayer.addChild(this.dropOrbPc);
     this.worldLayer.addChild(this.sporeBulletPc);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     // 加速拖尾压在开火光效之下、弹之上:它是船自己的航迹,不该糊住"这一发打中了"的读数
@@ -1462,11 +1515,24 @@ export class Renderer {
       alpha,
     });
 
-    // 残骸掉落物:整池直接喂进去(池的 items 本就是致密数组,不必像敌/弹那样先分桶),
+    // 掉落物按 kind 分桶后整桶喂(磁吸宝物与经验残骸纹理/tint/个头都不同):
     // 与它们同一套 syncParticles ⇒ 一并吃 alpha 插值:磁吸段每秒 300px,不插值就是一串跳点
-    this.syncParticles(this.dropParticles, this.dropPc, this.world.drops.items, {
+    this.dropXpBucket.length = 0;
+    this.dropOrbBucket.length = 0;
+    const dropItems = this.world.drops.items;
+    for (let i = 0; i < dropItems.length; i++) {
+      const d = dropItems[i]!;
+      (d.kind === DROP_KIND_MAGNET ? this.dropOrbBucket : this.dropXpBucket).push(d);
+    }
+    this.syncParticles(this.dropParticles, this.dropPc, this.dropXpBucket, {
       texture: this.dropTexture,
       tint: DROP_TINT,
+      alpha,
+    });
+    this.syncParticles(this.dropOrbParticles, this.dropOrbPc, this.dropOrbBucket, {
+      texture: this.dropOrbTexture,
+      tint: MAGNET_ORB_TINT,
+      scale: MAGNET_ORB_SCALE,
       alpha,
     });
 

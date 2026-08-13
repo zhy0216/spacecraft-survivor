@@ -67,9 +67,8 @@ import {
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
   DROP_MAX_ALIVE,
-  MAGNET_SURGE_ELITE,
-  MAGNET_SURGE_RADIUS_MUL,
-  MAGNET_SURGE_SEGMENT,
+  MAGNET_PICKUP_RADIUS_MUL,
+  MAGNET_PICKUP_SURGE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   SHOP_BEACON_LIFETIME,
@@ -128,7 +127,7 @@ import {
   initSummon,
   stepBossBehavior,
 } from './boss';
-import { createDrop, type Drop, resetDrop, stepDrops } from './drop';
+import { createDrop, type Drop, DROP_KIND_MAGNET, resetDrop, stepDrops } from './drop';
 import {
   affixMask,
   applyDamage,
@@ -789,18 +788,22 @@ export class World {
   boostCooldown = 0;
 
   /**
-   * 磁吸涌剩余秒(26 号):> 0 = 涌期间,起吸半径的连乘链尾部再乘 MAGNET_SURGE_RADIUS_MUL
+   * 磁吸涌剩余秒(26 号改):> 0 = 涌期间,起吸半径的连乘链尾部再乘 MAGNET_PICKUP_RADIUS_MUL
    * (25 × 80 = 2000 ≈ 弃置半径,即"全场");0 = 无涌。
-   * 两个置位点都零 rng、都是确定性时刻:跨段那一帧(与 spawnShopBeacon 同帧,1→2、2→3、3→4
-   * 三次)置 MAGNET_SURGE_SEGMENT;精英死亡(reap 落账处)置 max(现值, MAGNET_SURGE_ELITE)——
-   * 取 max 不叠加,连杀精英不把涌抻成常态。每帧在 stepDrops **之后**减 SIM_DT
-   * (照 resonanceCooldown 同款写法):置位那一帧就是涌的第一帧,当帧磁吸吃到满倍率;
+   * **唯一置位点**:玩家收下磁吸宝物(spawnDrop 里精英死亡掉落、stepDrops 报数、本帧置位,
+   * 三处合起来把涌的触发权从"精英死亡自动白送"挪到"亲自去捡")。取 max 不叠加 ——
+   * 涌还醒着时拾起第二颗,只是余量不足就补满,不把涌抻成常态。零 rng:拾取是确定性事件。
+   * 每帧在 stepDrops **之后**减 SIM_DT(照 resonanceCooldown 同款写法):置位排在递减之后,
+   * 拾起那一帧的磁吸已按旧半径跑完,涌从下一帧起足额走 MAGNET_PICKUP_SURGE 秒;
    * 时停期间 step 不跑,计时器自然冻结 —— 时停不消耗涌,正是想要的。
    * 它是逐帧演化的真状态:直接决定残骸的起吸判定,漏了它,涌期间"这颗吸不吸得上"的分叉
    * 就从确定性口径下漏掉,故进 checksum(×100,与 boost 那批秒数字段同一条量化理由)、进 runSave。
    * 锁定机制(drop.ts 的"进过半径就永不放手")原样吃这个半径:涌结束后已锁定的照飞。
    */
   magnetSurgeTime = 0;
+
+  /** 磁吸宝物收取计数(26 号改):stepDrops 每帧先清零再报数,置位 magnetSurgeTime 读它。整帧复用零分配 */
+  private readonly dropOrbOut = { n: 0 };
 
   private scratch: Enemy[] = [];
 
@@ -1115,10 +1118,6 @@ export class World {
       // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
       stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
       if (this.wave.segment !== segmentBefore && !this.wave.done) {
-        // 磁吸涌(26 号):跨段那一帧置位,与 spawnShopBeacon 同帧 —— 1→2、2→3、3→4 三次
-        // (第 4 段走完那一帧 wave.done 已置位、这条分支进不来,"进 Boss 不发信标"的既有行为
-        // 原样保留)。零 rng:跨段是确定性时刻,不碰随机序列。
-        this.magnetSurgeTime = MAGNET_SURGE_SEGMENT;
         // 跨段那一帧一次掷定三样,**顺序定死**(信标位置 → 法令货架 → 武器货架):
         // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
         // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
@@ -1189,10 +1188,10 @@ export class World {
     // 磁力协议(拾取半径 +30%/层):与词缀干扰同一个倍率连乘 —— 层数变了当帧即读
     // (聚合在帧首刷过)。未持有 = ×1,既有链路逐位一字不差
     magnetMul *= this.buffs.magnetRadiusMul;
-    // 磁吸涌(26 号)接在这条连乘链尾部:与磁力协议/磁力干扰同一条链,一律连乘 ——
+    // 磁吸涌(26 号改)接在这条连乘链尾部:与磁力协议/磁力干扰同一条链,一律连乘 ——
     // 涌的倍率大到干扰减半也罩全场,不必开例外。锁定机制(drop.ts 的"进过半径就永不放手")
     // 原样吃这个半径:涌结束后已锁定的照飞,这正是想要的"哗——全进账"
-    if (this.magnetSurgeTime > 0) magnetMul *= MAGNET_SURGE_RADIUS_MUL;
+    if (this.magnetSurgeTime > 0) magnetMul *= MAGNET_PICKUP_RADIUS_MUL;
     // 粗筛半径 = 船体受击圆(damage.shipRadius 的唯一口径,与精筛同一份几何)
     const contactR = shipRadius(tuning.shipLength);
 
@@ -1336,14 +1335,20 @@ export class World {
     // 船心传的是本帧**积分之后**的位置:残骸追的是船现在在哪 ——
     // 晚一帧的话,高速航行时整串残骸会恒定拖在船身后(与出怪环以船本帧位置为心同一条理由)。
     // magnetMul 是帧首扫出来的磁力修正(词缀干扰 × 法令过载,14/18 号);
-    // 经验倍率(buffs.xpMul)由 stepDrops 内部乘好 —— 这一句只进账
-    this.scrap += stepDrops(this.drops, ship.x, ship.y, SIM_DT, magnetMul, this.buffs.xpMul);
+    // 经验倍率(buffs.xpMul)由 stepDrops 内部乘好 —— 这一句只进账。
+    // dropOrbOut 同时接着磁吸宝物的收取计数:收下几颗,置位几句后面的 magnetSurgeTime
+    this.scrap += stepDrops(this.drops, ship.x, ship.y, SIM_DT, magnetMul, this.buffs.xpMul, this.dropOrbOut);
 
     // 磁吸涌计时排在 stepDrops **之后**递减(照 resonanceCooldown 同款写法,逐帧减 dt、夹 0):
-    // 置位那一帧(跨段在此前的出怪块、精英死亡在帧尾的 reap)的拾取已经吃到满倍率,
-    // 涌的时长一步不缩;时停期间 step 不跑,计时器自然冻结 —— 时停不消耗涌(想要的)。
+    // 时停期间 step 不跑,计时器自然冻结 —— 时停不消耗涌(想要的)。
     if (this.magnetSurgeTime > 0) {
       this.magnetSurgeTime = Math.max(0, this.magnetSurgeTime - SIM_DT);
+    }
+    // 磁吸宝物置位(26 号改)排在递减**之后**:拾起那一帧的磁吸已按旧半径跑完,
+    // 涌从下一帧起足额走 MAGNET_PICKUP_SURGE 秒;取 max 不叠加 —— 涌还醒着时
+    // 拾起第二颗,只是余量不足就补满。零 rng:拾取是确定性事件。
+    if (this.dropOrbOut.n > 0) {
+      this.magnetSurgeTime = Math.max(this.magnetSurgeTime, MAGNET_PICKUP_SURGE);
     }
 
     // 船体受击结算:粗筛名单 → 受击圆精筛 → 扣血(顺序理由见块注释与 settleHullDamage)
@@ -1487,9 +1492,6 @@ export class World {
       // Boss 绝不用 affixes 位故不计入;与 kills 同一条回收帧记账、不进 checksum
       if (e.affixes !== 0) {
         this.eliteKills++;
-        // 磁吸涌(26 号):精英死亡置位。取 max 不叠加 —— 连杀精英不把涌抻成常态,
-        // 只是"余量不足 2 秒就补满"(跨段那次是直接赋值)。零 rng:死亡是确定性时刻。
-        this.magnetSurgeTime = Math.max(this.magnetSurgeTime, MAGNET_SURGE_ELITE);
       }
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
@@ -1558,10 +1560,16 @@ export class World {
    * 经验掉落物:速度不填,池里取出来的那颗刚走过 resetDrop,vx/vy = 0 就是"停在尸体上等人来捡";
    * 面额 ≤ 0 的型**不掉**(数值表允许 0,见 enemies.test.ts 的表级不变量):
    * 一颗看得见却给不了任何东西的经验只会骗玩家专程绕一趟,还白占着下面那道保险丝的名额;
-   * 触到在场上限就**丢弃这一颗、不留账**(与 spawnFromWave 那句一字同源):
-   * DROP_MAX_ALIVE 是保险丝不是旋钮,理由全文见 data/economy.ts。
-   * (星币那条路没有保险丝:它直接进账,根本不经过掉落物池。)
-   */
+    * 触到在场上限就**丢弃这一颗、不留账**(与 spawnFromWave 那句一字同源):
+    * DROP_MAX_ALIVE 是保险丝不是旋钮,理由全文见 data/economy.ts。
+    * (星币那条路没有保险丝:它直接进账,根本不经过掉落物池。)
+    *
+    * 磁吸宝物(26 号改):**精英(affixes ≠ 0)必掉一颗**,与经验掉落物同池、同位置、
+    * 同磁吸/收取规则,只有收下时的账不同(stepDrops 报数 → step 置 magnetSurgeTime)。
+    * 独立一颗而不是塞进经验掉落物:经验那颗随时可能因面额 ≤ 0 或保险丝被弃,
+    * 宝物的"精英必掉"承诺不能挂在它的命上。零 rng(与经验那条路同口径,必掉、位置定死);
+    * Boss 无词缀位、分裂体不带词缀,天然不掉 —— 宝物是精英的专属犒赏。
+    */
   private spawnDrop(e: Enemy): void {
     const isBoss = e.kind === KIND_BOSS;
     // 星币:**先掷、后判**(掷在最前面且无条件 —— 见上面那段 rng 消耗口径)。
@@ -1578,11 +1586,21 @@ export class World {
     // Boss ×12 读 BOSS.hpMul(数值表里与"12 倍"同值的唯一倍率 —— 加独立字段请改 data/enemies)
     const base = isBoss ? ENEMIES[BOSS.baseKind]!.scrap : ENEMIES[e.kind]!.scrap;
     const value = isBoss ? base * BOSS.hpMul : e.affixes !== 0 ? base * ELITE.scrapMul : base;
-    if (value <= 0 || this.drops.size >= DROP_MAX_ALIVE) return;
-    const d = this.drops.spawn();
-    d.x = d.px = e.x;
-    d.y = d.py = e.y;
-    d.value = value;
+    if (value > 0 && this.drops.size < DROP_MAX_ALIVE) {
+      const d = this.drops.spawn();
+      d.x = d.px = e.x;
+      d.y = d.py = e.y;
+      d.value = value;
+    }
+
+    // 磁吸宝物:精英必掉。与经验那颗同池同位置(重叠出生:一颗普通菱形 + 一颗金色宝物,
+    // 拾起时一起被吸走);value 恒 0 —— 它进账的是涌而不是经验(kind 分流,见 drop.ts)
+    if (e.affixes !== 0 && this.drops.size < DROP_MAX_ALIVE) {
+      const o = this.drops.spawn();
+      o.x = o.px = e.x;
+      o.y = o.py = e.y;
+      o.kind = DROP_KIND_MAGNET;
+    }
   }
 
   /**
@@ -2435,7 +2453,7 @@ export class World {
     // × 100 的量化理由与那批秒数字段一字同源(1/8 的步长抓不住单帧差)
     acc(this.boostTime * 100);
     acc(this.boostCooldown * 100);
-    // 磁吸涌(26 号)紧跟加速计时器:它直接决定起吸半径(涌 × 25 ≈ 全场),差一帧就是
+    // 磁吸涌(26 号改)紧跟加速计时器:它直接决定起吸半径(涌 × 25 ≈ 全场),差一帧就是
     // "这颗残骸吸不吸得上"当帧分叉 —— 照 boost 那批秒数字段同一条 × 100 量化理由进哈希
     acc(this.magnetSurgeTime * 100);
     // 武器槽紧跟着船(改版 §5,取代旧甲板的逐格哈希):槽位与节流状态是逐帧演化的真状态,
@@ -2522,9 +2540,13 @@ export class World {
     //(与子弹的 damage 一样,飞行途中绝不会变);magnet 是只从 false 变 true 的单向锁,
     // 它一旦不同,下一帧的位置立刻就分开了(锁住的每帧朝船走一步,没锁的停在原地)——
     // 位置这一项已经抓得住,多哈几个不会变的数只是把同一件事哈好几遍。
+    // **kind 例外**(26 号改):它决定收下这颗是进经验还是置涌,直接改 magnetSurgeTime ——
+    // 一颗宝物被当成经验收下的分叉,位置轨迹上完全看不出来(两条路飞向船的方式一字不差),
+    // 却会让涌少一场,故 kind 单独进哈希。
     for (const d of this.drops.items) {
       acc(d.x);
       acc(d.y);
+      acc(d.kind);
     }
     // 收下的残骸当场出池,故池里再也找不到它 —— 这一笔账必须单独进哈希,
     // 否则"磁吸多收了一颗/漏收了一颗"这类回归在场上残骸清空之后就彻底看不见了。

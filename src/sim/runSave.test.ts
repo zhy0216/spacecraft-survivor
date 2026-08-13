@@ -106,7 +106,7 @@ describe('局内存档:capture → restore', () => {
 
   it('v3 快照携带磁吸涌计时:涌进行中存档,读档 checksum 一致且继续推进逐帧一致', () => {
     const world = freshRun(600);
-    world.magnetSurgeTime = 1.37; // 涌走到一半的那一帧(跨段置位 2.5 后的任意中间值)
+    world.magnetSurgeTime = 1.37; // 涌走到一半的那一帧(拾起宝物置位 2.0 后的任意中间值)
     const snap = captureRun(world, META);
     expect(snap.magnetSurgeTime).toBe(1.37);
     const restored = restoreRun(snap);
@@ -128,10 +128,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v2 旧档判废(26 号升版):版本对不上直接拒收,不产出一个涌消失的半死世界', () => {
+  it('v3 旧档判废(26 号改升版):版本对不上直接拒收,不产出一个掉落物字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v2json = serializeRunSnapshot(snap).replace('"v":3', '"v":2');
-    expect(parseRunSnapshot(v2json)).toBeNull();
+    const v3json = serializeRunSnapshot(snap).replace('"v":4', '"v":3');
+    expect(parseRunSnapshot(v3json)).toBeNull();
   });
 
   it('局内的账(击杀/精英/武器战报)读档后不被抹掉', () => {
@@ -265,7 +265,7 @@ describe('局内存档:stride 与结构对表', () => {
   it('EnemyBullet:8 存 + px/py 不存', () => {
     expect(Object.keys(createEnemyBullet()).length).toBe(EB_STRIDE + 2);
   });
-  it('Drop:6 存 + px/py 不存', () => {
+  it('Drop:7 存 + px/py 不存', () => {
     expect(Object.keys(createDrop()).length).toBe(DR_STRIDE + 2);
   });
   it('武器槽 / 法令层数 / 候选卡:全字段都存,一个不落', () => {
