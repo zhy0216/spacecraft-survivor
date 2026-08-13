@@ -4,10 +4,16 @@
  * ① 存档摘要必须说清"继续的是什么"(尤其血量:接手一艘残血船而不自知是最坏的一种意外);
  * ② 「新航行」在有存档时必须把代价说出来 —— 二段确认的措辞里没有"放弃存档"四个字,
  *    这个二段确认就等于没有。
+ *
+ * 文件末尾破一次例去测「图鉴」按钮的接线(照 gameOver.test 的先例):
+ * 它是四条出口里唯一"先收本页再弹别的页"的那一类 —— 点下去该收起自己并把去向
+ * 交给 onCodex,漏一句 hide 就会叠两层遮罩。桩只提供 createTitleScreen 真的会碰的
+ * 那几样(createElement/getElementById/append + window.addEventListener + HTMLElement),
+ * 不装 jsdom。
  */
 import { describe, expect, it } from 'vitest';
 import type { RunSaveDigest } from '../sim/runSave';
-import { continueLineText, newRunLabel } from './titleScreen';
+import { createTitleScreen, continueLineText, newRunLabel } from './titleScreen';
 
 const DIGEST: RunSaveDigest = {
   elapsedSec: 754,
@@ -51,5 +57,104 @@ describe('标题界面:「新航行」的二段确认', () => {
   it('没有存档时不会问出一句无意义的确认', () => {
     // hasSave = false 时无论 confirming 是什么,文案都不该冒出"放弃存档"
     expect(newRunLabel(false, true)).toBe('开始航行');
+  });
+});
+
+// —— 「图鉴」按钮接线(不装 jsdom,见文件头)——
+
+interface StubEl {
+  tagName: string;
+  style: { cssText: string; display: string };
+  textContent: string;
+  children: StubEl[];
+  listeners: Map<string, (e: unknown) => void>;
+  append(...kids: StubEl[]): void;
+  appendChild(kid: StubEl): StubEl;
+  addEventListener(type: string, fn: (e: unknown) => void): void;
+}
+
+function createStubEl(tag = 'div'): StubEl {
+  const el: StubEl = {
+    tagName: tag.toUpperCase(),
+    style: { cssText: '', display: '' },
+    textContent: '',
+    children: [],
+    listeners: new Map<string, (e: unknown) => void>(),
+    append(...kids: StubEl[]): void {
+      el.children.push(...kids);
+    },
+    appendChild(kid: StubEl): StubEl {
+      el.children.push(kid);
+      return kid;
+    },
+    addEventListener(type: string, fn: (e: unknown) => void): void {
+      el.listeners.set(type, fn);
+    },
+  };
+  return el;
+}
+
+function installDom(): {
+  created: StubEl[];
+  restore(): void;
+} {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const prevWindow = g.window;
+  const prevDocument = g.document;
+  const prevHtmlElement = g.HTMLElement;
+  const created: StubEl[] = [];
+  const dom = {
+    created,
+    restore(): void {
+      g.window = prevWindow;
+      g.document = prevDocument;
+      g.HTMLElement = prevHtmlElement;
+    },
+  };
+  g.window = {
+    addEventListener(): void {},
+  };
+  g.document = {
+    createElement: (tag: string): StubEl => {
+      const el = createStubEl(tag);
+      created.push(el);
+      return el;
+    },
+    getElementById: (id: string): StubEl | null => {
+      if (id !== 'ui') return null;
+      // #ui 本身:页面上唯一的既有节点,遮罩 append 到它里面
+      const ui = createStubEl();
+      return ui;
+    },
+    activeElement: null,
+  };
+  g.HTMLElement = class HTMLElement {};
+  return dom;
+}
+
+describe('标题界面:「图鉴」按钮', () => {
+  it('四颗按钮都在;点图鉴收起本页并把去向交给 onCodex', () => {
+    const dom = installDom();
+    try {
+      let codexCalls = 0;
+      const ui = createTitleScreen({
+        onContinue() {},
+        onNewRun() {},
+        onSettings() {},
+        onCodex() {
+          codexCalls++;
+        },
+      });
+      ui.show(null);
+      const buttons = dom.created.filter((el) => el.tagName === 'BUTTON');
+      const labels = buttons.map((b) => b.textContent);
+      expect(labels).toEqual(['继续上次航行', '开始航行', '设置', '图鉴']);
+      const codexBtn = buttons.find((b) => b.textContent === '图鉴')!;
+      codexBtn.listeners.get('click')?.({});
+      expect(codexCalls).toBe(1);
+      expect(ui.visible()).toBe(false); // 收起本页 —— 漏这一句就叠两层遮罩
+    } finally {
+      dom.restore();
+    }
   });
 });

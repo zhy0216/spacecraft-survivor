@@ -57,6 +57,7 @@ import {
 import type { Settings } from './ui/settings';
 import { createSettingsMenu } from './ui/settingsMenu';
 import { applySettings, loadSettings, saveSettings } from './ui/settingsStorage';
+import { createCodexUi } from './ui/codex';
 import { createTitleScreen } from './ui/titleScreen';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 
@@ -598,6 +599,7 @@ async function boot(): Promise<void> {
       loadoutFlow,
       titleScreen,
       settingsMenu,
+      codex,
       restart,
       retry,
       // 存档一路都能在控制台里手验:__game.saveRun() 存一次、__game.toTitle() 回标题
@@ -707,10 +709,23 @@ async function boot(): Promise<void> {
   });
 
   /**
-   * 标题界面(进游戏的第一屏)。三条出口:
+   * 图鉴页(ui/codex.ts):**整页只建一次**,只从标题进 —— 每局结算后 progress 已更新,
+   * getProgress 每次 show 现读,标题那颗「图鉴」点开就是最新的一份。onClose 只回标题:
+   * 与设置页不同,它没有"战斗中开"的那条来路,不需要 runActive 分岔(入口只此一处)。
+   */
+  const codex = createCodexUi({
+    getProgress: () => progress,
+    onClose: () => {
+      titleScreen.show(titleDigest());
+    },
+  });
+
+  /**
+   * 标题界面(进游戏的第一屏)。四条出口:
    *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不套起手配置**);
    *   新航行 —— 走原来那条起手配置选择,选完开新局;
-   *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来。
+   *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来;
+   *   图鉴 —— 收起自己弹图鉴页(与设置同一条让路)。
    * 读档失败(存档损坏 / 存储不可用)不弹错误框,直接退回"没有存档"的标题:
    * loadRunWorld 已经把读不出来的档删掉了,玩家再点一次就是一颗干净的「开始航行」
    */
@@ -735,6 +750,10 @@ async function boot(): Promise<void> {
     onSettings: () => {
       titleScreen.hide();
       settingsMenu.show();
+    },
+    onCodex: () => {
+      titleScreen.hide();
+      codex.show();
     },
   });
 

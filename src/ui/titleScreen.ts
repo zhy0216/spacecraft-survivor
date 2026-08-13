@@ -6,8 +6,8 @@
  * ## 它解决的问题:进来就已经在打了
  *
  * 在此之前页面一载入就直接弹起手配置、选完当场开跑 —— 于是"上一局打到一半关了页面"
- * 与"想改个设置"这两件事都无处安放。标题界面把开跑前的三条路摆在同一屏上:
- * 继续上次航行 / 开一局新的 / 设置。
+ * 与"想改个设置"这两件事都无处安放。标题界面把开跑前的四条路摆在同一屏上:
+ * 继续上次航行 / 开一局新的 / 设置 / 图鉴。
  *
  * ## 「继续」与「新航行」的不对称
  *
@@ -83,6 +83,8 @@ export interface TitleScreenHooks {
   onNewRun(): void;
   /** 「设置」:main 收起本页、弹设置页,关掉后再把本页弹回来 */
   onSettings(): void;
+  /** 「图鉴」:main 收起本页、弹图鉴页,关掉后再把本页弹回来(与设置同一条让路) */
+  onCodex(): void;
 }
 
 export interface TitleScreenUi {
@@ -142,10 +144,18 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
     hooks.onSettings();
   });
 
+  const codexBtn = document.createElement('button');
+  codexBtn.style.cssText = QUIET_CSS;
+  codexBtn.textContent = '图鉴';
+  codexBtn.addEventListener('click', () => {
+    hide();
+    hooks.onCodex();
+  });
+
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
 
-  card.append(title, sub, continueBtn, saveLine, newBtn, settingsBtn, hint);
+  card.append(title, sub, continueBtn, saveLine, newBtn, settingsBtn, codexBtn, hint);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
