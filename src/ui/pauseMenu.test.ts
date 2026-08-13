@@ -284,6 +284,40 @@ describe('createPauseMenu', () => {
     expect(paused).toBe(true); // 世界继续冻着
   });
 
+  it('键位表(28 号):五行键位齐全、排在设置按钮之前,是纯文本不是按钮', () => {
+    const menu = make();
+    const cardEl = card(dom);
+    // 构造顺序固定:标题 / 4 按钮 / 键位表 / 设置 / 声音 / 提示(见 createPauseMenu)
+    const keyTable = cardEl.children[5]!;
+    const settingsBtn = cardEl.children[6]!;
+    expect(keyTable.tagName).toBe('DIV');
+    expect(settingsBtn.tagName).toBe('BUTTON');
+    expect(settingsBtn.textContent).toBe('设置');
+    // 键位表排在设置按钮之前:暂停菜单按"求助页"顺序读下去,键位先于出口
+    expect(cardEl.children.indexOf(keyTable)).toBeLessThan(cardEl.children.indexOf(settingsBtn));
+    // 五行五对:键名列右对齐、说明列左对齐,顺序与实现 KEY_ROWS 一致
+    const pairs = [
+      ['WASD', '航向'],
+      ['空格', '加速'],
+      ['I', '武器布局'],
+      ['按住 Tab', '射界'],
+      ['Esc', '暂停'],
+    ];
+    expect(keyTable.children.length).toBe(5);
+    pairs.forEach(([key, desc], i) => {
+      const row = keyTable.children[i]!;
+      expect(row.children[0]!.tagName).toBe('SPAN');
+      expect(row.children[0]!.textContent).toBe(key);
+      expect(row.children[1]!.tagName).toBe('SPAN');
+      expect(row.children[1]!.textContent).toBe(desc);
+    });
+    // 纯文本:整表不挂任何监听(不是按钮,不可点),菜单收起/重开原样复用
+    expect(keyTable.listeners.size).toBe(0);
+    menu.show();
+    expect(findButton(dom, '设置')).toBeDefined();
+    expect(keyTable.children.length).toBe(5);
+  });
+
   it('设置页开着时 Esc 归它:暂停菜单主动让路,不会一键摔回战斗', () => {
     const menu = make();
     dom.key(keyEvent('Escape')); // 暂停

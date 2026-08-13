@@ -40,6 +40,11 @@ const MUTE_CSS = BTN_CSS.replace(`color:${OK_COLOR}`, `color:${VALUE_COLOR}`);
 
 const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:10px;letter-spacing:.06em;`;
 
+// 键位表(静态、非按钮):键名列右对齐、说明列左对齐,两列拼成一张居中的表
+const KEYS_CSS = `font-size:11px;margin:0 0 10px;padding-top:10px;border-top:1px solid ${LINE_COLOR};`;
+const KEY_CSS = `color:${VALUE_COLOR};display:inline-block;width:76px;text-align:right;margin-right:10px;letter-spacing:.06em;`;
+const KEYDESC_CSS = `color:${IDLE_COLOR};display:inline-block;text-align:left;letter-spacing:.06em;`;
+
 export interface PauseMenuHooks {
   /** 战斗运行中?(main 传 `() => !run.paused`;时停/结算/起手选择时不响应 Esc) */
   canPause(): boolean;
@@ -120,6 +125,28 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     saveQuitBtn.textContent = '保存失败(存储不可用)';
   });
 
+  // 静态键位表:暂停菜单就是"我还能干什么"的求助页,键位放这里最顺(非按钮、不可点)
+  const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
+    ['WASD', '航向'],
+    ['空格', '加速'],
+    ['I', '武器布局'],
+    ['按住 Tab', '射界'],
+    ['Esc', '暂停'],
+  ];
+  const keyTable = document.createElement('div');
+  keyTable.style.cssText = KEYS_CSS;
+  for (const [key, desc] of KEY_ROWS) {
+    const row = document.createElement('div');
+    const keySpan = document.createElement('span');
+    keySpan.style.cssText = KEY_CSS;
+    keySpan.textContent = key;
+    const descSpan = document.createElement('span');
+    descSpan.style.cssText = KEYDESC_CSS;
+    descSpan.textContent = desc;
+    row.append(keySpan, descSpan);
+    keyTable.appendChild(row);
+  }
+
   const settingsBtn = document.createElement('button');
   settingsBtn.style.cssText = BTN_CSS;
   settingsBtn.textContent = '设置';
@@ -148,6 +175,7 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     saveQuitBtn,
     restartBtn,
     retryBtn,
+    keyTable,
     settingsBtn,
     muteBtn,
     hint,

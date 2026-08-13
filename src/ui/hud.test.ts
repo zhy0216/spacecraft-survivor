@@ -290,10 +290,12 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数(左列纵队:vitals/星币/法令/图鉴/火力全在 grid 第一格里)、
-    // 两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关、屏下缘两根血条(精英 + Boss)、
-    // 解锁 toast、段落横幅(26 号,display:none 的常驻节点)、战术雷达以及低血量红晕(畅玩性),
+    // 两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关、静音开关正上方的键位提示行
+    // (28 号新增节点 —— 计数 10 → 11,它插在 muteBtn 之后、精英血条之前)、
+    // 屏下缘两根血条(精英 + Boss)、解锁 toast、段落横幅(26 号,display:none 的常驻节点)、
+    // 战术雷达以及低血量红晕(畅玩性),
     // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
-    expect(root.children.length).toBe(10);
+    expect(root.children.length).toBe(11);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -387,7 +389,8 @@ describe('createHud', () => {
   it('解锁 toast:toast() 亮出"解锁 XX",到点自动消失;setWorld 换局清掉上一局的提示', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const toastEl = root.children[6]!;
+    // 解锁 toast 排在键位提示行(28 号新增)之后:root 第 7 枚(0 起)
+    const toastEl = root.children[7]!;
     // 初始隐藏(display:none 写在 cssText 里,toast() 点亮时才落成 style.display 属性)
     expect(toastEl.style.cssText).toContain('display:none');
 
@@ -427,10 +430,33 @@ describe('createHud', () => {
     expect(mute.style.color).toBe(colorOn);
   });
 
+  it('键位提示行(28 号):常驻小字印出 I/Tab 玩法键,纯静态、鼠标穿透、加速不重复进这行', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    // 静音开关(下标 3)正上方、精英血条(下标 5)之前 —— 与实现构造顺序一字同源
+    const keyHints = root.children[4]!;
+    expect(keyHints.textContent).toBe('[I] 武器布局 · [Tab] 射界');
+    // 加速有自己的条标签(「加速 [空格]」),不重复进这行
+    expect(keyHints.textContent).not.toContain('加速');
+    // 常驻小字:pointer-events 穿透、贴 48px 罗盘通道同套边距(不新开档位)、无监听不可点
+    expect(keyHints.style.cssText).toContain('pointer-events:none');
+    expect(keyHints.style.cssText).toContain('left:48px');
+    expect(keyHints.listeners.size).toBe(0);
+    // 时停淡出随整层走:setPaused 改 root 的 opacity,这一行是 root 子层自动带上
+    hud.setPaused(true);
+    expect(Number(root.style.opacity)).toBeLessThan(0.1);
+    hud.setPaused(false);
+    // 纯静态:换局(setWorld)节点原样复用、文案不变、不重复挂 DOM
+    hud.setWorld(stubWorld() as unknown as World);
+    expect(dom.ui.children.length).toBe(1);
+    expect(keyHints.textContent).toBe('[I] 武器布局 · [Tab] 射界');
+  });
+
   it('精英血条:无精英隐藏,有精英亮出并反映 hp/maxHp', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const elite = root.children[4]!;
+    // 精英血条排键位提示行(28 号新增)之后:root 第 5 枚(0 起)
+    const elite = root.children[5]!;
     expect(elite.style.display).toBe('none');
 
     hud.setWorld(
@@ -470,7 +496,8 @@ describe('createHud', () => {
   it('Boss 血条:常驻直到击杀 —— 无 Boss 隐藏,有 Boss 亮出并反映 hp/maxHp,出池当帧隐藏', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const boss = root.children[5]!;
+    // Boss 血条排键位提示行(28 号新增)之后:root 第 6 枚(0 起)
+    const boss = root.children[6]!;
     expect(boss.style.display).toBe('none');
 
     // Boss(kind 4,affixes 恒 0)进场:血条亮出,比例钉 Boss 本体的 hp/maxHp
@@ -499,8 +526,9 @@ describe('createHud', () => {
       }) as unknown as World,
     });
     const root = dom.ui.children[0]!;
-    const elite = root.children[4]!;
-    const boss = root.children[5]!;
+    // 键位提示行(28 号新增)在两者之前:精英第 5、Boss 第 6(0 起)
+    const elite = root.children[5]!;
+    const boss = root.children[6]!;
     expect(elite.style.display).toBe('block');
     expect(boss.style.display).toBe('block');
     expect(findText(root, '30 / 200')).toBeDefined();

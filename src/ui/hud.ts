@@ -225,6 +225,17 @@ const MUTE_CSS =
   'font:inherit;letter-spacing:.08em;cursor:pointer;user-select:none;' +
   'pointer-events:auto!important;';
 
+/**
+ * 键位提示行(28 号):静音开关正上方一行小字,把 HUD/暂停菜单/设置页都没有入口的
+ * I(武器布局)与 Tab(射界)常驻报出来 —— 加速不重复进这行(它的条自带「加速 [空格]」标签)。
+ * 静音开关 bottom:48、解锁 toast 放 104,这行填两者之间,与 48px 罗盘通道同一套边距,
+ * 不新开档位;muted 色与左列标签同款(根 12px 字号,不另设),pointer-events:none 穿透,
+ * 时停淡出随整层走(setPaused 改 root 的 opacity,本节点是 root 子层,自动带上)。
+ */
+const KEYS_CSS =
+  'position:absolute;left:48px;bottom:82px;pointer-events:none;' +
+  `color:${IDLE_COLOR};letter-spacing:.08em;white-space:nowrap;`;
+
 /** 罗盘根是一支向 +X 的 CSS 箭头;sync 时只改位置、旋转、尺寸与透明度 */
 const THREAT_CSS =
   'position:absolute;width:24px;height:24px;transform-origin:50% 50%;will-change:left,top,transform;' +
@@ -571,6 +582,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   });
   paintMute();
 
+  // 键位提示行(28 号):静音开关正上方的常驻小字。I/Tab 是玩法键不是调试(?debug 同样显示,
+  // 不特判);纯静态文本,节点只建一次、无监听、sync 不写它,时停淡出随整层自动带上
+  const keyHints = document.createElement('div');
+  keyHints.style.cssText = KEYS_CSS;
+  keyHints.textContent = '[I] 武器布局 · [Tab] 射界';
+
   // 精英血条:屏下缘、与静音开关不抢位(一个贴左、一个居中)。填充色取威胁红,
   // 与罗盘箭头同色 —— 这一只就是当下最需要盯着的威胁
   const elite = document.createElement('div');
@@ -769,7 +786,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 
-  root.append(top, threat, warn, muteBtn, elite, boss, unlockToast, banner, radar, vignette);
+  root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {

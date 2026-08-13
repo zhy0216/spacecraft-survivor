@@ -42,6 +42,7 @@ import { canSaveRun, captureRun, digestRunSnapshot } from './sim/runSave';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
 import { createHud, type HudUi } from './ui/hud';
+import { loadIPressed, markIPressed } from './ui/keyHintStorage';
 import { createLoadoutFlow } from './ui/loadoutFlow';
 import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
 import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
@@ -74,6 +75,9 @@ const HITSTOP_MS = 45;
 
 /** 段落横幅的存留秒数(26 号):3 秒够读完一行,到点由 hud 侧渐隐 */
 const BANNER_SECONDS = 3;
+
+/** I 键首局提示的时间窗(28 号):战斗开始后 20s 内飘一次,过了窗就不打扰 */
+const I_HINT_WINDOW_SECONDS = 20;
 
 async function boot(): Promise<void> {
   const input = new Input();
@@ -259,6 +263,9 @@ async function boot(): Promise<void> {
       run.paused = true;
       loop.halt();
       hud.setPaused(true);
+      // I 键首局提示(28 号):面板真的开出来了 = 玩家按过了 I,永久不再飘 —— 顺手落盘
+      markIPressed();
+      ipressed = true;
     },
     onClose: () => {
       run.paused = false;
@@ -293,6 +300,14 @@ async function boot(): Promise<void> {
   // 本局已 toast 过的解锁位掩码(19 号):与 progress.unlockMask 同编码。局内检测跨过阈值
   // 就置位,防止同一局里"300 杀达标"这类条件每帧弹一次 —— 置位过的不再重复提示
   let announcedMask = 0;
+  // I 键首局提示(28 号):"按过一次 I 就永久不再飘"的永久标记来自 localStorage
+  // (见 ui/keyHintStorage.ts,不进 sim、不进存档),"本局已飘过"则是 main 层的一个 let ——
+  // 提示是本局一次性的,不落盘。ipressed 页载时读一次,面板开过就地置真 + 落盘
+  let ipressed = loadIPressed();
+  let keyHintShown = false;
+  // 本局开跑的 world.elapsed 基准(秒):20s 窗口按它与当前 elapsed 的差算,
+  // 读档进来的世界 elapsed 不为 0,窗口照样从"这一局开跑"起算
+  let battleStartElapsed = 0;
 
   /**
    * 存一次档。**只在世界冻着的那些点调用**(升级/整备时停、暂停菜单、页面隐藏) ——
@@ -510,6 +525,10 @@ async function boot(): Promise<void> {
     lastBoostActive = false;
     // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
     announcedMask = 0;
+    // I 键首局提示的"本局已飘过"记性同属这一局:换局清零、20s 窗重新起算
+    // (永久标记在 localStorage 那侧,不受换局影响)
+    keyHintShown = false;
+    battleStartElapsed = world.elapsed;
     stats.upgrades = world.upgrades;
     stats.upgradeCost = world.upgradeCost;
     stats.segment = world.wave.segment;
@@ -802,6 +821,17 @@ async function boot(): Promise<void> {
         if (!unlockMet(entry, live)) continue;
         announcedMask |= 1 << i;
         hud.toast(`解锁:${entry.name}`);
+      }
+      // I 键首局提示(28 号):战斗开始 20s 内,从未按过 I 且本局还没飘过 → 走解锁 toast
+      // 通道飘一条「按 I 可调整武器朝向」。窗口按 world.elapsed 与开跑基准的差算
+      // (读档进来的世界口径不变);时停期间不查 —— 世界不动,窗口不缩,恢复后接着等
+      if (
+        !keyHintShown &&
+        !ipressed &&
+        world.elapsed - battleStartElapsed <= I_HINT_WINDOW_SECONDS
+      ) {
+        keyHintShown = true;
+        hud.toast('按 I 可调整武器朝向');
       }
     }
     // 加速技能触发:boostTime 从 0 变正的那一帧响推进器点火(沿检测,窗内不重复响)
