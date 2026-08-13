@@ -56,9 +56,6 @@ import {
   ENEMIES,
   KIND_BOSS,
   KIND_SPORE,
-  KIND_STRAFER,
-  KIND_SWARM,
-  KIND_TRAILER,
   type EnemyDef,
 } from '../data/enemies';
 import {
@@ -81,7 +78,7 @@ import {
 import { SHOP_BEACON_LIFETIME, SHOP_BEACON_RADIUS } from '../data/economy';
 import { BURST_PATTERN_RING, SPAWN_RADIUS } from '../data/waves';
 import { type Arc, slotArc } from '../sim/arc';
-import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
+import { WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
 import { tuning } from '../sim/config';
 import { shipRadius } from '../sim/damage';
 import { DROP_KIND_MAGNET, type Drop } from '../sim/drop';
@@ -154,17 +151,7 @@ const MAGNET_ORB_SCALE = 1.4;
 // 战斗态整船几十 px,写死 px 的话改一次船长就得回来重调一遍全部常数。
 const CELL = tuning.shipLength / 4;
 
-// —— 船体配色:我方一律冷色域(GDD §12)——程序化船身兜底的明面/亮边取 palette 的船体色 ——
-/** 生成舰壳图缺失时的程序化船身底色(与旧"战斗态底板"同一条兜底契约) */
-const HULL_FILL = SHIP_FILL;
-const HULL_OUTLINE_WIDTH = 1.8;
-const HULL_OUTLINE_COLOR = SHIP_EDGE;
-/** 船头亮边 + 艏尖:快速转向时头尾必须一眼分得清(T3 验收口径),给最亮的一档冷白 */
-const HULL_BOW_COLOR = 0xdff2ff;
-const HULL_BOW_WIDTH = 2.6;
-/** 艏尖三角的长与半宽(× CELL)。纯装饰,故意伸出船壳一点点(超出的是观感不是口径) */
-const HULL_PROW_LEN = 0.5;
-const HULL_PROW_HALF_W = 0.42;
+// —— 舰壳图缩放(旧参数原样保留)——
 /** 舰壳图比 tuning 声明的船体略大一圈,露出装甲侧裙、推进器和舰艏(旧参数原样保留) */
 const SHIP_HULL_LENGTH_PAD = 0.72;
 const SHIP_HULL_WIDTH_PAD = 0.45;
@@ -536,7 +523,6 @@ interface Interpolatable {
  * 取硬点 / 屏幕点的暂存。模块级复用而不是每次现造(照 sim/world.ts 的 desired 写法):
  * 四个武器槽每帧要问好几遍硬点与扇形,现造就是每秒上千次分配(铁律 3)。用完即弃,绝不跨函数存活。
  */
-const localPos: Vec2 = { x: 0, y: 0 };
 const screenPos: Vec2 = { x: 0, y: 0 };
 /** 射界暂存:同理,叠加层每帧要向 sim 问一遍全部槽的扇形,现造就是每秒上千次分配(铁律 3) */
 const arcTmp: Arc = { center: 0, half: 0 };
@@ -796,37 +782,6 @@ function buildMagnetOrbShape(): Graphics {
     .poly(pts)
     .fill(DROP_FILL)
     .stroke({ width: DROP_EDGE_WIDTH * 1.4, color: DROP_EDGE });
-}
-
-/**
- * 生成舰壳图缺失时的程序化船身(与旧"战斗态底板"同一条兜底契约:坏一张图
- * 不该让船在画面上消失)。固定船壳 → 构造时画一次,运行期零重建。
- * 局部 +X = 船头(与 WEAPON_HARDPOINTS 同一套坐标)。圆角矩形船体 + 舰艏楔形 +
- * 船头亮边/艏尖 + 尾部两团推进器喷焰,头尾与左右四个方向都读得出。
- */
-function buildHullFallback(): Graphics {
-  const g = new Graphics();
-  const L = tuning.shipLength;
-  const W = tuning.shipWidth;
-  const hl = L / 2;
-  const hw = W / 2;
-  // 船体:圆角矩形 + 舰艏楔形
-  g.roundRect(-hl, -hw, L, W, 4).fill(HULL_FILL);
-  g.poly([hl, -hw * 0.82, hl + L * 0.14, 0, hl, hw * 0.82]).fill(HULL_FILL);
-  // 轮廓:外圈 + 楔形两侧一次 stroke
-  g.roundRect(-hl, -hw, L, W, 4).stroke({ width: HULL_OUTLINE_WIDTH, color: HULL_OUTLINE_COLOR });
-  g.moveTo(hl, -hw * 0.82)
-    .lineTo(hl + L * 0.14, 0)
-    .lineTo(hl, hw * 0.82)
-    .stroke({ width: HULL_OUTLINE_WIDTH, color: HULL_OUTLINE_COLOR });
-  // 船头标识:亮边 + 艏尖三角(快速转向时头尾必须一眼分得清)
-  g.moveTo(hl, -hw * 0.82).lineTo(hl, hw * 0.82).stroke({ width: HULL_BOW_WIDTH, color: HULL_BOW_COLOR });
-  const pw = CELL * HULL_PROW_HALF_W;
-  g.poly([hl, -pw, hl + CELL * HULL_PROW_LEN, 0, hl, pw]).fill(HULL_BOW_COLOR);
-  // 尾部推进器:两团冷色喷焰(船体语汇,交代头尾之外的左右)
-  g.rect(-hl - 1.5, -hw * 0.36, 3, 5).fill(HULL_OUTLINE_COLOR);
-  g.rect(-hl - 1.5, hw * 0.36 - 5, 3, 5).fill(HULL_OUTLINE_COLOR);
-  return g;
 }
 
 /**

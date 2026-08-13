@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { AFFIX_ARMORED, AFFIX_FRENZY } from '../data/affixes';
 import {
-  DOCK_REPAIR_PRICE,
+  DOCK_WEAPON_PRICE,
   MAGNET_PICKUP_SURGE,
   STARTING_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
-import { KIND_SWARM } from '../data/enemies';
+import { KIND_BOSS, KIND_SWARM } from '../data/enemies';
 import {
   STAR_MAX,
   TOWER_ARC,
@@ -18,6 +18,7 @@ import {
   TOWER_STORM_CANNON,
 } from '../data/towers';
 import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
+import { BOSS_CHASE } from './boss';
 import { tuning } from './config';
 import { DROP_KIND_MAGNET } from './drop';
 import { FX_LIFE_RESONANCE, FXV_RESONANCE } from './fx';
@@ -165,8 +166,8 @@ describe('World 槽位制核心接线', () => {
       for (let i = 0; i < charts; i++) w.grantEdict(EDICT_STARCHART);
       return w;
     };
-    const a = mk(0); // 基础 10%
-    const b = mk(EDICT_MAX_LEVEL); // 10% + 5×8% = 50%
+    const a = mk(0); // 基础 3%(二轮审查重锚)
+    const b = mk(EDICT_MAX_LEVEL); // 3% + 5×2% = 13%
     for (let i = 0; i < 200; i++) {
       for (const w of [a, b]) {
         const e = w.enemies.spawn();
@@ -179,9 +180,9 @@ describe('World 槽位制核心接线', () => {
     // 概率不同、掷的次数相同:同 seed 同操作序列,两条随机流必须停在同一格
     // (少了"每杀恒掷一次"这条,拿一层星图协议就会把整局的出怪序列整体挪位)
     expect(a.rng.next()).toBe(b.rng.next());
-    // 概率真的起作用了:5 层星图协议的收入应当明显高于基础档(200 杀,期望 20 vs 100)。
+    // 概率真的起作用了:5 层星图协议的收入应当明显高于基础档(200 杀,期望 6 vs 26)。
     // 钉的是**这一局挣到的**,不是余额 —— 开局白送的 STARTING_STAR_COINS 两边一样多,
-    // 留在读数里只会把两档的倍数差冲淡(15 + 20 与 15 + 100 的比值远小于真实的 5 倍)
+    // 留在读数里只会把两档的倍数差冲淡(25 + 6 与 25 + 26 的比值远小于真实的 4 倍)
     const earned = (w: World): number => w.starCoins - STARTING_STAR_COINS;
     expect(earned(a)).toBeGreaterThan(0);
     expect(earned(b)).toBeGreaterThan(earned(a) * 2);
@@ -191,8 +192,9 @@ describe('World 槽位制核心接线', () => {
     // 与出怪/掉落无关的常数:换 seed 不该换到第二个数(它不掷 rng,也不进 checksum)
     expect(new World(1).starCoins).toBe(STARTING_STAR_COINS);
     expect(new World(999).starCoins).toBe(STARTING_STAR_COINS);
-    // 第一家店(武器 30 / 法令 25 / 修复 25)仍买不起:白送的是半样东西,不是一整套起手装备
-    expect(STARTING_STAR_COINS).toBeLessThan(DOCK_REPAIR_PRICE);
+    // 白送的口径是"配第一段收入(≈5 枚)恰好买一样":够一件法令/修复,武器仍差一档 ——
+    // 白送不是一整套起手装备(二轮审查重锚:15 → 25)
+    expect(STARTING_STAR_COINS).toBeLessThan(DOCK_WEAPON_PRICE);
   });
 
   it('checksum 不包含星币余额', () => {
@@ -616,6 +618,27 @@ describe('视野回收重投(无限地图防风筝)', () => {
     const { w, e } = place(10, SPAWN_RADIUS + SPAWN_RADIUS_BAND, 0, 0.5);
     w.step();
     expect(e.px).toBe(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+  });
+
+  it('Boss 不参与回收(二轮审查收束账):越界只对普通怪生效,Boss 原地诚实逼近', () => {
+    // 终局战不许"无限风筝 = 无限僵局":Boss 追速 < 巡航,直线逃跑必触发回收,而回收落点
+    // (1150-1300)恒在射程(≈790)外 —— 旧口径下 Boss 每次被甩开就瞬移到航向前方,
+    // 双方永不可达、局永不收束。排除后逃跑 = 玩家主动放弃完成,掉头即战。
+    const { w, e } = place(11, ENEMY_RECYCLE_RADIUS + 1, 0, 0.5);
+    e.kind = KIND_BOSS;
+    e.state = BOSS_CHASE;
+    w.step();
+    // Boss 不被回收:px 仍钉在越界的位置(回收在 px 存档之前,若误回收 px 会落在出怪环上);
+    // x 只被 seek 积分挪了一帧的步长(56/60 ≈ 0.93),仍远在出怪环外沿之外 —— 没被瞬移
+    expect(e.px).toBe(ENEMY_RECYCLE_RADIUS + 1);
+    expect(Math.hypot(e.x, e.y)).toBeGreaterThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND + 50);
+    // 罗盘也不吃回收脉冲:威胁读数零样本
+    expect(w.threatIntensity).toBe(0);
+    // 对照组:同一位置放一只普通怪,当场被回收进航向扇面(既有断言口径)
+    const { w: w2, e: e2 } = place(11, ENEMY_RECYCLE_RADIUS + 1, 0, 0.5);
+    w2.step();
+    const dist = Math.hypot(e2.px - w2.ship.x, e2.py - w2.ship.y);
+    expect(dist).toBeCloseTo(SPAWN_RADIUS + 0.5 * SPAWN_RADIUS_BAND, 8);
   });
 });
 

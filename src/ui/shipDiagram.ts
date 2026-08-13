@@ -20,9 +20,6 @@
  * "只读还是等选槽"(mode),鼠标停在哪一格是纯表现,交出去只会让两边的状态各存一份。
  */
 import {
-  THR_AMMO,
-  THR_CHARGE,
-  THR_HEAT,
   throttleName,
   TOWERS,
   TOWER_ARC,
@@ -83,14 +80,6 @@ export function towerGlyph(type: number): string {
 export function towerTintCss(type: number): string {
   const tint = TOWERS[type]?.tint;
   return tint === undefined ? MUTED_COLOR : `#${tint.toString(16).padStart(6, '0')}`;
-}
-
-/** 节流系的单字(与 armoryPanel 同源:格子窄,只取一个字) */
-function throttleGlyph(throttle: number): string {
-  if (throttle === THR_AMMO) return '弹';
-  if (throttle === THR_HEAT) return '热';
-  if (throttle === THR_CHARGE) return '充';
-  return '?';
 }
 
 // —— 环形布局的几何(px)。四个数互相咬合,改一个就要重算另外三个 ——

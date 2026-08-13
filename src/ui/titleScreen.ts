@@ -22,7 +22,7 @@
  */
 import type { RunSaveDigest } from '../sim/runSave';
 import { formatDuration, segmentLabel } from './gameOver';
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';

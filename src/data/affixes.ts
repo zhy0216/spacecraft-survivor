@@ -99,23 +99,20 @@ export const AFFIXES: AffixDef[] = [
 ];
 
 /**
- * 精英通用参数(GDD §6.4 / todos/14 + 16)—— 体型与 HP 放大、必掉星币面额,占位待调。
+ * 精英通用参数(GDD §6.4 / todos/14 + 16)—— 体型与 HP 放大、掉落面额,占位待调。
  * 与 enemies.ts 的表格同一条口径:改平衡只改这里,不改 sim 一行。
- * 16 号起精英掉落**整体替换**为固定星币(见 starCoins):零 rng、击杀当场入账,
- * 不再造残骸掉落物 —— 旧的"3× 残骸"占位就此退役(口径见 todos/16)。
+ * 两条掉落账各走各的:starCoins 按 STARCOIN_DROP_CHANCE 概率入账(见 data/economy);
+ * scrapMul 是精英**经验掉落物**的面额倍率(改版 10 号后 World.spawnDrop 现读:精英 XP =
+ * 底座 scrap × 它)。
  */
 export const ELITE = {
   /** 体型放大比例:渲染纹理、碰撞半径与冲锋几何都乘它(倍数建议真人试玩定稿) */
   scale: 1.5,
   /** HP 放大比例:精英 HP = 基础 HP × 时间缩放 × 它 */
   hpMul: 3,
-  /**
-   * **遗留字段,sim 不再读取**(16 号已把精英掉落替换为下面的 starCoins)。
-   * 保留只因 data/affixes.test.ts 的表级不变量仍钉着它 ≥ 1;下次清数据层时连同那条用例一起删。
-   * 调平衡请改 starCoins,改它没有任何效果。
-   */
+  /** 精英经验掉落物的面额倍率:精英 XP = 底座 scrap × 它(World.spawnDrop 现读) */
   scrapMul: 3,
-  /** 精英必掉星币面额(16 号):击杀当场进账 world.starCoins,零 rng、掉的就是"这一只"的。
+  /** 精英星币面额(16 号):命中掉率时当场进账 world.starCoins,零 rng 面额、掉的就是"这一只"的。
    *  1 只精英 = 1 次重摇的价(10),占位待调 */
   starCoins: 10,
 };

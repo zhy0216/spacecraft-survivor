@@ -32,7 +32,7 @@ import { tuning } from './config';
 import { shipRadius } from './damage';
 import { type Enemy } from './enemy';
 import { type FireSink, FXV_MUZZLE } from './fx';
-import { DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
+import { DEG2RAD, type Ship, wrapAngle } from './ship';
 import type { EdictBuffs } from './edictBuffs';
 import { canFire, onFired, slotTowerDef, stepThrottle } from './tower';
 import { candidates, fire, muzzle } from './turretFire';

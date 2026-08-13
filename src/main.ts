@@ -41,7 +41,7 @@ import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
 import { canSaveRun, captureRun, digestRunSnapshot } from './sim/runSave';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
 import { createGameOverUi } from './ui/gameOver';
-import { createHud, type HudUi } from './ui/hud';
+import { createHud } from './ui/hud';
 import { loadIPressed, markIPressed } from './ui/keyHintStorage';
 import { createLoadoutFlow } from './ui/loadoutFlow';
 import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
@@ -137,7 +137,18 @@ async function boot(): Promise<void> {
   // 重开走 setWorld,升级时停与结算的淡出则每渲染帧照 run.paused 同步,不另挂事件监听器。
   // 放在升级/结算面板之前创建,后两者弹出时自然盖在它上面;HUD 本身 pointer-events:none。
   // rightGutter:玩家模式 0(罗盘/顶栏用到整条屏幕),开发模式 288(给 Tweakpane 让位)。
-  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG });
+  // muted hooks(二轮审查):静音的**唯一真相源** = settings.muted —— HUD/暂停菜单/设置页
+  // 三处都读写这一份,写即落盘 + 全量重灌(与 settingsMenu.onChange 同一条通道),
+  // 不再存在"HUD 静音被设置页抹掉/不持久化"的状态分裂
+  const mutedHooks = {
+    get: (): boolean => settings.muted,
+    set: (m: boolean): void => {
+      settings = { ...settings, muted: m };
+      saveSettings(settings);
+      applySettings(settings, renderer);
+    },
+  };
+  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG, muted: mutedHooks });
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -213,6 +224,7 @@ async function boot(): Promise<void> {
     createDebugPanel(stats, run, { restart, retry });
   } else {
     pauseMenu = createPauseMenu({
+      muted: mutedHooks,
       canPause: () => !run.paused,
       onPause: () => {
         // 暂停 = 下一次 advance 被挡住;本次没有 step 回调在跑(回调只在 ticker 的
@@ -305,6 +317,10 @@ async function boot(): Promise<void> {
   // 提示是本局一次性的,不落盘。ipressed 页载时读一次,面板开过就地置真 + 落盘
   let ipressed = loadIPressed();
   let keyHintShown = false;
+  // 磁吸宝物首拾提示(二轮审查):金色宝物 = 精英掉落,拾起 = 2 秒全场磁吸 —— 全 UI 没有任何
+  // 解释,玩家首见只会当它是又一种残骸。每局第一次涌置位时走解锁 toast 通道提示一次;
+  // "本局已飘过"是 main 层的一个 let(与 keyHintShown 同一条口径),换局清零
+  let magnetToastShown = false;
   // 本局开跑的 world.elapsed 基准(秒):20s 窗口按它与当前 elapsed 的差算,
   // 读档进来的世界 elapsed 不为 0,窗口照样从"这一局开跑"起算
   let battleStartElapsed = 0;
@@ -528,6 +544,9 @@ async function boot(): Promise<void> {
     // I 键首局提示的"本局已飘过"记性同属这一局:换局清零、20s 窗重新起算
     // (永久标记在 localStorage 那侧,不受换局影响)
     keyHintShown = false;
+    // 磁吸宝物首拾提示的记性也同属这一局:换局清零(读档进来已置过涌的也不重飘 ——
+    // 沿检测看的是"翻正那一帧",存量涌不会触发)
+    magnetToastShown = false;
     battleStartElapsed = world.elapsed;
     stats.upgrades = world.upgrades;
     stats.upgradeCost = world.upgradeCost;
@@ -633,6 +652,12 @@ async function boot(): Promise<void> {
       } else {
         startRun(new World(runSeed, progress.unlockMask));
       }
+    },
+    // Esc 取消出口(二轮审查):此前是死锁界面 —— 起手选择占满全屏、title 已藏、
+    // 暂停/升级/结算都占着,不选卡就出不去。回标题即可:世界本来就冻着,没装配过的新局
+    // 不需要任何清理;从暂停菜单「再来一局」进来的,标题的「继续」仍指向那份暂停存档
+    onCancel: () => {
+      toTitle();
     },
   });
 
@@ -838,6 +863,12 @@ async function boot(): Promise<void> {
     const boostActive = world.boostTime > 0;
     if (boostActive && !lastBoostActive) audioBus.playBoost();
     lastBoostActive = boostActive;
+    // 磁吸宝物首拾提示(二轮审查):magnetSurgeTime 翻正的那一帧 = 玩家刚拾起精英掉落的
+    // 金色宝物,走解锁 toast 通道解释一次"这是什么" —— 时停中世界不动,不会误触发
+    if (!magnetToastShown && world.magnetSurgeTime > 0) {
+      magnetToastShown = true;
+      hud.toast('磁吸风暴:残骸自动飞向你 2 秒');
+    }
     // Boss 战横幅(26 号):bossPhase 翻进 1 的那一帧弹「封锁线接敌」,与出场音同一套
     // bossWarnOnEnter 判据;基准在 startRun 按新世界现值对齐
     if (world.bossPhase !== bossPhaseSeen) {

@@ -352,13 +352,49 @@ export interface BoostReadout {
   active: boolean;
 }
 
-/** 加速技能读数:boostTime > 0 = 窗内;冷却条按 1 - cd/cdMax 回充,归零印"就绪" */
-export function boostReadout(boostTime: number, cooldown: number, cdMax: number): BoostReadout {
-  if (finiteOrZero(boostTime) > 0) return { text: '加速中', ratio: 1, active: true };
+/**
+ * 加速技能读数:boostTime > 0 = 窗内;冷却条按 1 - cd/cdMax 回充,归零印"就绪"。
+ * 传 out 则写进复用缓冲(60fps 热路径不逐帧 new —— 与 radarScratch 同一条纪律),
+ * 不传照旧新造一枚(单测与一次性调用)。
+ */
+export function boostReadout(
+  boostTime: number,
+  cooldown: number,
+  cdMax: number,
+  out?: BoostReadout,
+): BoostReadout {
+  const o = out ?? { text: '', ratio: 1, active: false };
+  if (finiteOrZero(boostTime) > 0) {
+    o.text = '加速中';
+    o.ratio = 1;
+    o.active = true;
+    return o;
+  }
   const cd = finiteOrZero(cooldown);
-  if (cd <= 0) return { text: '就绪', ratio: 1, active: false };
-  return { text: `${cd.toFixed(1)}s`, ratio: 1 - hudRatio(cd, cdMax), active: false };
+  if (cd <= 0) {
+    o.text = '就绪';
+    o.ratio = 1;
+    o.active = false;
+    return o;
+  }
+  o.text = `${cd.toFixed(1)}s`;
+  o.ratio = 1 - hudRatio(cd, cdMax);
+  o.active = false;
+  return o;
 }
+
+/** boostReadout / threatVisual 的模块级复用缓冲(单线程 sync 内独占,与 radarScratch 同一条纪律) */
+const boostScratch: BoostReadout = { text: '', ratio: 1, active: false };
+const threatScratch: ThreatVisual = {
+  x: 0,
+  y: 0,
+  rotationDeg: 0,
+  strength: 0,
+  sizePx: 0,
+  linePx: 0,
+  opacity: 0,
+  brightness: 0,
+};
 
 export interface RadarPoint {
   /** 相对雷达圆心的屏幕偏移(px,y 向下,与世界系同向 —— 雷达不随船头旋转,北就是世界 -Y) */
@@ -441,6 +477,7 @@ export function threatVisual(
   width: number,
   height: number,
   rightGutter: number = HUD_RIGHT_GUTTER,
+  out?: ThreatVisual,
 ): ThreatVisual {
   const angle = Number.isFinite(direction) ? direction : 0;
   const viewportW = Number.isFinite(width) && width > 0 ? width : 1;
@@ -459,17 +496,28 @@ export function threatVisual(
   const ty = Math.abs(dy) > 1e-9 ? halfH / Math.abs(dy) : Number.POSITIVE_INFINITY;
   const distance = Math.min(tx, ty);
   const strength = hudRatio(intensity, THREAT_INTENSITY_MAX);
-  return {
-    x: cx + dx * (Number.isFinite(distance) ? distance : 0),
-    y: cy + dy * (Number.isFinite(distance) ? distance : 0),
-    // 箭头放在来敌侧边缘,但头部朝向屏幕内/船心,读起来是“怪流从这里压进来”。
-    rotationDeg: (angle * 180) / Math.PI + 180,
-    strength,
-    sizePx: 22 + strength * 16,
-    linePx: 2 + strength * 4,
-    opacity: 0.38 + strength * 0.58,
-    brightness: 0.78 + strength * 0.72,
-  };
+  const o =
+    out ??
+    ({
+      x: 0,
+      y: 0,
+      rotationDeg: 0,
+      strength: 0,
+      sizePx: 0,
+      linePx: 0,
+      opacity: 0,
+      brightness: 0,
+    } as ThreatVisual);
+  o.x = cx + dx * (Number.isFinite(distance) ? distance : 0);
+  o.y = cy + dy * (Number.isFinite(distance) ? distance : 0);
+  // 箭头放在来敌侧边缘,但头部朝向屏幕内/船心,读起来是“怪流从这里压进来”。
+  o.rotationDeg = (angle * 180) / Math.PI + 180;
+  o.strength = strength;
+  o.sizePx = 22 + strength * 16;
+  o.linePx = 2 + strength * 4;
+  o.opacity = 0.38 + strength * 0.58;
+  o.brightness = 0.78 + strength * 0.72;
+  return o;
 }
 
 export interface HudUi {
@@ -514,13 +562,28 @@ function createBar(parent: HTMLElement, labelText: string, color: string): BarEl
   return { value, fill };
 }
 
-export function createHud(opts: { world: World; rightGutter?: number; debug?: boolean }): HudUi {
+/**
+ * 静音开关的单一真相源钩子(二轮审查):get 供上色、set 供点击 —— 生产由 main 注入
+ * (指向 settings.muted + saveSettings + applySettings),与设置页/暂停菜单同一条账;
+ * 不传(单测/开发)退回直写 audioBus 单例,与旧行为逐字一致。
+ */
+export interface MuteHooks {
+  get(): boolean;
+  set(m: boolean): void;
+}
+
+export function createHud(opts: { world: World; rightGutter?: number; debug?: boolean; muted?: MuteHooks }): HudUi {
   let world = opts.world;
   let paused = false;
   const rightGutter = opts.rightGutter ?? HUD_RIGHT_GUTTER;
   // debug 由 main 注入(URL 口径只解析一次),HUD 不自己摸 location:sync 是 60fps 热路径,
-  // 且测试桩里根本没有 location
+  // 且测试桩里根本没有 location。唯一用途 = 经验读数的玩家/调试两形态
   const debug = opts.debug ?? false;
+  // 静音:main 注入 hooks 时它就是真相源;缺省(测试/开发)退回 audioBus(旧行为)
+  const muted: MuteHooks = opts.muted ?? {
+    get: () => audioBus.isMuted(),
+    set: (m: boolean) => audioBus.setMuted(m),
+  };
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -568,19 +631,22 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     'border:2px dashed ' + THREAT_COLOR + ';display:none;';
   warn.append(warnShaft, warnTip, warnRing);
 
-  // 静音开关:默认有声(开)。点击只切 audioBus 总线增益并改自己的文字/颜色,
-  // 不新增任何窗口监听、不动 sim;按钮本体是 div,不会抢键盘焦点(Enter/空格不受干扰)
+  // 静音开关:真相源 = muted hooks(main 注入的 settings.muted,与设置页/暂停菜单同一条账;
+  // 二轮审查前这里持局部布尔只写 audioBus,会被设置页覆盖且不持久化)。
+  // 按钮本体是 div,不会抢键盘焦点(Enter/空格不受干扰),不新增任何窗口监听、不动 sim。
+  // lastMuted 是"上一次画上去的值":sync 每帧对照 hooks —— 设置页改的静音当帧反映到按钮上。
   const muteBtn = document.createElement('div');
   muteBtn.style.cssText = MUTE_CSS;
   muteBtn.title = '静音开关';
-  let muted = false;
+  let lastMuted: boolean | null = null;
   function paintMute(): void {
-    muteBtn.textContent = muted ? '声音:关' : '声音:开';
-    muteBtn.style.color = muted ? IDLE_COLOR : OK_COLOR;
+    const m = muted.get();
+    lastMuted = m;
+    muteBtn.textContent = m ? '声音:关' : '声音:开';
+    muteBtn.style.color = m ? IDLE_COLOR : OK_COLOR;
   }
   muteBtn.addEventListener('click', () => {
-    muted = !muted;
-    audioBus.setMuted(muted);
+    muted.set(!muted.get());
     paintMute();
   });
   paintMute();
@@ -634,6 +700,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   edicts.appendChild(edictsRow);
   // chip 的签名缓存:名单没变就一个字都不动(换局 setWorld 时重置,见 sync 区)
   let lastEdictSig = '';
+  // 签名拼装的复用缓冲:sync 每帧只清空复用,不逐帧新数组(与 lastEdictSig 同一份纪律)
+  const chipSig: string[] = [];
   // 悬停描述 tooltip:整个 HUD 只有这一个,chip 悬停时点亮、移开即隐。
   // 定位在法令面板正下方、与左列左缘对齐;自身 pointer-events:none,永远不抢鼠标。
   const edictTip = document.createElement('div');
@@ -641,9 +709,9 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     `${PANEL_CSS}position:fixed;display:none;max-width:300px;white-space:pre-line;` +
     `line-height:1.55;z-index:1000;pointer-events:none;color:${VALUE_COLOR};`;
 
-  // 商店信标倒计时:一行"商店"标签 + 剩余秒数与距离;节点只建一次,每帧现读世界。
-  // 距离也报:玩家判断"这趟跑不跑得赢"要的是**秒数与距离两个数一起看**
-  //(巡航 130px/s —— 剩 8 秒、还有 900px 就是明摆着的放弃)
+  // 商店信标倒计时:一行"商店"标签 + 剩余秒数与航程;节点只建一次,每帧现读世界。
+  // 航程直接报"约几秒能到"(距离 ÷ 巡航速度,二轮审查:px 对玩家没有速度参照,
+  // 算不出跑不跑得赢 —— 剩 8 秒、约 7 秒能到才是明摆着的"跑得赢")。
   const beacon = document.createElement('div');
   beacon.style.cssText = BEACON_CSS;
   beacon.title = '地图商店信标';
@@ -819,6 +887,9 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   }
 
   function sync(): void {
+    // 静音按钮跟着真相源走:设置页/HUD/暂停菜单三处任一改动,其余两处当帧对齐
+    if (muted.get() !== lastMuted) paintMute();
+
     const hpMax = finiteOrZero(world.ship.maxHp);
     const hpNow = finiteOrZero(world.ship.hp);
     hp.value.textContent = `${Math.max(0, Math.round(hpNow))} / ${Math.max(0, Math.round(hpMax))}`;
@@ -838,13 +909,15 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
     const cost = finiteOrZero(world.upgradeCost);
     const scrapNow = finiteOrZero(world.scrap);
-    // 玩家形态不展示具体经验值/费用:数值区留空,只保留进度条(?debug 才显示精确读数)
+    // 玩家形态不展示具体经验值/费用:数值区留空,只保留进度条(?debug 才显示精确读数)。
+    // 这是有测试钉着的刻意设计(玩家形态极简 HUD,与升级面板只写"三选一"同一口径),
+    // 二轮审查复核后**保留** —— 若要对账跳过卡手续费,正路是升级面板印余额,不是这里
     scrap.value.textContent = debug ? `${Math.max(0, Math.round(scrapNow))} / ${Math.max(0, Math.round(cost))}` : '';
     scrap.fill.style.width = `${hudRatio(scrapNow, cost) * 100}%`;
 
     // 加速技能:读数与条都走纯函数 boostReadout(冷却上限现读 tuning —— 面板拖动即时改刻度)。
-    // 窗内点亮成白色抢眼一瞬,回充/就绪回推进器青绿
-    const br = boostReadout(world.boostTime, world.boostCooldown, tuning.boostCooldown);
+    // 窗内点亮成白色抢眼一瞬,回充/就绪回推进器青绿;写进复用缓冲,热路径不逐帧 new
+    const br = boostReadout(world.boostTime, world.boostCooldown, tuning.boostCooldown, boostScratch);
     boost.value.textContent = br.text;
     boost.fill.style.width = `${br.ratio * 100}%`;
     boost.fill.style.background = br.active ? '#eafff4' : BOOST_COLOR;
@@ -856,7 +929,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     // **层数 ≥ 2 的挂一个 ×N**(用户设计会:"拿过两次过热上限就显示 过热上限 ×2")。
     // chip 只在名单签名变化时重建(每帧拼签名串 + 比较,零 DOM 重建 —— HUD 永不逐帧重建 DOM);
     // 一层都没有时整体隐藏;叠层 / 重开换世界,当帧跟上(setWorld 把 lastEdictSig 复位成 '')
-    const chipSig: string[] = [];
+    chipSig.length = 0; // 复用缓冲(二轮审查:此前每帧新数组 + join)
     for (let i = 0; i < EDICTS.length; i++) {
       const lv = edictLevel(world.edictLevels, i);
       if (lv <= 0) continue;
@@ -882,15 +955,19 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     // 名单换过之后 tooltip 可能还悬在旧位置上:直接收起(下一帧悬停再弹)
     if (chipSig.length === 0) hideEdictTip();
 
-    // 商店信标:亮着才显示,报"还剩几秒 · 还有多远"。距离取船心到信标的直线距离
-    // (与 sim 的接触判定同一对坐标),不减判定半径 —— 玩家读的是"要跑多远",不是"还差几像素"
+    // 商店信标:亮着才显示,报"还剩几秒 · 约几秒能到"。距离取船心到信标的直线距离
+    // (与 sim 的接触判定同一对坐标),不减判定半径,按巡航速度折成航程秒 ——
+    // Ttl 是"窗口还剩多少",航程秒是"赶路要花多少",两个数直接可比
     if (world.shopBeaconActive) {
       const dx = world.shopBeaconX - world.ship.x;
       const dy = world.shopBeaconY - world.ship.y;
+      const cruise = finiteOrZero(tuning.shipCruiseSpeed);
+      const eta = cruise > 0 ? Math.round(Math.hypot(dx, dy) / cruise) : 0;
       beacon.style.display = 'block';
-      beaconValue.textContent = `${Math.max(0, Math.ceil(finiteOrZero(world.shopBeaconTtl)))}s · ${Math.round(
-        Math.hypot(dx, dy),
-      )}px`;
+      beaconValue.textContent = `${Math.max(0, Math.ceil(finiteOrZero(world.shopBeaconTtl)))}s · 约 ${Math.max(
+        0,
+        eta,
+      )}s 能到`;
     } else {
       beacon.style.display = 'none';
     }
@@ -986,6 +1063,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       window.innerWidth,
       window.innerHeight,
       rightGutter,
+      threatScratch,
     );
     threat.style.left = `${visual.x}px`;
     threat.style.top = `${visual.y}px`;

@@ -173,10 +173,6 @@ export function refitDenyMessage(code: number): string {
   }
 }
 
-function round(value: number): string {
-  return String(Math.round(value * 100) / 100);
-}
-
 /**
  * 一张法令的效果文案 —— **转发 upgradeFlow 的 edictDesc**,不在这里念第二遍数值表。
  * 升级三选一的法令卡与船坞货架的法令卡是同一批东西,文案分家的话改一次数值表就得改两处,

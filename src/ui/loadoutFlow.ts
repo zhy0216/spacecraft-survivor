@@ -20,10 +20,10 @@ import {
   UNLOCKS,
   type UnlockEntry,
 } from '../data/unlocks';
-import { TOWER_KIND_COUNT, TOWERS } from '../data/towers';
+import { TOWER_KIND_COUNT } from '../data/towers';
 import { EDICTS, EDICT_KIND_COUNT } from '../data/edicts';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 
 /** 冷色域与结算界面同一支:我方废铁的青蓝系(GDD §12,敌我色域分离) */
 const OK_COLOR = '#9adcff';
@@ -188,8 +188,10 @@ export interface LoadoutFlowUi {
  * 与结算界面同一条教训:每局多一份监听器 = 一次按键选好几局。
  * @param opts.onSelect 选中的 LOADOUTS 下标。界面自己收起后回调(与 gameOver 的"点了就该消失"同口径),
  *   装配新 World 的事在 main.ts 那条流程里。
+ * @param opts.onCancel Esc 的出口(二轮审查:此前全游戏唯一的死锁界面 —— title 已藏、
+ *   暂停/升级/结算都占着,不选卡就出不去)。界面自己收起后回调;不传 = 不响应 Esc(单测旧口径)。
  */
-export function createLoadoutFlow(opts: { onSelect: (index: number) => void }): LoadoutFlowUi {
+export function createLoadoutFlow(opts: { onSelect: (index: number) => void; onCancel?: () => void }): LoadoutFlowUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
   const panel = document.createElement('div');
@@ -199,7 +201,7 @@ export function createLoadoutFlow(opts: { onSelect: (index: number) => void }): 
   title.textContent = '选择起手配置';
   const note = document.createElement('div');
   note.style.cssText = NOTE_CSS;
-  note.textContent = '数字键 1–4 或点击卡片选择 · 起手配置是开跑前输入,不影响本局种子';
+  note.textContent = `数字键 1–${LOADOUTS.length} 或点击卡片选择 · Esc 返回标题 · 起手配置是开跑前输入,不影响本局种子`;
   const grid = document.createElement('div');
   grid.style.cssText = GRID_CSS;
   panel.append(title, note, grid);
@@ -222,6 +224,14 @@ export function createLoadoutFlow(opts: { onSelect: (index: number) => void }): 
 
   window.addEventListener('keydown', (e) => {
     if (!visible || e.repeat || isTyping()) return;
+    // Esc 取消出口(二轮审查):收回界面并交还 main(回标题)。不选卡永远不是死路
+    if (e.code === 'Escape') {
+      if (!opts.onCancel) return;
+      e.preventDefault();
+      hide();
+      opts.onCancel();
+      return;
+    }
     const digit = e.code.startsWith('Digit')
       ? Number(e.code.slice(5))
       : e.code.startsWith('Numpad')

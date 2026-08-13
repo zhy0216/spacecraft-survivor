@@ -6,6 +6,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    // 二轮审查补上:死代码的编译期拦截 —— 此前漏网的 30 处死符号(死常量/死函数/死 import)
+    // 全靠手工审计才抓得到,开这两条后 tsc 直接报,永久防再犯
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "useDefineForClassFields": true,

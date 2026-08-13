@@ -33,7 +33,7 @@ import {
 import { WAVE_LOCKED_ELITES } from '../data/waves';
 import type { Progress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 
 /** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
 const OK_COLOR = '#9adcff';
@@ -190,7 +190,7 @@ export function resultNote(result: number): string {
     case RESULT_WIN:
       return '封锁线 Boss 已被击破 —— 这艘船活着开出了怪潮';
     case RESULT_LOSE:
-      return '船体 HP 归零 —— 这一局的账都记在甲板上';
+      return '船体 HP 归零 —— 这一局的账,都记在战报里';
     default:
       return '结果码没有配文案(这是个 bug)';
   }

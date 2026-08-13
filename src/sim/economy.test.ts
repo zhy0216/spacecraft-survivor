@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_HZ } from '../core/loop';
 import { KIND_BOSS } from '../data/enemies';
-import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, skipRefundFor, upgradeCost } from '../data/economy';
+import {
+  DOCK_EDICT_PRICE,
+  OFFER_WEIGHT_EDICT,
+  OFFER_WEIGHT_NEW_WEAPON,
+  skipRefundFor,
+  upgradeCost,
+} from '../data/economy';
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import { WEAPON_SLOT_COUNT } from './armory';
 import { tuning } from './config';
@@ -94,6 +100,12 @@ describe('真脚本长跑:一局自然升级次数窗口(12–15)', () => {
       expect(b.upgrades).toBe(a.upgrades);
       expect(b.scrap).toBe(a.scrap);
       expect(b.checksum()).toBe(a.checksum());
+      // 星币闭合账(二轮审查补):真脚本一局(1958 杀、3% 掉率)的收入要落在
+      // "3-6 件 25 币货"的窗口里 —— 一局 3-4 次商店大决策,店与店之间要攒。
+      // 掉出窗口 = 掉率/面额/白送三处有一处脱锚,回 data/economy 调数而不是放宽断言。
+      expect(a.starCoins).toBeGreaterThanOrEqual(3 * DOCK_EDICT_PRICE);
+      expect(a.starCoins).toBeLessThanOrEqual(6 * DOCK_EDICT_PRICE);
+      expect(b.starCoins).toBe(a.starCoins);
     },
     120_000,
   );

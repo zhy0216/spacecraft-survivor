@@ -24,7 +24,6 @@ import {
   SPAWN_RADIUS_BAND,
   WAVE_MAX_ALIVE,
   WAVE_SEGMENTS,
-  type WaveSegment,
 } from '../data/waves';
 import {
   BOSS_CHASE,
@@ -32,7 +31,6 @@ import {
   BOSS_RECOVER,
   BOSS_WINDUP,
   bossContactDamage,
-  bossRadius,
   initBoss,
   initSummon,
   stepBossBehavior,

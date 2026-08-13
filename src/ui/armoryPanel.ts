@@ -21,7 +21,7 @@ import { audioBus } from '../render/audio';
 import { slotSustainedDps } from '../sim/tower';
 import { WEAPON_SLOT_COUNT, type WeaponSlot } from '../sim/armory';
 import type { World } from '../sim/world';
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 // 朝向中文名从舰船图那边取:商店的舰船一览与本面板印的必须是同一张表,
 // 各存一份就会出现"同一个槽在两个面板上叫不同的方向"(SLOT_CELL 与它咬合的纪律见下)
 import { SLOT_FACING_NAME } from './shipDiagram';

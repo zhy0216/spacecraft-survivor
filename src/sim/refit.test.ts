@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   DOCK_EDICT_PRICE,
-  DOCK_REPAIR_FRACTION,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_PRICE,

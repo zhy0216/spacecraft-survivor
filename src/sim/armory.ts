@@ -18,7 +18,6 @@
  *   slotMuzzleWorld = 船心 + 旋转(船体局部硬点, ship.heading) —— 画炮口、开火起点同一份;
  *   slotArcCenter = WEAPON_SLOT_FACING[i] + ship.heading —— 画扇形、索敌中心同一份。
  */
-import { STAR_MAX } from '../data/towers';
 import { type Ship, type Vec2, wrapAngle } from './ship';
 
 /**

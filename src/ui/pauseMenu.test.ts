@@ -8,7 +8,7 @@
  * 桩只提供 createPauseMenu 真的会碰的那几样(createElement/getElementById/append +
  * window.addEventListener + activeElement),绝不发展成半个 jsdom。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPauseMenu, type PauseMenuHooks } from './pauseMenu';
 
 interface StubEl {
@@ -244,7 +244,7 @@ describe('createPauseMenu', () => {
   });
 
   it('「保存并退出」存上了:调一次 onSaveAndQuit,退出由 main 接手', () => {
-    const menu = make();
+    make();
     dom.key(keyEvent('Escape'));
     findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
     expect(saveAttempts).toBe(1);
@@ -277,7 +277,7 @@ describe('createPauseMenu', () => {
   });
 
   it('「设置」按钮:只说一声,收菜单与弹设置页都归 main(两个入口共用一页设置)', () => {
-    const menu = make();
+    make();
     dom.key(keyEvent('Escape'));
     findButton(dom, '设置')!.listeners.get('click')!({});
     expect(settingsOpened).toBe(1);
@@ -350,7 +350,7 @@ describe('createPauseMenu', () => {
     // audioBus 是 module 单例,Node 下直接可用(ensureCtx 懒建,点击只是切布尔)
     const audio = (await import('../render/audio')).audioBus;
     audio.setMuted(false);
-    const menu = make();
+    make();
     dom.key(keyEvent('Escape'));
     const btn = findButton(dom, '声音:开')!;
     btn.listeners.get('click')!({});
@@ -358,5 +358,42 @@ describe('createPauseMenu', () => {
     expect(findButton(dom, '声音:关')).toBeDefined();
     // 菜单开着时静音状态改,重开菜单也要画对(show 里 paintMute)
     audio.setMuted(false);
+  });
+
+  it('静音单一真相源(二轮审查):注入 hooks 后点击写 hooks、上色读 hooks,不再直碰 audioBus', () => {
+    let muted = false;
+    let setCalls = 0;
+    const hooks: PauseMenuHooks = {
+      canPause: () => !paused,
+      onPause: () => {
+        paused = true;
+      },
+      onResume: () => {
+        paused = false;
+      },
+      onRestart: () => {},
+      onRetry: () => {},
+      onSettings: () => {},
+      onSaveAndQuit: () => true,
+      muted: {
+        get: () => muted,
+        set: (m: boolean) => {
+          setCalls++;
+          muted = m;
+        },
+      },
+    };
+    const menu = createPauseMenu(hooks);
+    menu.show();
+    expect(findButton(dom, '声音:开')).toBeDefined();
+    findButton(dom, '声音:开')!.listeners.get('click')!({});
+    expect(setCalls).toBe(1);
+    expect(muted).toBe(true);
+    expect(findButton(dom, '声音:关')).toBeDefined();
+    // 外部(设置页)改真相源后重开菜单,画对
+    muted = false;
+    menu.hide();
+    menu.show();
+    expect(findButton(dom, '声音:开')).toBeDefined();
   });
 });

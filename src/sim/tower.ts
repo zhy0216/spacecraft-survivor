@@ -114,7 +114,7 @@ export function slotFireInterval(slot: WeaponSlot, def: TowerDef, buffs: EdictBu
  * 那门炮此后再也不装填,弹药系的硬停顿整条消失。
  * 不随等级成长:GDD §5.4 的成长档里没有装填这一项(弹夹是加法档,装填是定值)。
  */
-export function slotReload(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
+export function slotReload(_slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
   return def.reload * buffs.reloadMul[def.throttle]!;
 }
 

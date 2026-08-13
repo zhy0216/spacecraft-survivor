@@ -376,7 +376,7 @@ describe('createHud', () => {
   it('法令 chip 悬停 tooltip:点亮名字×层/作用域/一层效果,移开即隐;面板底色之上必须显式给定文字色', () => {
     const levels = createEdictLevels();
     levels[EDICT_AMMO] = 1;
-    const hud = createHud({ world: stubWorld({ edictLevels: levels }) as unknown as World });
+    createHud({ world: stubWorld({ edictLevels: levels }) as unknown as World });
     const root = dom.ui.children[0]!;
     const tip = root.children[11]!;
     expect(tip.style.cssText).toContain('display:none');
@@ -455,6 +455,32 @@ describe('createHud', () => {
     mute.listeners.get('click')!(undefined);
     expect(mute.textContent).toBe('声音:开');
     expect(mute.style.color).toBe(colorOn);
+  });
+
+  it('静音单一真相源(二轮审查):注入 hooks 后点击走 hooks、上色读 hooks,外部改动 sync 当帧对齐', () => {
+    let muted = false;
+    let calls = 0;
+    const hud = createHud({
+      world: stubWorld() as unknown as World,
+      muted: {
+        get: () => muted,
+        set: (m: boolean) => {
+          calls++;
+          muted = m;
+        },
+      },
+    });
+    const mute = dom.ui.children[0]!.children[3]!;
+    expect(mute.textContent).toBe('声音:开');
+    // 点击走 hooks(不再直写 audioBus):状态只在 hooks 那一份里翻
+    mute.listeners.get('click')!(undefined);
+    expect(calls).toBe(1);
+    expect(muted).toBe(true);
+    expect(mute.textContent).toBe('声音:关');
+    // 设置页改的静音 = 外部改真相源:sync 当帧把按钮画对,不必等下一次点击
+    muted = false;
+    hud.sync();
+    expect(mute.textContent).toBe('声音:开');
   });
 
   it('键位提示行(28 号):常驻小字印出 I/Tab 玩法键,纯静态、鼠标穿透、加速不重复进这行', () => {

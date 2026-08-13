@@ -13,7 +13,7 @@
  * 每改一项立刻 onChange:设置页没有「保存」按钮 —— 拨过去就生效、就落盘,
  * 于是不存在"改了没保存"的中间态,也不必为它画一个确认流程。
  */
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 import {
   createSettings,
   nextShake,

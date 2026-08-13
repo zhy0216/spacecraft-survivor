@@ -12,7 +12,7 @@
  * 时停状态下的 Esc 永远归流程自己(重选/取消),玩家模式才归本菜单。
  */
 import { audioBus } from '../render/audio';
-import { isTyping } from './isTyping';
+import { isTyping } from '../core/isTyping';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -71,6 +71,11 @@ export interface PauseMenuHooks {
    *   宁可当场说"保存失败"也不给一个空头承诺(见 ui/runSaveStorage.ts 的口径)
    */
   onSaveAndQuit(): boolean;
+  /**
+   * 静音开关的单一真相源(二轮审查):get 供上色、set 供点击 —— main 注入 settings.muted
+   * 那一份账;不传(单测)退回 audioBus 单例,与旧行为逐字一致。
+   */
+  muted?: { get(): boolean; set(m: boolean): void };
 }
 
 export interface PauseMenuUi {
@@ -156,11 +161,16 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
 
   const muteBtn = document.createElement('button');
   muteBtn.style.cssText = MUTE_CSS;
+  // 真相源 = hooks(main 注入 settings.muted);缺省退回 audioBus(单测旧口径)
   function paintMute(): void {
-    muteBtn.textContent = audioBus.isMuted() ? '声音:关' : '声音:开';
+    muteBtn.textContent = (hooks.muted ? hooks.muted.get() : audioBus.isMuted()) ? '声音:关' : '声音:开';
   }
   muteBtn.addEventListener('click', () => {
-    audioBus.setMuted(!audioBus.isMuted());
+    if (hooks.muted) {
+      hooks.muted.set(!hooks.muted.get());
+    } else {
+      audioBus.setMuted(!audioBus.isMuted());
+    }
     paintMute();
   });
   paintMute();

@@ -21,10 +21,8 @@ import {
 } from '../data/edicts';
 import {
   TOWER_AUTOCANNON,
-  TOWER_KIND_COUNT,
   TOWER_LASER,
   TOWER_RAILGUN,
-  TOWER_STORM_CANNON,
   TOWERS,
 } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';

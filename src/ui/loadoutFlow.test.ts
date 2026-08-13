@@ -286,9 +286,38 @@ describe('createLoadoutFlow', () => {
   });
 
   it('收着的时候数字键一律不认 —— 战斗中误按数字不该换掉正打着的局', () => {
-    const ui = make();
+    make();
     dom.key(keyEvent('Digit1'));
     expect(picked).toEqual([]);
+  });
+
+  it('Esc = 取消出口(二轮审查):收起界面并回调 onCancel;收着时不触发', () => {
+    let cancelled = 0;
+    const ui = createLoadoutFlow({
+      onSelect: (i) => {
+        picked.push(i);
+      },
+      onCancel: () => {
+        cancelled++;
+      },
+    });
+    ui.show(0);
+    expect(dom.ui.children[0]!.style.display).toBe('flex');
+    dom.key(keyEvent('Escape'));
+    expect(cancelled).toBe(1);
+    expect(picked).toEqual([]);
+    expect(dom.ui.children[0]!.style.display).toBe('none');
+    // 收着时 Esc 不再触发(visible 守卫,与数字键同一条)
+    dom.key(keyEvent('Escape'));
+    expect(cancelled).toBe(1);
+  });
+
+  it('不传 onCancel(旧调用方)时 Esc 不炸也不选卡 —— 死锁由 main 传 onCancel 修掉', () => {
+    const ui = make();
+    ui.show(0);
+    dom.key(keyEvent('Escape'));
+    expect(picked).toEqual([]);
+    expect(dom.ui.children[0]!.style.display).toBe('flex');
   });
 
   it('长按不连发(repeat)、越界数字键、非数字键一概不管', () => {

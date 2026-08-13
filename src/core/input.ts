@@ -2,6 +2,8 @@
  * 键盘状态 → 期望航向向量(GDD §3.1:输入是期望航向,不是直接位移)。
  * 骨架阶段尚未接入 sim;02 号 issue(飞船操控)在 World.step 里消费它。
  */
+import { isTyping } from './isTyping';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -24,8 +26,11 @@ export class Input {
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => {
-      // 拦默认行为 ≠ 吞掉这次按键:照常记进 keys,否则"按住 Tab 显示射界"就没了触发源
-      if (PREVENT_DEFAULT.has(e.code)) e.preventDefault();
+      // 拦默认行为 ≠ 吞掉这次按键:照常记进 keys,否则"按住 Tab 显示射界"就没了触发源。
+      // isTyping 守卫(二轮审查):焦点在输入框里(开发期 Tweakpane 的文本框)时这一记
+      // 是打字,preventDefault 会让空格打不出来、Tab 切不动焦点 —— 玩家侧没有文本输入,
+      // 这条只救 dev 工具
+      if (PREVENT_DEFAULT.has(e.code) && !isTyping()) e.preventDefault();
       this.keys.add(e.code);
     });
     target.addEventListener('keyup', (e) => this.keys.delete(e.code));

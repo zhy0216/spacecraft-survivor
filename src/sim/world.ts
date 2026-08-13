@@ -86,7 +86,6 @@ import {
   edictCanStack,
   edictLevel,
   EDICT_KIND_COUNT,
-  EDICT_MAX_LEVEL,
   EDICTS,
 } from '../data/edicts';
 import {
@@ -156,7 +155,6 @@ import {
   FXV_IMPACT,
   FXV_KILL,
   FXV_LANCE,
-  FXV_MUZZLE,
   FXV_RESONANCE,
   FXV_SPARK,
   resetFxEvent,
@@ -594,6 +592,13 @@ export class World {
    * 击杀本身在敌人池与 bossPhase 里可见,故**不进 checksum**。
    */
   bossKilledAt = 0;
+
+  /**
+   * 在场 Boss 的对象引用(工程审计的 O(1) 缓存):spawnBoss 挂上、stepBossSummon 只读。
+   * 是**派生缓存**(全表扫描随时找得回),故不进 checksum、不进存档 —— 读档恢复后
+   * 由 stepBossSummon 第一次调用现扫重挂;引用失效(Boss 死亡回池)以 dead 为判据。
+   */
+  private bossRef: Enemy | null = null;
 
   /**
    * 已收集、未花掉的残骸(改版后 = **经验**,字段名沿用 GDD 的"残骸"口径)—— **成长资源**,
@@ -1202,11 +1207,16 @@ export class World {
       // 排在 px/py 存档**之前**,于是插值的两端都在新位置上 —— 不会有一帧横跨整张屏的拖影
       // (它本就在屏外,但 144Hz 插值的中间采样点可能扫进屏里)。
       // 只有 BH_SEEK/接近段的怪才可能落到这么远(驻留/冲锋的活动半径 ≤ 560),状态机不必复位。
+      // **Boss 不参与回收**(二轮审查收束账):追速 56 < 巡航 130,直线风筝必触发回收,而回收
+      // 落点(1150-1300)恒在全塔 3★ 射程(≈790)之外 —— 旧口径下 Boss 每被甩开就瞬移到航向
+      // 前方,风筝期间双方互不可达,终局战既不赢也不输、还能无限刷召唤波资源。排除后 Boss
+      // 只从它实际的位置诚实逼近:逃跑 = 玩家主动放弃完成(想收束随时掉头,Boss 就在身后),
+      // 战斗中也不会因一次拉扯把 Boss 瞬移到视野另一头、把战场几何搅碎。
       {
         const fdx = e.x - tx;
         const fdy = e.y - ty;
         const fd2 = fdx * fdx + fdy * fdy;
-        if (fd2 > ENEMY_RECYCLE_RADIUS * ENEMY_RECYCLE_RADIUS) {
+        if (e.kind !== KIND_BOSS && fd2 > ENEMY_RECYCLE_RADIUS * ENEMY_RECYCLE_RADIUS) {
           // 落点**零 rng**:半径与扇面角偏都取自 e.animSeed([0,1) 的出生哈希,每只恒定,
           // 于是同 seed 回放/读档逐位一致,也不扰动出怪随机序列。s2 = 同一粒种子的第二个
           // 分数折(×137 取小数),把"半径偏大"与"角偏右"这两件事解耦开。
@@ -1543,7 +1553,8 @@ export class World {
    *
    * 改版后它同时管两本账:
    *   **星币**(用户设计会:改成**概率掉落**):每次击杀**恒掷 1 次 rng**,命中
-   *     buffs.starCoinChance(基础 10%,星图协议每层 +8 个点)才进账,面额一个字不改 ——
+   *     buffs.starCoinChance(基础 3%,星图协议每层 +2 个点 —— 二轮审查重锚,见
+   *     data/economy 的 STARCOIN_DROP_CHANCE)才进账,面额一个字不改 ——
    *     普通怪按型(ENEMIES[kind].starCoins,1-4)、精英 ELITE.starCoins(10)、
    *     Boss BOSS.starCoins(30)。**不造掉落物**:星币没有"掉在地上捡不到"的问题,
    *     也不占 DROP_MAX_ALIVE、不走磁吸;
@@ -1592,8 +1603,11 @@ export class World {
     }
 
     // 磁吸宝物:精英必掉。与经验那颗同池同位置(重叠出生:一颗普通菱形 + 一颗金色宝物,
-    // 拾起时一起被吸走);value 恒 0 —— 它进账的是涌而不是经验(kind 分流,见 drop.ts)
-    if (e.affixes !== 0 && this.drops.size < DROP_MAX_ALIVE) {
+    // 拾起时一起被吸走);value 恒 0 —— 它进账的是涌而不是经验(kind 分流,见 drop.ts)。
+    // **不经过 DROP_MAX_ALIVE 保险丝**(二轮审查):精英整局只有脚本定死的 ~8 只,宝物是
+    // 这个量级的稀罕物,而保险丝是为"每只怪必掉一颗"的洪峰设的 —— 被它拦住的话,
+    // "精英必掉一颗"的承诺会在残骸触顶时静默作废,且宝物 value 恒 0、折半兜底也救不了它。
+    if (e.affixes !== 0) {
       const o = this.drops.spawn();
       o.x = o.px = e.x;
       o.y = o.py = e.y;
@@ -2076,7 +2090,10 @@ export class World {
    *     "变身只在合到 3★ 时触发"的闸门;
    *   **已拥有但未满 3★ 的同型照进**(星级系统):同型卡是三合一升星的原料,买下照常落槽;
    *   **已满 3★ 的同型不进**:到顶了,买来没星可升,是死卡;
-   *   **未解锁的型不进**(19 号闸门,照 SHOP_WEAPON_UNLOCK_BIT)。
+   *   **未解锁的型不进**(19 号闸门,照 SHOP_WEAPON_UNLOCK_BIT);
+   *   **货架内不去重**(与 rollDockEdicts 不同 —— 那边不摆重复卡,因为法令卡重复 = 废格):
+   *   同型两把 = 合法的三合一原料(两把同型 1★ 摆上货架,买下立刻 2★),去重反而砍掉
+   *   升星最顺的进货渠道。
    */
   rollShopWeapons(): void {
     const offers = this.shopWeapons;
@@ -2247,6 +2264,7 @@ export class World {
     this.threatDirX += Math.cos(a) * THREAT_SPAWN_IMPULSE;
     this.threatDirY += Math.sin(a) * THREAT_SPAWN_IMPULSE;
     this.onEnemySpawn?.(e);
+    this.bossRef = e; // 召唤侧 O(1) 缓存的挂载点(见 stepBossSummon)
   }
 
   /**
@@ -2263,13 +2281,23 @@ export class World {
    * Boss 已击杀时由 bossPhase 挡在门外,这里再兜一道(尸体回池后池里就没有它了)。
    */
   private stepBossSummon(): void {
-    let boss: Enemy | null = null;
-    for (let i = 0; i < this.enemies.items.length; i++) {
-      const e = this.enemies.items[i]!;
-      if (e.kind === KIND_BOSS) {
-        boss = e;
-        break;
+    // Boss 引用缓存在 spawnBoss 挂上,这里每帧只读缓存、不再全表扫敌人池(工程审计:
+    // 纯逻辑层唯一的每帧线性扫描)。失效判据 = 引用被回池(dead 为真 —— Boss 死亡那一帧
+    // reap 先翻 bossPhase 再回池,本函数由 bossPhase 挡在门外,这条是双保险)。
+    // 读档恢复时 bossRef 是空(它是派生缓存、不进 checksum 不进存档),第一次调用
+    // 现扫一遍重新挂上 —— 稳态 O(1),恢复路径一次 O(n)。
+    let boss = this.bossRef;
+    if (!boss || boss.dead) {
+      boss = null;
+      const items = this.enemies.items;
+      for (let i = 0; i < items.length; i++) {
+        const e = items[i]!;
+        if (e.kind === KIND_BOSS) {
+          boss = e;
+          break;
+        }
       }
+      this.bossRef = boss;
     }
     if (!boss) return;
     this.bossSummonCooldown -= SIM_DT;

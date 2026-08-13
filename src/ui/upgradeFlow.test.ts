@@ -410,6 +410,15 @@ describe('createUpgradeFlow 单阶段流程', () => {
     flow.hide();
   });
 
+  it('选卡阶段 Esc 不再是死键(二轮审查):flash 指路,不跳过、不结算', () => {
+    setup();
+    dom.key('Escape');
+    expect(toastOf(dom).textContent).toBe('选一张卡,或点「跳过」结束这次升级');
+    expect(world.skipCalls).toBe(0);
+    expect(resolved).toBe(0);
+    expect(panelOf(dom).style.display).toBe('flex'); // 仍留在选卡层
+  });
+
   it('普通拒绝留在选卡阶段，卡片过期则放行', () => {
     world.takeCode = EDICT_MAXED;
     setup();

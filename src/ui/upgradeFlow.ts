@@ -26,9 +26,10 @@ import { edictDesc, edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { THR_CHARGE, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
 import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
+import { isTyping } from '../core/isTyping';
 
 // 提示文字配色:成功 = 冷青蓝、拒绝 = 暖红(与渲染层高亮同色;冷色是我方色域,GDD §12)
 const OK_COLOR = '#9adcff';
@@ -218,12 +219,8 @@ export function skipRefund(cost: number): number {
   return skipRefundFor(cost);
 }
 
-/** 焦点在调参面板的输入框里:此时数字键/Esc 是在打字,不该被当成选卡/取消抢走 */
-function isTyping(): boolean {
-  const el = document.activeElement;
-  if (!(el instanceof HTMLElement)) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
-}
+// 焦点在输入框里 → 数字键/Esc 是在打字,不该被当成选卡/取消抢走。
+// 判据走共享模块(二轮审查:本文件曾是全仓第四份拷贝,口径漂移隐患)
 
 /** 三选一升级流程的对外面孔。main.ts 在 onUpgradeOffer 里 show、结算完由 onResolved 接手 */
 export interface UpgradeFlowUi {
@@ -570,7 +567,14 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     // 收着的时候一律不认:战斗中按 Esc/数字键不该动到升级流程
     if (phase === PHASE_OFF || e.repeat || isTyping()) return;
     if (e.code === 'Escape') {
-      cancelReplace();
+      e.preventDefault();
+      if (phase === PHASE_REPLACE) {
+        cancelReplace();
+      } else {
+        // 选卡阶段的 Esc(二轮审查):不绑"跳过" —— 误触一记 Esc 不该扣 15 残骸手续费;
+        // 但也不许是静默死键(全游戏其他覆盖层都认 Esc),flash 指路即可
+        flash('选一张卡,或点「跳过」结束这次升级', OK_COLOR);
+      }
       return;
     }
     // 数字键直选卡片(1..N = 从左到右)。只认主键盘的 DigitN。换槽阶段不认数字键
