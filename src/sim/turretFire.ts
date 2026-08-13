@@ -214,13 +214,13 @@ function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink
       if (perp > def.lanceWidth + enemyRadius(e)) continue;
       sink.damage(e, damage, def.throttle, def.type);
     }
-    sink.fx(FXV_BEAM, muzzle.x, muzzle.y, muzzle.x + ux * range, muzzle.y + uy * range, 0, def.type);
+    sink.fx(FXV_BEAM, muzzle.x, muzzle.y, muzzle.x + ux * range, muzzle.y + uy * range, 0, def.type, 0, 0, slot.stars);
     return 1;
   }
 
   // 单体光束(激光):命中点取目标**当前**位置,瞬时判定,画到哪儿就是打到哪儿
   sink.damage(target, damage, def.throttle, def.type);
-  sink.fx(FXV_BEAM, muzzle.x, muzzle.y, target.x, target.y, 0, def.type);
+  sink.fx(FXV_BEAM, muzzle.x, muzzle.y, target.x, target.y, 0, def.type, 0, 0, slot.stars);
   return 1;
 }
 
@@ -241,7 +241,7 @@ function fireChain(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSin
   chained.length = 0;
   while (hop) {
     sink.damage(hop, damage, def.throttle, def.type); // 节流系跟进去:词缀抗性(14 号)在结算处认它
-    sink.fx(FXV_CHAIN, fromX, fromY, hop.x, hop.y, 0, def.type);
+    sink.fx(FXV_CHAIN, fromX, fromY, hop.x, hop.y, 0, def.type, 0, 0, slot.stars);
     chained.push(hop);
     // 判在这里而不是循环头:chainCount 被改成 0/负数时,首目标照样吃这一下 ——
     // "打得到却不掉血"比"少跳一只"难查得多
@@ -319,6 +319,6 @@ function fireLance(
 
   // 无条件推一条光柱,哪怕一个人都没扫到:"打出去了但没打中"正是玩家判断这门沉炮该不该
   // 提前多少的唯一读数(与迫击炮那条 FXV_BLAST 同一条理由)。终点画到射程尽头 = 可视化即作用范围
-  sink.fx(FXV_LANCE, muzzle.x, muzzle.y, muzzle.x + ux * range, muzzle.y + uy * range, 0, def.type);
+  sink.fx(FXV_LANCE, muzzle.x, muzzle.y, muzzle.x + ux * range, muzzle.y + uy * range, 0, def.type, 0, 0, slot.stars);
   return 1;
 }

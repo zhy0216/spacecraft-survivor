@@ -37,6 +37,8 @@ export const FXV_IMPACT = 8; // 直射弹命中火花:确认子弹确实打在�
 // (沿用 FXV_KILL 借放敌型的同款手法:这是第八个以外的 kind,没理由为它单开一格字段);
 // 渲染层照它取 WEAPON_SLOT_FACING[中心槽] + heading 画那道舷侧弧光。radius 恒 0。
 export const FXV_RESONANCE = 9;
+/** 武器升星/合成爆发:纯表现事件, towerType = 结果塔型, stars = 结算后的星级 */
+export const FXV_STAR_UPGRADE = 10;
 
 /**
  * 上面这两种的存续秒数。**刻意不进 data/towers 的 FX_LIFE_* 那一组** ——
@@ -54,6 +56,7 @@ export const FX_LIFE_KILL = 0.25; // 占位待调
 export const FX_LIFE_IMPACT = 0.1;
 // 共振闪光与击杀爆点同量级:它是低频事件(冷却 4s 兜底),0.5s 够眼睛追完一道舷侧弧光
 export const FX_LIFE_RESONANCE = 0.5; // 占位待调
+export const FX_LIFE_STAR_UPGRADE = 0.55;
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),
@@ -98,6 +101,8 @@ export interface FxEvent {
   juicePlayed: boolean;
   /** 飘字的一次性消费锁:与 audioPlayed/juicePlayed 各管各的(飘字生命周期比事件长,见渲染层) */
   dmgPlayed: boolean;
+  /** 开火/升星时的星级快照;0 = 事件不携带星级(旧事件与受击事件) */
+  stars: number;
 }
 
 /** 池的 factory:字段一次性声明齐,运行期绝不新增 */
@@ -116,6 +121,7 @@ export function createFxEvent(): FxEvent {
     audioPlayed: false,
     juicePlayed: false,
     dmgPlayed: false,
+    stars: 0,
   };
 }
 
@@ -137,6 +143,7 @@ export function resetFxEvent(e: FxEvent): void {
   e.audioPlayed = false;
   e.juicePlayed = false;
   e.dmgPlayed = false; // 漏清:飘字消费锁会一直锁着,这一种 kind 从此再也不出数字
+  e.stars = 0;
 }
 
 /**
@@ -172,6 +179,8 @@ export interface FireSink {
     damage?: number,
     /** 伤害 / 该敌满血,渲染层配色用(见 FxEvent.dmgRatio)。缺省 0 */
     dmgRatio?: number,
+    /** 开火/升星时的星级快照;缺省 0 */
+    stars?: number,
   ): void;
   /** 邻域查询(复用 World 的空间哈希,绝不线性扫全场),结果写进 out */
   query(x: number, y: number, r: number, out: Enemy[]): void;

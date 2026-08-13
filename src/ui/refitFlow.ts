@@ -125,6 +125,8 @@ const TOAST_CSS =
   `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.82);` +
   'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;pointer-events:none;white-space:pre-line;';
 const FLASH_MS = 1500;
+const SHOP_ART_URL = new URL('../../assets/game/ui/shop-bay.svg', import.meta.url).href;
+const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
 
 export interface RefitFlowUi {
   /** 换掉整局的 World(重开流程)。同时收面板、清提示:旧局的面板状态不能带到新船上去 */
@@ -201,6 +203,11 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   // —— 店头:标题 + 星币余额 ——
   const shopHead = document.createElement('div');
   shopHead.style.cssText = SHOP_HEAD_CSS;
+  shopHead.style.backgroundImage = `linear-gradient(90deg,rgba(8,14,24,.96) 0%,rgba(8,14,24,.72) 58%,rgba(8,14,24,.2) 100%),url("${SHOP_ART_URL}")`;
+  shopHead.style.backgroundSize = 'cover';
+  shopHead.style.backgroundPosition = 'center';
+  shopHead.style.borderRadius = '8px';
+  shopHead.style.padding = '14px';
   const shopTitleBox = document.createElement('div');
   const shopEyebrow = document.createElement('div');
   shopEyebrow.style.cssText = EYEBROW_CSS;
@@ -262,6 +269,10 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
     const row = document.createElement('button');
     row.style.cssText = ROW_CSS;
+    row.style.backgroundImage = `linear-gradient(90deg,rgba(18,29,45,.94),rgba(18,29,45,.7)),url("${EDICT_ART_URL}")`;
+    row.style.backgroundRepeat = 'no-repeat';
+    row.style.backgroundPosition = 'right center';
+    row.style.backgroundSize = '52px 52px';
     row.addEventListener('click', () => buyDockEdict(i));
     starSection.appendChild(row);
     edictRows.push(row);

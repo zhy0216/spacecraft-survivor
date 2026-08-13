@@ -385,6 +385,13 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
         : equipped
           ? 'rgba(21,34,52,.82)'
           : 'rgba(13,21,34,.6)';
+      chip.style.boxShadow = equipped
+        ? equipped.stars >= 3
+          ? '0 0 18px rgba(255,241,168,.42), inset 0 0 16px rgba(255,212,121,.08)'
+          : equipped.stars === 2
+            ? '0 0 14px rgba(255,212,121,.26)'
+            : 'none'
+        : 'none';
       // pick 态才可点:只读面板上的格子不是按钮,给出手型只会骗玩家点一下试试
       const clickable = pick && !!equipped;
       chip.disabled = !clickable;

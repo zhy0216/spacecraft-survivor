@@ -89,6 +89,7 @@ import {
   FX_LIFE_IMPACT,
   FX_LIFE_KILL,
   FX_LIFE_RESONANCE,
+  FX_LIFE_STAR_UPGRADE,
   FX_LIFE_SPARK,
   FXV_BEAM,
   FXV_BLAST,
@@ -99,6 +100,7 @@ import {
   FXV_LANCE,
   FXV_MUZZLE,
   FXV_RESONANCE,
+  FXV_STAR_UPGRADE,
   FXV_SPARK,
 } from '../sim/fx';
 import { lerpAngle, type Vec2 } from '../sim/ship';
@@ -158,6 +160,8 @@ const SHIP_HULL_WIDTH_PAD = 0.45;
 /** 四型生成图都按战斗态飞船的视觉量级展示,并再放大一档;甲虫继续保留重甲型的体型读数。 */
 const ENEMY_VISUAL_SPAN = (tuning.shipLength + CELL * SHIP_HULL_LENGTH_PAD) * 1.15;
 const ENEMY_HEAVY_VISUAL_SCALE = 1.15;
+/** Boss 是收尾焦点:视觉比碰撞体额外放大,碰撞与预警判定仍走 bossRadius()。 */
+const BOSS_VISUAL_SCALE = 1.35;
 /** fal.ai 候选图的正面朝纹理上方(-Y),而船体局部 0 弧度朝船头(+X),两者相差 90°。 */
 const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
 
@@ -223,6 +227,9 @@ const FX_BEAM_CORE_WIDTH = 1.6;
 /** 光束存续只有 FX_LIFE_BEAM(≈3 逻辑帧),按 life 线性淡出会把"持续光束"画成一闪一闪的虚线,
  *  故只从这个底 alpha 起微微收一点 —— "常亮"正是它与另外三类的区别所在 */
 const FX_BEAM_CORE_ALPHA_FLOOR = 0.55;
+const FX_STAR_COLORS = [0x9adcff, 0xffd479, 0xfff1a8] as const;
+const FX_STAR_UPGRADE_R0 = 12;
+const FX_STAR_UPGRADE_R1 = 86;
 const FX_CHAIN_WIDTH = 2;
 const FX_CHAIN_ALPHA = 0.9;
 /** 折角幅度(× 跳长):按跳长缩放,短跳才不会被折成一团 */
@@ -955,12 +962,14 @@ export class Renderer {
   private hasHullArt = false;
   /** 炮位贴图层:随槽位内容重建(Sprite/色块只在装填那一下增删),炮管旋转每帧只改已有精灵 */
   private weaponG = new Container();
+  /** 常驻星级徽记层:2★/3★ 不只在开火瞬间才可读。 */
+  private starG = new Graphics();
   private weaponBindings: WeaponBinding[] = [];
   /**
    * 炮位内容的脏标记签名:4 个槽的 type 压进一个数(每槽 4 位)。type 只在获得/替换/合成
    * 时变,故签名不变就绝不重建;重开换世界由 setWorld 置 -1 强制首帧重建(与旧 deckRevision 同一条纪律)。
    */
-  private weaponSig = -1;
+  private weaponSig = '';
   /** 射界扇形 + 判定圆(按住 Tab):压在船体之下 —— 它是底衬,不许糊住船身与炮位 */
   private arcG = new Graphics();
   /**
@@ -1149,7 +1158,7 @@ export class Renderer {
     this.bossTexture = bossTex;
     // 回退底座纹理时它可能是程序化剪影(需要上底座 tint);专属图与生成图一律白 tint 原色
     this.bossTextureTint = bossGenerated ? 0xffffff : this.enemyTextureTints[BOSS.baseKind]!;
-    this.bossTextureScale = (bossRadius() * 2) / Math.max(bossTex.width, bossTex.height);
+    this.bossTextureScale = (bossRadius() * 2 * BOSS_VISUAL_SCALE) / Math.max(bossTex.width, bossTex.height);
     this.bossRotationOffset = bossGenerated
       ? GENERATED_ART_FORWARD_OFFSET
       : this.enemyRotationOffsets[BOSS.baseKind]!;
@@ -1230,7 +1239,7 @@ export class Renderer {
     // → 炮位贴图 → 炮口线 → 节流读数。
     // 扇形画在船体之下:它是底衬,不许糊住船身与炮位;炮口线与读数长在炮位上,理应压住贴图。
     // 这里不建炮位几何 —— 槽位内容要等 sync() 的签名检查在首帧补上(weaponSig = -1)。
-    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.muzzleG, this.throttleG);
+    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.muzzleG, this.starG, this.throttleG);
     // 拖尾环形缓冲一次建齐(铁律 3):life ≤ 0 = 空闲槽,运行期只改字段
     for (let i = 0; i < BOOST_TRAIL_MAX; i++) this.boostTrail.push({ x: 0, y: 0, life: 0 });
 
@@ -1500,6 +1509,7 @@ export class Renderer {
     this.syncWeaponSprites();
     this.syncWeaponRotations();
     this.drawSlotMuzzles();
+    this.drawSlotStars();
     if (this.arcOverlay) {
       // 按住 Tab:射界扇形 + 判定圆 + 节流读数一起出现(全部读同一个 arcOverlay,
       // 不会出现"松了 Tab 但读数还挂着"的半套状态)
@@ -1583,7 +1593,7 @@ export class Renderer {
    */
   setWorld(world: World): void {
     this.world = world;
-    this.weaponSig = -1;
+    this.weaponSig = '';
     this.muzzleFxG.clear();
     this.eliteWarnKey = -1;
     this.bossPhaseSeen = -1;
@@ -1653,10 +1663,12 @@ export class Renderer {
    */
   private syncWeaponSprites(): void {
     const w = this.world.weapons;
-    let sig = 0;
+    let sig = '';
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-      const t = w[i]!.type;
-      sig |= (t < 0 ? 0xf : t) << (i * 4);
+      const slot = w[i]!;
+      const t = slot.type;
+      const stars = Math.max(0, Math.min(STAR_MAX, Math.floor(slot.stars)));
+      sig += `${t < 0 ? -1 : t}:${stars};`;
     }
     if (sig === this.weaponSig) return;
     this.weaponSig = sig;
@@ -1678,7 +1690,9 @@ export class Renderer {
       if (tex) {
         const s = new Sprite(tex);
         s.anchor.set(0.5);
-        s.scale.set(size / Math.max(tex.width, tex.height));
+        const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
+        const starScale = stars === 1 ? 1 : stars === 2 ? 1.16 : 1.32;
+        s.scale.set((size * starScale) / Math.max(tex.width, tex.height));
         s.tint = def.tint; // 冷色域(GDD §12):炮位贴图与它的弹和光效同色,"这门炮是谁"不用猜
         s.position.set(hp.x, hp.y);
         g = s;
@@ -1792,6 +1806,31 @@ export class Renderer {
       drawn++;
     }
     if (drawn > 0) g.stroke({ width: SLOT_MUZZLE_WIDTH, color: SLOT_MUZZLE_COLOR });
+  }
+
+  /** 常驻星级徽记:一颗星保持干净炮位,2★/3★ 用冷金色菱点分层。 */
+  private drawSlotStars(): void {
+    const g = this.starG;
+    g.clear();
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const slot = this.world.weapons[i]!;
+      if (slot.type < 0) continue;
+      const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
+      if (stars < 2) continue;
+      const hp = WEAPON_HARDPOINTS[i];
+      if (!hp) continue;
+      const a = WEAPON_SLOT_FACING[i] ?? 0;
+      const x = hp.x + Math.cos(a) * CELL * 0.58;
+      const y = hp.y + Math.sin(a) * CELL * 0.58;
+      const color = stars === 3 ? 0xfff1a8 : 0xffd479;
+      const size = stars === 3 ? 2.8 : 2.3;
+      for (let n = 0; n < stars; n++) {
+        const ox = (n - (stars - 1) / 2) * CELL * 0.18;
+        g.poly([x + ox, y - size, x + ox + size, y, x + ox, y + size, x + ox - size, y])
+          .fill({ color, alpha: stars === 3 ? 0.95 : 0.82 })
+          .stroke({ width: 0.8, color: FX_CORE_COLOR, alpha: 0.8 });
+      }
+    }
   }
 
   /**
@@ -2014,6 +2053,15 @@ export class Renderer {
     return 1;
   }
 
+  /** FxEvent 携带星级时优先使用快照；旧事件/弹道命中事件回查当前槽位作为兼容兜底。 */
+  private fxStarsForTower(towerType: number): number {
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const slot = this.world.weapons[i];
+      if (slot && slot.type === towerType) return Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
+    }
+    return 1;
+  }
+
   /**
    * 开火光效(05 号 issue T5):照 world.fx.items 逐个事件画,按 life 淡出。
    *
@@ -2058,13 +2106,15 @@ export class Renderer {
           // 细实线 + **常亮**:激光是 10Hz 的伤害 tick + 每帧续命的可视化(见 05 设计约定),
           // 按 life 线性淡出会把"持续光束"画成一闪一闪的虚线 —— 那正好毁掉它与另外三类的区别
           const t = fxFade(e.life, FX_LIFE_BEAM);
+          const star = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          const starMul = star <= 1 ? 1 : star === 2 ? 1.55 : 2.2;
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
-            .stroke({ width: FX_BEAM_GLOW_WIDTH, color, alpha: FX_BEAM_GLOW_ALPHA * t });
+            .stroke({ width: FX_BEAM_GLOW_WIDTH * starMul, color, alpha: FX_BEAM_GLOW_ALPHA * t });
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
             .stroke({
-              width: FX_BEAM_CORE_WIDTH,
+              width: FX_BEAM_CORE_WIDTH * (star <= 1 ? 1 : star === 2 ? 1.25 : 1.6),
               color: FX_CORE_COLOR,
               alpha: FX_BEAM_CORE_ALPHA_FLOOR + (1 - FX_BEAM_CORE_ALPHA_FLOOR) * t,
             });
@@ -2073,24 +2123,45 @@ export class Renderer {
         case FXV_CHAIN: {
           // 一跳一个事件,首尾相接自然连成整条链;折角是它与光束唯一的形状差别,故必须画
           const t = fxFade(e.life, FX_LIFE_CHAIN);
-          this.strokeChainHop(e.x0, e.y0, e.x1, e.y1, color, FX_CHAIN_ALPHA * t);
+          const star = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          this.strokeChainHop(e.x0, e.y0, e.x1, e.y1, color, FX_CHAIN_ALPHA * t * (star >= 3 ? 1.18 : star === 2 ? 1.08 : 1));
           break;
         }
         case FXV_LANCE: {
           // 唯一"越来越细"的一类:光柱随 life 从 FX_LANCE_WIDTH 收成一条芯线,
           // 读起来就是"贯穿的那一瞬间已经过去,现在只剩余波"
           const t = fxFade(e.life, FX_LIFE_LANCE);
+          const lanceStars = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
             .stroke({
               // 下限夹在芯线宽度上:光晕收得比芯线还细就不再是光晕了,让它平滑地退化成芯线本身
-              width: Math.max(FX_LANCE_CORE_WIDTH, FX_LANCE_WIDTH * t),
+              width: Math.max(FX_LANCE_CORE_WIDTH, FX_LANCE_WIDTH * (lanceStars <= 1 ? 1 : lanceStars === 2 ? 1.35 : 1.8) * t),
               color,
               alpha: FX_LANCE_ALPHA * t,
             });
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
             .stroke({ width: FX_LANCE_CORE_WIDTH, color: FX_CORE_COLOR, alpha: t });
+          break;
+        }
+        case FXV_STAR_UPGRADE: {
+          const t = fxFade(e.life, FX_LIFE_STAR_UPGRADE);
+          const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(e.stars || 1)));
+          const p = 1 - t;
+          const r = FX_STAR_UPGRADE_R0 + (FX_STAR_UPGRADE_R1 - FX_STAR_UPGRADE_R0) * p;
+          const tint = FX_STAR_COLORS[stars - 1] ?? FX_STAR_COLORS[0];
+          g.circle(e.x0, e.y0, r).stroke({ width: 3 + stars, color: tint, alpha: t * 0.9 });
+          g.circle(e.x0, e.y0, r * 0.48).stroke({ width: 2, color: FX_CORE_COLOR, alpha: t });
+          for (let k = 0; k < stars + 2; k++) {
+            const a = (k / (stars + 2)) * Math.PI * 2 + heading;
+            const inner = r * 0.55;
+            const outer = r * (1.08 + 0.12 * t);
+            g.moveTo(e.x0 + Math.cos(a) * inner, e.y0 + Math.sin(a) * inner)
+              .lineTo(e.x0 + Math.cos(a) * outer, e.y0 + Math.sin(a) * outer);
+          }
+          g.stroke({ width: 2, color: tint, alpha: t * 0.8 });
+          if (playAudio) audioBus.playUpgrade();
           break;
         }
         case FXV_BLAST: {
@@ -2173,7 +2244,8 @@ export class Renderer {
           // 坐标 = sim 开火那一帧用 slotMuzzleWorld 算好的世界坐标(见 sim/turret),
           // 渲染层不再回查槽位 —— 与光束/链电那几类同一份"事件自带世界坐标"的口径。
           const t = fxFade(e.life, FX_LIFE_BEAM);
-          const radius = FX_MUZZLE_RADIUS * (0.65 + 0.35 * t);
+          const stars = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          const radius = FX_MUZZLE_RADIUS * (0.65 + 0.35 * t) * (stars === 3 ? 1.3 : stars === 2 ? 1.12 : 1);
           muzzleG
             .circle(e.x0, e.y0, radius)
             .fill({ color, alpha: FX_MUZZLE_ALPHA * t })

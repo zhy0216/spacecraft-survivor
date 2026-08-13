@@ -40,8 +40,9 @@ const LINE_COLOR = '#2b4a6e'; // 船体冷色废铁本色,与结算界面/旧提
 
 // 卡片面板:贴屏幕底边、不铺满整屏(index.html 里 `#ui > *` 直接子元素 pointer-events:auto)
 const PANEL_CSS =
-  'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);display:none;' +
-  'flex-direction:column;align-items:center;gap:10px;' +
+  'position:fixed;inset:0;display:none;z-index:20;' +
+  'flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:28px;' +
+  'background:radial-gradient(ellipse at center,rgba(13,37,58,.72) 0%,rgba(4,8,14,.88) 72%);' +
   'font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;';
 const HEAD_CSS = `color:${IDLE_COLOR};letter-spacing:.08em;`;
 const CARDS_CSS = 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap;';
@@ -117,6 +118,8 @@ export function cardTitle(opt: UpgradeOption): string {
 // EDICT_ICONS 十条:弹药/散热/电容/装甲/增幅/磁力/重心/巡航/星图/超载
 const TOWER_ICONS: string[] = ['▰', '◇', 'ϟ', '➠', '✣', '◉', '', '', '', '', '', '', '♁'];
 const EDICT_ICONS: string[] = ['▦', '≋', '⚡', '⬢', '✚', '◈', '⟲', '➤', '✧', '≫'];
+const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
+const UPGRADE_ART_URL = new URL('../../assets/game/ui/upgrade-core.svg', import.meta.url).href;
 
 function kindIcon(list: string[], type: number): string {
   return list[type] || '?';
@@ -367,6 +370,12 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       }
       card.root.style.display = 'block';
       card.icon.textContent = cardIcon(opt);
+      card.icon.style.backgroundImage = `url("${opt.kind === OFFER_NEW_WEAPON ? UPGRADE_ART_URL : EDICT_ART_URL}")`;
+      card.icon.style.backgroundSize = '54px 54px';
+      card.icon.style.backgroundRepeat = 'no-repeat';
+      card.icon.style.backgroundPosition = 'center';
+      card.icon.style.padding = '12px 0';
+      card.icon.style.borderRadius = '8px';
       card.title.textContent = cardTitle(opt);
       card.desc.textContent = cardDesc(opt, world);
       card.level.textContent = cardLevelText(opt, world);

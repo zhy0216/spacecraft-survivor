@@ -146,6 +146,7 @@ import {
   FX_LIFE_IMPACT,
   FX_LIFE_KILL,
   FX_LIFE_RESONANCE,
+  FX_LIFE_STAR_UPGRADE,
   FX_LIFE_SPARK,
   type FireSink,
   type FxEvent,
@@ -156,6 +157,7 @@ import {
   FXV_KILL,
   FXV_LANCE,
   FXV_RESONANCE,
+  FXV_STAR_UPGRADE,
   FXV_SPARK,
   resetFxEvent,
 } from './fx';
@@ -294,6 +296,8 @@ function fxLife(kind: number): number {
       return FX_LIFE_IMPACT;
     case FXV_RESONANCE:
       return FX_LIFE_RESONANCE;
+    case FXV_STAR_UPGRADE:
+      return FX_LIFE_STAR_UPGRADE;
     default:
       return FX_LIFE_BEAM;
   }
@@ -831,7 +835,7 @@ export class World {
   private readonly sink: FireSink & EnemyBulletSink = {
     spawnBullet: () => this.bullets.spawn(),
     damage: (e, amount, throttle, towerType) => this.damageEnemy(e, amount, throttle, towerType),
-    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0) => {
+    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0, stars = 0) => {
       const e = this.fx.spawn();
       e.kind = kind;
       e.x0 = x0;
@@ -843,6 +847,7 @@ export class World {
       e.life = fxLife(kind);
       e.damage = damage;
       e.dmgRatio = dmgRatio;
+      e.stars = stars;
     },
     query: (x, y, r, out) => {
       this.grid.query(x, y, r, out);
@@ -1943,10 +1948,16 @@ export class World {
       if (next === STAR_MAX) {
         // 3★ 有配方 → 变身;无配方(导弹巢/合成武器)→ 3★ 到顶
         const result = dataMergeResultOf(type);
-        if (result >= 0) this.installWeapon(keep, result, STAR_MAX);
-        else this.weapons[keep]!.stars = STAR_MAX;
+        if (result >= 0) {
+          this.installWeapon(keep, result, STAR_MAX);
+          this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, result, 0, 0, STAR_MAX);
+        } else {
+          this.weapons[keep]!.stars = STAR_MAX;
+          this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, type, 0, 0, STAR_MAX);
+        }
       } else {
         this.weapons[keep]!.stars = next; // 升星不清节流状态:这不是免费装填
+        this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, type, 0, 0, next);
       }
     }
   }

@@ -161,7 +161,7 @@ export function stepInterception(
     b.intercept = true; // 拦截弹:只认弹丸,不认敌人(见 hitDirect 的分支与文件头)
 
     // 与 stepTurrets 同款:炮口闪、记节流代价、投一次"这座塔开火"的票
-    sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type);
+    sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type, 0, 0, stars);
     onFired(slot, def, 1, buffs);
     sink.fired(i);
   }

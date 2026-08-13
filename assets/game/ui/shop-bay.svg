@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 260">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#0b1d31"/><stop offset="1" stop-color="#07101d"/></linearGradient>
+    <linearGradient id="beam" x1="0" x2="1"><stop stop-color="#55d7ff" stop-opacity="0"/><stop offset=".5" stop-color="#9adcff"/><stop offset="1" stop-color="#55d7ff" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="640" height="260" rx="24" fill="url(#bg)" stroke="#2b4a6e" stroke-width="3"/>
+  <path d="M48 198h544M74 170h160M406 170h160" stroke="#1e3857" stroke-width="3"/>
+  <path d="M105 206V96l56-32 56 32v110M423 206V96l56-32 56 32v110" fill="#102a42" stroke="#3d7095" stroke-width="3"/>
+  <path d="M160 71v92M480 71v92" stroke="#9adcff" stroke-width="4" opacity=".65"/>
+  <path d="M270 192l48-104 48 104-48 28z" fill="#244b69" stroke="#9adcff" stroke-width="4"/>
+  <path d="M318 88v132M253 166h130" stroke="url(#beam)" stroke-width="5" opacity=".8"/>
+  <circle cx="318" cy="104" r="16" fill="#dff2ff"/><circle cx="318" cy="104" r="28" fill="none" stroke="#55d7ff" stroke-width="3" opacity=".55"/>
+  <path d="M48 226h544" stroke="#55d7ff" stroke-width="2" opacity=".45"/>
+</svg>
