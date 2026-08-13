@@ -197,16 +197,26 @@ const IDLE: ShipCommand = { desiredHeading: null };
  * 空间哈希按 cell 坐标散列(core/spatialHash),坐标多大都装得下。
  *
  * 原边界的真正职责("防止玩家一路开出怪潮之外把这一局拖成散步")由下面这对常量接手:
- * 被甩开超过 ENEMY_FALLBEHIND_RADIUS 的敌人**沿船心镜像重投**到 ENEMY_REJOIN_RADIUS ——
- * 即"落在身后追不上的怪,悄悄挪到你正开过去的那一侧屏幕外"(VS 同款的屏外重定位)。
- * 镜像而不是原地拉近:拉近的怪永远吊在船尾追不上,压力等于零;镜像则让逃跑本身把压力
- * 转到航向前方,"跑"仍然有代价。**一次 rng 都不掷**(方向 = 旧方位取反,距离定死),
- * 于是同 seed 同输入的确定性回放照旧成立,重定位也不会扰动出怪序列。
+ * 被甩开超过 ENEMY_RECYCLE_RADIUS 的敌人**回收进视野缓冲圈** —— 以船为心、朝航向前方
+ * ±ENEMY_RECYCLE_SPREAD_DEG 的扇面、落点半径与新生怪同一档(出怪带
+ * [SPAWN_RADIUS, +BAND)):"落在身后追不上的怪,悄悄挪到你正开过去的那一侧屏幕外"
+ * (VS 同款的屏外重定位)。相对旧"整点镜像"口径的两个改动:
+ *  1. **触发圈收紧 1450 → 1350**:旧口径把不可见带留到出怪环外沿 + 2×BAND,怪在
+ *     [1300,1450) 的屏外死带里白跑几百帧 —— 分离/空间哈希/碰撞全在看不见的对象上白付,
+ *     还在 WAVE_MAX_ALIVE 触顶时挤掉新刷的怪。缓冲圈 = 出怪环外沿 + 50 = 1350:
+ *     死带从 150px 缩到 50px,每只怪少挂几十帧的账(这就是"省计算")。
+ *  2. **落点从"单点镜像"换成"前向扇面"**:旧口径整群镜像到航向正前方 1150 处一个点
+ *     (单列纵队,直航时前方永远只有这一条细流);新口径把每只的半径/角度按 e.animSeed
+ *     抖开 —— 一条 100° 弧 × 出怪带,进屏不再是排队,且转向时落点跟着航向走,
+ *     "往哪开,压力就补到哪边"("跑"仍然有代价,机制本体不变)。
+ * **一次 rng 都不掷**(方向 = 航向 ± animSeed 折叠,半径 = 出怪带内 animSeed 抖动;
+ * animSeed 是出生位置 hash 出的每只定值,见 sim/enemy.ts),于是同 seed 同输入的确定性
+ * 回放照旧成立,回收也不扰动出怪序列。
  */
-/** 触发重投的距离(> 出怪环外沿 SPAWN_RADIUS + BAND = 1300,新生的怪绝不会被当场误判) */
-export const ENEMY_FALLBEHIND_RADIUS = SPAWN_RADIUS + SPAWN_RADIUS_BAND * 2;
-/** 重投落点半径 = 出怪环内沿:与新刷的怪同一档距离,进屏节奏一致,玩家分不出谁是挪过来的 */
-export const ENEMY_REJOIN_RADIUS = SPAWN_RADIUS;
+/** 触发回收的距离(> 出怪环外沿 SPAWN_RADIUS + BAND = 1300:新生的怪绝不会被当场误判;落点恒 < 1300,也绝不会下一帧再来一次) */
+export const ENEMY_RECYCLE_RADIUS = SPAWN_RADIUS + SPAWN_RADIUS_BAND + 50;
+/** 回收落点扇面的半宽(度):与 data/waves.ts 各流 spreadDeg 同一套"半展宽"词汇,落点落在航向 ± 这一档内 */
+export const ENEMY_RECYCLE_SPREAD_DEG = 50;
 
 /** 压测出怪环的内/外半径:别把敌人直接生在船脸上。**只服务于 stressSyncCounts 那条 debug 路径** */
 const SPAWN_MIN_RADIUS = 300;
@@ -240,7 +250,8 @@ const boostForward: Vec2 = { x: 0, y: 0 };
  */
 const THREAT_SMOOTH_TAU = 1.25;
 const THREAT_SMOOTH_DECAY = Math.exp(-SIM_DT / THREAT_SMOOTH_TAU);
-const THREAT_SPAWN_IMPULSE = (1 - THREAT_SMOOTH_DECAY) / SIM_DT;
+/** 单次成功事件的方向脉冲增益(导出给单测钉"回收喂的恰好是一发脉冲"这条契约) */
+export const THREAT_SPAWN_IMPULSE = (1 - THREAT_SMOOTH_DECAY) / SIM_DT;
 /** 最近实际生成速率低于这一档时，旧样本已经没有指向意义，回退波次脚本的派生方向。 */
 const THREAT_DIRECTION_MIN_RATE = 0.05;
 
@@ -722,10 +733,12 @@ export class World {
    * 正式出怪器实际成功落地事件的一阶平滑统计。三个数整局就地演化、不存逐事件历史：
    * rate 是平滑后的只/秒；dirX/dirY 是同一批事件按出生角累积的加权方向向量。
    * 纯 HUD 读数，不参与任何判定，也不进 checksum（与 FxEvent 同口径）。
+   * dirX/dirY 不设 private：单测要直读向量钉"回收喂的恰好是一发脉冲、方向 = 落点方位"
+   * （threatDirection 有速率回退路径，钉不了这个增量口径）。
    */
   private threatRate = 0;
-  private threatDirX = 0;
-  private threatDirY = 0;
+  threatDirX = 0;
+  threatDirY = 0;
 
   /**
    * 逐塔型的实际 DPS 平滑值(下标 = TOWER_*)。伤害结算的唯一入口(damageEnemy)在
@@ -964,11 +977,11 @@ export class World {
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
    * 顺序定死(单测按此钉):**支援聚合 + HP 上限(帧首派生量)** → 船 → 出怪 →
-   * 重建空间哈希 → 清 contacts → 敌人(镜像重投(在 px/py 存档之前,防插值拖影)→
+   * 重建空间哈希 → 清 contacts → 敌人(视野回收重投(在 px/py 存档之前,防插值拖影)→
    * 积分 + hitCd 递减 + 粗筛入 contacts)→ 点防拦截 → 炮管(含节流与开火)→ 子弹 →
    * 残骸(磁吸与收取)→ 船体受击结算 → 可视化事件老化 → 回收死者(含掉落)→ 局终判定 →
    * 升级候选结算。
-   * (地图无限,原"贴边夹取"一步已删,见 ENEMY_FALLBEHIND_RADIUS 那段。)
+   * (地图无限,原"贴边夹取"一步已删,见 ENEMY_RECYCLE_RADIUS 那段。)
    *
    * 支援聚合排在**最前**:这一帧的塔按最新的支援加成开火、这一帧的撞击按最新的上限与减伤
    * 结算 —— 买下一座支援后,加成与上限当帧就生效,而不是靠下一次 step 才想起来重算
@@ -1036,7 +1049,7 @@ export class World {
     if (this.boostCooldown > 0) this.boostCooldown = Math.max(0, this.boostCooldown - SIM_DT);
 
     // 船先动:敌人这一帧要追的是船的新位置,晚一帧追会让高速时的包夹肉眼可见地滞后。
-    // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_FALLBEHIND_RADIUS 那段)。
+    // 地图无限,船不再被任何边界夹取(原 WORLD_RADIUS 已删,理由见 ENEMY_RECYCLE_RADIUS 那段)。
     // 巡航倍率(18 号巡航校准)照 turnRateDeg 的先例由 World 现算传入:未持有 = 1,逐位恒等;
     // 加速窗内巡航与推力再乘 tuning.boost*(现读,面板拖动即时生效)。
     // 加速窗内**无方向输入**时沿船头满推(desired 顶成船头方向):不给这一手,
@@ -1185,7 +1198,7 @@ export class World {
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i]!;
 
-      // 无限地图的防风筝(理由全文见 ENEMY_FALLBEHIND_RADIUS):被甩开的敌人沿船心镜像重投。
+      // 无限地图的防风筝(理由全文见 ENEMY_RECYCLE_RADIUS):被甩开的敌人回收进视野缓冲圈。
       // 排在 px/py 存档**之前**,于是插值的两端都在新位置上 —— 不会有一帧横跨整张屏的拖影
       // (它本就在屏外,但 144Hz 插值的中间采样点可能扫进屏里)。
       // 只有 BH_SEEK/接近段的怪才可能落到这么远(驻留/冲锋的活动半径 ≤ 560),状态机不必复位。
@@ -1193,18 +1206,24 @@ export class World {
         const fdx = e.x - tx;
         const fdy = e.y - ty;
         const fd2 = fdx * fdx + fdy * fdy;
-        if (fd2 > ENEMY_FALLBEHIND_RADIUS * ENEMY_FALLBEHIND_RADIUS) {
-          const fd = Math.sqrt(fd2);
-          const k = -ENEMY_REJOIN_RADIUS / fd;
-          e.x = tx + fdx * k;
-          e.y = ty + fdy * k;
-          // 重投也是一次"压力从这个方向来"的既成事实,照出怪那样喂给威胁罗盘(方向 = 新落点方位
-          // = 旧方位取反)。不喂的话,玩家背对主压方向持续逃跑时,慢速主压流全部被镜像到航向
+        if (fd2 > ENEMY_RECYCLE_RADIUS * ENEMY_RECYCLE_RADIUS) {
+          // 落点**零 rng**:半径与扇面角偏都取自 e.animSeed([0,1) 的出生哈希,每只恒定,
+          // 于是同 seed 回放/读档逐位一致,也不扰动出怪随机序列。s2 = 同一粒种子的第二个
+          // 分数折(×137 取小数),把"半径偏大"与"角偏右"这两件事解耦开。
+          const s = e.animSeed;
+          const s2 = (s * 137) % 1;
+          const ang =
+            ship.heading + (s2 * 2 - 1) * ENEMY_RECYCLE_SPREAD_DEG * DEG2RAD;
+          const r = SPAWN_RADIUS + s * SPAWN_RADIUS_BAND;
+          e.x = tx + Math.cos(ang) * r;
+          e.y = ty + Math.sin(ang) * r;
+          // 回收也是一次"压力从这个方向来"的既成事实,照出怪那样喂给威胁罗盘(方向 = 实际
+          // 落点方位)。不喂的话,玩家背对主压方向持续逃跑时,慢速主压流全部被回收进航向
           // 正前方,罗盘却仍指着身后的脚本方位 —— HUD 读数与实际来向长期相反。
-          // 只喂方向不喂 threatRate:强度读数的语义是"出怪速率",重投没有新增一只怪。
+          // 只喂方向不喂 threatRate:强度读数的语义是"出怪速率",回收没有新增一只怪。
           // 与出怪样本同款零分配、零 rng,且威胁统计不进 checksum,确定性不受影响
-          this.threatDirX += (-fdx / fd) * THREAT_SPAWN_IMPULSE;
-          this.threatDirY += (-fdy / fd) * THREAT_SPAWN_IMPULSE;
+          this.threatDirX += Math.cos(ang) * THREAT_SPAWN_IMPULSE;
+          this.threatDirY += Math.sin(ang) * THREAT_SPAWN_IMPULSE;
         }
       }
 
@@ -2471,8 +2490,12 @@ export class World {
       // 无敌帧剩余秒同理是逐帧演化的状态:它决定"这一口该不该咬",漏了它,
       // "结算间隔算错"就只会在血条上慢慢体现,而不会当场炸出一次确定性分叉。× 100 同上
       acc(e.hitCd * 100);
+      // animSeed 从纯表现升格为判定输入(视野回收的落点半径/角偏,见 ENEMY_RECYCLE_RADIUS
+      // 那段),按"checksum 哈所有真状态字段"的口径必须进 —— × 1000 只求绊线分辨率,
+      // 落点分叉的第一责任人仍是下面的 x/y(animSeed 本身是出生位置的确定性哈希)。
+      acc(e.animSeed * 1000);
       // **hitFlash / lastHit 一律不进**:hitFlash 是纯表现(闪白不参与任何判定,渲染层
-      // 只读它上色,少闪一帧不改变世界的下一帧 —— 与 animSeed 同一条口径);
+      // 只读它上色,少闪一帧不改变世界的下一帧);
       // lastHit 是伤害输入的派生量(amount × 抗性,抗性读 e.affixes、伤害最终落在 e.hp,
       // 两个输入都已在哈希里 —— 哈它只是把同一件事哈两遍,与 maxHp 同一条口径)。
       // 本哈希本来也不逐字段哈敌人(状态机/速度/朝向都不进),它们不在,表现字段更不该在

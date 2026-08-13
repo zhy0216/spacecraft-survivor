@@ -408,8 +408,8 @@ export const WAVE_MAX_STREAMS = WAVE_SEGMENTS.reduce(
  * 换更宽的屏、或把 cameraShipHeightFraction 调小(= 镜头拉远),都得回来把它加大 —— 单测钉着这条不等式。
  * 上界也有:出得太远,最慢的敌型要走好几秒才进屏,密度曲线与实际压力就对不上了(单测一并钉住)。
  *
- * 它同时是 sim/world.ts 那对防风筝常量的基准:被甩开(> SPAWN_RADIUS + 2×BAND)的敌人
- * 镜像重投回这个半径上 —— 出怪与重投共用同一档进屏距离,玩家分不出谁是挪过来的。
+ * 它同时是 sim/world.ts 视野回收常量的基准:被甩开(> SPAWN_RADIUS + BAND + 50)的敌人
+ * 回收回这条带上(航向前方 ±50° 扇面)—— 出怪与回收共用同一档进屏距离,玩家分不出谁是挪过来的。
  */
 export const SPAWN_RADIUS = 1150;
 

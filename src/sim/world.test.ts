@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
 import { AFFIX_ARMORED, AFFIX_FRENZY } from '../data/affixes';
 import {
@@ -7,6 +7,7 @@ import {
   STARTING_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
+import { KIND_SWARM } from '../data/enemies';
 import {
   STAR_MAX,
   TOWER_ARC,
@@ -16,11 +17,17 @@ import {
   TOWER_RAILGUN,
   TOWER_STORM_CANNON,
 } from '../data/towers';
-import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
+import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import { tuning } from './config';
 import { DROP_KIND_MAGNET } from './drop';
 import { FX_LIFE_RESONANCE, FXV_RESONANCE } from './fx';
-import { World } from './world';
+import { wrapAngle } from './ship';
+import {
+  ENEMY_RECYCLE_RADIUS,
+  ENEMY_RECYCLE_SPREAD_DEG,
+  THREAT_SPAWN_IMPULSE,
+  World,
+} from './world';
 
 describe('World 槽位制核心接线', () => {
   it('同 seed replay 包含武器槽与法令层数', () => {
@@ -543,5 +550,112 @@ describe('磁吸涌(26 号)', () => {
     }
     expect(a.magnetSurgeTime).toBe(b.magnetSurgeTime);
     expect(a.magnetSurgeTime).toBe(0);
+  });
+});
+
+describe('视野回收重投(无限地图防风筝)', () => {
+  // 封闭夹具:压测路旁路出怪脚本(场上只有手里这一只、罗盘没有其他样本、rng 一字不动)。
+  // stressEnemies 取 1 而不是 0 —— 0 会让 stressSyncCounts 把刚手摆的怪当场清掉。
+  const prevSpawn: { on: boolean; n: number } = { on: tuning.stressSpawn, n: tuning.stressEnemies };
+
+  beforeEach(() => {
+    tuning.stressSpawn = true;
+    tuning.stressEnemies = 1;
+  });
+  afterEach(() => {
+    tuning.stressSpawn = prevSpawn.on;
+    tuning.stressEnemies = prevSpawn.n;
+  });
+
+  /** 手摆一只蜂群蛭在船的 (x, y) 相对位置、钉死 animSeed 与航向(朝东 = 0),返回世界与它 */
+  const place = (seed: number, x: number, y: number, animSeed: number) => {
+    const w = new World(seed);
+    w.ship.heading = 0;
+    const e = w.enemies.spawn();
+    e.kind = KIND_SWARM;
+    e.hp = e.maxHp = 1; // 照 killElite 的口径:池出生是空壳,hp 要自己给(这一局没有武器,不会被打死)
+    e.x = e.px = x;
+    e.y = e.py = y;
+    e.animSeed = animSeed;
+    return { w, e };
+  };
+
+  it('边界:越界者回收进 [出怪内沿, 外沿) 的航向前向扇面,圈内者不动', () => {
+    for (const s of [0, 0.5, 0.99999]) {
+      const { w, e } = place(7, ENEMY_RECYCLE_RADIUS + 1, 0, s);
+      w.step();
+      // 落点半径 = SPAWN_RADIUS + s*BAND,px/py 都停在新位置上(回收在 px 存档之前,插值无拖影)
+      const dist = Math.hypot(e.px - w.ship.x, e.py - w.ship.y);
+      expect(dist).toBeCloseTo(SPAWN_RADIUS + s * SPAWN_RADIUS_BAND, 8);
+      // 方位在航向 ± 半宽锥内
+      const rel = Math.abs(wrapAngle(Math.atan2(e.py - w.ship.y, e.px - w.ship.x) - w.ship.heading));
+      expect(rel).toBeLessThanOrEqual((ENEMY_RECYCLE_SPREAD_DEG * Math.PI) / 180 + 1e-7);
+    }
+    // 圈内(离触发界 1px)不回收:px 存档时刻仍在原处
+    const { w, e } = place(8, ENEMY_RECYCLE_RADIUS - 1, 0, 0.5);
+    w.step();
+    expect(e.px).toBe(ENEMY_RECYCLE_RADIUS - 1);
+  });
+
+  it('回收零 rng;威胁罗盘恰吃一发脉冲、方向 = 实际落点方位、强度不动', () => {
+    const { w, e } = place(9, 1500, 0, 0.25);
+    const before = w.rng.state;
+    w.step();
+    expect(w.rng.state).toBe(before);
+    const dx = e.px - w.ship.x;
+    const dy = e.py - w.ship.y;
+    const dist = Math.hypot(dx, dy);
+    expect(w.threatDirX).toBeCloseTo((dx / dist) * THREAT_SPAWN_IMPULSE, 12);
+    expect(w.threatDirY).toBeCloseTo((dy / dist) * THREAT_SPAWN_IMPULSE, 12);
+    // 只喂方向不喂 threatRate:回收没有新增一只怪
+    expect(w.threatIntensity).toBe(0);
+  });
+
+  it('新生儿安全:出怪环外沿的怪不会被当场误判,常量不等式钉死', () => {
+    expect(ENEMY_RECYCLE_RADIUS).toBe(SPAWN_RADIUS + SPAWN_RADIUS_BAND + 50);
+    const { w, e } = place(10, SPAWN_RADIUS + SPAWN_RADIUS_BAND, 0, 0.5);
+    w.step();
+    expect(e.px).toBe(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+  });
+});
+
+describe('视野回收重投·长航(默认波次路径)', () => {
+  it('20 秒直飞:缓冲圈箍住全场、前方跑步机非空、双世界逐帧 checksum 一致', () => {
+    const a = new World(5);
+    const b = new World(5);
+    const half = (ENEMY_RECYCLE_SPREAD_DEG * Math.PI) / 180;
+    let maxDist = 0;
+    let treadmillSeen = false;
+    for (let i = 0; i < 1200; i++) {
+      a.step({ desiredHeading: { x: 1, y: 0 } });
+      b.step({ desiredHeading: { x: 1, y: 0 } });
+      if (i % 60 === 0) expect(a.checksum()).toBe(b.checksum());
+      for (const e of a.enemies.items) {
+        const d = Math.hypot(e.x - a.ship.x, e.y - a.ship.y);
+        if (d > maxDist) maxDist = d;
+        // 跑步机在送怪上前:px = 当帧移动前的位置 —— 刚回收的怪 px 恰落在 [SPAWN_RADIUS, +BAND)
+        // 的航向锥内,下一 tick 就开始向船收近、缩到内沿以下,所以只能逐帧盯 px 不能盯帧末 x
+        const pdx = e.px - a.ship.x;
+        const pdy = e.py - a.ship.y;
+        if (
+          !treadmillSeen &&
+          Math.hypot(pdx, pdy) >= SPAWN_RADIUS - 1e-6 &&
+          Math.abs(wrapAngle(Math.atan2(pdy, pdx) - a.ship.heading)) <= half + 1e-7
+        ) {
+          treadmillSeen = true;
+        }
+      }
+    }
+    // 全程无一只越过缓冲圈(触发 1350 + 单 tick 最大位移/分离推挤余量)
+    expect(maxDist).toBeLessThan(ENEMY_RECYCLE_RADIUS + 40);
+    // 越出 30px 余量带的怪只能是回收产物 —— 必在航向锥内(出怪带外沿 1300 + 位移到不了这一档)
+    for (const e of a.enemies.items) {
+      const d = Math.hypot(e.x - a.ship.x, e.y - a.ship.y);
+      if (d > ENEMY_RECYCLE_RADIUS + 30) {
+        const rel = Math.abs(wrapAngle(Math.atan2(e.y - a.ship.y, e.x - a.ship.x) - a.ship.heading));
+        expect(rel).toBeLessThanOrEqual(half + 1e-7);
+      }
+    }
+    expect(treadmillSeen).toBe(true);
   });
 });

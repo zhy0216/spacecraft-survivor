@@ -72,8 +72,9 @@ export const RUN_SAVE_VERSION = 5;
  * **不存**(与 Enemy 结构的其余 5 个字段一一对应,理由见文件头三类):
  * px/py = 插值基准(读档时对齐成 x/y);hitFlash = 闪白纯表现;
  * lastHit = 伤害输入的派生量;dead/sporeFire = 同帧即消费的闩。
- * animSeed **要存**:它虽是纯表现,却是由出生位置 hash 出来的定值 ——
- * 读档时无从重算(出生位置早已不可考),不存的话全场虫子的呼吸相位会在读档那一刻齐刷刷对齐。
+ * animSeed **要存**:它决定视野回收的落点(world.ts 的 ENEMY_RECYCLE_RADIUS 那段)与
+ * 呼吸相位,且是由出生位置 hash 出来的定值 —— 读档时无从重算(出生位置早已不可考),
+ * 不存的话读档后的回收落点会整片跑偏、全场虫子的相位也会在那一刻齐刷刷对齐。
  */
 export const EN_STRIDE = 15;
 /** 一颗我方子弹占几个格子:x, y, vx, vy, kind, damage, life, pierce, radius, aoeRadius, aoeDamage, towerType, throttle, intercept(0/1)。不存 px/py */
