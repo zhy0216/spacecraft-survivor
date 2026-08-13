@@ -21,7 +21,7 @@ import {
   type UnlockEntry,
 } from '../data/unlocks';
 import { TOWER_KIND_COUNT, TOWERS } from '../data/towers';
-import { EDICT_KIND_COUNT } from '../data/edicts';
+import { EDICTS, EDICT_KIND_COUNT } from '../data/edicts';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { isTyping } from './isTyping';
 
@@ -81,15 +81,18 @@ const TOWER_GLYPH: string[] = [
   '荆', // TOWER_THORN
   '弹', // TOWER_MISSILE_NEST
 ];
-// 十条法令的单字:弹药/散热/电容/装甲/增幅/磁力/重心/巡航/星图/超载
-const EDICT_GLYPH: string[] = ['弹', '散', '容', '甲', '验', '磁', '心', '航', '星', '载'];
-
 function glyphForTower(type: number): string {
   return type >= 0 && type < TOWER_KIND_COUNT ? TOWER_GLYPH[type]! : '?';
 }
 
+/**
+ * 法令的单字:现读 EDICTS[type].name 的首字(弹药→弹、散热→散、电容→容),不再是与表并排写死的
+ * 字形表 —— 法令改名/加条时字形自动跟着走,不会有旧名残留(如原「经验增幅器」的「验」)。
+ * 不认识的号一律 '?',与 TOWER_GLYPH 同一条口径。
+ */
 function glyphForEdict(type: number): string {
-  return type >= 0 && type < EDICT_KIND_COUNT ? EDICT_GLYPH[type]! : '?';
+  const def = type >= 0 && type < EDICT_KIND_COUNT ? EDICTS[type] : undefined;
+  return def ? def.name.charAt(0) : '?';
 }
 
 /**

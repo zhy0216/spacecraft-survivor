@@ -16,7 +16,7 @@
 
 | # | 文件 | 标题 | 优先级 | 依赖 |
 |---|---|---|---|---|
-| 23 | [23-loadout-edict-pairing.md](23-loadout-edict-pairing.md) | 起手法令按节流系配对 | P0 | — |
+| 23 | [done/23-loadout-edict-pairing.md](done/23-loadout-edict-pairing.md) ✅ | 起手法令按节流系配对 | P0 | — |
 | 24 | [24-broadside-resonance.md](24-broadside-resonance.md) | 齐射共振(broadside 时刻复活) | P0 | — |
 | 25 | [25-ring-burst.md](25-ring-burst.md) | 环阵事件(波次脚本 pattern) | P1 | 26* |
 | 26 | [26-segment-closure-magnet-surge.md](26-segment-closure-magnet-surge.md) | 段落收束仪式 + 磁吸涌 | P1 | — |
