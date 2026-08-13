@@ -65,6 +65,14 @@ import {
   FX_LIFE_CHAIN,
   FX_LIFE_LANCE,
   FX_MORTAR,
+  TOWER_AURORA,
+  TOWER_ANNIHILATION,
+  TOWER_ARC,
+  TOWER_DELUGE,
+  TOWER_LASER,
+  TOWER_MORTAR,
+  TOWER_RAILGUN,
+  TOWER_THUNDER,
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
@@ -230,6 +238,8 @@ const FX_BEAM_CORE_ALPHA_FLOOR = 0.55;
 const FX_STAR_COLORS = [0x9adcff, 0xffd479, 0xfff1a8] as const;
 const FX_STAR_UPGRADE_R0 = 12;
 const FX_STAR_UPGRADE_R1 = 86;
+const FX_STAR_UPGRADE_BURST_WIDTH = 3.2;
+const FX_STAR_UPGRADE_CRACK_COUNT = 4;
 const FX_CHAIN_WIDTH = 2;
 const FX_CHAIN_ALPHA = 0.9;
 /** 折角幅度(× 跳长):按跳长缩放,短跳才不会被折成一团 */
@@ -2063,6 +2073,94 @@ export class Renderer {
   }
 
   /**
+   * 升星结算的专属爆发几何。基础武器与对应合成武器共用一条视觉语汇：
+   * 激光变粗、电弧分叉、磁轨裂纹、迫击炮扩散环；未知塔型退回通用星芒。
+   * 这段只读 FxEvent，不写 sim 状态，且所有随机性都由固定角度构成，回放不会漂移。
+   */
+  private drawStarUpgradeBurst(
+    g: Graphics,
+    e: { x0: number; y0: number; towerType: number },
+    heading: number,
+    stars: number,
+    t: number,
+    tint: number,
+  ): void {
+    const cx = e.x0;
+    const cy = e.y0;
+    const r = FX_STAR_UPGRADE_R0 + (FX_STAR_UPGRADE_R1 - FX_STAR_UPGRADE_R0) * (1 - t);
+    const alpha = t * 0.9;
+    const isLaser = e.towerType === TOWER_LASER || e.towerType === TOWER_AURORA;
+    const isArc = e.towerType === TOWER_ARC || e.towerType === TOWER_THUNDER;
+    const isRail = e.towerType === TOWER_RAILGUN || e.towerType === TOWER_ANNIHILATION;
+    const isMortar = e.towerType === TOWER_MORTAR || e.towerType === TOWER_DELUGE;
+
+    if (isLaser) {
+      // "变粗":四条互相垂直的能量轴，中心段宽、边缘快速收细。
+      const half = r * (0.35 + 0.18 * stars);
+      for (let k = 0; k < 4; k++) {
+        const a = heading + (k * Math.PI) / 2;
+        const dx = Math.cos(a) * half;
+        const dy = Math.sin(a) * half;
+        g.moveTo(cx - dx, cy - dy).lineTo(cx + dx, cy + dy);
+      }
+      g.stroke({ width: (FX_STAR_UPGRADE_BURST_WIDTH + stars * 1.4) * t, color: tint, alpha });
+      g.circle(cx, cy, r * 0.2).fill({ color: FX_CORE_COLOR, alpha: alpha * 0.95 });
+      return;
+    }
+
+    if (isArc) {
+      // "电弧分叉":四条主枝在中段各自再分成两叉。
+      const branch = r * (0.62 + stars * 0.08);
+      for (let k = 0; k < 4; k++) {
+        const a = heading + (k * Math.PI) / 2 + Math.PI / 4;
+        const mx = cx + Math.cos(a) * branch * 0.46;
+        const my = cy + Math.sin(a) * branch * 0.46;
+        for (let f = -1; f <= 1; f += 2) {
+          const endA = a + f * 0.34;
+          g.moveTo(cx, cy).lineTo(mx, my).lineTo(cx + Math.cos(endA) * branch, cy + Math.sin(endA) * branch);
+        }
+      }
+      g.stroke({ width: Math.max(1.4, FX_STAR_UPGRADE_BURST_WIDTH * 0.72) * t, color: tint, alpha });
+      return;
+    }
+
+    if (isRail) {
+      // "磁轨裂纹":从核心向外的四组不规则折线，像装甲被贯穿后裂开。
+      const crack = r * (0.72 + stars * 0.06);
+      for (let k = 0; k < FX_STAR_UPGRADE_CRACK_COUNT; k++) {
+        const a = heading + (k / FX_STAR_UPGRADE_CRACK_COUNT) * Math.PI * 2;
+        const p1 = crack * 0.38;
+        const p2 = crack * 0.67;
+        const wiggle = (k % 2 === 0 ? 1 : -1) * 0.14;
+        g.moveTo(cx, cy)
+          .lineTo(cx + Math.cos(a + wiggle) * p1, cy + Math.sin(a + wiggle) * p1)
+          .lineTo(cx + Math.cos(a - wiggle) * p2, cy + Math.sin(a - wiggle) * p2)
+          .lineTo(cx + Math.cos(a + wiggle * 0.5) * crack, cy + Math.sin(a + wiggle * 0.5) * crack);
+      }
+      g.stroke({ width: Math.max(1.5, FX_STAR_UPGRADE_BURST_WIDTH * 0.82) * t, color: tint, alpha });
+      return;
+    }
+
+    if (isMortar) {
+      // "迫击炮环":多层落点环，逐层向外扩散，和 AoE 的落点语汇保持一致。
+      g.circle(cx, cy, r * 0.46).stroke({ width: 2.4 + stars * 0.5, color: tint, alpha: alpha * 0.8 });
+      g.circle(cx, cy, r * 0.74).stroke({ width: 2 + stars * 0.4, color: FX_CORE_COLOR, alpha: alpha * 0.72 });
+      g.circle(cx, cy, r).stroke({ width: 1.6 + stars * 0.35, color: tint, alpha: alpha * 0.62 });
+      return;
+    }
+
+    // 其它型号(机炮、点防、合成塔)保留通用星芒作为安全兜底。
+    for (let k = 0; k < stars + 2; k++) {
+      const a = (k / (stars + 2)) * Math.PI * 2 + heading;
+      const inner = r * 0.55;
+      const outer = r * (1.08 + 0.12 * t);
+      g.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner)
+        .lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer);
+    }
+    g.stroke({ width: 2, color: tint, alpha: alpha * 0.8 });
+  }
+
+  /**
    * 开火光效(05 号 issue T5):照 world.fx.items 逐个事件画,按 life 淡出。
    *
    * **不做插值**:FxEvent 的坐标是"开火那一逻辑帧"的世界坐标,给它插值就得再存一份 prev、
@@ -2150,18 +2248,11 @@ export class Renderer {
           const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(e.stars || 1)));
           const p = 1 - t;
           const r = FX_STAR_UPGRADE_R0 + (FX_STAR_UPGRADE_R1 - FX_STAR_UPGRADE_R0) * p;
-          const tint = FX_STAR_COLORS[stars - 1] ?? FX_STAR_COLORS[0];
+    const tint = FX_STAR_COLORS[stars - 1] ?? FX_STAR_COLORS[0];
           g.circle(e.x0, e.y0, r).stroke({ width: 3 + stars, color: tint, alpha: t * 0.9 });
           g.circle(e.x0, e.y0, r * 0.48).stroke({ width: 2, color: FX_CORE_COLOR, alpha: t });
-          for (let k = 0; k < stars + 2; k++) {
-            const a = (k / (stars + 2)) * Math.PI * 2 + heading;
-            const inner = r * 0.55;
-            const outer = r * (1.08 + 0.12 * t);
-            g.moveTo(e.x0 + Math.cos(a) * inner, e.y0 + Math.sin(a) * inner)
-              .lineTo(e.x0 + Math.cos(a) * outer, e.y0 + Math.sin(a) * outer);
-          }
-          g.stroke({ width: 2, color: tint, alpha: t * 0.8 });
-          if (playAudio) audioBus.playUpgrade();
+          this.drawStarUpgradeBurst(g, e, heading, stars, t, tint);
+          if (playAudio) audioBus.playUpgradeBurst(e.towerType, stars);
           break;
         }
         case FXV_BLAST: {

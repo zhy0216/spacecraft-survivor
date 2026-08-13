@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { audioBus, killStreakPitch, masterVolume } from './audio';
+import { audioBus, killStreakPitch, masterVolume, upgradeBurstFamily } from './audio';
 
 /**
  * Node 环境没有 AudioContext,用 stub 全局 AudioContext 的假实现验证:
@@ -133,6 +133,7 @@ describe('audioBus(无素材解码能力时的合成兜底)', () => {
       'playHurt',
       'playCollect',
       'playUpgrade',
+      'playUpgradeBurst',
       'playPlace',
       'playBroadside',
       'playEliteWarn',
@@ -144,6 +145,13 @@ describe('audioBus(无素材解码能力时的合成兜底)', () => {
       expect(typeof (audioBus as Record<string, unknown>)[n]).toBe('function');
     }
     expect(typeof masterVolume.value).toBe('number');
+  });
+
+  it('升星爆发音把基础/合成塔映射到正确武器家族', () => {
+    expect([0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5].map((t) => upgradeBurstFamily(t))).toEqual([
+      0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5,
+    ]);
+    expect(upgradeBurstFamily(999)).toBe(0);
   });
 
   it('import 时不创建 AudioContext,resume 后才懒建并激活', async () => {
@@ -178,6 +186,7 @@ describe('audioBus(无素材解码能力时的合成兜底)', () => {
       () => audioBus.playHurt('spark'),
       () => audioBus.playCollect(),
       () => audioBus.playUpgrade(),
+      () => audioBus.playUpgradeBurst(1, 2),
       () => audioBus.playPlace(),
       () => audioBus.playEliteWarn(),
       () => audioBus.playBossWarn(),

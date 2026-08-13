@@ -133,6 +133,7 @@ const MIN_INTERVAL: Record<string, number> = {
   collect: 0.02,
   place: 0.05,
   upgrade: 0.08,
+  'upgrade-burst': 0.12,
   broadside: 0.22,
   explosion: 0.8,
   'warn:elite': 0.5,
@@ -158,6 +159,11 @@ let musicBuffer: AudioBuffer | null = null;
 let musicSource: AudioBufferSourceNode | null = null;
 let musicGain: GainNode | null = null;
 let musicFilter: BiquadFilterNode | null = null;
+
+/** 升星爆发音的基础武器家族(0 机炮,1 激光,2 磁轨,3 电弧,4 迫击炮,5 点防)。 */
+export function upgradeBurstFamily(towerType: number): number {
+  return [0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5][towerType] ?? 0;
+}
 
 /** 主音量(0..1)。发声明时乘进各 voice 的峰值,静音开关与之正交(走总线 gain) */
 export const masterVolume = { value: 0.8 };
@@ -569,6 +575,41 @@ export function playUpgrade(): void {
   playVoice({ type: 'sine', freq: 784, attack: 0.003, decay: 0.14, peak: 0.2, startAt: 0.05 });
 }
 
+/**
+ * 合成/升星结算瞬间的专属爆发声。与三选一确认音分开走独立限流键，
+ * 并按武器家族改变音色/音高，让玩家在战斗中也能听出是哪一门炮完成了进化。
+ * 不依赖新素材：生成音频尚未解码或浏览器没有 WebAudio 时，沿用总线静默契约。
+ */
+export function playUpgradeBurst(towerType: number, stars: number): void {
+  if (!throttled('upgrade-burst')) return;
+  const level = Math.max(1, Math.min(3, Math.floor(stars || 1)));
+  // 合成塔的编号不是基础塔编号的简单 modulo 顺序(8=磁轨,9=电弧,10=迫击炮,11=点防)。
+  // 显式映射避免把合成结果误播成另一种武器的升级音。
+  const family = upgradeBurstFamily(towerType);
+  if (deferSynthFallback()) return;
+  const base = [220, 520, 150, 92, 300, 180][family] ?? 220;
+  const peak = 0.16 + level * 0.025;
+  if (family === 1) {
+    // 激光：明亮上扫双音。
+    playVoice({ type: 'sine', freq: base, freqEnd: base * 2.4, attack: 0.004, decay: 0.22, peak });
+    playVoice({ type: 'triangle', freq: base * 1.5, freqEnd: base * 2.8, attack: 0.006, decay: 0.16, peak: peak * 0.65, startAt: 0.035 });
+  } else if (family === 2) {
+    // 电弧：分叉的两条短促高频脉冲。
+    playVoice({ noise: true, filterType: 'bandpass', filterFreq: 1700 + level * 180, filterQ: 1.8, attack: 0.002, decay: 0.12, peak });
+    playVoice({ type: 'square', freq: base, freqEnd: base * 1.9, attack: 0.002, decay: 0.1, peak: peak * 0.7, startAt: 0.028 });
+  } else if (family === 3) {
+    // 磁轨：低频蓄能后重击。
+    playVoice({ type: 'sawtooth', freq: base, freqEnd: base * 0.45, attack: 0.035, decay: 0.3, peak: peak * 1.25 });
+    playVoice({ noise: true, filterType: 'lowpass', filterFreq: 560, filterQ: 0.7, attack: 0.003, decay: 0.16, peak: peak * 0.8, startAt: 0.045 });
+  } else if (family === 5) {
+    // 迫击炮：扩散环式双层低频脉冲。
+    playVoice({ type: 'sine', freq: base, freqEnd: base * 0.55, attack: 0.006, decay: 0.28, peak: peak * 1.1 });
+    playVoice({ type: 'sine', freq: base * 1.8, freqEnd: base * 0.9, attack: 0.004, decay: 0.18, peak: peak * 0.7, startAt: 0.04 });
+  } else {
+    playVoice({ type: 'triangle', freq: base, freqEnd: base * 1.8, attack: 0.006, decay: 0.2, peak });
+  }
+}
+
 /** 放置/焊接确认:磁吸锁扣 + 焊花 + 确认亮音 */
 export function playPlace(): void {
   if (!throttled('place')) return;
@@ -668,6 +709,7 @@ export const audioBus = {
   playHurt,
   playCollect,
   playUpgrade,
+  playUpgradeBurst,
   playPlace,
   playBoost,
   playBroadside,
