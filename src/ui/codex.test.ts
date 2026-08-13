@@ -1,19 +1,32 @@
 /**
- * 图鉴页(ui/codex.ts)。主体测的是那几个**纯函数** —— 图鉴上到底印了什么:
- * 锁定判定、效果摘要、合成武器底座名、解锁条件文案,哪一条错都只是几行字符串拼接,
- * 却要等真人进一次图鉴才看得见(与 gameOver.test 测 summaryText 同一条理由)。
+ * 图鉴页(ui/codex.ts)。主体测的是那几个**纯函数** —— 图鉴上到底显示了什么:
+ * 锁定判定、悬停行(尤其 **1★/2★/3★ 星级三档读数**)、合成武器血统、每行配了哪张图,
+ * 哪一条错都只是几行字符串拼接,却要等真人进一次图鉴才看得见(与 gameOver.test 测
+ * summaryText 同一条理由)。
  *
  * 文件末尾破一次例去测 createCodexUi 本身(照 gameOver.test 的先例):
- * 只建一次 / show 整块重排 / Esc 关页回 onClose / 收着时 Esc 不认,四条各错一次的后果
- * (多一份监听器、目录叠两遍、Esc 一按关好几层)都要真人反复开关图鉴才看得出来。
- * 桩只提供 createCodexUi 真的会碰的那几样(createElement/getElementById/append +
- * window.addEventListener + HTMLElement),绝不发展成半个 jsdom —— 本仓 vitest 跑在
- * Node 环境里,不装 jsdom。
+ * 只建一次 / show 整块重排 / 过滤器切档 / 悬停 tooltip / Esc 关页回 onClose / 收着时
+ * Esc 不认,六条各错一次的后果(多一份监听器、网格叠两遍、切档没反应、悬停没数值)
+ * 都要真人反复开关图鉴才看得出来。桩只提供 createCodexUi 真的会碰的那几样
+ * (createElement/getElementById/append + window.addEventListener + getBoundingClientRect +
+ *  HTMLElement),绝不发展成半个 jsdom —— 本仓 vitest 跑在 Node 环境里,不装 jsdom。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BOSS, ENEMIES } from '../data/enemies';
+import { AFFIXES } from '../data/affixes';
+import { BOSS, ENEMIES, KIND_BEETLE } from '../data/enemies';
 import { EDICT_AMMO, EDICT_GYRO, EDICT_OVERDRIVE, EDICT_STARCHART, EDICTS } from '../data/edicts';
-import { TOWERS, TOWER_MISSILE_NEST } from '../data/towers';
+import {
+  THR_CHARGE,
+  towerAoeDamage,
+  towerChargeTime,
+  towerDamage,
+  towerFireInterval,
+  towerRange,
+  TOWERS,
+  TOWER_LASER,
+  TOWER_MISSILE_NEST,
+  TOWER_MORTAR,
+} from '../data/towers';
 import {
   COND_ELITE_KILLS,
   COND_FIRST_WIN,
@@ -22,6 +35,7 @@ import {
   UNLOCKS,
   type UnlockEntry,
 } from '../data/unlocks';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import { createProgress, type Progress } from '../sim/progress';
 import {
   behaviorName,
@@ -31,7 +45,10 @@ import {
   createCodexUi,
   edictSummaryText,
   formatMul,
+  glyphBadgeSvg,
+  tintHex,
   unlockConditionText,
+  type CodexArt,
 } from './codex';
 
 /** 全解锁掩码:位 0..UNLOCKS.length-1 全置 1(与 sim/progress.ts 的 FULL_MASK 同编码) */
@@ -39,6 +56,29 @@ const FULL_MASK = (1 << UNLOCKS.length) - 1;
 
 function progress(mask: number, over: Partial<Progress> = {}): Progress {
   return { ...createProgress(), unlockMask: mask, ...over };
+}
+
+/** svg 配图的内容串;非 svg 配图给空串(断言只关心 svg 那类) */
+function svgOf(art: CodexArt | null): string {
+  return art !== null && art.kind === 'svg' ? art.svg : '';
+}
+
+/** 星级读数的期望串:与 codex 的 starLine 同一组 getter 现算 —— 两边对不上 = 有一边口径错了 */
+function starExpected(def: typeof TOWERS[number], stars: number, mortar: boolean): string {
+  // 期望串用与实现同源的 getter 算(数值表改档时两边一起走,断言不用回头改)
+  const dmg = mortar ? towerAoeDamage(def, stars) : towerDamage(def, stars);
+  const range = Math.round(towerRange(def, stars));
+  if (def.throttle === THR_CHARGE) {
+    return (
+      `${stars}★ ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
+      `充能 ${formatMul(towerChargeTime(def, stars))}s`
+    );
+  }
+  const interval = towerFireInterval(def, stars);
+  return (
+    `${stars}★ ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
+    `射速 ${formatMul(1 / interval)}/s`
+  );
 }
 
 describe('unlockConditionText', () => {
@@ -77,7 +117,7 @@ describe('behaviorName', () => {
 });
 
 describe('formatMul / edictSummaryText', () => {
-  it('倍率印法:两位小数内舍入、尾零省掉', () => {
+  it('数值印法:两位小数内舍入、尾零省掉', () => {
     expect(formatMul(1.25)).toBe('1.25');
     expect(formatMul(1.5)).toBe('1.5');
     expect(formatMul(0.7)).toBe('0.7');
@@ -99,6 +139,21 @@ describe('formatMul / edictSummaryText', () => {
   });
 });
 
+describe('tintHex / glyphBadgeSvg', () => {
+  it('数字 tint → #rrggbb,高位丢 0 也补到六位', () => {
+    expect(tintHex(0x9adcff)).toBe('#9adcff');
+    expect(tintHex(0x2b4a6e)).toBe('#2b4a6e');
+    expect(tintHex(0x0000ff)).toBe('#0000ff');
+  });
+
+  it('徽章带字形与 tint(暗底圆盘 + 虚环 + 中心字),与升级卡片同一套字形身份', () => {
+    const svg = glyphBadgeSvg('▦', '#123456');
+    expect(svg).toContain('<svg');
+    expect(svg).toContain('▦');
+    expect(svg).toContain('#123456');
+  });
+});
+
 describe('codexStatsText / codexUnlockStats', () => {
   it('统计行:三个累计计数器', () => {
     expect(codexStatsText(progress(0, { wins: 3, kills: 1280, eliteKills: 9 }))).toBe(
@@ -113,93 +168,137 @@ describe('codexStatsText / codexUnlockStats', () => {
 });
 
 describe('codexRows', () => {
-  it('分区顺序:武器 → 敌人 → 法令 → 起手配置', () => {
-    const titles = codexRows(progress(0)).map((s) => s.title);
-    expect(titles).toEqual(['武器', '敌人', '法令', '起手配置']);
+  it('分区顺序与过滤器键:武器 → 敌人 → 法令 → 起手配置', () => {
+    const sections = codexRows(progress(0));
+    expect(sections.map((s) => s.title)).toEqual(['武器', '敌人', '法令', '起手配置']);
+    expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts', 'loadouts']);
   });
 
-  it('武器全量 13 型:基础塔印射程/伤害/系别,迫击炮类印落点伤害(直击伤害恒 0)', () => {
+  it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图与渲染层同源', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     expect(weapons.length).toBe(TOWERS.length);
     const auto = weapons.find((r) => r.name === '自动机炮')!;
     expect(auto.locked).toBe(false);
-    expect(auto.detail).toBe('射程 380 · 伤害 6 · 弹药系');
-    const mortar = weapons.find((r) => r.name === '等离子迫击炮')!;
-    expect(mortar.detail).toContain('落点伤害 20');
-    expect(mortar.detail).not.toContain('伤害 0');
+    expect(auto.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[0]] });
+    const def = TOWERS[0]!;
+    expect(auto.hover[0]).toBe('自动机炮 · 弹药系');
+    expect(auto.hover[1]).toBe(starExpected(def, 1, false));
+    expect(auto.hover[2]).toBe(starExpected(def, 2, false));
+    expect(auto.hover[3]).toBe(starExpected(def, 3, false));
+    // 成长曲线确实在涨:2★/3★ 的伤害与 1★ 不同(这正是旧版图鉴漏印的两行)
+    expect(auto.hover[2]).not.toContain(`2★ 伤害 ${formatMul(def.damage)}`);
   });
 
-  it('合成武器经 MERGES 反查底座名(数据表改名图鉴跟着走)', () => {
+  it('迫击炮类:落点伤害 + 充能节奏(直击伤害恒 0,不印误导性的 0)', () => {
+    const mortar = codexRows(progress(0))[0]!.rows.find(
+      (r) => r.name === TOWERS[TOWER_MORTAR]!.name,
+    )!;
+    expect(mortar.hover[1]).toBe(starExpected(TOWERS[TOWER_MORTAR]!, 1, true));
+    expect(mortar.hover[1]).toContain('落点伤害');
+    expect(mortar.hover[1]).toContain('充能');
+    expect(mortar.hover[1]).not.toContain('伤害 0');
+  });
+
+  it('合成武器经 MERGES 反查底座名与底座贴图(数据表改名图鉴跟着走)', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     const aurora = weapons.find((r) => r.name === '极光阵列')!;
-    expect(aurora.detail).toBe('激光棱镜合3★ · 过热系');
+    expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合3★变身 · 过热系');
+    // 合成塔没有独立贴图,配图回退底座塔的图 —— 与悬停里的"底座合3★"两相印证
+    expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
   });
 
-  it('导弹巢:未解锁灰显 + 条件文案,解锁后印回数值行', () => {
+  it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;无贴图走字形徽章', () => {
     const locked = codexRows(progress(0))[0]!.rows.find(
       (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
     )!;
     expect(locked.locked).toBe(true);
-    expect(locked.detail).toBe('首次胜利');
+    expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
+    // 徽章 = 升级卡片同一套字形(♁)+ 数值表 tint
+    expect(locked.art?.kind).toBe('svg');
+    expect(svgOf(locked.art)).toContain('♁');
+    expect(svgOf(locked.art)).toContain(tintHex(TOWERS[TOWER_MISSILE_NEST]!.tint));
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
       (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
     )!;
     expect(unlocked.locked).toBe(false);
-    expect(unlocked.detail).toContain('射程 460');
+    expect(unlocked.hover.some((l) => l.includes('未解锁'))).toBe(false);
   });
 
-  it('敌人:六型 + Boss + 精英事件;Boss 数值按底座 × 倍率现算', () => {
+  it('敌人:六型 + Boss + 精英事件;悬停报身板与掉落,配图各取各的贴图', () => {
     const enemies = codexRows(progress(0))[1]!.rows;
     expect(enemies.length).toBe(ENEMIES.length + 1 + 1);
-    const larva = enemies.find((r) => r.name === '蜂群蛭')!;
-    expect(larva.detail).toBe('HP 8 · 接触 5 · 直线追船');
+    const larvaDef = ENEMIES[0]!;
+    const larva = enemies.find((r) => r.name === larvaDef.name)!;
+    expect(larva.hover).toEqual([
+      `${larvaDef.name} · 直线追船`,
+      `HP ${larvaDef.hp} · 接触 ${larvaDef.contactDamage}`,
+      `残骸 ${larvaDef.scrap} · 星币 ${larvaDef.starCoins}`,
+    ]);
+    expect(larva.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[0]] });
     const beetle = ENEMIES[BOSS.baseKind]!;
     const boss = enemies.find((r) => r.name === BOSS.name)!;
-    expect(boss.detail).toBe(
+    expect(boss.hover).toEqual([
+      `${BOSS.name} · 巨型冲锋 · 召唤蜂群`,
       `HP ${Math.round(beetle.hp * BOSS.hpMul)} · 接触 ` +
-        `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)} · 巨型冲锋 · 召唤蜂群`,
-    );
+        `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)}`,
+      `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
+    ]);
     // 读数锚点(现表:hpMul 52、contactDamageMul 2):40×52=2080、18×2=36
-    expect(boss.detail).toContain('HP 2080 · 接触 36');
+    expect(boss.hover[1]).toContain('HP 2080 · 接触 36');
+    expect(boss.art).toEqual({ kind: 'img', urls: [BOSS_ART_URL] });
   });
 
-  it('精英事件条目命名走 collectionItemName(与结算图鉴同源);未解锁带条件', () => {
+  it('精英事件条目命名走 collectionItemName(与结算图鉴同源);悬停报词缀名单', () => {
     const elite = codexRows(progress(0))[1]!.rows.find((r) => r.name.includes('虫群母巢'))!;
     expect(elite.locked).toBe(true);
     expect(elite.name).toContain('精英');
-    expect(elite.detail).toBe('累计精英击杀 14');
+    expect(elite.hover[elite.hover.length - 1]).toBe('未解锁 · 累计精英击杀 14');
+    // 词缀名单读数据表(现表:[0,3,4] = 狂热光环/装甲/相位)
+    const affixes = elite.hover.find((l) => l.startsWith('词缀'))!;
+    expect(affixes).toContain(AFFIXES[0]!.name);
+    expect(affixes).toContain(AFFIXES[3]!.name);
+    expect(affixes).toContain(AFFIXES[4]!.name);
+    // 精英 = 带词缀的底座(冲撞甲虫),图同一张
+    expect(elite.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[KIND_BEETLE]] });
     const unlocked = codexRows(progress(FULL_MASK))[1]!.rows.find((r) =>
       r.name.includes('虫群母巢'),
     )!;
     expect(unlocked.locked).toBe(false);
-    expect(unlocked.detail).toBe('');
+    expect(unlocked.hover.some((l) => l.includes('未解锁'))).toBe(false);
   });
 
-  it('法令全量 10 条:超载协议未解锁带条件,其余恒解锁', () => {
+  it('法令全量 10 条:悬停 = 效果摘要 + 叠层上限;超载协议未解锁带条件', () => {
     const edicts = codexRows(progress(0))[2]!.rows;
     expect(edicts.length).toBe(EDICTS.length);
     const over = edicts.find((r) => r.name === '超载协议')!;
     expect(over.locked).toBe(true);
-    expect(over.detail).toBe('单局击杀 300');
+    expect(over.hover[over.hover.length - 1]).toBe('未解锁 · 单局击杀 300');
     const ammo = edicts.find((r) => r.name === '弹药协议')!;
     expect(ammo.locked).toBe(false);
-    expect(ammo.detail).toBe('弹药系:射速 ×1.25 · 装填 ×0.7');
+    expect(ammo.hover).toEqual(['弹药系:射速 ×1.25 · 装填 ×0.7', '最多 5 层']);
+    expect(ammo.art?.kind).toBe('svg');
+    expect(svgOf(ammo.art)).toContain('▦'); // EDICT_ICONS[0]
+    expect(svgOf(ammo.art)).toContain(tintHex(EDICTS[EDICT_AMMO]!.tint));
   });
 
-  it('起手配置:炮击/狙击未解锁带条件,解锁后印回表内描述', () => {
+  it('起手配置:悬停报描述与开局名单,配图 = 开局武器贴图各一张', () => {
     const loadouts = codexRows(progress(0))[3]!.rows;
     expect(loadouts.length).toBe(4);
     const bombard = loadouts.find((r) => r.name === '炮击开局')!;
     expect(bombard.locked).toBe(true);
-    expect(bombard.detail).toBe('累计精英击杀 5');
+    expect(bombard.hover[bombard.hover.length - 1]).toBe('未解锁 · 累计精英击杀 5');
     const standard = loadouts.find((r) => r.name === '标准起手')!;
     expect(standard.locked).toBe(false);
-    expect(standard.detail).toContain('弹药');
+    expect(standard.hover[0]).toContain('弹药');
+    expect(standard.hover[1]).toBe('开局武器 自动机炮 + 自动机炮');
+    expect(standard.hover[2]).toBe('开局法令 弹药协议×1');
+    // 标准起手 = 双自动机炮:配图两张、同一张图
+    expect(standard.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[0], TOWER_ART_URLS[0]] });
     const unlocked = codexRows(progress(FULL_MASK))[3]!.rows.find(
       (r) => r.name === '狙击开局',
     )!;
     expect(unlocked.locked).toBe(false);
-    expect(unlocked.detail).toContain('磁轨炮');
+    expect(unlocked.hover[0]).toContain('磁轨炮');
   });
 });
 
@@ -207,7 +306,7 @@ describe('codexRows', () => {
 
 interface StubEl {
   tagName: string;
-  style: { cssText: string; color: string; display: string };
+  style: { cssText: string; color: string; display: string; left: string; top: string };
   textContent: string;
   src: string;
   alt: string;
@@ -217,12 +316,13 @@ interface StubEl {
   appendChild(kid: StubEl): StubEl;
   replaceChildren(...kids: StubEl[]): void;
   addEventListener(type: string, fn: (e: unknown) => void): void;
+  getBoundingClientRect(): { left: number; bottom: number };
 }
 
 function createStubEl(tag = 'div'): StubEl {
   const el: StubEl = {
     tagName: tag.toUpperCase(),
-    style: { cssText: '', color: '', display: '' },
+    style: { cssText: '', color: '', display: '', left: '', top: '' },
     textContent: '',
     src: '',
     alt: '',
@@ -241,6 +341,9 @@ function createStubEl(tag = 'div'): StubEl {
     },
     addEventListener(type: string, fn: (e: unknown) => void): void {
       el.listeners.set(type, fn);
+    },
+    getBoundingClientRect(): { left: number; bottom: number } {
+      return { left: 10, bottom: 120 };
     },
   };
   return el;
@@ -298,6 +401,7 @@ function installDom(): StubDom {
   };
 
   g.window = {
+    innerWidth: 1000, // tooltip 贴边夹取读它
     addEventListener(type: string, fn: (e: StubKeyEvent) => void): void {
       dom.windowListeners++;
       if (type === 'keydown') keys.push(fn);
@@ -323,7 +427,7 @@ function root(dom: StubDom): StubEl {
   return dom.ui.children[0]!;
 }
 
-/** 深度查找:按谓词扫子树,返回第一个命中(目录行都是 leaf,textContent 可精确匹配) */
+/** 深度查找:按谓词扫子树,返回第一个命中(卡片名都是 leaf,textContent 可精确匹配) */
 function findEl(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl | undefined {
   if (pred(rootEl)) return rootEl;
   for (const kid of rootEl.children) {
@@ -331,6 +435,23 @@ function findEl(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl | undefin
     if (hit) return hit;
   }
   return undefined;
+}
+
+/** 反查父节点:卡片名改挂名称 div 之后,灰显断言要看它父格子的 cssText */
+function parentOf(rootEl: StubEl, target: StubEl): StubEl | undefined {
+  for (const kid of rootEl.children) {
+    if (kid === target) return rootEl;
+    const hit = parentOf(kid, target);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/** 悬停 tooltip:整页唯一那个 fixed 定位、pointer-events:none 的 div */
+function tip(dom: StubDom): StubEl {
+  return dom.created.find(
+    (el) => el.style.cssText.includes('position:fixed') && el.style.cssText.includes('pointer-events:none'),
+  )!;
 }
 
 describe('createCodexUi', () => {
@@ -364,35 +485,79 @@ describe('createCodexUi', () => {
     expect(root(dom).style.display).toBe('none');
   });
 
-  it('show 整块重排:标题带计数、锁定项灰显 + 条件、解锁项带数值', () => {
+  it('show 整块重排:标题带计数、卡片图上名下、锁定卡灰显', () => {
     const ui = make();
     ui.show();
     const title = findEl(root(dom), (el) => el.textContent.startsWith('图鉴 ·'))!;
     expect(title.textContent).toBe('图鉴 · 内容解锁 0/5');
     const stats = findEl(root(dom), (el) => el.textContent.startsWith('胜场'))!;
     expect(stats.textContent).toBe('胜场 1 · 总击杀 100 · 精英击杀 2');
-    // 锁定项:导弹巢(未解锁 · 首次胜利),灰显样式落在 opacity 上
-    const locked = findEl(root(dom), (el) => el.textContent.includes('导弹巢(未解锁 · 首次胜利)'))!;
-    expect(locked.style.cssText).toContain('opacity:.45');
-    // 解锁项:名称 + 数值详情
-    expect(findEl(root(dom), (el) => el.textContent.includes('自动机炮  射程 380'))).toBeDefined();
-    // 分区标题
+    // 卡片名是纯名称(数值在悬停里);分区标题在
     expect(findEl(root(dom), (el) => el.textContent === '武器')).toBeDefined();
-    expect(findEl(root(dom), (el) => el.textContent === '船形剪影')).toBeDefined();
+    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeDefined();
+    // 锁定卡:名称 div 的父格子带 opacity 灰显
+    const lockedName = findEl(root(dom), (el) => el.textContent === '导弹巢')!;
+    expect(parentOf(root(dom), lockedName)!.style.cssText).toContain('opacity:.45');
     // 无剪影给占位,不空着这一栏
     expect(findEl(root(dom), (el) => el.textContent.includes('暂无收藏剪影'))).toBeDefined();
   });
 
-  it('剪影:progress.silhouettes 全量摆成 img,空时不摆 img', () => {
+  it('过滤器:切到法令只剩法令卡,切回全部恢复', () => {
+    const ui = make();
+    ui.show();
+    const edictBtn = dom.created.find(
+      (el) => el.tagName === 'BUTTON' && el.textContent === '法令',
+    )!;
+    edictBtn.listeners.get('click')?.({});
+    expect(findEl(root(dom), (el) => el.textContent === '弹药协议')).toBeDefined();
+    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeUndefined();
+    const allBtn = dom.created.find(
+      (el) => el.tagName === 'BUTTON' && el.textContent === '全部',
+    )!;
+    allBtn.listeners.get('click')?.({});
+    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeDefined();
+    expect(findEl(root(dom), (el) => el.textContent === '弹药协议')).toBeDefined();
+  });
+
+  it('悬停 tooltip:进卡弹出(含 1★/2★/3★ 星级读数),出卡收起', () => {
+    const ui = make();
+    ui.show();
+    const nameEl = findEl(root(dom), (el) => el.textContent === '自动机炮')!;
+    const cell = parentOf(root(dom), nameEl)!;
+    // 初始 display:none 落在构造时的 cssText 里(桩不解析 cssText,与遮罩同款断言)
+    expect(tip(dom).style.cssText).toContain('display:none');
+    cell.listeners.get('mouseenter')?.({});
+    expect(tip(dom).style.display).toBe('block');
+    expect(tip(dom).textContent).toContain('1★ 伤害');
+    expect(tip(dom).textContent).toContain('2★ 伤害');
+    expect(tip(dom).textContent).toContain('3★ 伤害');
+    expect(tip(dom).style.top).toBe('126px'); // 卡下方 6px
+    cell.listeners.get('mouseleave')?.({});
+    expect(tip(dom).style.display).toBe('none');
+  });
+
+  it('剪影:progress.silhouettes 全量摆成 img(按 alt 与卡片配图区分),空时不摆', () => {
     const ui = createCodexUi({
       getProgress: () => progress(0, { silhouettes: ['data:a', 'data:b'] }),
       onClose: () => {},
     });
     ui.show();
-    const imgs = dom.created.filter((el) => el.tagName === 'IMG');
-    expect(imgs.length).toBe(2);
-    expect(imgs[0]!.src).toBe('data:a');
-    expect(imgs[1]!.src).toBe('data:b');
+    const shots = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '历史船形');
+    expect(shots.length).toBe(2);
+    expect(shots[0]!.src).toBe('data:a');
+    expect(shots[1]!.src).toBe('data:b');
+  });
+
+  it('卡片配图:PNG 直摆、无贴图条目走 SVG data URI(导弹巢/法令)', () => {
+    const ui = make();
+    ui.show();
+    const thumbs = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
+    // 武器 13 卡 + 敌人 8 卡 + 法令 10 卡 + 起手 4 卡(双图),配图数必然远多于零
+    expect(thumbs.length).toBeGreaterThan(20);
+    expect(thumbs.some((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
+    const svg = thumbs.find((el) => el.src.startsWith('data:image/svg+xml'));
+    expect(svg).toBeDefined(); // 导弹巢与法令的徽章走 data URI
+    expect(svg!.src).toContain(encodeURIComponent('♁')); // 导弹巢字形
   });
 
   it('Esc 关页走 onClose;收着时 Esc 不认;按钮同一条路', () => {

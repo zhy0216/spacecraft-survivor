@@ -5,16 +5,22 @@
  * **整页只建一次**(与 settingsMenu 同一条纪律):DOM 与 window 监听器都在 createCodexUi 里挂,
  * 反复 show/hide 不重建 —— 建两份就是两份 Esc 监听器、两块遮罩。
  *
- * 与结算界面里那张小图鉴(ui/gameOver.ts 的 renderCollection)不同,这里是**全量目录**:
- * 武器 13 型、敌人 6 型 + Boss + 精英事件、法令 10 条、起手配置 4 套,未解锁的灰显 +
- * 条件文案(「下一把的新理由」就摆在眼前)。数据一律现读 progress(main 持唯一那一份,
- * 每局结算后已更新):getProgress() 每次 show 现取,不缓存。
+ * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令/起手),内容是卡片网格 ——
+ * 每张卡一张大图(56px)+ 名称,未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
+ * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
+ * **星级三档全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
+ * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
+ *
+ * 配图口径:有生成贴图的用真实 PNG(6 基础塔 / 5 敌型 + Boss / 起手双武器,URL 清单与渲染层
+ * 同源,见 render/artUrls.ts —— 本文件不 import pixi,但可以 import 纯字符串清单);没贴图的
+ * 画程序化 SVG 徽章(合成武器回退底座塔贴图、导弹巢与法令用升级卡片同一套字形 + 数值表 tint)。
  *
  * 「图鉴到底显示了什么」全部走纯函数(codexRows 那一层),Node 里可直接数出来 ——
- * 与 gameOver.summaryText 同一条口径:锁定判定、效果摘要、合成武器底座名,哪一条错
+ * 与 gameOver.summaryText 同一条口径:锁定判定、悬停行、每行配了哪张图,哪一条错
  * 都只是几行字符串拼接,却要等真人进一次图鉴才看得见。
  */
 import { isTyping } from '../core/isTyping';
+import { AFFIXES } from '../data/affixes';
 import {
   BH_SEEK,
   BH_SEEK_CHARGE,
@@ -23,11 +29,23 @@ import {
   BH_STRAFE_CHARGE,
   BOSS,
   ENEMIES,
+  type EnemyDef,
 } from '../data/enemies';
-import { EDICTS, type EdictDef } from '../data/edicts';
+import { EDICT_MAX_LEVEL, EDICTS, type EdictDef } from '../data/edicts';
 import { LOADOUTS } from '../data/loadout';
 import { MERGES } from '../data/merges';
-import { FX_MORTAR, throttleName, TOWERS } from '../data/towers';
+import {
+  FX_MORTAR,
+  THR_CHARGE,
+  throttleName,
+  towerAoeDamage,
+  towerChargeTime,
+  towerDamage,
+  towerFireInterval,
+  towerRange,
+  TOWERS,
+  type TowerDef,
+} from '../data/towers';
 import {
   COND_ELITE_KILLS,
   COND_FIRST_WIN,
@@ -40,8 +58,11 @@ import {
   UNLOCKS,
   type UnlockEntry,
 } from '../data/unlocks';
+import { WAVE_LOCKED_ELITES } from '../data/waves';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
+import { EDICT_ICONS, TOWER_ICONS } from './upgradeFlow';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -55,39 +76,63 @@ const ROOT_CSS =
   'font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;';
 
 /**
- * 卡片比设置页更宽(560):图鉴行带数值详情,太窄会换行折成三行。
- * 竖向 flex + 内层滚动:标题与返回按钮永远在屏内,滚的只是中间那一截目录。
+ * 卡片比设置页更宽(640):网格要排得开 13 座塔。竖向 flex + 内层滚动:
+ * 标题/过滤器/返回按钮永远在屏内,滚的只是中间那一截网格。
  */
 const CARD_CSS =
-  'min-width:340px;max-width:min(94vw,560px);max-height:86vh;padding:22px 26px;border-radius:10px;' +
+  'min-width:340px;max-width:min(94vw,640px);max-height:88vh;padding:20px 22px;border-radius:10px;' +
   `background:rgba(10,16,26,.94);border:1px solid ${LINE_COLOR};` +
   'display:flex;flex-direction:column;';
 
 const TITLE_CSS =
   `color:${OK_COLOR};font-size:19px;letter-spacing:.22em;text-align:center;`;
 const STATS_CSS =
-  `color:${VALUE_COLOR};text-align:center;margin-bottom:8px;letter-spacing:.06em;`;
+  `color:${VALUE_COLOR};text-align:center;margin-bottom:6px;letter-spacing:.06em;`;
+
+// —— 过滤器:一排小按钮,选中档高亮。filter 是本页自己的状态,跨 show 保留(整页只建一次)——
+const FILTER_ROW_CSS = 'display:flex;gap:6px;margin:6px 0 2px;';
+const FILTER_BTN_CSS =
+  'padding:3px 10px;border-radius:5px;cursor:pointer;font:inherit;' +
+  `border:1px solid rgba(43,74,110,.6);background:rgba(43,74,110,.18);color:${IDLE_COLOR};` +
+  'letter-spacing:.08em;';
+const FILTER_ON_CSS =
+  'padding:3px 10px;border-radius:5px;cursor:pointer;font:inherit;' +
+  `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.55);color:${OK_COLOR};` +
+  'letter-spacing:.08em;';
 
 /** 目录滚动区:flex:1 让它占掉卡片剩余高度,内容超高时自己滚,不把返回按钮挤出屏外 */
 const SCROLL_CSS = 'flex:1 1 auto;overflow-y:auto;margin-top:4px;padding-right:6px;';
-const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;margin-top:12px;margin-bottom:3px;`;
-/** 图鉴条目:已解锁 = 读数同色;未解锁 = 灰字 + 降透明度(与结算图鉴同一套灰显) */
-const ROW_CSS = `color:${VALUE_COLOR};`;
-const ROW_LOCKED_CSS = `color:${IDLE_COLOR};opacity:.45;`;
-/** 船形剪影缩略图;dataURL 原样显示,object-fit 兜住剪影的透明边(与结算图鉴同款) */
-const SHOT_THUMB_CSS =
-  `width:52px;height:52px;object-fit:contain;background:rgba(5,7,13,.6);` +
-  `border:1px solid ${LINE_COLOR};border-radius:4px;margin:4px 6px 0 0;`;
-const SHOT_PLACEHOLDER_CSS = `color:${IDLE_COLOR};margin-top:4px;`;
+const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;margin-top:12px;margin-bottom:6px;`;
+
+/** 卡片网格:每格 76px 起,列数随卡片宽度自适应(13 塔 ≈ 6-7 列 × 2 行) */
+const GRID_CSS = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:8px;';
+/** 图鉴卡片:图上名下;锁定卡整卡降透明度(图跟着一起压暗,与结算图鉴同一套灰显) */
+const CELL_CSS =
+  'display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 2px 5px;' +
+  'border-radius:6px;border:1px solid rgba(43,74,110,.45);background:rgba(10,16,26,.5);';
+const CELL_LOCKED_CSS = CELL_CSS + 'opacity:.45;';
+/** 配图容器:恒定 56px 高,单图 56px、双图(起手)并排 34px —— 网格行高不因配图张数参差 */
+const CELL_ART_CSS = 'display:flex;gap:3px;align-items:center;height:56px;';
+const CELL_IMG_CSS = 'object-fit:contain;background:rgba(5,7,13,.6);' +
+  'border:1px solid rgba(43,74,110,.6);border-radius:4px;';
+const CELL_NAME_CSS =
+  `font-size:11px;color:${VALUE_COLOR};text-align:center;line-height:1.3;letter-spacing:.02em;`;
+
+/** 悬停 tooltip:整页只此一个,pointer-events:none 永不抢鼠标(与 HUD 法令悬停同一条口径) */
+const TIP_CSS =
+  'position:fixed;display:none;max-width:300px;white-space:pre-line;line-height:1.55;' +
+  'z-index:1000;pointer-events:none;background:rgba(10,16,26,.97);' +
+  `border:1px solid rgba(43,74,110,.8);border-radius:6px;padding:8px 10px;` +
+  `color:${VALUE_COLOR};font-size:12px;`;
 
 const BACK_BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};` +
   'letter-spacing:.1em;margin-top:14px;';
 
-// —— 纯函数层:图鉴「显示了什么」,Node 里可测 ——
+// —— 纯函数层:图鉴「显示了什么」(含悬停行),Node 里可测 ——
 
-/** 解锁条件文案(未解锁条目灰显时并排印出来 —— 只说清"差什么",不说怎么玩) */
+/** 解锁条件文案(未解锁条目的悬停末条 —— 只说清"差什么",不说怎么玩) */
 export function unlockConditionText(entry: UnlockEntry): string {
   switch (entry.condition.kind) {
     case COND_FIRST_WIN:
@@ -122,7 +167,7 @@ export function behaviorName(bh: number): string {
   }
 }
 
-/** 倍率印法:两位小数内舍入、尾零省掉(1.25 / 1.5 / 0.7,不印 1.250) */
+/** 数值印法:两位小数内舍入、尾零省掉(1.25 / 1.5 / 0.7,不印 1.250) */
 export function formatMul(v: number): string {
   return String(Math.round(v * 100) / 100);
 }
@@ -168,17 +213,165 @@ export function codexUnlockStats(progress: Progress): { unlocked: number; total:
   return { unlocked, total };
 }
 
-/** 图鉴一行:名称 + 详情(已解锁 = 关键数值;锁定 = 解锁条件)+ 锁定标记 */
+/**
+ * 一行的配图。两种来路:真实贴图(PNG,清单与渲染层同源)或程序化 SVG 徽章
+ * (无贴图条目:导弹巢与法令,字形 + 数值表 tint)。null = 没配到图,DOM 只摆文字。
+ */
+export type CodexArt = { kind: 'img'; urls: string[] } | { kind: 'svg'; svg: string };
+
+/** 图鉴一行:名称 + 锁定标记 + 配图 + 悬停行(具体数值全部在悬停里,网格只摆图与名) */
 export interface CodexRow {
   name: string;
-  /** 已解锁:关键数值;锁定:解锁条件文案(DOM 层拼进"(未解锁 · …)") */
-  detail: string;
   locked: boolean;
+  art: CodexArt | null;
+  /** 悬停 tooltip 的行:首行标题,其余具体数值;锁定行末条 = 「未解锁 · 条件」 */
+  hover: string[];
 }
 
 export interface CodexSection {
+  /** 过滤器键:'weapons' | 'enemies' | 'edicts' | 'loadouts'(DOM 层按它过滤) */
+  key: string;
   title: string;
   rows: CodexRow[];
+}
+
+/** 数字 tint → "#rrggbb"(SVG 徽章要的是 CSS 颜色串;数值表存的是 Pixi 数字色) */
+export function tintHex(v: number): string {
+  return `#${(v & 0xffffff).toString(16).padStart(6, '0')}`;
+}
+
+/**
+ * 程序化徽章(无贴图条目的配图):暗底圆盘 + tint 虚线环 + 中心字形 ——
+ * 结构与 assets/game/ui/edict-seal.svg 同族,但字形与 tint 跟条目走,
+ * 升级卡片与图鉴共用同一套「型号 → 字形」身份(见 upgradeFlow 的 EDICT_ICONS/TOWER_ICONS)。
+ */
+export function glyphBadgeSvg(glyph: string, tint: string): string {
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">' +
+    '<circle cx="24" cy="24" r="21" fill="#091625" stroke="#2b4a6e" stroke-width="2.5"/>' +
+    '<circle cx="24" cy="24" r="15.5" fill="none" stroke="' +
+    tint +
+    '" stroke-width="2.5" stroke-dasharray="7 5" opacity=".85"/>' +
+    // 字形是给图鉴/升级卡看的身份符号,字体跟全 UI 同一支等宽栈:
+    // img 里的 SVG 不继承页面字体,不写就落系统默认字(冷僻字形如 ⟲ 可能变成豆腐块)
+    '<text x="24" y="25" font-size="17" text-anchor="middle" dominant-baseline="central" ' +
+    'font-family="ui-monospace,SFMono-Regular,Menlo,monospace" fill="' +
+    tint +
+    '">' +
+    glyph +
+    '</text></svg>'
+  );
+}
+
+/** 真实贴图配图:过滤掉 undefined(表里加了新型但还没出图时,那一张静默跳过) */
+function imgArt(...urls: Array<string | undefined>): CodexArt | null {
+  const found: string[] = [];
+  for (const u of urls) if (u !== undefined) found.push(u);
+  return found.length === 0 ? null : { kind: 'img', urls: found };
+}
+
+/**
+ * 武器配图:基础塔(0..5)用本塔贴图;合成塔(6..11)回退**底座塔贴图**
+ * (它们由底座 3★ 变身而来,悬停里标"底座合3★"两相印证 —— 渲染层对它们也只有 tint 色块兜底,
+ * 图鉴给底座图反而比游戏里更易认);导弹巢与未知型画字形徽章。
+ */
+function towerArt(type: number): CodexArt | null {
+  if (type >= 0 && type < TOWER_ART_URLS.length) return imgArt(TOWER_ART_URLS[type]);
+  for (const r of MERGES) {
+    if (r.result === type) return imgArt(TOWER_ART_URLS[r.base]);
+  }
+  const def = TOWERS[type];
+  if (def === undefined) return null;
+  return { kind: 'svg', svg: glyphBadgeSvg(TOWER_ICONS[type] ?? '?', tintHex(def.tint)) };
+}
+
+/** 法令配图:字形徽章,字形与升级卡片同表、tint 取数值表(与卡片色域同一支冷色) */
+function edictArt(type: number): CodexArt | null {
+  const def = EDICTS[type];
+  if (def === undefined) return null;
+  return {
+    kind: 'svg',
+    svg: glyphBadgeSvg(EDICT_ICONS[type] ?? '?', tintHex(def.tint)),
+  };
+}
+
+/**
+ * 一条星级读数:伤害(迫击炮类印落点伤害,直击恒 0)· 射程 · 射速/充能。
+ * **1★/2★/3★ 三档全印** —— 星级成长走 data/towers 的 starLevel 曲线,2★ = 旧 Lv3、
+ * 3★ = 旧 Lv5,数值由同表的 towerDamage/towerRange 等 getter 现算(与 sim 同一份函数,
+ * 图鉴印的与游戏里打的永远同一个数)。
+ */
+function starLine(def: TowerDef, stars: number): string {
+  const dmg = def.fx === FX_MORTAR ? towerAoeDamage(def, stars) : towerDamage(def, stars);
+  const range = Math.round(towerRange(def, stars));
+  if (def.throttle === THR_CHARGE) {
+    return (
+      `${stars}★ ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
+      `射程 ${range} · 充能 ${formatMul(towerChargeTime(def, stars))}s`
+    );
+  }
+  const interval = towerFireInterval(def, stars);
+  const rate = interval > 0 ? formatMul(1 / interval) : '—';
+  return (
+    `${stars}★ ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
+    `射程 ${range} · 射速 ${rate}/s`
+  );
+}
+
+/** 武器悬停行:标题(合成武器带血统)+ 三条星级读数 */
+function weaponHover(type: number): string[] {
+  const def = TOWERS[type];
+  if (def === undefined) return [`未知塔型 #${type}`];
+  let head = `${def.name} · ${throttleName(def.throttle)}`;
+  for (const r of MERGES) {
+    if (r.result === type) {
+      head = `${def.name} · 由${TOWERS[r.base]?.name ?? '?'}合3★变身 · ${throttleName(def.throttle)}`;
+    }
+  }
+  return [head, starLine(def, 1), starLine(def, 2), starLine(def, 3)];
+}
+
+/** 敌型悬停行:标题 + 身板 + 掉落(残骸是升级资源、星币是商店货币,两样都报) */
+function enemyHover(e: EnemyDef): string[] {
+  return [
+    `${e.name} · ${behaviorName(e.behavior)}`,
+    `HP ${e.hp} · 接触 ${e.contactDamage}`,
+    `残骸 ${e.scrap} · 星币 ${e.starCoins}`,
+  ];
+}
+
+/** 精英悬停行:词缀名单读数据表(affixes 下标 → 名字),锁定追加条件 */
+function eliteHover(entry: UnlockEntry): string[] {
+  const lines: string[] = [collectionItemName(entry)];
+  const elite = WAVE_LOCKED_ELITES[entry.type];
+  if (elite !== undefined) {
+    const names: string[] = [];
+    for (const a of elite.affixes) names.push(AFFIXES[a]?.name ?? `#${a}`);
+    lines.push(`词缀 ${names.join(' · ')}`);
+  }
+  return lines;
+}
+
+/** 法令悬停行:效果摘要 + 叠层上限(满层即从卡池剔出,上限就是"这条能推多深") */
+function edictHover(type: number): string[] {
+  const def = EDICTS[type];
+  if (def === undefined) return [`未知法令 #${type}`];
+  return [edictSummaryText(def), `最多 ${EDICT_MAX_LEVEL} 层`];
+}
+
+/** 起手悬停行:表内描述 + 开局武器/法令名单(名字读数据表,改名自动跟上) */
+function loadoutHover(index: number): string[] {
+  const l = LOADOUTS[index]!;
+  const wNames = l.weapons.map((w) => TOWERS[w]?.name ?? `#${w}`).join(' + ');
+  const eParts: string[] = [];
+  for (let i = 0; i < l.edicts.length; i++) {
+    const t = l.edicts[i]!;
+    if (l.edicts.indexOf(t) !== i) continue; // 重复持有只数一次,×N 报层数
+    let n = 0;
+    for (const x of l.edicts) if (x === t) n++;
+    eParts.push(`${EDICTS[t]?.name ?? `#${t}`}×${n}`);
+  }
+  return [l.desc, `开局武器 ${wNames}`, `开局法令 ${eParts.join(' + ')}`];
 }
 
 /**
@@ -193,34 +386,25 @@ function lockIndexOf(kind: number, type: number): number {
   return -1;
 }
 
-/** 造一行:带锁的内容照掩码判定,锁定行把详情换成解锁条件 */
+/** 造一行:带锁的内容照掩码判定,锁定行在悬停末条追加解锁条件(灰显交给 DOM 的 opacity) */
 function rowForLocked(
   mask: number,
   kind: number,
   type: number,
   name: string,
-  detail: string,
+  hover: string[],
+  art: CodexArt | null,
 ): CodexRow {
   const idx = lockIndexOf(kind, type);
   if (idx >= 0 && (mask & (1 << idx)) === 0) {
-    return { name, detail: unlockConditionText(UNLOCKS[idx]!), locked: true };
+    return {
+      name,
+      locked: true,
+      art,
+      hover: [...hover, `未解锁 · ${unlockConditionText(UNLOCKS[idx]!)}`],
+    };
   }
-  return { name, detail, locked: false };
-}
-
-/**
- * 武器行详情:合成武器经 MERGES 反查底座名("极光阵列 激光棱镜合3★");其余印射程/伤害/系别。
- * 迫击炮类(FX_MORTAR)直击伤害恒 0、伤害全在落点 —— 印「落点伤害」而不是一个误导性的 0。
- */
-function towerDetail(type: number): string {
-  const t = TOWERS[type];
-  if (t === undefined) return `#${type}`;
-  const family = throttleName(t.throttle); // 本身就带「系」字,见 edictSummaryText 同款注释
-  for (const r of MERGES) {
-    if (r.result === type) return `${TOWERS[r.base]?.name ?? `#${r.base}`}合3★ · ${family}`;
-  }
-  const dmg = t.fx === FX_MORTAR ? `落点伤害 ${t.aoeDamage}` : `伤害 ${t.damage}`;
-  return `射程 ${t.range} · ${dmg} · ${family}`;
+  return { name, locked: false, art, hover };
 }
 
 /**
@@ -234,51 +418,69 @@ export function codexRows(progress: Progress): CodexSection[] {
 
   const weapons: CodexRow[] = [];
   for (let type = 0; type < TOWERS.length; type++) {
-    weapons.push(rowForLocked(mask, UNLOCK_TOWER, type, TOWERS[type]!.name, towerDetail(type)));
+    weapons.push(
+      rowForLocked(mask, UNLOCK_TOWER, type, TOWERS[type]!.name, weaponHover(type), towerArt(type)),
+    );
   }
-  sections.push({ title: '武器', rows: weapons });
+  sections.push({ key: 'weapons', title: '武器', rows: weapons });
 
   const enemies: CodexRow[] = [];
   for (const e of ENEMIES) {
     enemies.push({
       name: e.name,
-      detail: `HP ${e.hp} · 接触 ${e.contactDamage} · ${behaviorName(e.behavior)}`,
       locked: false,
+      art: imgArt(ENEMY_ART_URLS[e.kind]),
+      hover: enemyHover(e),
     });
   }
   // Boss = 放大的冲撞甲虫:HP/接触按底座 × 倍率现算(与 sim 的派生同一条公式)
   const base = ENEMIES[BOSS.baseKind]!;
   enemies.push({
     name: BOSS.name,
-    detail:
-      `HP ${Math.round(base.hp * BOSS.hpMul)} · 接触 ` +
-      `${Math.round(base.contactDamage * BOSS.contactDamageMul)} · 巨型冲锋 · 召唤蜂群`,
     locked: false,
+    art: imgArt(BOSS_ART_URL),
+    hover: [
+      `${BOSS.name} · 巨型冲锋 · 召唤蜂群`,
+      `HP ${Math.round(base.hp * BOSS.hpMul)} · 接触 ` +
+        `${Math.round(base.contactDamage * BOSS.contactDamageMul)}`,
+      `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
+    ],
   });
-  // 精英事件(UNLOCK_ELITE 条目):命名走 collectionItemName,与结算图鉴同源
+  // 精英事件(UNLOCK_ELITE 条目):命名走 collectionItemName(与结算图鉴同源),
+  // 配图用底座敌型的贴图 —— 精英就是"带词缀的底座",图同一张
   for (let i = 0; i < UNLOCKS.length; i++) {
     const entry = UNLOCKS[i]!;
     if (entry.kind !== UNLOCK_ELITE) continue;
     const locked = (mask & (1 << i)) === 0;
+    const eliteKind = WAVE_LOCKED_ELITES[entry.type]?.kind;
+    const hover = locked
+      ? [...eliteHover(entry), `未解锁 · ${unlockConditionText(entry)}`]
+      : eliteHover(entry);
     enemies.push({
       name: collectionItemName(entry),
-      detail: locked ? unlockConditionText(entry) : '',
       locked,
+      art: eliteKind === undefined ? null : imgArt(ENEMY_ART_URLS[eliteKind]),
+      hover,
     });
   }
-  sections.push({ title: '敌人', rows: enemies });
+  sections.push({ key: 'enemies', title: '敌人', rows: enemies });
 
   const edicts: CodexRow[] = [];
   for (const d of EDICTS) {
-    edicts.push(rowForLocked(mask, UNLOCK_EDICT, d.type, d.name, edictSummaryText(d)));
+    edicts.push(
+      rowForLocked(mask, UNLOCK_EDICT, d.type, d.name, edictHover(d.type), edictArt(d.type)),
+    );
   }
-  sections.push({ title: '法令', rows: edicts });
+  sections.push({ key: 'edicts', title: '法令', rows: edicts });
 
   const loadouts: CodexRow[] = [];
   for (let i = 0; i < LOADOUTS.length; i++) {
-    loadouts.push(rowForLocked(mask, UNLOCK_LOADOUT, i, LOADOUTS[i]!.name, LOADOUTS[i]!.desc));
+    const art = imgArt(...LOADOUTS[i]!.weapons.map((w) => TOWER_ART_URLS[w]));
+    loadouts.push(
+      rowForLocked(mask, UNLOCK_LOADOUT, i, LOADOUTS[i]!.name, loadoutHover(i), art),
+    );
   }
-  sections.push({ title: '起手配置', rows: loadouts });
+  sections.push({ key: 'loadouts', title: '起手配置', rows: loadouts });
 
   return sections;
 }
@@ -296,8 +498,19 @@ export interface CodexUi {
   visible(): boolean;
 }
 
+/** 过滤器档位:值与 CodexSection.key 一一对应,'all' = 全部显示 */
+const FILTERS: Array<{ key: string; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'weapons', label: '武器' },
+  { key: 'enemies', label: '敌人' },
+  { key: 'edicts', label: '法令' },
+  { key: 'loadouts', label: '起手' },
+];
+
 export function createCodexUi(hooks: CodexHooks): CodexUi {
   let visible = false;
+  /** 本页自己的过滤器状态:跨 show 保留(整页只建一次,与设置页的拨档同一份口径) */
+  let filter = 'all';
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -307,6 +520,23 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   titleEl.style.cssText = TITLE_CSS;
   const statsEl = document.createElement('div');
   statsEl.style.cssText = STATS_CSS;
+
+  // 过滤器按钮:只建一次,选中档由 paintFilters 按 filter 现刷
+  const filterRow = document.createElement('div');
+  filterRow.style.cssText = FILTER_ROW_CSS;
+  const filterBtns = new Map<string, HTMLButtonElement>();
+  for (const f of FILTERS) {
+    const btn = document.createElement('button');
+    btn.textContent = f.label;
+    btn.addEventListener('click', () => {
+      filter = f.key;
+      paintFilters();
+      render();
+    });
+    filterBtns.set(f.key, btn);
+    filterRow.appendChild(btn);
+  }
+
   const scrollEl = document.createElement('div');
   scrollEl.style.cssText = SCROLL_CSS;
   const backBtn = document.createElement('button');
@@ -314,14 +544,67 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   backBtn.textContent = '返回(Esc)';
   backBtn.addEventListener('click', close);
 
-  card.append(titleEl, statsEl, scrollEl, backBtn);
-  root.appendChild(card);
+  // 悬停 tooltip:整页只此一个(与 HUD 法令悬停同一条口径),卡片悬停点亮、移开即隐
+  const tip = document.createElement('div');
+  tip.style.cssText = TIP_CSS;
+
+  card.append(titleEl, statsEl, filterRow, scrollEl, backBtn);
+  root.append(card, tip);
   document.getElementById('ui')!.appendChild(root);
 
-  /**
-   * 整块重排:标题/统计照 getProgress 现读,目录整块 replaceChildren 重建 ——
-   * 与 gameOver.renderCollection 同一条先例:图鉴一开一次,分配不在铁律 3 的热路径上。
-   */
+  /** 过滤器按钮的选中态:选中的高亮,其余回落 */
+  function paintFilters(): void {
+    for (const f of FILTERS) {
+      filterBtns.get(f.key)!.style.cssText = f.key === filter ? FILTER_ON_CSS : FILTER_BTN_CSS;
+    }
+  }
+
+  /** 一张卡:配图容器 + 名称;悬停点亮 tooltip(定位在卡下方,贴屏边时夹回) */
+  function appendCell(grid: HTMLElement, row: CodexRow): void {
+    const cell = document.createElement('div');
+    cell.style.cssText = row.locked ? CELL_LOCKED_CSS : CELL_CSS;
+    if (row.art !== null) {
+      const artBox = document.createElement('div');
+      artBox.style.cssText = CELL_ART_CSS;
+      const size = row.art.kind === 'img' && row.art.urls.length > 1 ? '34px' : '56px';
+      if (row.art.kind === 'img') {
+        for (const url of row.art.urls) {
+          const img = document.createElement('img');
+          img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
+          img.src = url;
+          img.alt = '图鉴图标';
+          artBox.appendChild(img);
+        }
+      } else {
+        const img = document.createElement('img');
+        img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
+        img.alt = '图鉴图标';
+        artBox.appendChild(img);
+      }
+      cell.appendChild(artBox);
+    }
+    const name = document.createElement('div');
+    name.style.cssText = CELL_NAME_CSS;
+    name.textContent = row.name;
+    cell.appendChild(name);
+    cell.addEventListener('mouseenter', () => {
+      tip.textContent = row.hover.join('\n');
+      tip.style.display = 'block';
+      const rect = cell.getBoundingClientRect();
+      // 贴卡片下沿;右缘会越出视口时夹回(与 HUD tooltip 同一条"永远可读"的口径)
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 316));
+      tip.style.left = `${left}px`;
+      tip.style.top = `${rect.bottom + 6}px`;
+    });
+    cell.addEventListener('mouseleave', () => {
+      tip.style.display = 'none';
+    });
+    grid.appendChild(cell);
+  }
+
+  /** 整块重排:标题/统计照 getProgress 现读,网格整块 replaceChildren 重建 —— 与
+   * gameOver.renderCollection 同一条先例:图鉴一开一次,分配不在铁律 3 的热路径上。 */
   function render(): void {
     const p = hooks.getProgress();
     const { unlocked, total } = codexUnlockStats(p);
@@ -329,40 +612,41 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     statsEl.textContent = codexStatsText(p);
     scrollEl.replaceChildren();
     for (const section of codexRows(p)) {
+      if (filter !== 'all' && section.key !== filter) continue;
       const label = document.createElement('div');
       label.style.cssText = CATEGORY_CSS;
       label.textContent = section.title;
       scrollEl.appendChild(label);
-      for (const row of section.rows) {
-        const item = document.createElement('div');
-        item.style.cssText = row.locked ? ROW_LOCKED_CSS : ROW_CSS;
-        if (row.locked) {
-          item.textContent = `${row.name}(未解锁 · ${row.detail})`;
-        } else {
-          item.textContent = row.detail.length > 0 ? `${row.name}  ${row.detail}` : row.name;
-        }
-        scrollEl.appendChild(item);
-      }
+      const grid = document.createElement('div');
+      grid.style.cssText = GRID_CSS;
+      for (const row of section.rows) appendCell(grid, row);
+      scrollEl.appendChild(grid);
     }
-    // 船形剪影收尾:全量展示(存档侧本来就限量 10 张);一张都没有给占位,别让这一栏空着
+    // 船形剪影收尾:全量展示(存档侧本来就限量 10 张);一张都没有给占位,别让这一栏空着。
+    // 不属于任何过滤器档 —— 它是收藏不是目录
     const label = document.createElement('div');
     label.style.cssText = CATEGORY_CSS;
     label.textContent = '船形剪影';
     scrollEl.appendChild(label);
+    const shotRow = document.createElement('div');
+    shotRow.style.cssText = 'display:flex;flex-wrap:wrap;';
     if (p.silhouettes.length === 0) {
       const ph = document.createElement('div');
-      ph.style.cssText = SHOT_PLACEHOLDER_CSS;
+      ph.style.cssText = `color:${IDLE_COLOR};`;
       ph.textContent = '暂无收藏剪影 —— 每局结算自动收录';
-      scrollEl.appendChild(ph);
+      shotRow.appendChild(ph);
     } else {
       for (const url of p.silhouettes) {
         const thumb = document.createElement('img');
-        thumb.style.cssText = SHOT_THUMB_CSS;
+        thumb.style.cssText =
+          'width:52px;height:52px;object-fit:contain;background:rgba(5,7,13,.6);' +
+          `border:1px solid ${LINE_COLOR};border-radius:4px;margin:0 6px 6px 0;`;
         thumb.src = url;
         thumb.alt = '历史船形';
-        scrollEl.appendChild(thumb);
+        shotRow.appendChild(thumb);
       }
     }
+    scrollEl.appendChild(shotRow);
   }
 
   function close(): void {
@@ -373,6 +657,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
 
   function hide(): void {
     visible = false;
+    tip.style.display = 'none'; // 悬停的 tooltip 别留到下一次打开
     root.style.display = 'none';
   }
 
@@ -385,6 +670,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
 
   return {
     show(): void {
+      paintFilters();
       render();
       visible = true;
       root.style.display = 'flex';

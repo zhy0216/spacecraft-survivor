@@ -116,8 +116,10 @@ export function cardTitle(opt: UpgradeOption): string {
 // 两套符号各自独立(下标互不相干),按 data/towers(TOWER_*)与 data/edicts(EDICT_*)的编号排列;
 // TOWER_ICONS 里 6..11 是合成塔(卡池不进,恒空位)。
 // EDICT_ICONS 十条:弹药/散热/电容/装甲/增幅/磁力/重心/巡航/星图/超载
-const TOWER_ICONS: string[] = ['▰', '◇', 'ϟ', '➠', '✣', '◉', '', '', '', '', '', '', '♁'];
-const EDICT_ICONS: string[] = ['▦', '≋', '⚡', '⬢', '✚', '◈', '⟲', '➤', '✧', '≫'];
+// 导出给 ui/codex 用:图鉴的无贴图条目(导弹巢/法令)拿同一套字形画程序化徽章,
+// 升级卡片与图鉴于是共用一套"型号 → 符号"的身份,不让两个 UI 各抄一份。
+export const TOWER_ICONS: string[] = ['▰', '◇', 'ϟ', '➠', '✣', '◉', '', '', '', '', '', '', '♁'];
+export const EDICT_ICONS: string[] = ['▦', '≋', '⚡', '⬢', '✚', '◈', '⟲', '➤', '✧', '≫'];
 const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
 const UPGRADE_ART_URL = new URL('../../assets/game/ui/upgrade-core.svg', import.meta.url).href;
 
