@@ -1,0 +1,23 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro",
+  "request_id": "019ff6b2-7d01-7a20-8de0-ebe5a8b248e4",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa60f38/bntC1ty_B0KCnCfyvMQl-_2TLPvk2J.png",
+        "content_type": "image/png",
+        "file_name": "bntC1ty_B0KCnCfyvMQl-_2TLPvk2J.png",
+        "file_size": null,
+        "width": null,
+        "height": null
+      }
+    ],
+    "description": ""
+  },
+  "gallery": {
+    "session_id": "216e400d772a",
+    "path": "/Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/216e400d772a/index.html"
+  }
+}

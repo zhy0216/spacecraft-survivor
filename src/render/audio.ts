@@ -94,6 +94,7 @@ type SampleKey =
   | 'broadside'
   | 'elite-warn'
   | 'boss-warn'
+  | 'boost'
   | 'explosion';
 
 /** Vite 在构建时把这些 URL 指向带 hash 的运行时素材。 */
@@ -111,6 +112,7 @@ const SAMPLE_URLS: Record<SampleKey, string> = {
   broadside: new URL('../../assets/game/audio/sfx/broadside.wav', import.meta.url).href,
   'elite-warn': new URL('../../assets/game/audio/sfx/elite-warn.wav', import.meta.url).href,
   'boss-warn': new URL('../../assets/game/audio/sfx/boss-warn.wav', import.meta.url).href,
+  boost: new URL('../../assets/game/audio/sfx/boost.wav', import.meta.url).href,
   explosion: new URL('../../assets/game/audio/sfx/explosion.wav', import.meta.url).href,
 };
 
@@ -135,6 +137,9 @@ const MIN_INTERVAL: Record<string, number> = {
   explosion: 0.8,
   'warn:elite': 0.5,
   'warn:boss': 0.8,
+  // 素材本身就有 1.1s(= 加速窗时长),而技能冷却 5s ——
+  // 闸门只用来挡住"同一次触发被喊两声",给一个够长又远小于冷却的窗
+  boost: 0.5,
 };
 
 let ctx: AudioContext | null = null;
@@ -598,11 +603,16 @@ export function playBroadside(): void {
 }
 
 /**
- * 加速技能触发:低频推进器点火 + 上扫气流。无专属素材(genmedia 下一轮再补),
- * 纯合成兜底路径直接出声 —— 与其余 SFX 同一条 throttled/降级纪律。
+ * 加速技能触发:推进器点火 —— 低频冲击 + 加压泄气 + 上扫金属气流,尾部收成短促喷流。
+ * 素材裁到 1.10s,与 tuning.boostDuration 同长:声音铺满加速窗,窗一关声音也正好收尾,
+ * 于是"还在加速"这件事是听得见的,不必再看 HUD 冷却条。
+ * 峰值取 0.30(击杀 0.16 与爆炸 0.46 之间):它是玩家自己按出来的一记推背,
+ * 该压过怪潮的底噪,但不能盖住同期的受击/爆炸这些真正要命的提示。
+ * 与其余 SFX 同一条 throttled/降级纪律:素材没解码好就退回原合成兜底。
  */
 export function playBoost(): void {
   if (!throttled('boost')) return;
+  if (playSample('boost', 0.3)) return;
   if (deferSynthFallback()) return;
   playVoice({ type: 'sawtooth', freq: 70, freqEnd: 150, attack: 0.02, decay: 0.4, peak: 0.24 });
   playVoice({ noise: true, filterType: 'bandpass', filterFreq: 900, filterQ: 0.8, attack: 0.03, decay: 0.35, peak: 0.14 });

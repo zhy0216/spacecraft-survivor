@@ -48,3 +48,26 @@ ffmpeg -i generated/collect-1.wav \
 Result: 365 Hz fundamental, ~340 Hz centroid, 89-94% of the energy below
 500 Hz. Its bus gain in `src/render/audio.ts` moved 0.17 -> 0.20 to hold the
 same A-weighted loudness two octaves lower.
+
+## Round 3 (2026-08-13): boost thruster
+
+`playBoost` was the last audio-bus event with no generated asset — it had been
+falling through to the synth fallback since the boost skill landed, with a
+`genmedia 下一轮再补` note in the code. `boost-0.wav` fills it, generated with
+`sonilo/v1.1/text-to-sound-effects` (`duration: 3`, `audio_format: wav`) from:
+
+> Spaceship afterburner ignition burst: deep bass thump, sharp pressurized gas
+> release, rising metallic whoosh as thrusters kick in, tapering into a short
+> jet roar tail. Punchy, dry, close-mic, no music, no voice, game sound effect.
+
+The source is a 2.97 s jet roar that never decays, so the trim does the shaping.
+The runtime copy is cut to **1.10 s — exactly `tuning.boostDuration`** — so the
+sound fills the boost window and stops when the window does; "still boosting"
+becomes audible instead of a HUD-only readout. Tail fades over the last 0.30 s
+(the source would otherwise hard-cut), 2 ms head fade against the click, mono
+44.1 kHz PCM, peak-normalized to 0.95.
+
+Its bus gain is 0.30, between kill (0.16) and explosion (0.46): a boost is a
+player-initiated shove that should cut through the swarm bed without burying the
+hit and explosion cues firing at the same moment. **If `tuning.boostDuration`
+changes, re-trim this file to match** — the 1.10 s is a coupling, not a coincidence.

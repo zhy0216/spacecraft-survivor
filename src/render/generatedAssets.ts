@@ -70,8 +70,16 @@ const BACKGROUND_URL = new URL(
   import.meta.url,
 ).href;
 
+/**
+ * 舰壳(round-4):round-1 那张其实**从没经过生成器** —— 当时图像生成不可用,临时手画了一张
+ * SVG 兜底再栅格化,于是全仓只有它一张不是生成美术,平涂色块也与塔/设施的质感对不上。
+ * 本轮用 nano-banana-pro 真生成:废铁改装舰俯视图(焊接补丁 / 外挂装甲 / 平铺管线 /
+ * 橙色警示条),冷蓝灰主色仍落在 SHIP_FILL 的色域里,船头指向 +X(与 hullArtG 不加旋转偏移对齐)。
+ * 出图按 (shipLength + CELL×0.72) : (shipWidth + CELL×0.45) = 1.368 垫边到目标宽高比再缩放,
+ * 让 Renderer 那步"强制拉伸到船体包围盒"退化成等比缩放 —— 船不会被压扁。
+ */
 const SHIP_HULL_URL = new URL(
-  '../../assets/game/fal-round-1/ships/scrapper-hull.png',
+  '../../assets/game/fal-round-4/ships/scrapper-hull.png',
   import.meta.url,
 ).href;
 

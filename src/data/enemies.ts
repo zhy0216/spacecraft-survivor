@@ -205,7 +205,10 @@ export const ENEMIES: EnemyDef[] = [
     sporeDamage: 0,
     sporeSalvoCount: 0,
     sporeSpreadDeg: 0, // 非远程型,整段填 0
-    tint: 0xff4d6d, // 占位待调
+    // 洋红(H=300)。刻意不取高饱和洋红:那一档在**红色盲**模拟下会塌到船体 0x2b4a6e 附近
+    // (OKLab 距 0.065 < 阈值 0.08),于是这里退一步换饱和度 —— 色相仍是洋红,贴图那边照 H=300
+    // 重着色、虫体本身的饱和度不受影响,只有死亡爆点这一处偏淡。
+    tint: 0xbd84bd,
     shape: 'circle',
   },
   {
@@ -234,7 +237,10 @@ export const ENEMIES: EnemyDef[] = [
     sporeDamage: 0,
     sporeSalvoCount: 0,
     sporeSpreadDeg: 0, // 非远程型,整段填 0
-    tint: 0xff8c42, // 占位待调
+    // 橙,五型里**明度最高**的一档(H=25):它是唯一"突发侧切"的型,最亮 = 余光里也能先看见它进场。
+    // 到不了"橙金"是因为 g ≤ 0x8c 这条硬线(见 enemies.test.ts):金色要 g≈0xa0,越线就滑向暖黄、
+    // 离我方冷色域反而更近。g 顶到 0x8c 就是这条线上最橙的一点。贴图重着色同色相。
+    tint: 0xff8c3c,
     shape: 'arrow',
   },
   {
@@ -268,8 +274,10 @@ export const ENEMIES: EnemyDef[] = [
     sporeDamage: 0,
     sporeSalvoCount: 0,
     sporeSpreadDeg: 0, // 非远程型,整段填 0
-    // 暖绯红而不是高蓝紫：敌纹理还会乘灰底；原紫色在绿色盲模拟下会与我方靛蓝塔合流。
-    tint: 0xd42844, // 占位待调；色盲合成审计见 render/palette.test.ts
+    // 深绯红,五型里**明度最低**的一档(H=344):它赖在船尾死角、不冲锋,靠"暗"与最亮的
+    // 侧掠者拉开两端;色相只与冲撞甲虫差 6°,分家全靠明度 —— 两者的贴图重着色同样按这个差做。
+    // 仍是暖绯红而不是高蓝紫:敌纹理还会乘灰底,原紫色在绿色盲模拟下会与我方靛蓝塔合流。
+    tint: 0xb01030, // 色盲合成审计见 render/palette.test.ts;r 顶着 0xb0 的下限(最暗的合法红)
     shape: 'capsule',
   },
   {
@@ -300,7 +308,10 @@ export const ENEMIES: EnemyDef[] = [
     sporeDamage: 0,
     sporeSalvoCount: 0,
     sporeSpreadDeg: 0, // 非远程型,整段填 0
-    tint: 0xff1f4b, // 占位待调
+    // 猩红(H=356,r 拉满):最疼的一型占最"警报"的那个红。与尾随蛆只差 8° 色相,
+    // 两者分家全靠明度(r=255 对 r=176)—— 贴图重着色也按这个差做。
+    // Boss 是它的放大版,重着色时按同一档明度处理,两者一眼同族。
+    tint: 0xff1f2e,
     shape: 'hex',
   },
   {
@@ -334,7 +345,11 @@ export const ENEMIES: EnemyDef[] = [
     sporeDamage: 8, // 占位待调(单发 ≈ 1.6 只蜂群蛭的咬伤:三发全中很疼,但每一发都看得见、躲得开)
     sporeSalvoCount: 3, // 占位待调(一轮三发 = "齐射"的读数,一发一发地喷就退化成普通怪了)
     sporeSpreadDeg: 12, // 占位待调(三发固定错开的扇面半展宽:不叠成一根"大弹",也不散到全躲得掉)
-    tint: 0xff5f9e, // 占位待调(暖洋红紫:GDD §12 红紫暖色域,绿分量被压住)
+    // 紫罗兰(H=288):暖色域最"紫"的一端 —— GDD §12 的红紫域到此为止,再往下就是我方冷蓝。
+    // 它是唯一的远程型,离船最远、最该一眼认出来,故占住与另外四型跨度最大的那个色相。
+    // 再紫一点就会跌破 r ≥ 0xb0(紫的红分量随色相下滑),288° 是这条线上最紫的一点。
+    // 色盲合成审计见 render/palette.test.ts。
+    tint: 0xb400e0,
     shape: 'spore', // 带刺球:与圆型蜂群蛭(纯圆)同族但多一圈尖刺,色相之外的第二条辨识通道
   },
 ];
