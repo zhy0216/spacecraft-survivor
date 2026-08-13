@@ -3,7 +3,7 @@
  * 末尾的小 DOM 桩只守重开/时停这两条流程约束:单实例换 World,不重复挂节点或监听器。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS } from '../data/edicts';
+import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS, edictDesc, edictScopeLabel } from '../data/edicts';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
@@ -110,6 +110,8 @@ interface StubEl {
   append(...kids: StubEl[]): void;
   appendChild(kid: StubEl): StubEl;
   addEventListener(type: string, fn: (e?: unknown) => void): void;
+  /** 法令 tooltip 定位要读面板几何(showEdictTip):桩一律报零,够用 */
+  getBoundingClientRect(): { left: number; top: number; right: number; bottom: number };
 }
 
 function createStubEl(tag = 'div'): StubEl {
@@ -129,6 +131,9 @@ function createStubEl(tag = 'div'): StubEl {
     },
     addEventListener(type: string, fn: (e?: unknown) => void): void {
       el.listeners.set(type, fn);
+    },
+    getBoundingClientRect(): { left: number; top: number; right: number; bottom: number } {
+      return { left: 0, top: 0, right: 0, bottom: 0 };
     },
   };
   return el;
@@ -366,6 +371,27 @@ describe('createHud', () => {
     // 重开一局(新世界无法令):徽记当帧收起
     hud.setWorld(stubWorld() as unknown as World);
     expect(edicts.style.display).toBe('none');
+  });
+
+  it('法令 chip 悬停 tooltip:点亮名字×层/作用域/一层效果,移开即隐;面板底色之上必须显式给定文字色', () => {
+    const levels = createEdictLevels();
+    levels[EDICT_AMMO] = 1;
+    const hud = createHud({ world: stubWorld({ edictLevels: levels }) as unknown as World });
+    const root = dom.ui.children[0]!;
+    const tip = root.children[11]!;
+    expect(tip.style.cssText).toContain('display:none');
+    // PANEL_CSS 只给深色底、不给定文字色,而页面基色是黑 —— 少了 color 就是黑字黑底,
+    // 玩家悬停只见一个空面板(真机复现过的回归,这里是那道防线的钉子)
+    expect(tip.style.cssText).toContain('color:');
+
+    const edicts = root.children[0]!.children[0]!.children[3]!;
+    const chip = edicts.children[0]!.children[1]!.children[0]!;
+    chip.listeners.get('mouseenter')!();
+    expect(tip.style.display).toBe('block');
+    const def = EDICTS[EDICT_AMMO]!;
+    expect(tip.textContent).toBe(`${def.name} ×1\n${edictScopeLabel(def)}\n${edictDesc(def)}`);
+    chip.listeners.get('mouseleave')!();
+    expect(tip.style.display).toBe('none');
   });
 
   it('图鉴读数:按 world.unlockMask 置位数显示已解锁数/总数,setWorld 换世界当帧跟上', () => {

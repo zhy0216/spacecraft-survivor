@@ -639,7 +639,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   const edictTip = document.createElement('div');
   edictTip.style.cssText =
     `${PANEL_CSS}position:fixed;display:none;max-width:300px;white-space:pre-line;` +
-    `line-height:1.55;z-index:1000;pointer-events:none;`;
+    `line-height:1.55;z-index:1000;pointer-events:none;color:${VALUE_COLOR};`;
 
   // 商店信标倒计时:一行"商店"标签 + 剩余秒数与距离;节点只建一次,每帧现读世界。
   // 距离也报:玩家判断"这趟跑不跑得赢"要的是**秒数与距离两个数一起看**
