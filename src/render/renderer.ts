@@ -71,7 +71,7 @@ import {
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
-  TOWER_MAX_LEVEL,
+  STAR_MAX,
   TOWERS,
   towerArcDeg,
   type TowerDef,
@@ -1750,7 +1750,7 @@ export class Renderer {
       const b = this.weaponBindings[k]!;
       if (!b.def || b.g instanceof Graphics) continue; // 兜底色块是静态的,不跟炮管转
       const slot = this.world.weapons[b.slot]!;
-      slotArc(b.slot, 0, towerArcDeg(b.def, slot.level), arcTmp);
+      slotArc(b.slot, 0, towerArcDeg(b.def, slot.stars), arcTmp);
       b.g.rotation = arcTmp.center + slot.turretOffset + GENERATED_ART_FORWARD_OFFSET;
     }
   }
@@ -1830,7 +1830,7 @@ export class Renderer {
       const def = TOWERS[slot.type];
       const hp = WEAPON_HARDPOINTS[i];
       if (!def || !hp) continue;
-      slotArc(i, 0, towerArcDeg(def, slot.level), arcTmp);
+      slotArc(i, 0, towerArcDeg(def, slot.stars), arcTmp);
       // 不必 wrapAngle:cos/sin 对超出 ±π 的角一样正确,折回只是白算两次三角函数
       const a = arcTmp.center + slot.turretOffset;
       g.moveTo(hp.x, hp.y).lineTo(hp.x + Math.cos(a) * SLOT_MUZZLE_LEN, hp.y + Math.sin(a) * SLOT_MUZZLE_LEN);
@@ -1862,8 +1862,8 @@ export class Renderer {
       const def = TOWERS[slot.type];
       const hp = WEAPON_HARDPOINTS[i];
       if (!def || !hp) continue;
-      slotArc(i, 0, towerArcDeg(def, slot.level), arcTmp);
-      const r = towerRange(def, slot.level);
+      slotArc(i, 0, towerArcDeg(def, slot.stars), arcTmp);
+      const r = towerRange(def, slot.stars);
       g.moveTo(hp.x, hp.y)
         .arc(hp.x, hp.y, r, arcTmp.center - arcTmp.half, arcTmp.center + arcTmp.half)
         .closePath();
@@ -1928,7 +1928,7 @@ export class Renderer {
             color: THR_TRACK_COLOR,
             alpha: THR_TRACK_ALPHA,
           });
-          const cap = towerMagazine(def, slot.level);
+          const cap = towerMagazine(def, slot.stars);
           const ammo = cap > 0 ? clamp01(slot.ammo / cap) : 0;
           if (ammo > 0) g.rect(x, y0, THR_BAR_THICK, THR_BAR_LEN * ammo).fill(color);
           // 分母走 sim/tower 的 slotReload(而不是裸 def.reload):弹药库把装填时间乘短了,
@@ -1996,15 +1996,15 @@ export class Renderer {
           break; // 认不出的节流档只是不画读数,不炸掉整层(与敌人 kind 越界同一条兜底口径)
       }
 
-      // 等级点(GDD §5.4 的 Lv1→Lv5):三种机制共用同一处 —— 硬点船尾侧,沿 +Y 居中排开。
-      // 用点数而不是数字:炮位旁边能塞进去的字号已经小到认不出是几,而五个点数得清。
-      // 上限夹在 TOWER_MAX_LEVEL:数据表被改坏(或将来放宽等级上限)也不该排出炮位一档
-      const lv = Math.min(Math.max(Math.floor(slot.level), 0), TOWER_MAX_LEVEL);
-      if (lv > 0) {
+      // 星级点(星级系统:1★..3★):三种机制共用同一处 —— 硬点船尾侧,沿 +Y 居中排开。
+      // 用点数而不是数字:炮位旁边能塞进去的字号已经小到认不出是几,而三个点数得清。
+      // 上限夹在 STAR_MAX:数据表被改坏也不该排出炮位一档
+      const stars = Math.min(Math.max(Math.floor(slot.stars), 0), STAR_MAX);
+      if (stars > 0) {
         const x = hp.x - THR_GAUGE_OFF;
-        const y0 = hp.y - ((lv - 1) * THR_LEVEL_DOT_GAP) / 2;
-        for (let k = 0; k < lv; k++) g.circle(x, y0 + k * THR_LEVEL_DOT_GAP, THR_LEVEL_DOT_R);
-        // 攒成一条 path 一次填充:等级点是一组读数,不需要逐点不同的表现
+        const y0 = hp.y - ((stars - 1) * THR_LEVEL_DOT_GAP) / 2;
+        for (let k = 0; k < stars; k++) g.circle(x, y0 + k * THR_LEVEL_DOT_GAP, THR_LEVEL_DOT_R);
+        // 攒成一条 path 一次填充:星级点是一组读数,不需要逐点不同的表现
         g.fill(FX_CORE_COLOR);
       }
     }

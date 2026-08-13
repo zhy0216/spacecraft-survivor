@@ -7,7 +7,14 @@ import {
   STARTING_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
-import { TOWER_ARC, TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
+import {
+  STAR_MAX,
+  TOWER_ARC,
+  TOWER_AUTOCANNON,
+  TOWER_LASER,
+  TOWER_MISSILE_NEST,
+  TOWER_STORM_CANNON,
+} from '../data/towers';
 import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import { tuning } from './config';
 import { DROP_KIND_MAGNET } from './drop';
@@ -62,12 +69,59 @@ describe('World 槽位制核心接线', () => {
     expect(world.swapWeapons(0, 99)).toBe(-80);
   });
 
-  it('四次重复获得触发合成时保留最高等级并释放槽位', () => {
+  it('升星合成:第 2 把同型 → 2★,第 3 把 → 3★ 变身合成武器,吸收不占新槽', () => {
     const world = new World(2);
-    for (let i = 0; i < 3; i++) expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    // 第 1 把:落空槽 1★
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.weapons[0]!.type).toBe(TOWER_AUTOCANNON);
+    expect(world.weapons[0]!.stars).toBe(1);
+    // 第 2 把:吸收进同一把 → 2★,槽位不增(还只有这一个槽有炮)
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.weapons[0]!.stars).toBe(2);
+    expect(world.weapons.filter((slot) => slot.type >= 0)).toHaveLength(1);
+    // 第 3 把:合到 3★ 且有配方 → 当场变身风暴机炮 3★
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.weapons[0]!.type).toBe(TOWER_STORM_CANNON);
+    expect(world.weapons[0]!.stars).toBe(STAR_MAX);
+    expect(world.weapons.filter((slot) => slot.type >= 0)).toHaveLength(1);
+    // 第 4 把机炮:原型的槽已经变成风暴机炮,新 copy 从头养一条 1★ 线
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.weapons.filter((slot) => slot.type === TOWER_AUTOCANNON)).toHaveLength(1);
+  });
+
+  it('无配方的塔合到 3★ 就到顶:不变身,再收同型是无操作(防御性兜底)', () => {
+    const world = new World(2);
+    for (let i = 0; i < 3; i++) expect(world.acquireWeapon(TOWER_MISSILE_NEST)).toBe(0);
     const occupied = world.weapons.filter((slot) => slot.type >= 0);
     expect(occupied).toHaveLength(1);
-    expect(occupied[0]!.level).toBeLessThanOrEqual(TOWER_MAX_LEVEL);
+    expect(occupied[0]!.type).toBe(TOWER_MISSILE_NEST);
+    expect(occupied[0]!.stars).toBe(STAR_MAX);
+    expect(world.acquireWeapon(TOWER_MISSILE_NEST)).toBe(0);
+    expect(world.weapons.filter((slot) => slot.type >= 0)).toHaveLength(1);
+  });
+
+  it('槽满 + 未拥有 → REPLACE_NEEDED;槽满 + 已拥有同型 → 吸收成功不需槽', () => {
+    const world = new World(2);
+    const types = [TOWER_AUTOCANNON, TOWER_LASER, TOWER_ARC, 0, 1, 2, 3, 4];
+    for (let i = 0; i < 8; i++) world.weapons[i]!.type = types[i]!;
+    world.weapons[0]!.stars = 1;
+    for (let i = 1; i < 8; i++) world.weapons[i]!.stars = 1;
+    expect(world.acquireWeapon(TOWER_MISSILE_NEST)).toBeLessThan(0); // 未拥有 + 槽满
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0); // 已拥有 → 吸收升 2★
+    expect(world.weapons[0]!.stars).toBe(2);
+  });
+
+  it('替换:同型 = 喂线(最高星那把 +1★),异型 = 清槽落位 1★', () => {
+    const world = new World(2);
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0); // 现在一把 2★ 机炮
+    // 同型替换:吸收进最高星那把 → 3★ 变身,目标槽(0 号)是那把最高星本身
+    expect(world.replaceWeapon(0, TOWER_AUTOCANNON)).toBe(0);
+    expect(world.weapons[0]!.type).toBe(TOWER_STORM_CANNON);
+    // 异型替换:旧武器清空、新武器落位 1★
+    expect(world.replaceWeapon(0, TOWER_LASER)).toBe(0);
+    expect(world.weapons[0]!.type).toBe(TOWER_LASER);
+    expect(world.weapons[0]!.stars).toBe(1);
   });
 
   it('法令聚合驱动船体上限:装甲协议每层 +15,授予当帧就生效', () => {

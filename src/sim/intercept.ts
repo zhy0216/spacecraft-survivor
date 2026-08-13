@@ -89,11 +89,11 @@ export function stepInterception(
     if (!def) continue;
     // 拦截旗子:data/towers 的 interceptsProjectiles,荆棘壁垒与点防同筛(见该字段注释)
     if (!def.interceptsProjectiles) continue;
-    const level = slot.level;
+    const stars = slot.stars;
 
-    slotArc(i, ship.heading, towerArcDeg(def, level), arc);
+    slotArc(i, ship.heading, towerArcDeg(def, stars), arc);
     slotMuzzleWorld(ship, i, muzzle);
-    const range = towerRange(def, level);
+    const range = towerRange(def, stars);
     const range2 = range * range;
 
     // —— 选目标:射界 + 射程内、朝船接近、距船最近 ——
@@ -152,9 +152,9 @@ export function stepInterception(
     b.y = b.py = muzzle.y;
     b.vx = Math.cos(a) * def.bulletSpeed;
     b.vy = Math.sin(a) * def.bulletSpeed;
-    b.damage = effectiveDamage(def, level, buffs.damageMul);
+    b.damage = effectiveDamage(def, stars, buffs.damageMul);
     b.life = dist / def.bulletSpeed;
-    b.pierce = towerPierce(def, level);
+    b.pierce = towerPierce(def, stars);
     b.radius = def.bulletRadius;
     b.towerType = def.type;
     b.throttle = def.throttle;

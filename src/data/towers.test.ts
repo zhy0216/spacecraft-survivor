@@ -18,11 +18,11 @@ import {
   TOWER_DELUGE,
   TOWER_KIND_COUNT,
   TOWER_LASER,
-  TOWER_MAX_LEVEL,
   TOWER_MISSILE_NEST,
   TOWER_MORTAR,
   TOWER_PD,
   TOWER_RAILGUN,
+  STAR_MAX,
   TOWER_STORM_CANNON,
   TOWER_THORN,
   TOWER_THUNDER,
@@ -41,7 +41,7 @@ import {
   TOWERS,
 } from './towers';
 
-const LEVELS = [1, 2, 3, 4, 5];
+const STARS = [1, 2, 3];
 const ACCESSORS: Array<[string, (def: TowerDef, level: number) => number]> = [
   ['damage', towerDamage], ['fireInterval', towerFireInterval], ['range', towerRange],
   ['arc', towerArcDeg], ['magazine', towerMagazine], ['heat', towerHeatMax],
@@ -52,7 +52,7 @@ const ACCESSORS: Array<[string, (def: TowerDef, level: number) => number]> = [
 describe('武器塔数值表', () => {
   it('下标、基础塔与合成塔编号稳定', () => {
     expect(TOWER_KIND_COUNT).toBe(13);
-    expect(TOWER_MAX_LEVEL).toBe(5);
+    expect(STAR_MAX).toBe(3);
     expect(TOWERS).toHaveLength(TOWER_KIND_COUNT);
     TOWERS.forEach((def, index) => expect(def.type).toBe(index));
     expect(TOWERS.slice(0, 6).map((def) => def.name)).toEqual([
@@ -111,27 +111,31 @@ describe('武器塔数值表', () => {
     expect(TOWERS.filter((def) => def.interceptsProjectiles)).toHaveLength(2);
   });
 
-  it('等级 getter 保持成长、整数与越界夹取契约', () => {
+  it('星级 getter 保持成长、整数与越界夹取契约(2★/3★ = 旧 Lv3/Lv5 档)', () => {
     for (const def of TOWERS) {
-      for (let level = 1; level < TOWER_MAX_LEVEL; level++) {
-        expect(towerRange(def, level + 1)).toBeGreaterThan(towerRange(def, level));
-        if (def.damage > 0) expect(towerDamage(def, level + 1)).toBeGreaterThan(towerDamage(def, level));
-        else expect(towerAoeDamage(def, level + 1)).toBeGreaterThan(towerAoeDamage(def, level));
+      for (let stars = 1; stars < STAR_MAX; stars++) {
+        expect(towerRange(def, stars + 1)).toBeGreaterThan(towerRange(def, stars));
+        if (def.damage > 0) expect(towerDamage(def, stars + 1)).toBeGreaterThan(towerDamage(def, stars));
+        else expect(towerAoeDamage(def, stars + 1)).toBeGreaterThan(towerAoeDamage(def, stars));
       }
       for (const [name, getter] of ACCESSORS) {
         const low = getter(def, 1);
-        const high = getter(def, TOWER_MAX_LEVEL);
+        const high = getter(def, STAR_MAX);
         expect(Number.isFinite(low), name).toBe(true);
         expect(Number.isFinite(high), name).toBe(true);
         expect(getter(def, Number.NaN), name).toBe(low);
         expect(getter(def, 99), name).toBe(high);
       }
-      expect(Number.isInteger(towerMagazine(def, TOWER_MAX_LEVEL))).toBe(true);
-      expect(Number.isInteger(towerChainCount(def, TOWER_MAX_LEVEL))).toBe(true);
+      expect(Number.isInteger(towerMagazine(def, STAR_MAX))).toBe(true);
+      expect(Number.isInteger(towerChainCount(def, STAR_MAX))).toBe(true);
     }
     const gun = TOWERS[TOWER_AUTOCANNON]!;
-    expect(LEVELS.map((level) => towerBurst(gun, level))).toEqual([1, 1, 2, 2, 2]);
-    expect(LEVELS.map((level) => towerPierce(gun, level))).toEqual([0, 0, 0, 0, 1]);
+    // 星级映射钉死:2★ 触发旧 Lv3 的双管跳变、3★ 触发旧 Lv5 的曳光弹穿透
+    expect(STARS.map((stars) => towerBurst(gun, stars))).toEqual([1, 2, 2]);
+    expect(STARS.map((stars) => towerPierce(gun, stars))).toEqual([0, 0, 1]);
+    // 2★/3★ 的数值档位恰好命中旧 Lv3/Lv5:按成长表现算一遍(不改表、只钉换算口径)
+    expect(towerDamage(gun, 2)).toBe(gun.damage * Math.pow(gun.growth.damage, 2));
+    expect(towerDamage(gun, 3)).toBe(gun.damage * Math.pow(gun.growth.damage, 4));
   });
 
   it('光束与特效存续时间保持正序', () => {

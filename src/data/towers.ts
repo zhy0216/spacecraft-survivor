@@ -46,13 +46,24 @@ export const TOWER_THORN = 11; // 3×点防 → 荆棘星幕(击落弹幕拦截�
 export const TOWER_MISSILE_NEST = 12; // 导弹巢(首次胜利解锁;弹药系迫击炮,见下)
 export const TOWER_KIND_COUNT = 13;
 
-/** 同名叠级上限(GDD §5.4:Lv1→Lv5,原格生效不占新格) */
-export const TOWER_MAX_LEVEL = 5;
+/**
+ * 星级上限(星级系统,取代旧 GDD §5.4 的同名叠级 Lv1→Lv5):1★ 起步,同型合成升星,最多 3★。
+ * 2★ = 旧 Lv3 档数值 + burstAtLv3 机制跳变,3★ = 旧 Lv5 档 + pierceAtLv5 —— 换算见文件尾 starLevel。
+ */
+export const STAR_MAX = 3;
 
-// —— 节流机制(GDD §5.1)。三档正是 06 号支援设施的三个作用锚点,故编号与语义都不许合并 ——
+// —— 节流机制(GDD §5.1)。三档正是三条系限定法令的作用锚点,故编号与语义都不许合并 ——
 export const THR_AMMO = 0; // 弹药:弹夹 + 装填 → 突发满速后**必然停火一段**
 export const THR_HEAT = 1; // 过热:热量累积 + 强制冷却 → **点射就永不停火**,只罚贪连射
 export const THR_CHARGE = 2; // 充能:蓄力满了才放 → 攒-放节奏,与射速旋钮无关
+
+/** 节流系的中文名(下标 = THR_*;武器系标签与系限定法令作用域的单一来源,UI 不许再抄第二份) */
+export const THROTTLE_NAMES = ['弹药系', '过热系', '充能系'] as const;
+
+/** 节流系名字:越界(数值表被改坏)不抛,回落成可读的问号档 */
+export function throttleName(throttle: number): string {
+  return THROTTLE_NAMES[throttle] ?? '?';
+}
 
 // —— 开火表现 / 结算类型。sim/turret.ts 靠它 switch 分派,渲染层靠它选画法 ——
 export const FX_BULLET = 0; // 直射弹(机炮、点防)→ 真子弹,飞行途中碰撞
@@ -86,16 +97,18 @@ export const FX_LIFE_BLAST = 0.25; // 占位待调
  * 每座塔各带一份而不是全局共用一份:成长曲线本身就是塔的定位
  * (磁轨该在伤害上陡、点防该在弹夹上陡),共用一份等于把六塔的手感绑成一个旋钮。
  * **不用的乘法档填 1(= 无成长)而不是 0** —— 这里是本文件"不用就填 0"那条口径的唯一例外:
- * 0 作乘数是"归零",会把 Lv2 的热上限直接抹成 0,与"这一档用不上"是两码事。
+ * 0 作乘数是"归零",会把 2★ 的热上限直接抹成 0,与"这一档用不上"是两码事。
+ * 口径仍是"按旧 Lv 步进"的每级数值:星级 getter 在 starLevel 里换算(2★→旧 Lv3、3★→旧 Lv5),
+ * 本表一个数都不用重写。
  */
 export interface TowerGrowth {
-  damage: number; // 每级乘数(复利)
-  fireRate: number; // 每级乘数;fireInterval = base / m^(N-1)
-  range: number; // 每级乘数
-  heatMax: number; // 每级乘数
-  chargeRate: number; // 每级乘数;chargeTime = base / m^(N-1)
-  magazine: number; // 每级**加法**(发),取整
-  chain: number; // 每级**加法**(跳),取整
+  damage: number; // 每旧级乘数(复利)
+  fireRate: number; // 每旧级乘数;fireInterval = base / m^(N-1)
+  range: number; // 每旧级乘数
+  heatMax: number; // 每旧级乘数
+  chargeRate: number; // 每旧级乘数;chargeTime = base / m^(N-1)
+  magazine: number; // 每旧级**加法**(发),取整
+  chain: number; // 每旧级**加法**(跳),取整
 }
 
 export interface TowerDef {
@@ -750,79 +763,85 @@ export const TOWERS: TowerDef[] = [
  * 而 NaN 在 checksum 里被 `| 0` 抹成 0,分叉当场就从确定性口径下漏掉了。
  * 取整是因为等级本就是整数档:非整数进来(将来若有"半级"类效果)也不会算出档位之间的怪值。
  */
-function clampLevel(level: number): number {
-  if (!(level >= 1)) return 1;
-  if (level > TOWER_MAX_LEVEL) return TOWER_MAX_LEVEL;
-  return Math.floor(level);
+/**
+ * 星级 → 有效等级档:1★→1、2★→3、3★→5。
+ * 成长表(TowerGrowth)不用改、还是按旧 Lv 步进:starLevel−1 = 0/2/4 恰好是旧 Lv1/Lv3/Lv5 的指数,
+ * 于是 2★ 命中旧 Lv3 档数值、3★ 命中旧 Lv5 档 —— "星级自带成长"直接由旧数据兑现。
+ * 夹取与取整口径照旧:非整数星级(将来若有"半星"类效果)也不会算出档位之间的怪值,
+ * 而 NaN 在 checksum 里被 `| 0` 抹成 0,分叉当场就从确定性口径下漏掉。
+ */
+function starLevel(stars: number): number {
+  if (!(stars >= 1)) return 1; // NaN 兜底(与旧 clampLevel 同一条守卫:NaN >= 1 恒 false)
+  return Math.min(STAR_MAX, Math.floor(stars)) * 2 - 1;
 }
 
 /**
- * 以下取值函数是 sim 读表的**唯一入口**:一律 (def, level) 入参、一律不读 tuning
+ * 以下取值函数是 sim 读表的**唯一入口**:一律 (def, stars) 入参、一律不读 tuning
  * (全局倍率在 sim/tower.ts 的 effectiveDamage / effectiveFireInterval 里现乘,数据表不认识 config)。
  * 入参形状定成这样是给 06 号留的口子:支援设施的邻接加成只需在 sim/tower.ts 的包装函数里多读一步,
  * 这里与几十处调用点一个字都不用改。
  */
-export function towerDamage(def: TowerDef, level: number): number {
-  return def.damage * Math.pow(def.growth.damage, clampLevel(level) - 1);
+export function towerDamage(def: TowerDef, stars: number): number {
+  return def.damage * Math.pow(def.growth.damage, starLevel(stars) - 1);
 }
 
 /** 秒/次。充能系的 base 恒 0,除下来照样是 0,不必特判 */
-export function towerFireInterval(def: TowerDef, level: number): number {
-  return def.fireInterval / Math.pow(def.growth.fireRate, clampLevel(level) - 1);
+export function towerFireInterval(def: TowerDef, stars: number): number {
+  return def.fireInterval / Math.pow(def.growth.fireRate, starLevel(stars) - 1);
 }
 
-export function towerRange(def: TowerDef, level: number): number {
-  return def.range * Math.pow(def.growth.range, clampLevel(level) - 1);
+export function towerRange(def: TowerDef, stars: number): number {
+  return def.range * Math.pow(def.growth.range, starLevel(stars) - 1);
 }
 
 /**
- * 射界弧度**不随等级成长**:GDD §5.4 只承诺"数值成长",射界是**格子**的属性
+ * 射界弧度**不随星级成长**:GDD §5.4 只承诺"数值成长",射界是**格子**的属性
  * (加宽只由角落格的 +60° 与 §5.5 的进化配方给)。
- * 仍然照其余取值函数收下 level:调用方一律写 towerArcDeg(def, cell.level),
+ * 仍然照其余取值函数收下 stars:调用方一律写 towerArcDeg(def, slot.stars),
  * 哪天加特林要塞(§5.5:弧度 +50°)落地,改这一处即可,十几个调用点一个字不用动。
  */
-export function towerArcDeg(def: TowerDef, level: number): number {
-  void level;
+export function towerArcDeg(def: TowerDef, stars: number): number {
+  void stars;
   return def.arcDeg;
 }
 
 /** 弹夹上限(发)。加法成长 + 取整:弹夹是**整数个**东西,UI 直接把它印出来 */
-export function towerMagazine(def: TowerDef, level: number): number {
-  return Math.round(def.magazine + def.growth.magazine * (clampLevel(level) - 1));
+export function towerMagazine(def: TowerDef, stars: number): number {
+  return Math.round(def.magazine + def.growth.magazine * (starLevel(stars) - 1));
 }
 
-export function towerHeatMax(def: TowerDef, level: number): number {
-  return def.heatMax * Math.pow(def.growth.heatMax, clampLevel(level) - 1);
+export function towerHeatMax(def: TowerDef, stars: number): number {
+  return def.heatMax * Math.pow(def.growth.heatMax, starLevel(stars) - 1);
 }
 
 /** 攒满一发要多久(秒)。成长挂在 chargeRate 上,故这里是除法 —— 与 fireInterval 同形 */
-export function towerChargeTime(def: TowerDef, level: number): number {
-  return def.chargeTime / Math.pow(def.growth.chargeRate, clampLevel(level) - 1);
+export function towerChargeTime(def: TowerDef, stars: number): number {
+  return def.chargeTime / Math.pow(def.growth.chargeRate, starLevel(stars) - 1);
 }
 
 /** 链式总命中数(含首目标)。同样是整数档 */
-export function towerChainCount(def: TowerDef, level: number): number {
-  return Math.round(def.chainCount + def.growth.chain * (clampLevel(level) - 1));
+export function towerChainCount(def: TowerDef, stars: number): number {
+  return Math.round(def.chainCount + def.growth.chain * (starLevel(stars) - 1));
 }
 
 /**
- * 每次开火几发(GDD §5.4 的 Lv3 机制小跳变;机炮双管 = 2)。
- * 0 = 该塔没有这次跳变 → 恒 1 发。跳变而不是连续成长:玩家要能在升到 Lv3 那一刻**听出来**。
+ * 每次开火几发(旧 GDD §5.4 的 Lv3 机制小跳变 → 星级系统里 2★ 触发;机炮双管 = 2)。
+ * 0 = 该塔没有这次跳变 → 恒 1 发。跳变而不是连续成长:玩家要能在合到 2★ 那一刻**听出来**。
  */
-export function towerBurst(def: TowerDef, level: number): number {
-  return clampLevel(level) >= 3 && def.burstAtLv3 > 0 ? def.burstAtLv3 : 1;
+export function towerBurst(def: TowerDef, stars: number): number {
+  return stars >= 2 && def.burstAtLv3 > 0 ? def.burstAtLv3 : 1;
 }
 
-/** 弹丸穿透次数(GDD §5.4 的 Lv5 机制小跳变;机炮曳光弹 = +1) */
-export function towerPierce(def: TowerDef, level: number): number {
-  return def.pierce + (clampLevel(level) >= 5 ? def.pierceAtLv5 : 0);
+/** 弹丸穿透次数(旧 Lv5 机制小跳变 → 星级系统里 3★ 触发;机炮曳光弹 = +1) */
+export function towerPierce(def: TowerDef, stars: number): number {
+  return def.pierce + (stars >= 3 ? def.pierceAtLv5 : 0);
 }
 
 /**
  * 落点 AoE 伤害。迫击炮的 def.damage 恒 0(途中不碰撞),伤害全在落点 ——
- * 少了这个函数,它就是六塔里唯一升级不加伤的塔,而它偏偏是充能系里最慢的那座。
+ * 少了这个函数,它就是六塔里唯一升星不加伤的塔,而它偏偏是充能系里最慢的那座。
  * 复用 growth.damage 而不另开一档:落点伤害**就是**这座塔的伤害,两条曲线没有分开的理由。
  */
-export function towerAoeDamage(def: TowerDef, level: number): number {
-  return def.aoeDamage * Math.pow(def.growth.damage, clampLevel(level) - 1);
+export function towerAoeDamage(def: TowerDef, stars: number): number {
+  return def.aoeDamage * Math.pow(def.growth.damage, starLevel(stars) - 1);
 }

@@ -5,14 +5,11 @@
  * 铁律 3:候选写进调用方给的 out(World.offer),本文件自己的暂存全是模块级复用 ——
  *   一次抽卡不新增分配(卡片本身除外:out 不够长时才补一个对象,整局至多三个)。
  *
- * —— 三类候选(权重在 data/economy.ts)——
- *   新武器 OFFER_NEW_WEAPON(20%):武器槽扩到 8 个之后,新武器不再是"顺手拿到的东西",
- *     但也不能像旧的 5% 那样稀有(那档配 8 个槽会让整局有一半槽位空着);
- *     **允许抽到已拥有的型** —— 那正是三合一合成的唯一通路(见下面 collectPool 的注释);
- *   武器升级 OFFER_WEAPON_UPGRADE(30%):升级一张同名武器卡 = 该武器 +1 级;
- *     **可以给未拥有的武器升级**(存档等级,见 World.weaponBankedLevels ——
- *     获得那把武器时从存档级起步);
- *   法令 OFFER_EDICT(50%):不占槽、**可叠层**(每条最多 EDICT_MAX_LEVEL 层),
+ * —— 两类候选(权重在 data/economy.ts)—— 星级系统:武器升级整类取消,成长 = 升星合成 + 法令叠层
+ *   新武器 OFFER_NEW_WEAPON(40%):同型武器是升星通路的原料(第 2 把 → 2★、第 3 把 → 3★
+ *     变身合成武器,见 World.mergeOrInstall);**已拥有但未满 3★ 的同型照进** —— 那正是升星合成
+ *     的唯一通路(见下面 collectPool 的注释),已满 3★ 的同型是死卡、剔出候选;
+ *   法令 OFFER_EDICT(60%):不占槽、**可叠层**(每条最多 EDICT_MAX_LEVEL 层),
  *     满层的从候选里剔掉。
  *
  * 本文件只回答两个问题,别的一概不管:
@@ -23,35 +20,29 @@
  * (槽满 / 法令满层返回理由码)。
  *
  * —— rng 消耗口径(定死,与 World.stressPickKind 一字同源)——
- * **每个候选位恰好消耗 2 次 rng**:先掷类别(20/30/50 按总和归一化),再在该类别的可选表里掷下标。
- * 即使这一位最终空着(三类都无合法项)也照样消耗,即消耗次数与**槽位状态、权重、去重结果全无关**。
+ * **每个候选位恰好消耗 2 次 rng**:先掷类别(40/60 按总和归一化),再在该类别的可选表里掷下标。
+ * 即使这一位最终空着(两类都无合法项)也照样消耗,即消耗次数与**槽位状态、权重、去重结果全无关**。
  * 少了这条,一次平衡调整(改权重)或一次取用(改槽位)就会把整条随机序列往前后挪一格,
  * 于是"同 seed 同出怪序列"当场作废 —— 而那是 08 号那批用例与整个确定性口径的地基。
  */
 import type { Rng } from '../core/rng';
-import {
-  OFFER_WEIGHT_EDICT,
-  OFFER_WEIGHT_NEW_WEAPON,
-  OFFER_WEIGHT_WEAPON_UPGRADE,
-  UPGRADE_CHOICE_COUNT,
-} from '../data/economy';
+import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, UPGRADE_CHOICE_COUNT } from '../data/economy';
 import { edictCanStack, edictLevel, EDICT_KIND_COUNT, EDICTS } from '../data/edicts';
 import { isMergeResult } from '../data/merges';
-import { TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
+import { STAR_MAX, TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
 import { UNLOCK_EDICT, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
-import type { WeaponSlot } from './armory';
+import { slotMaxStars, type WeaponSlot } from './armory';
 
 /**
- * 候选的三个类别。数字常量而非 enum(与 data/enemies.ts 同口径)。权重在 data/economy.ts。
+ * 候选的两个类别。数字常量而非 enum(与 data/enemies.ts 同口径)。权重在 data/economy.ts。
  * **编号连续且从 0 起**是 rollUpgradeOffer 里那句类别回退(`(kind + 1) % OFFER_KIND_COUNT`)的前提:
  * 中间挖一个空号,回退就会轮到一个不存在的类别上、白白空掉一位候选。
  */
 export const OFFER_NEW_WEAPON = 0;
-export const OFFER_WEAPON_UPGRADE = 1;
-export const OFFER_EDICT = 2;
-export const OFFER_KIND_COUNT = 3;
+export const OFFER_EDICT = 1;
+export const OFFER_KIND_COUNT = 2;
 
-/** 卡片内容码(取代旧版 deck 的 CELL_*):武器两类共用 1,法令 0。见 optionContent */
+/** 卡片内容码(取代旧版 deck 的 CELL_*):武器 1,法令 0。见 optionContent */
 export const OFFER_CONTENT_WEAPON = 1;
 
 /**
@@ -68,16 +59,14 @@ export const UPGRADE_NO_OFFER = -1;
  * 卡片、渲染层、checksum 读的都是它,而时停期间槽位不会变,故快照与现算永远一致。
  */
 export interface UpgradeOption {
-  /** OFFER_*(新武器 / 武器升级 / 法令)。 */
+  /** OFFER_*(新武器 / 法令)。 */
   kind: number;
   /** 按 kind 解释为 TOWERS / EDICTS 的下标;两套编号互不相干。 */
   type: number;
   /**
    * 按 kind 解释:
-   *   OFFER_NEW_WEAPON = 该型武器在槽里的**最高等级**(0 = 一把都没有)—— 卡片靠它把
-   *     "这是第几把"说清楚:抽到已拥有的型是合成的通路,而玩家得先看得见"我已经有了";
-   *   OFFER_WEAPON_UPGRADE = 该型在槽里的**最高等级**,未拥有则 = 存档等级
-   *     (weaponBankedLevels)—— 卡片靠它说"当前 Lv3 → Lv4"或"未拥有(Lv2 存档起步)";
+   *   OFFER_NEW_WEAPON = 该型武器在槽里的**最高星级**(0 = 一把都没有)—— 卡片靠它把
+   *     "这是第几把"说清楚:抽到已拥有的型是升星合成的通路,而玩家得先看得见"我已经有了";
    *   OFFER_EDICT = 这条法令**当前的层数**(0 = 还没拿过)—— 卡片靠它印"散热协议 ×2 → ×3",
    *     这就是"拿过两次过热上限就显示 ×2"那条要求在候选侧的落点。
    */
@@ -112,7 +101,7 @@ for (let i = 0; i < UNLOCKS.length; i++) {
  * 数值沿用旧 deck 的 CELL_WEAPON(1),避免渲染层换号。
  */
 export function optionContent(opt: UpgradeOption): number {
-  return opt.kind === OFFER_NEW_WEAPON || opt.kind === OFFER_WEAPON_UPGRADE ? OFFER_CONTENT_WEAPON : 0;
+  return opt.kind === OFFER_NEW_WEAPON ? OFFER_CONTENT_WEAPON : 0;
 }
 
 /**
@@ -121,7 +110,7 @@ export function optionContent(opt: UpgradeOption): number {
  * 占位值取的正是 acquire 路径的默认参数(自动机炮),两处默认值同源,漏传参数时的行为才一致。
  */
 export function optionTowerType(opt: UpgradeOption): number {
-  return opt.kind === OFFER_NEW_WEAPON || opt.kind === OFFER_WEAPON_UPGRADE ? opt.type : TOWER_AUTOCANNON;
+  return opt.kind === OFFER_NEW_WEAPON ? opt.type : TOWER_AUTOCANNON;
 }
 
 /**
@@ -132,7 +121,7 @@ export function optionTowerType(opt: UpgradeOption): number {
  * 而静默换成另一座塔正是最难查的那种表现。
  */
 export function optionLabel(opt: UpgradeOption): string {
-  if (opt.kind === OFFER_NEW_WEAPON || opt.kind === OFFER_WEAPON_UPGRADE) {
+  if (opt.kind === OFFER_NEW_WEAPON) {
     return TOWERS[opt.type]?.name ?? `未知塔型(${opt.type})`;
   }
   return EDICTS[opt.type]?.name ?? `未知法令(${opt.type})`;
@@ -147,35 +136,23 @@ function alreadyOffered(out: UpgradeOption[], count: number, kind: number, type:
   return false;
 }
 
-/** 这一型武器在槽里的最高等级(没有 = 0)。武器卡的 level 读数 */
-function maxWeaponLevel(weapons: readonly WeaponSlot[], type: number): number {
-  let level = 0;
-  for (let i = 0; i < weapons.length; i++) {
-    const slot = weapons[i]!;
-    if (slot.type === type && slot.level > level) level = slot.level;
-  }
-  return level;
-}
 
 /**
  * 收集某一类别里**合法且本次还没被抽中**的型号,写进 typePool,返回条数。
  * 顺序恒为型号升序(与数值表下标一致)⇒ 同 seed 掷出的下标落在同一型上,确定性与遍历顺序无关。
  *
- * 三类的过滤(全部是"只改可选表内容、不碰 rng 消耗次数"的口径 —— 见文件头的 rng 消耗口径):
- *   NEW_WEAPON:合成结果塔(isMergeResult)不进 —— 合成武器只能三合一来,能在卡池买到就违背
- *     了"合成只在获得第 3 把时触发"的闸门;
- *     **已拥有的型照进**(用户设计会改动):旧版把它剔掉,而起手最多给 2 把同型、商店也剔已拥有,
- *     于是"同型 3 把"永远凑不齐 —— 六条合成配方与六把合成武器整段成了拿不到的死内容。
- *     8 个槽围成一圈之后,同型多把本就是合理 build(四门机炮各守一个朝向),
- *     放开这一条同时把合成通路接上:第 3 把落槽的那一刻 World.maybeMerge 当场合成;
- *   WEAPON_UPGRADE:合成结果塔不进;**未拥有照进** —— 升级可以给未拥有的武器存档等级
- *     (World.weaponBankedLevels),获得那把武器时从存档级起步;
+ * 两类的过滤(全部是"只改可选表内容、不碰 rng 消耗次数"的口径 —— 见文件头的 rng 消耗口径):
+ *   NEW_WEAPON:合成结果塔(isMergeResult)不进 —— 合成武器只能靠升星合成(3★ 变身)拿到,
+ *     能在卡池买到就违背了"变身只在合到 3★ 时触发"的闸门;
+ *     **已拥有但未满 3★ 的同型照进**(星级系统):第 2 把同型 → 2★、第 3 把 → 3★ 变身,
+ *     同型卡就是升星通路的原料;已满 3★ 的同型是死卡(无配方塔到顶了,如导弹巢)、剔出;
  *   EDICT:**已满层**(EDICT_MAX_LEVEL)与未解锁的不进 —— 注意判据是"满层"而不是旧版的
  *     "已持有":法令可叠到 5 层,把持有过一次的剔掉等于把叠层机制整条关掉。
  *
  * @param edictLevels World 的法令层数表:OFFER_EDICT 分支按它剔掉已满层的 ——
  *   抽到满层法令的"再拿一张也没用"沉默陷阱从结构上不存在;法令池被剔空就走
  *   rollUpgradeOffer 的类别回退
+ * @param weapons World.weapons:NEW_WEAPON 分支按 slotMaxStars 剔掉已满 3★ 的同型
  * @param unlockMask 解锁状态位掩码(19 号):未解锁的塔(TOWER_MISSILE_NEST)/ 法令(EDICT_OVERDRIVE)
  *   在进池之前就剔出可选表 —— 与满层过滤同位置同口径:只收窄 typePool,
  *   不碰 rng(每个候选位 2 次 rng 无条件消耗不变),"未解锁项绝不进候选"由此结构上成立
@@ -186,6 +163,7 @@ function collectPool(
   count: number,
   edictLevels: readonly number[],
   unlockMask: number,
+  weapons: readonly WeaponSlot[],
 ): number {
   typePool.length = 0;
   const kindCount = kind === OFFER_EDICT ? EDICT_KIND_COUNT : TOWER_KIND_COUNT;
@@ -197,8 +175,10 @@ function collectPool(
       const unlockBit = EDICT_UNLOCK_BIT[type]!;
       if (unlockBit >= 0 && (unlockMask & (1 << unlockBit)) === 0) continue;
     } else {
-      // 合成结果塔只能从三合一来(见 data/merges.ts 的 isMergeResult);解锁闸门照 tower 位
+      // 合成结果塔只能靠 3★ 变身(见 data/merges.ts 的 isMergeResult);解锁闸门照 tower 位;
+      // 已满 3★ 的同型是死卡(到顶了,再拿也没星可升)
       if (isMergeResult(type)) continue;
+      if (slotMaxStars(weapons, type) >= STAR_MAX) continue;
       const unlockBit = TOWER_UNLOCK_BIT[type]!;
       if (unlockBit >= 0 && (unlockMask & (1 << unlockBit)) === 0) continue;
     }
@@ -208,22 +188,18 @@ function collectPool(
 }
 
 /**
- * 把一个已经掷出来的 [0,1) 解释成类别(新武器 / 武器升级 / 法令)。
+ * 把一个已经掷出来的 [0,1) 解释成类别(新武器 / 法令)。
  * **只解释、不掷** —— 掷在 rollUpgradeOffer 里,且无论权重如何都恰好一次:
- * 于是改 data/economy 的 20/30/50 不会移动整条随机序列(见文件头的 rng 消耗口径)。
- * 三个权重都被填成 0(或负数)时回落成武器升级:总不能弹一张空气卡,而升级是卡池的主体之一。
+ * 于是改 data/economy 的 40/60 不会移动整条随机序列(见文件头的 rng 消耗口径)。
+ * 两个权重都被填成 0(或负数)时回落成新武器:总不能弹一张空气卡。
  */
 function pickKind(roll: number): number {
   // 数据表是手改的,负权重会让轮盘转反 —— 与 World.stressPickKind 同一手夹取
   const wNew = Math.max(0, OFFER_WEIGHT_NEW_WEAPON);
-  const wUp = Math.max(0, OFFER_WEIGHT_WEAPON_UPGRADE);
   const wEdict = Math.max(0, OFFER_WEIGHT_EDICT);
-  const total = wNew + wUp + wEdict;
-  if (total <= 0) return OFFER_WEAPON_UPGRADE;
-  const t = roll * total;
-  if (t < wNew) return OFFER_NEW_WEAPON;
-  if (t < wNew + wUp) return OFFER_WEAPON_UPGRADE;
-  return OFFER_EDICT;
+  const total = wNew + wEdict;
+  if (total <= 0) return OFFER_NEW_WEAPON;
+  return roll * total < wNew ? OFFER_NEW_WEAPON : OFFER_EDICT;
 }
 
 /**
@@ -235,9 +211,8 @@ function pickKind(roll: number): number {
  * @param unlockMask 解锁状态位掩码(19 号,跨局存档的一部分):未解锁的塔/法令在
  *   collectPool 里就剔出可选表 —— 只收窄 typePool,不碰 rng(每个候选位 2 次无条件消耗不变),
  *   于是同 seed 的随机序列逐位不受解锁状态影响(19 号验收)。缺省 0 = 一切未解锁。
- * @param weapons World.weapons:武器卡的 level 读它(槽内最高等级)。
- * @param weaponBankedLevels World.weaponBankedLevels:未拥有武器的升级卡 level 读它。
- * @returns 0 = 三类都没有合法项(通常只会是数值表被整体裁空)。
+ * @param weapons World.weapons:NEW_WEAPON 分支按它剔掉已满 3★ 的同型,武器卡的 level 读槽内最高星。
+ * @returns 0 = 两类都没有合法项(通常只会是数值表被整体裁空)。
  *   这一档由调用方兜底(World 当场按跳过结算,不响回调、不时停),本函数不认识"流程"这回事 ——
  *   返回一张空的候选表让 World 去弹,才是每帧重弹一张空卡的死循环。
  *
@@ -245,8 +220,8 @@ function pickKind(roll: number): number {
  *   UPGRADE_CHOICE_COUNT 个候选位,每位**先无条件掷两次 rng**(类别 → 下标),再去看槽位;
  *   可选表 = 该类别里合法(collectPool)且本次未抽中(alreadyOffered)的型号;
  *   掷中的类别没得选就按固定次序退到其余允许类别,**复用同一个下标随机数**,一次都不额外掷;
- *   三类都没得选,这一位就空着(照样已经消耗了 2 次)。
- *   类别回退的固定次序 = 编号升序绕圈(新武器 → 武器升级 → 法令)。
+ *   两类都没得选,这一位就空着(照样已经消耗了 2 次)。
+ *   类别回退的固定次序 = 编号升序绕圈(新武器 → 法令)。
  */
 export function rollUpgradeOffer(
   rng: Rng,
@@ -254,7 +229,6 @@ export function rollUpgradeOffer(
   edictLevels: readonly number[],
   unlockMask: number,
   weapons: readonly WeaponSlot[],
-  weaponBankedLevels: readonly number[],
 ): number {
   let count = 0;
   for (let slot = 0; slot < UPGRADE_CHOICE_COUNT; slot++) {
@@ -264,12 +238,12 @@ export function rollUpgradeOffer(
     const indexRoll = rng.next();
 
     let kind = pickKind(kindRoll);
-    let pool = collectPool(kind, out, count, edictLevels, unlockMask);
+    let pool = collectPool(kind, out, count, edictLevels, unlockMask, weapons);
     if (pool === 0) {
       // 类别没得选就按固定顺序轮到其余允许类别,复用同一个 indexRoll、不额外消耗 rng
       for (let offset = 1; offset < OFFER_KIND_COUNT && pool === 0; offset++) {
         kind = (kind + 1) % OFFER_KIND_COUNT;
-        pool = collectPool(kind, out, count, edictLevels, unlockMask);
+        pool = collectPool(kind, out, count, edictLevels, unlockMask, weapons);
       }
     }
     if (pool === 0) continue;
@@ -284,14 +258,8 @@ export function rollUpgradeOffer(
     }
     opt.kind = kind;
     opt.type = type;
-    // level 口径见 UpgradeOption.level:法令读当前层数,新武器读槽内最高等级(没有 = 0),
-    // 武器升级读槽内最高等级、未拥有读存档等级
-    opt.level =
-      kind === OFFER_EDICT
-        ? edictLevel(edictLevels, type)
-        : kind === OFFER_WEAPON_UPGRADE
-          ? maxWeaponLevel(weapons, type) || weaponBankedLevels[type] || 0
-          : maxWeaponLevel(weapons, type);
+    // level 口径见 UpgradeOption.level:法令读当前层数,新武器读槽内最高星级(没有 = 0)
+    opt.level = kind === OFFER_EDICT ? edictLevel(edictLevels, type) : slotMaxStars(weapons, type);
     count++;
   }
   // 截到真实候选数:多出来的是上一次抽卡留下的旧卡,留着就会被 ui 当成第四张/第三张卡摆出来

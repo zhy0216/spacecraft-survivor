@@ -104,7 +104,7 @@ export function stepTurrets(
     const def = slotTowerDef(slot);
     if (!def) continue;
     hasTurret = true;
-    const out = towerOutreach(def, slot.level);
+    const out = towerOutreach(def, slot.stars);
     if (out > maxOutreach) maxOutreach = out;
   }
   if (!hasTurret) return;
@@ -119,16 +119,16 @@ export function stepTurrets(
     if (slot.type < 0) continue; // 空槽:没有塔可言
     const def = slotTowerDef(slot);
     if (!def) continue;
-    const level = slot.level;
+    const stars = slot.stars;
 
     // 节流**有没有目标都要推进**:装填、降温、蓄力都在这里,只在有目标时跑的话,
     // 弹药塔会"没敌人时永远装不完",充能塔也攒不出那一发迎面的抢跳。
     // 受击射速惩罚已随四舷删除,故这里不再有 fireMul —— 法令倍率全部从聚合进
     stepThrottle(slot, def, dt, buffs);
 
-    slotArc(i, ship.heading, towerArcDeg(def, level), arc);
+    slotArc(i, ship.heading, towerArcDeg(def, stars), arc);
     slotMuzzleWorld(ship, i, muzzle);
-    const range = towerRange(def, level);
+    const range = towerRange(def, stars);
     const target = findArcTarget(candidates, muzzle.x, muzzle.y, arc, range);
 
     // 有目标就追它的方位,没目标就归位(回到扇形中心 = 偏角 0)。

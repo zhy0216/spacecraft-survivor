@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_HZ } from '../core/loop';
 import { KIND_BOSS } from '../data/enemies';
-import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_WEAPON_UPGRADE, upgradeCost, skipRefundFor } from '../data/economy';
+import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, skipRefundFor, upgradeCost } from '../data/economy';
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import { WEAPON_SLOT_COUNT } from './armory';
 import { tuning } from './config';
 import { applyStartingLoadout } from './loadout';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_WEAPON_UPGRADE } from './upgrade';
+import { OFFER_EDICT, OFFER_NEW_WEAPON } from './upgrade';
 import { ACQUIRE_REPLACE_NEEDED, RESULT_WIN, World } from './world';
 
 describe('槽位制经济参数', () => {
@@ -16,8 +16,8 @@ describe('槽位制经济参数', () => {
     expect(skipRefundFor(upgradeCost(2))).toBeLessThan(upgradeCost(2));
   });
 
-  it('候选三类权重总和为 100', () => {
-    expect(OFFER_WEIGHT_NEW_WEAPON + OFFER_WEIGHT_WEAPON_UPGRADE + OFFER_WEIGHT_EDICT).toBe(100);
+  it('候选两类权重总和为 100(星级系统:武器升级整类取消)', () => {
+    expect(OFFER_WEIGHT_NEW_WEAPON + OFFER_WEIGHT_EDICT).toBe(100);
   });
 
   it('起始装配与商店都读取固定武器槽而非甲板边界', () => {
@@ -42,10 +42,10 @@ describe('真脚本长跑:一局自然升级次数窗口(12–15)', () => {
   };
   afterEach(() => Object.assign(tuning, before));
 
-  /** 固定自动玩家:武器升级 > 新武器 > 法令,槽满时用 0 号槽替换;全被拒才跳过。零随机策略 */
+  /** 固定自动玩家:新武器 > 法令,槽满时用 0 号槽替换;全被拒才跳过。零随机策略 */
   function settleOffer(w: World): void {
     if (w.offer.length === 0) return;
-    const order = [OFFER_WEAPON_UPGRADE, OFFER_NEW_WEAPON, OFFER_EDICT];
+    const order = [OFFER_NEW_WEAPON, OFFER_EDICT];
     for (const kind of order) {
       const at = w.offer.findIndex((o) => o.kind === kind);
       if (at < 0) continue;

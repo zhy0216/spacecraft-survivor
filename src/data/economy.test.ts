@@ -24,7 +24,6 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_NEW_WEAPON,
-  OFFER_WEIGHT_WEAPON_UPGRADE,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   skipRefundFor,
@@ -136,9 +135,9 @@ describe('三选一与跳过', () => {
     expect(Number.isInteger(UPGRADE_CHOICE_COUNT)).toBe(true);
   });
 
-  it('三类权重固定为 20/30/50,总和为 100(支援并入法令后从四类收成三类)', () => {
-    const weights = [OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_WEAPON_UPGRADE, OFFER_WEIGHT_EDICT];
-    expect(weights).toEqual([20, 30, 50]);
+  it('两类权重固定为 40/60,总和为 100(星级系统:武器升级整类取消)', () => {
+    const weights = [OFFER_WEIGHT_NEW_WEAPON, OFFER_WEIGHT_EDICT];
+    expect(weights).toEqual([40, 60]);
     expect(weights.reduce((sum, weight) => sum + weight, 0)).toBe(100);
   });
 

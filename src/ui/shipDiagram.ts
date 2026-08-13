@@ -23,6 +23,7 @@ import {
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
+  throttleName,
   TOWERS,
   TOWER_ARC,
   TOWER_AUTOCANNON,
@@ -34,7 +35,7 @@ import {
   towerArcDeg,
   towerRange,
 } from '../data/towers';
-import { EDICTS } from '../data/edicts';
+import { edictScopeLabel, EDICTS } from '../data/edicts';
 import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING, type WeaponSlot } from '../sim/armory';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
@@ -159,8 +160,8 @@ const HINT_CSS = `color:${MUTED_COLOR};font-size:11px;letter-spacing:.04em;text-
 export interface ShipDiagramIncoming {
   /** TOWER_* */
   type: number;
-  /** 真的买下去会是几级(World.installWeapon 的 1 + 存档级口径,由调用方算好) */
-  level: number;
+  /** 真的买下去会是几星(新武器恒 1★,由调用方填) */
+  stars: number;
 }
 
 export interface ShipDiagramState {
@@ -190,7 +191,7 @@ export interface ShipDiagramOpts {
 /** 幽灵武器的 DPS 暂存槽:UI 侧也照铁律 3 复用一份,不为每次重画新建对象 */
 const ghostSlot: WeaponSlot = {
   type: -1,
-  level: 1,
+  stars: 1,
   cooldown: 0,
   ammo: 0,
   reloadLeft: 0,
@@ -355,8 +356,8 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       if (equipped && def && world) totalDps += slotSustainedDps(equipped, def, world.buffs);
 
       // 扇形按"这一格最终会是什么"画:虚装盖住原有的那把,于是换装前后的射界差是看得见的
-      if (ghost) paintWedge(slot, ghost.type, ghost.level, true);
-      else paintWedge(slot, equipped?.type ?? -1, equipped?.level ?? 1, false);
+      if (ghost) paintWedge(slot, ghost.type, ghost.stars, true);
+      else paintWedge(slot, equipped?.type ?? -1, equipped?.stars ?? 1, false);
 
       const lines: string[] = [`<div style="${FACING_CSS}">${facing}</div>`];
       if (ghost) {
@@ -366,20 +367,20 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
           // 换装预览:旧的划掉、新的顶上 —— 玩家点下去之前就看得到自己拿什么换什么
           lines.push(
             `<div style="${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through">` +
-              `${def.name} Lv${equipped.level}</div>`,
+              `${def.name} ★${equipped.stars}</div>`,
           );
         }
         lines.push(
-          `<div style="${NAME_CSS}color:${SEL_COLOR}">▸ ${gname} Lv${ghost.level}</div>`,
+          `<div style="${NAME_CSS}color:${SEL_COLOR}">▸ ${gname} ★${ghost.stars}</div>`,
         );
         if (!equipped) lines.push(`<div style="${META_CSS}">${ghostMeta(world, ghost)}</div>`);
       } else if (equipped && def) {
         const dps = world ? slotSustainedDps(equipped, def, world.buffs) : 0;
         lines.push(
           `<div style="${NAME_CSS}"><span style="color:${towerTintCss(equipped.type)}">` +
-            `${towerGlyph(equipped.type)}</span> ${def.name}</div>`,
-          `<div style="${META_CSS}">Lv${equipped.level} · ` +
-            `${Math.round(towerArcDeg(def, equipped.level))}° · ${Math.round(dps)}/s</div>`,
+            `${towerGlyph(equipped.type)}</span> ${def.name} ★${equipped.stars}</div>`,
+          `<div style="${META_CSS}">${throttleName(def.throttle)} · ` +
+            `${Math.round(towerArcDeg(def, equipped.stars))}° · ${Math.round(dps)}/s</div>`,
         );
       } else {
         lines.push(`<div style="${NAME_CSS}color:${MUTED_COLOR}">— 空槽 —</div>`);
@@ -413,7 +414,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       `船体 <span style="color:${TEXT_COLOR}">${Math.round(hp)}/${Math.round(maxHp)}</span>` +
       ` · 持续火力 <span style="color:${TEXT_COLOR}">${Math.round(totalDps)}/s</span>`;
 
-    // 法令:全船被动不占任何槽位,不在这里印就整局无处可查
+    // 法令:全船被动不占任何槽位,不在这里印就整局无处可查。chip 前缀 = 作用域标签(系名/全船)
     const owned: string[] = [];
     for (let i = 0; i < EDICTS.length; i++) {
       const level = world?.edictLevels[i] ?? 0;
@@ -423,7 +424,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       owned.push(
         `<span style="padding:2px 7px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
           `background:rgba(21,34,52,.62);font-size:11px;color:${TEXT_COLOR}">` +
-          `<span style="color:${color}">◆</span> ${def.name} ×${level}</span>`,
+          `<span style="color:${color}">◆</span> ${edictScopeLabel(def)} ${def.name} ×${level}</span>`,
       );
     }
     edictWrap.innerHTML =
@@ -445,19 +446,19 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
  * 走 sim/tower 的 slotSustainedDps(与 HUD 火力面板同源),法令加成一并算进去。
  * world = null(换局那一瞬)时没有 buffs 可读,返回 0 而不是拿中性值现编一个。
  */
-export function previewSustainedDps(world: World | null, type: number, level: number): number {
+export function previewSustainedDps(world: World | null, type: number, stars: number): number {
   const def = TOWERS[type];
   if (!def || !world) return 0;
   ghostSlot.type = type;
-  ghostSlot.level = level;
+  ghostSlot.stars = stars;
   return slotSustainedDps(ghostSlot, def, world.buffs);
 }
 
-/** 幽灵武器落在空槽上时那一行读数(节流系 · 射界 · 预估 DPS);拿不到世界就只印前两项 */
+/** 幽灵武器落在空槽上时那一行读数(系名 · 射界 · 预估 DPS);拿不到世界就只印前两项 */
 function ghostMeta(world: World | null, incoming: ShipDiagramIncoming): string {
   const def = TOWERS[incoming.type];
   if (!def) return '未知型号';
-  const head = `${throttleGlyph(def.throttle)} · ${Math.round(towerArcDeg(def, incoming.level))}°`;
+  const head = `${throttleName(def.throttle)} · ${Math.round(towerArcDeg(def, incoming.stars))}°`;
   if (!world) return head;
-  return `${head} · ${Math.round(previewSustainedDps(world, incoming.type, incoming.level))}/s`;
+  return `${head} · ${Math.round(previewSustainedDps(world, incoming.type, incoming.stars))}/s`;
 }

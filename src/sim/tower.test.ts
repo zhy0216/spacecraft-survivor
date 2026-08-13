@@ -17,7 +17,7 @@ import {
 function setup(type: number) {
   const slot = createWeaponSlots()[0]!;
   const def = TOWERS[type]!;
-  slot.type = type; slot.level = 1; slot.ammo = towerMagazine(def, 1);
+  slot.type = type; slot.stars = 1; slot.ammo = towerMagazine(def, 1);
   return { slot, def };
 }
 

@@ -87,22 +87,22 @@ describe('armory:定长槽位与硬点数学', () => {
     const a = slots[0]!;
     const b = slots[3]!;
     a.type = 1;
-    a.level = 3;
+    a.stars = 3;
     a.ammo = 7;
     a.heat = 4.5;
     a.charge = 0.6;
     a.turretOffset = 0.9;
     b.type = 5;
-    b.level = 2;
+    b.stars = 2;
     b.ammo = 11;
     b.turretOffset = -0.4;
     swapWeaponSlots(a, b);
     // 武器与它的弹夹/热量/充能一起搬走:换位不是"拆了再装",不许借它免费装填
     expect(a.type).toBe(5);
-    expect(a.level).toBe(2);
+    expect(a.stars).toBe(2);
     expect(a.ammo).toBe(11);
     expect(b.type).toBe(1);
-    expect(b.level).toBe(3);
+    expect(b.stars).toBe(3);
     expect(b.ammo).toBe(7);
     expect(b.heat).toBe(4.5);
     expect(b.charge).toBe(0.6);

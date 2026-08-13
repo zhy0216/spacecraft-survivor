@@ -29,7 +29,7 @@
  * 暂停归 main)→ hide() / onResolved()(run.paused = false 在 main.ts)。
  * RefitFlowUi 不再 extends PlacementUiState:纯商店没有拾格/高亮,渲染层不再接它。
  */
-import { WEAPON_SLOT_COUNT } from '../sim/armory';
+import { slotMaxStars, WEAPON_SLOT_COUNT } from '../sim/armory';
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
@@ -39,17 +39,9 @@ import {
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
 } from '../data/economy';
-import { EDICTS } from '../data/edicts';
+import { edictDesc, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
-import {
-  THR_AMMO,
-  THR_CHARGE,
-  THR_HEAT,
-  TOWER_MAX_LEVEL,
-  TOWERS,
-  towerArcDeg,
-  towerRange,
-} from '../data/towers';
+import { throttleName, TOWERS, towerArcDeg, towerRange } from '../data/towers';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -71,7 +63,6 @@ import {
   type ShipDiagramState,
   type ShipDiagramUi,
 } from './shipDiagram';
-import { edictDesc } from './upgradeFlow';
 
 const OK_COLOR = '#9adcff';
 const DENY_COLOR = '#ff7a6b';
@@ -199,13 +190,6 @@ export function dockEdictEffect(type: number): string {
 }
 
 /** 节流系的单字(与 shipDiagram / armoryPanel 同源:卡片窄,只取一个字) */
-function throttleGlyph(throttle: number): string {
-  if (throttle === THR_AMMO) return '弹';
-  if (throttle === THR_HEAT) return '热';
-  if (throttle === THR_CHARGE) return '充';
-  return '?';
-}
-
 export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   // world 是**可重赋的局部变量**而不是解构常量:重开一局要换掉整个 World(见 setWorld),
   // 闭包里每处都现读它 —— 换引用这一件事就够了,面板 DOM 一行都不必重挂。
@@ -357,18 +341,6 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     el.style.cursor = grey ? 'not-allowed' : 'pointer';
   }
 
-  /**
-   * 买下第 type 型武器时它会是几级 —— 与 World.installWeapon 同一条口径:
-   * **1 + 存档级**(weaponBankedLevels:给没拥有的武器升过级就存在那里),夹到满级。
-   * 商店卡上印的"入手 Lv2"与舰船图上虚装的那一把都读它:两处各算一份的话,
-   * 玩家会看到卡上写 Lv1、装上去却是 Lv2(或反过来),而这种差异只有买完才发现。
-   */
-  function incomingLevel(type: number): number {
-    const banked = world.weaponBankedLevels[type] ?? 0;
-    const level = 1 + banked;
-    return level < TOWER_MAX_LEVEL ? level : TOWER_MAX_LEVEL;
-  }
-
   /** 第一个空槽下标(-1 = 槽已满)。与 World.acquireWeapon 的落位顺序同向:从槽 0 往后找 */
   function firstEmptySlot(): number {
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
@@ -378,27 +350,18 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     return -1;
   }
 
-  /** 船上已装了几把这一型(三合一进度:凑满 3 把当场合成,见 data/merges) */
-  function ownedCount(type: number): number {
-    let n = 0;
-    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-      if (world.weapons[i]?.type === type) n++;
-    }
-    return n;
-  }
-
-  /** 舰船图这一帧该画成什么:替换态跟着鼠标走,只读态把悬停的那把虚装到第一个空槽 */
+  /** 舰船图这一帧该画成什么:替换态跟着鼠标走,只读态把悬停的那把虚装到第一个空槽(恒 1★) */
   function diagramState(): ShipDiagramState {
     if (pendingBuy) {
       return {
         mode: 'pick',
-        incoming: { type: pendingBuy.type, level: incomingLevel(pendingBuy.type) },
+        incoming: { type: pendingBuy.type, stars: 1 },
         target: -1,
       };
     }
     const type = hoverCard >= 0 ? world.shopWeapons[hoverCard] : undefined;
     if (type === undefined || type < 0) return { mode: 'view', incoming: null, target: -1 };
-    return { mode: 'view', incoming: { type, level: incomingLevel(type) }, target: firstEmptySlot() };
+    return { mode: 'view', incoming: { type, stars: 1 }, target: firstEmptySlot() };
   }
 
   /** 悬停换了一张卡:只重画舰船图(货架文案与余额一个字都没变,整屏重刷是白干) */
@@ -439,23 +402,23 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
         continue;
       }
       const def = TOWERS[type];
-      const level = incomingLevel(type);
-      // 数值行:与舰船图上那一格印的是同一套读数(节流系 · 射界 · 射程 · 持续 DPS),
+      // 数值行:与舰船图上那一格印的是同一套读数(系名 · 射界 · 射程 · 1★ 持续 DPS),
       // 于是"货架上这把"与"船上那把"能直接对着比 —— 这正是要不要花 30 星币的全部依据
       const stats = def
-        ? `${throttleGlyph(def.throttle)} · ${Math.round(towerArcDeg(def, level))}° · ` +
-          `射程 ${Math.round(towerRange(def, level))} · ${Math.round(previewSustainedDps(world, type, level))}/s`
+        ? `${throttleName(def.throttle)} · ${Math.round(towerArcDeg(def, 1))}° · ` +
+          `射程 ${Math.round(towerRange(def, 1))} · ${Math.round(previewSustainedDps(world, type, 1))}/s`
         : '数值表里没有这一型';
-      const owned = ownedCount(type);
+      // 已拥有同型 = 买下直接吸收升星(不占槽);未拥有才谈落位(空槽 / 替换)
+      const ownedStars = slotMaxStars(world.weapons, type);
       const mergeResult = mergeResultOf(type);
-      const notes: string[] = [`入手 Lv${level}`];
-      notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
-      if (owned > 0) {
-        notes.push(
-          owned >= 2 && mergeResult >= 0
-            ? `已有 ${owned} 把 · 再 1 把合成「${TOWERS[mergeResult]?.name ?? '合成武器'}」`
-            : `已有 ${owned} 把`,
-        );
+      const notes: string[] = [];
+      if (ownedStars >= 2 && mergeResult >= 0) {
+        notes.push(`已有 ★${ownedStars} · 再拿一把合成「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
+      } else if (ownedStars > 0) {
+        notes.push(`已有 ★${ownedStars} · 再拿一把升 ★${Math.min(3, ownedStars + 1)}`);
+      } else {
+        notes.push('入手 ★1');
+        notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
       }
       card.innerHTML =
         `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
@@ -527,7 +490,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const oldSlot = world.weapons[slotIndex];
     const oldName =
       oldSlot && oldSlot.type >= 0
-        ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} Lv${oldSlot.level}`
+        ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} ★${oldSlot.stars}`
         : null;
     const code = world.buyShopWeapon(pending.index, slotIndex);
     pendingBuy = null;

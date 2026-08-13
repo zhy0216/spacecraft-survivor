@@ -18,7 +18,7 @@
  *   slotMuzzleWorld = 船心 + 旋转(船体局部硬点, ship.heading) —— 画炮口、开火起点同一份;
  *   slotArcCenter = WEAPON_SLOT_FACING[i] + ship.heading —— 画扇形、索敌中心同一份。
  */
-import { TOWER_MAX_LEVEL } from '../data/towers';
+import { STAR_MAX } from '../data/towers';
 import { type Ship, type Vec2, wrapAngle } from './ship';
 
 /**
@@ -65,7 +65,7 @@ export const WEAPON_SLOT_FACING: number[] = [
 ];
 
 /**
- * 一个已填的武器槽;**type = -1 = 空槽**。除 type/level 外的七个字段全是**运行期节流状态**
+ * 一个已填的武器槽;**type = -1 = 空槽**。除 type/stars 外的七个字段全是**运行期节流状态**
  * (从旧 DeckCell 原样搬来,字段语义与 sim/tower.ts 的节流状态机一一对应):
  *   cooldown / ammo / reloadLeft / heat / coolLock / charge 由 stepThrottle/onFired 逐帧演化,
  *   turretOffset = 炮管相对射界中心的偏角(sim/turret.ts 逐帧追瞄/归位,世界朝向 = arcCenter + 它)。
@@ -74,8 +74,8 @@ export const WEAPON_SLOT_FACING: number[] = [
 export interface WeaponSlot {
   /** TOWER_*;-1 = 空槽 */
   type: number;
-  /** 1..TOWER_MAX_LEVEL;空槽恒 0 */
-  level: number;
+  /** 星级 1..STAR_MAX(星级系统:同型合成升星,2★/3★ 命中旧 Lv3/Lv5 档);空槽恒 0 */
+  stars: number;
   /** 距下次可开火的剩余秒(充能系恒 0:那类塔的节奏全由 charge 给) */
   cooldown: number;
   /** 弹夹剩余发数(弹药系;其余系恒 0) */
@@ -96,7 +96,7 @@ export interface WeaponSlot {
 function createWeaponSlot(): WeaponSlot {
   return {
     type: -1,
-    level: 0,
+    stars: 0,
     cooldown: 0,
     ammo: 0,
     reloadLeft: 0,
@@ -129,9 +129,9 @@ export function swapWeaponSlots(a: WeaponSlot, b: WeaponSlot): void {
   let t: number = a.type;
   a.type = b.type;
   b.type = t;
-  t = a.level;
-  a.level = b.level;
-  b.level = t;
+  t = a.stars;
+  a.stars = b.stars;
+  b.stars = t;
   t = a.cooldown;
   a.cooldown = b.cooldown;
   b.cooldown = t;
@@ -185,4 +185,18 @@ export function slotHasSpace(weapons: readonly WeaponSlot[]): boolean {
     if (weapons[i]!.type < 0) return true;
   }
   return false;
+}
+
+/**
+ * 这一型武器在槽里的最高星级(没有 = 0)。三处共用:
+ *   World.mergeOrInstall 拿它找吸收目标;卡池(upgrade.ts / rollShopWeapons)拿它剔掉已满 3★ 的同型;
+ *   UI(upgradeFlow / refitFlow)拿它印"已有 ★N · 再拿一把升 ★N+1"。
+ */
+export function slotMaxStars(weapons: readonly WeaponSlot[], type: number): number {
+  let stars = 0;
+  for (let i = 0; i < weapons.length; i++) {
+    const s = weapons[i]!;
+    if (s.type === type && s.stars > stars) stars = s.stars;
+  }
+  return stars;
 }

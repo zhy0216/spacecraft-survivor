@@ -24,7 +24,7 @@ import {
   SILHOUETTE_MAX_COUNT,
   type RunStats,
 } from './progress';
-import { OFFER_WEAPON_UPGRADE, rollUpgradeOffer, type UpgradeOption } from './upgrade';
+import { OFFER_NEW_WEAPON, rollUpgradeOffer, type UpgradeOption } from './upgrade';
 import { RESULT_LOSE, RESULT_WIN } from './world';
 
 /** 固定随机序列 + 计数器:类型私有字段使 Rng 名义化,测试桩经 unknown 显式转入(与 upgrade.test 同款) */
@@ -277,26 +277,23 @@ describe('unlockMask 编码与 sim/upgrade.ts 的位约定一致', () => {
   it('evaluateRun 算出的掩码被 upgrade.ts 闸门直接消费:全解锁下导弹巢可被掷中', () => {
     const weapons = createWeaponSlots();
     const edicts = createEdictLevels();
-    const banked = new Array<number>(TOWER_KIND_COUNT).fill(0);
     const mask = evaluateRun(createProgress(), {
       result: RESULT_WIN,
       kills: 300,
       eliteKills: 14,
       silhouette: null,
     }).progress.unlockMask;
-    // 沿 upgrade.test.ts 逐型喂掷值的既有口径:kind 掷 0.1 = 武器升级(未拥有也进池),
-    // 升级池 = 型号升序剔除合成结果塔 —— 全解锁掩码下每一型(含导弹巢)都必须掷得中
+    // 沿 upgrade.test.ts 逐型喂掷值的既有口径:kind 掷 0.1 = 新武器,
+    // 武器池 = 型号升序剔除合成结果塔 —— 全解锁掩码下每一型(含导弹巢)都必须掷得中
     const towerPool: number[] = [];
     for (let t = 0; t < TOWER_KIND_COUNT; t++) {
       if (!isMergeResult(t)) towerPool.push(t);
     }
     for (const [pos, type] of towerPool.entries()) {
       const out: UpgradeOption[] = [];
-      const rng = new CountingRng([0.3, (pos + 0.5) / towerPool.length]);
-      expect(
-        rollUpgradeOffer(rng as unknown as Rng, out, edicts, mask, weapons, banked),
-      ).toBeGreaterThan(0);
-      expect(out[0]).toEqual({ kind: OFFER_WEAPON_UPGRADE, type, level: 0 });
+      const rng = new CountingRng([0.01, (pos + 0.5) / towerPool.length]);
+      expect(rollUpgradeOffer(rng as unknown as Rng, out, edicts, mask, weapons)).toBeGreaterThan(0);
+      expect(out[0]).toEqual({ kind: OFFER_NEW_WEAPON, type, level: 0 });
     }
   });
 });

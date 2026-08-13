@@ -17,7 +17,7 @@ describe('槽位点防拦截', () => {
   it('只使用带拦截能力的武器槽', () => {
     const weapons = createWeaponSlots();
     weapons[0]!.type = TOWER_AUTOCANNON;
-    weapons[0]!.level = 1;
+    weapons[0]!.stars = 1;
     weapons[0]!.ammo = towerMagazine(TOWERS[TOWER_AUTOCANNON]!, 1);
     const bullets = new Pool(createBullet, resetBullet);
     stepInterception(weapons, createShip(), [], 1 / 60, sinkFor(bullets), createEdictBuffs());

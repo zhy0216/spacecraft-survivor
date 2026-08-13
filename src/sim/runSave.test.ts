@@ -128,10 +128,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v3 旧档判废(26 号改升版):版本对不上直接拒收,不产出一个掉落物字段错位的半死世界', () => {
+  it('v4 旧档判废(星级系统升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v3json = serializeRunSnapshot(snap).replace('"v":4', '"v":3');
-    expect(parseRunSnapshot(v3json)).toBeNull();
+    const v4json = serializeRunSnapshot(snap).replace('"v":5', '"v":4');
+    expect(parseRunSnapshot(v4json)).toBeNull();
   });
 
   it('局内的账(击杀/精英/武器战报)读档后不被抹掉', () => {
@@ -158,11 +158,11 @@ describe('局内存档:capture → restore', () => {
     const world = freshRun(60);
     // 手动改一个槽,模拟"半局里换过武器":读档必须拿到改后的这一份
     world.weapons[0]!.type = 3;
-    world.weapons[0]!.level = 4;
+    world.weapons[0]!.stars = 3;
     world.weapons[0]!.heat = 0.37;
     const restored = restoreRun(captureRun(world, META));
     expect(restored.weapons[0]!.type).toBe(3);
-    expect(restored.weapons[0]!.level).toBe(4);
+    expect(restored.weapons[0]!.stars).toBe(3);
     expect(restored.weapons[0]!.heat).toBeCloseTo(0.37, 6);
   });
 
@@ -274,7 +274,6 @@ describe('局内存档:stride 与结构对表', () => {
     const snap = captureRun(world, META);
     expect(snap.weapons.length).toBe(WEAPON_SLOT_COUNT * WP_STRIDE);
     expect(snap.edicts.length).toBe(EDICT_KIND_COUNT);
-    expect(snap.banked.length).toBe(TOWER_KIND_COUNT);
     expect(snap.damageByType.length).toBe(TOWER_KIND_COUNT);
     expect(snap.offer.length % OF_STRIDE).toBe(0);
     // 商店信标:五个数(active/x/y/ttl/segment)—— 少一个就是读档后信标位置对不上

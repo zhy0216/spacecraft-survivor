@@ -1,9 +1,9 @@
 /**
  * 起始装配表 → 槽位的薄接线层(改版 10/20 号 —— 甲板删除后的重写)。
- * 逐条把 LOADOUTS 的 weapons 填进 World 的武器槽(等级 1 起手)、edicts 逐层授予。
- * 起手配置是**开跑前输入**,直接走 armory 的槽位原语,不消费 rng、也不触发合成 ——
- * 合成是"获得第 3 把的那一刻"的机制(见 data/merges.ts),而开局配置是一次性输入,
- * 语义上不是"获得",loadout.test 钉着这条(起手给 3 把同型武器不该当场合成)。
+ * 逐条把 LOADOUTS 的 weapons 填进 World 的武器槽(1★ 起手)、edicts 逐层授予。
+ * 起手配置是**开跑前输入**,直接走 armory 的槽位原语,不消费 rng、也不触发升星合成 ——
+ * 升星是"获得第 2 把同型的那一刻"的机制(见 World.mergeOrInstall),而开局配置是一次性输入,
+ * 语义上不是"获得",loadout.test 钉着这条(起手给 2 把同型武器 = 两个 1★ 槽,不该当场合 2★)。
  *
  * 20 号:装配哪一套配置由调用方(开局选择界面)决定 —— 传 LOADOUTS 下标或整条定义均可;
  * 缺省 = 0(标准起手),于是既有调用方与单测的"无参 = 双自动机炮 + 一层弹药协议"语义原样成立。
@@ -75,7 +75,7 @@ function firstEmptySlot(weapons: readonly WeaponSlot[]): WeaponSlot | undefined 
 function installWeapon(slot: WeaponSlot, type: number): void {
   const def = TOWERS[type];
   slot.type = type;
-  slot.level = 1;
+  slot.stars = 1; // 起手直落 1★ —— 升星合成只在获得流程(World.mergeOrInstall)里触发
   slot.cooldown = 0;
   slot.ammo = def ? towerMagazine(def, 1) : 0;
   slot.reloadLeft = 0;

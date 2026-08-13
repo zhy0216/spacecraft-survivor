@@ -16,7 +16,7 @@
  * 摆成一圈而不是一行八格,是因为槽位编号本身没有意义 —— 玩家要读的是"这门炮朝哪",
  * 而一行八格的列表逼着他在脑子里把编号翻译成方位,那正是这个面板要消灭的那一步。
  */
-import { THR_AMMO, THR_CHARGE, THR_HEAT, TOWERS, towerArcDeg, towerRange } from '../data/towers';
+import { throttleName, TOWERS, towerArcDeg, towerRange } from '../data/towers';
 import { audioBus } from '../render/audio';
 import { slotSustainedDps } from '../sim/tower';
 import { WEAPON_SLOT_COUNT, type WeaponSlot } from '../sim/armory';
@@ -69,14 +69,6 @@ const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spac
  * 而那是玩家换完位才会在战斗里发现的那类错)。
  */
 const SLOT_CELL: number[] = [1, 2, 5, 8, 7, 6, 3, 0];
-
-/** 节流系的单字(与 upgradeFlow 的 THROTTLE_NAMES 同源,面板窄,这里只取一个字) */
-function throttleGlyph(throttle: number): string {
-  if (throttle === THR_AMMO) return '弹';
-  if (throttle === THR_HEAT) return '热';
-  if (throttle === THR_CHARGE) return '充';
-  return '?';
-}
 
 export interface ArmoryPanelHooks {
   /** 能不能开面板?(main 传 `() => !run.paused` —— 时停/结算/起手选择时 I 键不响应) */
@@ -171,9 +163,9 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
       const dps = world ? slotSustainedDps(s, def, world.buffs) : 0;
       cell.innerHTML =
         `<div style="${FACING_CSS}">${facing}</div>` +
-        `<div style="${NAME_CSS}">${def.name} Lv${s.level}</div>` +
-        `<div style="${META_CSS}">${throttleGlyph(def.throttle)} · ${Math.round(towerArcDeg(def, s.level))}° · ` +
-        `${Math.round(towerRange(def, s.level))} · ${Math.round(dps)}/s</div>`;
+        `<div style="${NAME_CSS}">${def.name} ★${s.stars} ${throttleName(def.throttle)}</div>` +
+        `<div style="${META_CSS}">${Math.round(towerArcDeg(def, s.stars))}° · ` +
+        `${Math.round(towerRange(def, s.stars))} · ${Math.round(dps)}/s</div>`;
     }
     // 选中态:暖色描边。暖色是敌人的色域(GDD §12),这里只用在**一格描边**上、
     // 且只在玩家自己点出来的那一瞬存在 —— 与过热锁死那条暖红同一档"小面积读数"的豁免
@@ -263,5 +255,5 @@ export function slotSummary(world: World, slot: number): string {
   if (!s || s.type < 0) return `${facing} · 空`;
   const def = TOWERS[s.type];
   if (!def) return `${facing} · 未知塔型(${s.type})`;
-  return `${facing} · ${def.name} Lv${s.level}`;
+  return `${facing} · ${def.name} ★${s.stars} · ${throttleName(def.throttle)}`;
 }

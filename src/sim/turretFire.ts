@@ -102,9 +102,9 @@ function fireBullets(
 
   // 发数走 slotShotsPerFire(恒发数 × Lv3 跳变):风暴机炮的"双管齐射"是恒发签名(def.burst = 2),
   // 只读 towerBurst 会把它漏成单管 —— 面板理论 DPS 与真开火必须同一份口径
-  const n = slotShotsPerFire(def, slot.level);
-  const damage = effectiveDamage(def, slot.level, damageMul);
-  const pierce = towerPierce(def, slot.level);
+  const n = slotShotsPerFire(def, slot.stars);
+  const damage = effectiveDamage(def, slot.stars, damageMul);
+  const pierce = towerPierce(def, slot.stars);
   const life = range / def.bulletSpeed;
   // 多发扇开的整束宽度 = **瞄准容差**,不为它新造一个旋钮:
   // 于是每一发的方向都还落在"算打得到"的那个锥里(容差之外的方向本就不许开火),
@@ -153,13 +153,13 @@ function fireMortar(
 ): number {
   if (!(def.bulletSpeed > 0)) return 0; // 理由同 fireBullets:Infinity 的 life 是个不回收的弹
 
-  const n = slotShotsPerFire(def, slot.level); // FX_MORTAR 只认恒发数(三连发是同一次蓄力的表现)
+  const n = slotShotsPerFire(def, slot.stars); // FX_MORTAR 只认恒发数(三连发是同一次蓄力的表现)
   const dx = target.x - muzzle.x;
   const dy = target.y - muzzle.y;
   // 夹在射程内是给浮点边界与将来的规则变动兜底(findArcTarget 已保证 ≤ range):
   // 落点绝不许跑到射界叠加层画出来的那个圆之外 —— 那条圆就是玩家读到的"这门炮够得到哪"
   const dist = Math.min(Math.hypot(dx, dy), range);
-  const damage = effectiveAoeDamage(def, slot.level, damageMul);
+  const damage = effectiveAoeDamage(def, slot.stars, damageMul);
   const step = n > 1 ? (def.aimTolDeg * DEG2RAD) / (n - 1) : 0;
   const base = -((n - 1) / 2) * step;
 
@@ -194,15 +194,15 @@ function fireMortar(
  */
 function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink, damageMul: number): number {
   // 节流系跟进去:词缀抗性(14 号:装甲/相位)在伤害结算处认 def.throttle
-  const damage = effectiveDamage(def, slot.level, damageMul);
+  const damage = effectiveDamage(def, slot.stars, damageMul);
   const dx = target.x - muzzle.x;
   const dy = target.y - muzzle.y;
   const dist = Math.hypot(dx, dy);
 
-  if (towerPierce(def, slot.level) > 0 && dist > 0) {
+  if (towerPierce(def, slot.stars) > 0 && dist > 0) {
     const ux = dx / dist;
     const uy = dy / dist;
-    const range = towerRange(def, slot.level);
+    const range = towerRange(def, slot.stars);
     for (let i = 0; i < candidates.length; i++) {
       const e = candidates[i]!;
       if (e.dead) continue;
@@ -232,8 +232,8 @@ function fireBeam(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink
  *   (按跳数扣热量的话,电弧塔在人堆里会瞬间过热,而"清蜂群"正是它的定位)
  */
 function fireChain(slot: WeaponSlot, def: TowerDef, target: Enemy, sink: FireSink, damageMul: number): number {
-  const total = towerChainCount(def, slot.level);
-  let damage = effectiveDamage(def, slot.level, damageMul);
+  const total = towerChainCount(def, slot.stars);
+  let damage = effectiveDamage(def, slot.stars, damageMul);
   let hop: Enemy | null = target;
   let fromX = muzzle.x;
   let fromY = muzzle.y;
@@ -300,7 +300,7 @@ function fireLance(
 ): number {
   const ux = Math.cos(aim);
   const uy = Math.sin(aim);
-  const damage = effectiveDamage(def, slot.level, damageMul);
+  const damage = effectiveDamage(def, slot.stars, damageMul);
 
   for (let i = 0; i < candidates.length; i++) {
     const e = candidates[i]!;

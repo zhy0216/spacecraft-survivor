@@ -222,10 +222,10 @@ interface StubWorld {
 }
 
 /** 武器槽桩:节流状态全零(就绪),用例按需覆写装填/锁死/蓄力 */
-function stubWeapon(type: number, level: number, over: Partial<WeaponSlot> = {}): WeaponSlot {
+function stubWeapon(type: number, stars: number, over: Partial<WeaponSlot> = {}): WeaponSlot {
   return {
     type,
-    level,
+    stars,
     cooldown: 0,
     ammo: 1,
     reloadLeft: 0,
@@ -295,7 +295,8 @@ describe('createHud', () => {
     // 屏下缘两根血条(精英 + Boss)、解锁 toast、段落横幅(26 号,display:none 的常驻节点)、
     // 战术雷达以及低血量红晕(畅玩性),
     // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
-    expect(root.children.length).toBe(11);
+    // (法令悬停 tooltip 是第 12 个根节点:常驻隐藏,悬停法令 chip 才点亮)
+    expect(root.children.length).toBe(12);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -619,7 +620,7 @@ describe('createHud', () => {
   });
 
   it('火力统计:理论 DPS 逐槽求和出格,同型合并 ×N 且发射读数取最快就绪那把,空槽格藏着', () => {
-    // 两门机炮:Lv2 就绪、Lv1 装填中 —— 合并格该报"就绪"(下一发确实从 Lv2 那把出膛);
+    // 两门机炮:2★ 就绪、1★ 装填中 —— 合并格该报"就绪"(下一发确实从 2★ 那把出膛);
     // 激光锁死 1.2s —— 单独格报"过热 1.2s"
     const world = stubWorld({
       kills: 42,
@@ -642,9 +643,10 @@ describe('createHud', () => {
       slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 2), TOWERS[TOWER_AUTOCANNON]!, buffs) +
       slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 1), TOWERS[TOWER_AUTOCANNON]!, buffs);
     const laserDps = slotSustainedDps(stubWeapon(TOWER_LASER, 3), TOWERS[TOWER_LASER]!, buffs);
-    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name} Lv2 ×2`)).toBeDefined();
+    // 星级 + 所属系 + 同型 ×N:合并格报最高星那把,系名直取单一来源
+    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name} ★★ · 弹药系 ×2`)).toBeDefined();
     expect(findText(firepower, formatDps(acDps))).toBeDefined();
-    expect(findText(firepower, `${TOWERS[TOWER_LASER]!.name} Lv3`)).toBeDefined();
+    expect(findText(firepower, `${TOWERS[TOWER_LASER]!.name} ★★★ · 过热系`)).toBeDefined();
     expect(findText(firepower, formatDps(laserDps))).toBeDefined();
     expect(findText(firepower, formatDps(acDps + laserDps))).toBeDefined();
     // 发射读数:机炮格就绪(装填那把不拖累),激光格报过热剩余秒

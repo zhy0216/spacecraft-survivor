@@ -29,7 +29,7 @@
  *   throttle >= 0 = **系限定**(弹药 0 / 过热 1 / 充能 2),四个族倍率只作用于该系武器;
  *   throttle === EDICT_THR_NONE(-1)= **全船无条件**(船体 / 经济 / 机动那几档)。
  */
-import { THR_AMMO, THR_CHARGE, THR_HEAT } from './towers';
+import { THR_AMMO, THR_CHARGE, THR_HEAT, throttleName } from './towers';
 
 // —— 系限定档(吸收原弹药库 / 散热器 / 电容组)——
 export const EDICT_AMMO = 0; // 弹药协议(原弹药库 + 曳光协议 + 急速协议)
@@ -55,7 +55,7 @@ export const EDICT_OVERDRIVE = 9; // 超载协议
 export const EDICT_KIND_COUNT = 10;
 
 /**
- * 同一条法令的叠层上限(用户设计会定死)。与 data/towers.ts 的 TOWER_MAX_LEVEL 同一条待遇:
+ * 同一条法令的叠层上限(用户设计会定死)。与 data/towers.ts 的 STAR_MAX 同一条待遇:
  * 它是**设计口径不是旋钮** —— 改它要连带重算整条经济账(法令是三选一的主体类别,
  * 上限决定了一局能把几条轴推到头)。满层的法令由卡池过滤剔出候选(见 sim/upgrade.ts),
  * 于是"抽到已满层法令"的沉默死卡从结构上不存在。
@@ -355,4 +355,54 @@ export function edictHeldCount(levels: readonly number[]): number {
     if (edictLevel(levels, i) > 0) n++;
   }
   return n;
+}
+
+/** 数值印成字符串:先四舍五入到两位小数再交给 String(连乘会带出浮点毛刺,原样印是噪声) */
+function num(v: number): string {
+  return String(Math.round(v * 100) / 100);
+}
+
+/**
+ * 法令的作用范围标签(系标签单一来源,UI 不许再抄第二份):
+ * 系限定法令 = 系名(弹药系 / 过热系 / 充能系),全船法令 = 「全船」。
+ */
+export function edictScopeLabel(def: EdictDef): string {
+  return def.throttle !== EDICT_THR_NONE ? throttleName(def.throttle) : '全船';
+}
+
+/**
+ * 法令卡的一句话 = **念数值表里那几项非中性的字段**(三选一卡、船坞商店、HUD 悬停提示都念它 ——
+ * 同一张表三处各念一遍必然走散)(乘法档 1、加法档 0 = "这档用不上",
+ * 调回中性那一句自己就消失)。作用域在前:系限定法令念「弹药系 …」,全船法令念「全船 · …」。
+ *
+ * 念的是**一层的效果**而不是"当前总量":卡片上写的是"点下去会多出什么",
+ * 而"已经叠到几层"由卡面/徽记的 ×N 单独报 —— 两件事分开说,
+ * 玩家才不会把"这条法令有多强"和"这一张卡给多少"看混。
+ */
+export function edictDesc(def: EdictDef): string {
+  const parts: string[] = [];
+  if (def.throttle !== EDICT_THR_NONE) {
+    const muls: string[] = [];
+    if (def.fireRateMul !== 1) muls.push(`射速 ×${num(def.fireRateMul)}`);
+    if (def.reloadMul !== 1) muls.push(`装填 ×${num(def.reloadMul)}`);
+    if (def.heatMaxMul !== 1) muls.push(`热上限 ×${num(def.heatMaxMul)}`);
+    if (def.chargeRateMul !== 1) muls.push(`充能 ×${num(def.chargeRateMul)}`);
+    if (muls.length > 0) parts.push(`${throttleName(def.throttle)} ${muls.join(' / ')}`);
+  }
+  if (def.damageMul !== 1) parts.push(`全武器伤害 ×${num(def.damageMul)}`);
+  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
+  if (def.damageTakenMul !== 1) parts.push(`受击 ×${num(def.damageTakenMul)}`);
+  if (def.xpMul !== 1) parts.push(`经验 ×${num(def.xpMul)}`);
+  if (def.magnetRadiusMul !== 1) parts.push(`磁吸半径 ×${num(def.magnetRadiusMul)}`);
+  if (def.turnRateAdd !== 0) {
+    parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
+  }
+  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
+  if (def.starCoinChanceAdd !== 0) {
+    parts.push(`星币概率 ${def.starCoinChanceAdd > 0 ? '+' : ''}${num(def.starCoinChanceAdd * 100)}%`);
+  }
+  // 全船法令的前缀放在最后统一加:前面几行只推效果文案,加在开头不打断任何一行
+  if (def.throttle === EDICT_THR_NONE && parts.length > 0) parts.unshift('全船');
+  // 一项都没有 = 数值表把这一条的效果全调成中性了。**不许印成空串**
+  return parts.length > 0 ? parts.join(' · ') : '这一条在数值表里没有任何效果';
 }

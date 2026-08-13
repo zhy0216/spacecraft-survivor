@@ -24,7 +24,7 @@ describe('起始装配落入固定槽位', () => {
     }
     for (const [i, type] of loadout.weapons.entries()) {
       const slot = world.weapons[i]!;
-      expect(slot.level).toBe(1);
+      expect(slot.stars).toBe(1);
       expect(slot.ammo).toBe(towerMagazine(TOWERS[type]!, 1));
     }
   });

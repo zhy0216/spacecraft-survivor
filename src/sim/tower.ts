@@ -104,7 +104,7 @@ export function slotTowerDef(slot: WeaponSlot): TowerDef | undefined {
  * @param fireMul 保留位(旧版受击惩罚的倍率),恒 1 —— 见文件头那段"惩罚随四舷删除"的说明。
  */
 export function slotFireInterval(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs, fireMul = 1): number {
-  return effectiveFireInterval(def, slot.level, fireMul, buffs.fireRateMul[def.throttle]!);
+  return effectiveFireInterval(def, slot.stars, fireMul, buffs.fireRateMul[def.throttle]!);
 }
 
 /**
@@ -123,7 +123,7 @@ export function slotReload(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): 
  * 渲染层的热量条分母读的也是它:分子(slot.heat)夹在这个上限里,两边同源才不会画出框。
  */
 export function slotHeatMax(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
-  return towerHeatMax(def, slot.level) * buffs.heatMaxMul[def.throttle]!;
+  return towerHeatMax(def, slot.stars) * buffs.heatMaxMul[def.throttle]!;
 }
 
 /**
@@ -134,7 +134,7 @@ export function slotHeatMax(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs):
  * Infinity 的蓄力时长,那座塔此后一帧都攒不起来,而且从画面上完全看不出是表填错了。
  */
 export function slotChargeTime(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
-  return towerChargeTime(def, slot.level) / safeScale(buffs.chargeRateMul[def.throttle]!);
+  return towerChargeTime(def, slot.stars) / safeScale(buffs.chargeRateMul[def.throttle]!);
 }
 
 /**
@@ -180,7 +180,7 @@ export function stepThrottle(slot: WeaponSlot, def: TowerDef, dt: number, buffs:
         if (slot.reloadLeft <= THROTTLE_EPS) {
           slot.reloadLeft = 0;
           // 按**当前**等级满弹:装填途中升了级,这一夹就直接吃到新弹夹上限(GDD §5.4 的成长看得见)
-          slot.ammo = towerMagazine(def, slot.level);
+          slot.ammo = towerMagazine(def, slot.stars);
         }
       }
       break;
@@ -283,7 +283,7 @@ export function onFired(slot: WeaponSlot, def: TowerDef, shots: number, buffs: E
           slot.reloadLeft = reload;
         } else {
           // 装填时间被调成 0 = 无停顿:当场满弹,而不是留下一座弹夹恒 0、永远打不响的塔
-          slot.ammo = towerMagazine(def, slot.level);
+          slot.ammo = towerMagazine(def, slot.stars);
         }
       }
       break;
@@ -398,11 +398,11 @@ export function slotShotsPerFire(def: TowerDef, level: number): number {
  * 数值全走 slot* 包装与 effective*(法令/tuning 各过各的门),别处不许再算第二遍。
  */
 export function slotSustainedDps(slot: WeaponSlot, def: TowerDef, buffs: EdictBuffs): number {
-  const shots = slotShotsPerFire(def, slot.level);
+  const shots = slotShotsPerFire(def, slot.stars);
   const dmg =
     def.fx === FX_MORTAR
-      ? effectiveAoeDamage(def, slot.level, buffs.damageMul)
-      : effectiveDamage(def, slot.level, buffs.damageMul);
+      ? effectiveAoeDamage(def, slot.stars, buffs.damageMul)
+      : effectiveDamage(def, slot.stars, buffs.damageMul);
   const perFire = shots * dmg;
   let dps: number;
 
@@ -411,7 +411,7 @@ export function slotSustainedDps(slot: WeaponSlot, def: TowerDef, buffs: EdictBu
       const interval = slotFireInterval(slot, def, buffs);
       if (!(interval > 0)) return 0; // 表被改坏(充能系才许 0 间隔),不除 0
       const reload = slotReload(slot, def, buffs);
-      const magazine = towerMagazine(def, slot.level);
+      const magazine = towerMagazine(def, slot.stars);
       if (!(reload > 0) || !(magazine > 0)) {
         dps = perFire / interval; // 无装填(风暴机炮的买断/表调 0):硬停顿整条消失,纯射速
       } else {

@@ -76,22 +76,17 @@ export const UPGRADE_CHOICE_COUNT = 3;
  * **三类之和恰为 100**:支援类随两套被动合并整类删除(见 data/edicts.ts 文件头),
  * 它那 35% 全部并进法令。
  *
- * 三条口径:
- *   - **新武器 20%**(旧 5%):武器槽从 4 个扩到 8 个(sim/armory 的 WEAPON_SLOT_COUNT),
- *     而星币改成 10% 概率掉落后商店一局也就买得起一样东西 —— 5% 那档配 8 个槽会让整局
- *     有一半槽位空着。20% ≈ 一局 13 次升级里期望 2.6 把,加起手 2 把与商店 1 把,
- *     刚好把 8 个槽填到六七成;
- *   - **武器升级 30%**:升级一张同名武器卡 = 该武器 +1 级(可对未拥有的武器先升级,
- *     "存档等级"见 World.weaponBankedLevels —— 获得那把武器时从存档级起步);
- *   - **法令 50%**:三选一的主体。法令可叠层(每条最多 EDICT_MAX_LEVEL 层),
+ * 两条口径(星级系统:武器升级整类取消,成长 = 升星合成 + 法令叠层):
+ *   - **新武器 40%**(旧 20%):同型武器是升星通路的原料(第 2 把 → 2★、第 3 把 → 3★
+ *     变身合成武器,见 World.mergeOrInstall),已拥有但未满 3★ 的同型照进卡池;
+ *   - **法令 60%**:三选一的主体。法令可叠层(每条最多 EDICT_MAX_LEVEL 层),
  *     满层的由卡池过滤剔出候选,于是"抽到已满层法令"的死卡从结构上不存在。
  *
  * 权重只决定"掷出来的那个数怎么解释",**不决定掷几次**:每个候选位恒定消耗 2 次 rng
- * (见 rollUpgradeOffer),于是改这三个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
+ * (见 rollUpgradeOffer),于是改这两个数不会移动整条随机序列 —— 同 seed 的出怪照旧一模一样。
  */
-export const OFFER_WEIGHT_NEW_WEAPON = 20;
-export const OFFER_WEIGHT_WEAPON_UPGRADE = 30;
-export const OFFER_WEIGHT_EDICT = 50;
+export const OFFER_WEIGHT_NEW_WEAPON = 40;
+export const OFFER_WEIGHT_EDICT = 60;
 
 /**
  * 跳过一次升级的**手续费**(畅玩性调整,取代旧的"固定返还 15"):

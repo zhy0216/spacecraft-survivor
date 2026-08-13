@@ -53,9 +53,11 @@ import { RESULT_RUNNING, World } from './world';
  * v3(26 号磁吸涌):快照新增 magnetSurgeTime 标量 —— 它影响拾取半径、进 checksum,必须存。
  * v4(26 号改):掉落物新增 kind 字段(磁吸宝物与经验分流,DR_STRIDE 6→7);磁吸涌的
  *   触发从"跨段 / 精英死亡自动置位"改为"拾起磁吸宝物",magnetSurgeTime 标量原样保留。
+ * v5(星级系统):武器槽的 level(1..5)改语义为 stars(1..3,2★/3★ = 旧 Lv3/Lv5 档);
+ *   删除 weaponBankedLevels 字段与 OFFER_WEAPON_UPGRADE 类别 —— 存档不再有"存档等级"。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 4;
+export const RUN_SAVE_VERSION = 5;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -80,7 +82,7 @@ export const BU_STRIDE = 14;
 export const EB_STRIDE = 8;
 /** 一颗掉落物占几个格子:x, y, vx, vy, value, magnet(0/1), kind。不存 px/py */
 export const DR_STRIDE = 7;
-/** 一个武器槽占几个格子:type, level, cooldown, ammo, reloadLeft, heat, coolLock, charge, turretOffset(= WeaponSlot 的全部字段) */
+/** 一个武器槽占几个格子:type, stars, cooldown, ammo, reloadLeft, heat, coolLock, charge, turretOffset(= WeaponSlot 的全部字段) */
 export const WP_STRIDE = 9;
 /** 一张候选卡占几个格子:kind, type, level(= UpgradeOption 的全部字段) */
 export const OF_STRIDE = 3;
@@ -110,8 +112,6 @@ export interface RunSnapshot {
   weapons: number[];
   /** 法令层数表,长度 EDICT_KIND_COUNT(下标 = EDICT_*,值 = 层数 0..EDICT_MAX_LEVEL) */
   edicts: number[];
-  /** 逐型武器存档等级,长度 TOWER_KIND_COUNT */
-  banked: number[];
   /** 波次进度:segment, segTime, burstNext, eliteNext(elites/dirRad/intensity/done 是派生量) */
   wave: number[];
   /** 逐流出怪账 */
@@ -186,7 +186,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     const s = world.weapons[i]!;
     weapons.push(
       s.type,
-      s.level,
+      s.stars,
       s.cooldown,
       s.ammo,
       s.reloadLeft,
@@ -260,7 +260,6 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     ship: [ship.x, ship.y, ship.vx, ship.vy, ship.heading, ship.hp],
     weapons,
     edicts,
-    banked: world.weaponBankedLevels.slice(),
     wave: [world.wave.segment, world.wave.segTime, world.wave.burstNext, world.wave.eliteNext],
     debt: world.wave.debt.slice(),
     econ: [
@@ -322,7 +321,7 @@ export function restoreRun(snap: RunSnapshot): World {
     const s = world.weapons[i]!;
     const o = i * WP_STRIDE;
     s.type = snap.weapons[o]!;
-    s.level = snap.weapons[o + 1]!;
+    s.stars = snap.weapons[o + 1]!;
     s.cooldown = snap.weapons[o + 2]!;
     s.ammo = snap.weapons[o + 3]!;
     s.reloadLeft = snap.weapons[o + 4]!;
@@ -332,9 +331,6 @@ export function restoreRun(snap: RunSnapshot): World {
     s.turretOffset = snap.weapons[o + 8]!;
   }
   for (let i = 0; i < EDICT_KIND_COUNT; i++) world.edictLevels[i] = snap.edicts[i]!;
-  for (let i = 0; i < world.weaponBankedLevels.length; i++) {
-    world.weaponBankedLevels[i] = snap.banked[i] ?? 0;
-  }
 
   restoreWaveState(world.wave, snap.wave[0]!, snap.wave[1]!, snap.wave[2]!, snap.wave[3]!, snap.debt);
 
@@ -522,7 +518,6 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   const ship = nums('ship', 6);
   const weapons = nums('weapons', WEAPON_SLOT_COUNT * WP_STRIDE);
   const edicts = nums('edicts', EDICT_KIND_COUNT);
-  const banked = nums('banked', TOWER_KIND_COUNT);
   const wave = nums('wave', 4);
   const debt = nums('debt', -1);
   const econ = nums('econ', 8);
@@ -542,7 +537,6 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     weapons === null ||
     edicts === null ||
     beacon === null ||
-    banked === null ||
     wave === null ||
     debt === null ||
     econ === null ||
@@ -572,7 +566,6 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     ship,
     weapons,
     edicts,
-    banked,
     wave,
     debt,
     econ,

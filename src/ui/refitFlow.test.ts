@@ -66,13 +66,14 @@ describe('整备面板纯文案', () => {
   });
 
   it('法令效果文案逐项取自数值表(与升级三选一同一份 edictDesc,两处不许各念各的)', () => {
-    expect(dockEdictEffect(EDICT_AMMO)).toBe('全船弹药系 射速 ×1.25 / 装填 ×0.7');
-    expect(dockEdictEffect(EDICT_COOLANT)).toBe('全船过热系 热上限 ×1.25'); // 27 号压档:1.5 → 1.25
-    expect(dockEdictEffect(EDICT_ARMOR)).toBe('船体 HP +15 · 受击 ×0.8');
-    expect(dockEdictEffect(EDICT_GYRO)).toBe('转向 +10°/s');
-    expect(dockEdictEffect(EDICT_MAGNET)).toBe('磁吸半径 ×1.3');
-    expect(dockEdictEffect(EDICT_CRUISE)).toBe('巡航速度 ×1.1');
-    expect(dockEdictEffect(EDICT_OVERDRIVE)).toBe('全武器伤害 ×1.15');
+    // 系限定法令前缀 = 系名;全船法令前缀 = 「全船」
+    expect(dockEdictEffect(EDICT_AMMO)).toBe('弹药系 射速 ×1.25 / 装填 ×0.7');
+    expect(dockEdictEffect(EDICT_COOLANT)).toBe('过热系 热上限 ×1.25'); // 27 号压档:1.5 → 1.25
+    expect(dockEdictEffect(EDICT_ARMOR)).toBe('全船 · 船体 HP +15 · 受击 ×0.8');
+    expect(dockEdictEffect(EDICT_GYRO)).toBe('全船 · 转向 +10°/s');
+    expect(dockEdictEffect(EDICT_MAGNET)).toBe('全船 · 磁吸半径 ×1.3');
+    expect(dockEdictEffect(EDICT_CRUISE)).toBe('全船 · 巡航速度 ×1.1');
+    expect(dockEdictEffect(EDICT_OVERDRIVE)).toBe('全船 · 全武器伤害 ×1.15');
     expect(dockEdictEffect(999)).toBe('未知法令');
   });
 });
@@ -158,7 +159,6 @@ interface StubWorld {
   shopWeapons: number[];
   dockEdictOffers: number[];
   weapons: WeaponSlot[];
-  weaponBankedLevels: number[];
   edictLevels: number[];
   buffs: EdictBuffs;
   weaponCalls: Array<[number, number | undefined]>;
@@ -187,7 +187,6 @@ function createStubWorld(): StubWorld {
     shopWeapons: [TOWER_AUTOCANNON, -1],
     dockEdictOffers: [EDICT_AMMO, EDICT_GYRO],
     weapons: createWeaponSlots(),
-    weaponBankedLevels: new Array<number>(TOWER_KIND_COUNT).fill(0),
     edictLevels: createEdictLevels(),
     buffs: createEdictBuffs(),
     weaponCalls: [],
@@ -316,17 +315,17 @@ describe('createRefitFlow 纯商店流程', () => {
       const slot = world.weapons[index];
       if (!slot) continue;
       slot.type = index === 2 ? TOWER_RAILGUN : TOWER_AUTOCANNON;
-      slot.level = index + 1;
+      slot.stars = index + 1;
     }
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     expect(world.weaponCalls).toEqual([[0, undefined]]);
     expect(cardsOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
-    // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 Lv3)
+    // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 ★3)
     expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
     expect(chipOf(dom, 2).innerHTML).toContain('正右');
-    expect(chipOf(dom, 2).innerHTML).toContain('Lv3');
+    expect(chipOf(dom, 2).innerHTML).toContain('★3');
     fire(chipOf(dom, 2), 'click');
     expect(world.weaponCalls).toEqual([[0, undefined], [0, 2]]);
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
@@ -335,7 +334,7 @@ describe('createRefitFlow 纯商店流程', () => {
 
   it('取消替换不扣费、不下架', () => {
     world.replaceNeeded = true;
-    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, level: 1 };
+    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, stars: 1 };
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     fire(pickerOf(dom).children[WEAPON_PICKER_CANCEL_INDEX] as StubEl, 'click');
@@ -387,13 +386,14 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(repairOf(dom).disabled).toBe(true);
   });
 
-  it('左侧画出整条船：每格印朝向，已装的印名称等级、没装的印空槽，船体读数取自 world.ship', () => {
+  it('左侧画出整条船：每格印朝向，已装的印名称星级与系、没装的印空槽，船体读数取自 world.ship', () => {
     world.weapons[0]!.type = TOWER_LASER;
-    world.weapons[0]!.level = 2;
+    world.weapons[0]!.stars = 2;
     setup();
     expect(chipOf(dom, 0).innerHTML).toContain('正前');
     expect(chipOf(dom, 0).innerHTML).toContain(TOWERS[TOWER_LASER]?.name);
-    expect(chipOf(dom, 0).innerHTML).toContain('Lv2');
+    expect(chipOf(dom, 0).innerHTML).toContain('★2');
+    expect(chipOf(dom, 0).innerHTML).toContain('过热系'); // 舰船图上的武器格也标系
     expect(chipOf(dom, 1).innerHTML).toContain('右前');
     expect(chipOf(dom, 1).innerHTML).toContain('空槽');
     expect((headOf(dom).children[1] as StubEl).innerHTML).toContain('60/100');
@@ -401,7 +401,7 @@ describe('createRefitFlow 纯商店流程', () => {
 
   it('悬停货架卡把武器虚装到第一个空槽上，移开还原；预览一次都不碰世界', () => {
     world.weapons[0]!.type = TOWER_LASER;
-    world.weapons[0]!.level = 1;
+    world.weapons[0]!.stars = 1;
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
     expect(chipOf(dom, 1).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
@@ -416,7 +416,7 @@ describe('createRefitFlow 纯商店流程', () => {
     world.replaceNeeded = true;
     for (const slot of world.weapons) {
       slot.type = TOWER_RAILGUN;
-      slot.level = 4;
+      slot.stars = 4;
     }
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
@@ -430,7 +430,7 @@ describe('createRefitFlow 纯商店流程', () => {
   it('替换态点到空槽不成交（真 DOM 靠 disabled 拦，这里是防桩）', () => {
     world.replaceNeeded = true;
     world.weapons[0]!.type = TOWER_AUTOCANNON;
-    world.weapons[0]!.level = 1;
+    world.weapons[0]!.stars = 1;
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     fire(chipOf(dom, 1), 'click');
@@ -450,20 +450,28 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_ARMOR]!.name} ×1`);
   });
 
-  it('武器卡印出数值、入手等级、落位方向与三合一进度', () => {
-    world.weaponBankedLevels[TOWER_AUTOCANNON] = 1;
+  it('武器卡印出数值与系名、已有同型时印升星/合成进度(不占槽),未拥有才报落位方向', () => {
     world.weapons[0]!.type = TOWER_AUTOCANNON;
-    world.weapons[0]!.level = 1;
+    world.weapons[0]!.stars = 1;
     world.weapons[1]!.type = TOWER_AUTOCANNON;
-    world.weapons[1]!.level = 1;
+    world.weapons[1]!.stars = 1;
     setup();
     const card = cardsOf(dom).children[0] as StubEl;
     expect(card.innerHTML).toContain('射程');
     expect(card.innerHTML).toContain('/s');
-    expect(card.innerHTML).toContain('入手 Lv2'); // 1 + 存档级，与 World.installWeapon 同口径
-    expect(card.innerHTML).toContain('装到「正右」'); // 槽 0/1 已满，第一个空槽是槽 2
-    expect(card.innerHTML).toContain('已有 2 把');
-    expect(card.innerHTML).toContain(TOWERS[TOWER_STORM_CANNON]?.name);
+    expect(card.innerHTML).toContain('弹药系'); // 商店武器卡标好所属系
+    // 已有 1★ 同型:买下直接吸收升星,不需要槽,也不报落位方向
+    expect(card.innerHTML).toContain('已有 ★1 · 再拿一把升 ★2');
+    expect(card.innerHTML).not.toContain('装到');
+    // 悬停/替换那类流程不在这里;未拥有那一档:清空同型后重画,报「入手 ★1」+ 落位方向
+    world.weapons[0]!.type = -1;
+    world.weapons[0]!.stars = 0;
+    world.weapons[1]!.type = -1;
+    world.weapons[1]!.stars = 0;
+    fire(refreshOf(dom), 'click');
+    const fresh = cardsOf(dom).children[0] as StubEl;
+    expect(fresh.innerHTML).toContain('入手 ★1');
+    expect(fresh.innerHTML).toContain('装到「正前」'); // 全空，第一个空槽是槽 0
   });
 
   it('完成整备调用 completeRefit，成功才回调', () => {

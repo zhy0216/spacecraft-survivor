@@ -15,9 +15,9 @@ import {
   EDICTS,
 } from '../data/edicts';
 import { isMergeResult } from '../data/merges';
-import { TOWER_AUTOCANNON, TOWER_MAX_LEVEL, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
+import { TOWER_AUTOCANNON, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import {
   ACQUIRE_INVALID_TYPE,
   ACQUIRE_REPLACE_NEEDED,
@@ -31,12 +31,8 @@ import {
 } from '../sim/world';
 import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps } from './upgradeFlow';
 
-function newWeaponOpt(type: number): UpgradeOption {
-  return { kind: OFFER_NEW_WEAPON, type, level: 0 };
-}
-
-function weaponUpgradeOpt(type: number, level: number): UpgradeOption {
-  return { kind: OFFER_WEAPON_UPGRADE, type, level };
+function newWeaponOpt(type: number, level = 0): UpgradeOption {
+  return { kind: OFFER_NEW_WEAPON, type, level };
 }
 
 function edictOpt(type: number, level = 0): UpgradeOption {
@@ -79,8 +75,8 @@ describe('denyMessage', () => {
 });
 
 describe('升级卡片纯文案', () => {
-  it('三类标题都来自 optionLabel，互不串表', () => {
-    const options = [newWeaponOpt(TOWER_AUTOCANNON), weaponUpgradeOpt(TOWER_RAILGUN, 2), edictOpt(EDICT_AMMO)];
+  it('两类标题都来自 optionLabel，互不串表', () => {
+    const options = [newWeaponOpt(TOWER_AUTOCANNON), edictOpt(EDICT_AMMO)];
     for (const option of options) expect(cardTitle(option)).toBe(optionLabel(option));
   });
 
@@ -92,41 +88,35 @@ describe('升级卡片纯文案', () => {
     expect(cardIcon(edictOpt(99))).toBe('?');
   });
 
-  it('新武器描述按存档等级计算到手数值，等级行提示三合一', () => {
+  it('新武器描述按 1★ 报数值与系,等级行按升星通路说话', () => {
     const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
-    world.weaponBankedLevels[TOWER_AUTOCANNON] = 2;
     const def = TOWERS[TOWER_AUTOCANNON];
     expect(def).toBeDefined();
     if (!def) return;
     const desc = cardDesc(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world));
-    expect(desc).toContain(String(Math.round(towerRange(def, 3))));
-    expect(desc).toContain(String(Math.round(towerDps(def, 3) * 100) / 100));
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toBe('新武器 · 获得后从 Lv3 起步 · 可三合一合成');
-    // 槽里已有同型(level > 0):卡面改口说"凑合成",那是这张卡此时的真正价值
-    expect(cardLevelText({ kind: OFFER_NEW_WEAPON, type: TOWER_AUTOCANNON, level: 2 }, worldAsWorld(world))).toContain(
-      '凑满 3 把',
+    expect(desc).toContain(String(Math.round(towerRange(def, 1))));
+    expect(desc).toContain(String(Math.round(towerDps(def, 1) * 100) / 100));
+    expect(desc).toContain('弹药系'); // 武器卡标好所属系
+    // 未拥有:从 1★ 起步
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toBe('新武器 · 获得后从 ★1 起步');
+    // 已有 1★(有配方):先说升星、再说 3★ 合成
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON, 1), worldAsWorld(world))).toBe(
+      '已有 ★1 · 再拿一把升 ★2 · 3★ 合成',
+    );
+    // 已有 2★(有配方):下一把就是 3★ 变身
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON, 2), worldAsWorld(world))).toBe(
+      '已有 ★2 · 再拿一把 · 凑满 3★ 当场合成',
     );
   });
 
-  it('武器升级分别显示 DPS 跳变、未持有存档和满级', () => {
-    const def = TOWERS[TOWER_AUTOCANNON];
-    expect(def).toBeDefined();
-    if (!def) return;
-    const upgrade = cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, 2));
-    expect(upgrade).toContain('Lv2 → Lv3');
-    expect(upgrade).toContain(`${Math.round(towerDps(def, 2) * 100) / 100}→${Math.round(towerDps(def, 3) * 100) / 100}/s`);
-    expect(cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, 0))).toContain('等级存档 Lv1');
-    expect(cardLevelText(weaponUpgradeOpt(TOWER_AUTOCANNON, 0))).toBe('未持有 · 存档等级');
-    expect(cardDesc(weaponUpgradeOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toContain('满级');
-    expect(cardLevelText(weaponUpgradeOpt(TOWER_AUTOCANNON, TOWER_MAX_LEVEL))).toContain('满级');
-  });
-
-  it('法令描述逐条来自数值表:系限定档带「全船 X 系」前缀,全船档直接念', () => {
+  it('法令描述逐条来自数值表:系限定档带系名前缀,全船档带「全船」前缀', () => {
     const ammo = cardDesc(edictOpt(EDICT_AMMO));
-    expect(ammo).toContain('全船');
+    expect(ammo).toContain('弹药系');
+    expect(ammo).not.toContain('全船');
     expect(ammo).toContain('射速');
     expect(ammo).toContain('装填');
     expect(cardDesc(edictOpt(EDICT_COOLANT))).toContain('热上限');
+    expect(cardDesc(edictOpt(EDICT_ARMOR))).toContain('全船');
     expect(cardDesc(edictOpt(EDICT_ARMOR))).toContain('船体 HP');
     expect(cardDesc(edictOpt(EDICT_GYRO))).toContain('转向');
     expect(cardDesc(edictOpt(EDICT_MAGNET))).toContain('磁吸半径');
@@ -143,7 +133,6 @@ describe('升级卡片纯文案', () => {
 
   it('越界型号不冒充第 0 型', () => {
     expect(cardDesc(newWeaponOpt(99))).toContain('99');
-    expect(cardDesc(weaponUpgradeOpt(99, 1))).toContain('99');
     expect(cardDesc(edictOpt(99))).toContain('99');
   });
 });
@@ -261,7 +250,6 @@ interface StubWorld {
   offerRerolled: boolean;
   weapons: WeaponSlot[];
   edictLevels: number[];
-  weaponBankedLevels: number[];
   takeCalls: Array<[number, number | undefined]>;
   takeCode: number;
   replaceNeeded: boolean;
@@ -283,7 +271,6 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     offerRerolled: false,
     weapons: createWeaponSlots(),
     edictLevels: createEdictLevels(),
-    weaponBankedLevels: Array(TOWERS.length).fill(0),
     takeCalls: [],
     takeCode: 0,
     replaceNeeded: false,
@@ -371,14 +358,14 @@ describe('createUpgradeFlow 单阶段流程', () => {
       const slot = world.weapons[index];
       if (!slot) continue;
       slot.type = index === 1 ? TOWER_RAILGUN : TOWER_AUTOCANNON;
-      slot.level = index + 1;
+      slot.stars = index + 1;
     }
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     expect(world.takeCalls).toEqual([[0, undefined]]);
     expect(panelOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
-    expect((pickerSlotsOf(dom).children[1] as StubEl).textContent).toContain('Lv2');
+    expect((pickerSlotsOf(dom).children[1] as StubEl).textContent).toContain('★2');
     fire(pickerSlotsOf(dom).children[1] as StubEl, 'click');
     expect(world.takeCalls).toEqual([[0, undefined], [0, 1]]);
     expect(resolved).toBe(1);
@@ -386,7 +373,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
 
   it('替换层可用按钮、Esc 和右键返回重选，且不结算', () => {
     world.replaceNeeded = true;
-    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, level: 1 };
+    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, stars: 1 };
     const flow = setup();
     for (const cancel of [() => fire(pickerBackOf(dom), 'click'), () => dom.key('Escape'), () => dom.contextMenu()]) {
       fire(cardsOf(dom).children[0] as StubEl, 'click');

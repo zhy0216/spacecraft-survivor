@@ -7,8 +7,8 @@
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
 import { BOSS, KIND_BOSS } from '../data/enemies';
-import { edictLevel, EDICTS } from '../data/edicts';
-import { TOWERS } from '../data/towers';
+import { edictDesc, edictLevel, edictScopeLabel, EDICTS } from '../data/edicts';
+import { throttleName, TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import { audioBus } from '../render/audio';
@@ -616,7 +616,10 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   starRow.append(starLabel, starValue);
   starCoins.appendChild(starRow);
 
-  // 法令徽记(18 号):一行"法令"标签 + 已持有名单;节点只建一次,每帧按掩码改写文本
+  // 法令徽记(18 号):一行"法令"标签 + 已持有名单的**逐条 chip**。节点只建一次,
+  // chip 只在名单签名变化时重建(法令一个小时内也变不了几次,而每帧重建 DOM 违背 HUD 铁律)。
+  // 每条 chip 都开 pointer-events 并挂 mouseenter/mouseleave → 悬停弹描述 tooltip(见 edictTip):
+  // 名字 ×层数 / 作用域(系名或全船)/ 一层效果 —— 战斗统计画面的法令,悬停即解释。
   const edicts = document.createElement('div');
   edicts.style.cssText = EDICTS_CSS;
   edicts.title = '已生效法令';
@@ -625,10 +628,18 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   const edictsLabel = document.createElement('span');
   edictsLabel.style.cssText = LABEL_CSS;
   edictsLabel.textContent = '法令';
-  const edictsValue = document.createElement('span');
-  edictsValue.style.cssText = `${VALUE_CSS}color:${OK_COLOR};`;
-  edictsRow.append(edictsLabel, edictsValue);
+  const edictChips = document.createElement('div');
+  edictChips.style.cssText = `${VALUE_CSS}color:${OK_COLOR};display:flex;flex-wrap:wrap;gap:4px 10px;`;
+  edictsRow.append(edictsLabel, edictChips);
   edicts.appendChild(edictsRow);
+  // chip 的签名缓存:名单没变就一个字都不动(换局 setWorld 时重置,见 sync 区)
+  let lastEdictSig = '';
+  // 悬停描述 tooltip:整个 HUD 只有这一个,chip 悬停时点亮、移开即隐。
+  // 定位在法令面板正下方、与左列左缘对齐;自身 pointer-events:none,永远不抢鼠标。
+  const edictTip = document.createElement('div');
+  edictTip.style.cssText =
+    `${PANEL_CSS}position:fixed;display:none;max-width:300px;white-space:pre-line;` +
+    `line-height:1.55;z-index:1000;pointer-events:none;`;
 
   // 商店信标倒计时:一行"商店"标签 + 剩余秒数与距离;节点只建一次,每帧现读世界。
   // 距离也报:玩家判断"这趟跑不跑得赢"要的是**秒数与距离两个数一起看**
@@ -789,8 +800,23 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 
-  root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette);
+  root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette, edictTip);
   document.getElementById('ui')!.appendChild(root);
+
+  /** 悬停一条法令 chip:在法令面板正下方点亮描述(名字 ×层 / 作用域 / 一层效果) */
+  function showEdictTip(i: number, lv: number): void {
+    const def = EDICTS[i];
+    if (!def) return;
+    const r = edicts.getBoundingClientRect();
+    edictTip.style.left = `${r.left}px`;
+    edictTip.style.top = `${r.bottom + 6}px`;
+    // textContent 直拼 —— 内容全部来自数值表,绝不用 innerHTML
+    edictTip.textContent = `${def.name} ×${lv}\n${edictScopeLabel(def)}\n${edictDesc(def)}`;
+    edictTip.style.display = 'block';
+  }
+  function hideEdictTip(): void {
+    edictTip.style.display = 'none';
+  }
 
   function sync(): void {
     const hpMax = finiteOrZero(world.ship.maxHp);
@@ -827,20 +853,34 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     starValue.textContent = String(Math.max(0, Math.round(coins)));
 
     // 法令徽记:每帧按 world.edictLevels 现读已持有名单 —— 名字直取 data/edicts(ui 不抄第二份),
-    // **层数 ≥ 2 的挂一个 ×N**(用户设计会:"拿过两次过热上限就显示 过热上限 ×2");
-    // 一层都没有时整体隐藏;叠层 / 重开换世界,当帧跟上
-    const edictNames: string[] = [];
+    // **层数 ≥ 2 的挂一个 ×N**(用户设计会:"拿过两次过热上限就显示 过热上限 ×2")。
+    // chip 只在名单签名变化时重建(每帧拼签名串 + 比较,零 DOM 重建 —— HUD 永不逐帧重建 DOM);
+    // 一层都没有时整体隐藏;叠层 / 重开换世界,当帧跟上(setWorld 把 lastEdictSig 复位成 '')
+    const chipSig: string[] = [];
     for (let i = 0; i < EDICTS.length; i++) {
       const lv = edictLevel(world.edictLevels, i);
       if (lv <= 0) continue;
-      edictNames.push(lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : EDICTS[i]!.name);
+      chipSig.push(lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : `${EDICTS[i]!.name}|${i}`);
     }
-    if (edictNames.length > 0) {
-      edicts.style.display = 'block';
-      edictsValue.textContent = edictNames.join(' ');
-    } else {
-      edicts.style.display = 'none';
+    const sig = chipSig.join("\u0001");
+    if (sig !== lastEdictSig) {
+      lastEdictSig = sig;
+      edictChips.textContent = '';
+      for (let i = 0; i < EDICTS.length; i++) {
+        const lv = edictLevel(world.edictLevels, i);
+        if (lv <= 0) continue;
+        const chip = document.createElement('span');
+        // 与静音按钮同一手:整棵 HUD 是 pointer-events:none,只有可交互的这一小块要开回来
+        chip.style.cssText = 'pointer-events:auto!important;cursor:help;white-space:nowrap;';
+        chip.textContent = lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : EDICTS[i]!.name;
+        chip.addEventListener('mouseenter', () => showEdictTip(i, lv));
+        chip.addEventListener('mouseleave', hideEdictTip);
+        edictChips.appendChild(chip);
+      }
     }
+    edicts.style.display = chipSig.length > 0 ? 'block' : 'none';
+    // 名单换过之后 tooltip 可能还悬在旧位置上:直接收起(下一帧悬停再弹)
+    if (chipSig.length === 0) hideEdictTip();
 
     // 商店信标:亮着才显示,报"还剩几秒 · 还有多远"。距离取船心到信标的直线距离
     // (与 sim 的接触判定同一对坐标),不减判定半径 —— 玩家读的是"要跑多远",不是"还差几像素"
@@ -879,7 +919,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       // 首见槽位才出格:往前扫到同型就交给它那一格(count/maxLevel/dps/发射读数一次算齐)
       let firstSeen = true;
       let count = 0;
-      let maxLevel = 0;
+      let maxStars = 0;
       let dps = 0;
       for (let j = 0; j < weapons.length; j++) {
         const other = weapons[j]!;
@@ -889,7 +929,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
           break;
         }
         count++;
-        if (other.level > maxLevel) maxLevel = other.level;
+        if (other.stars > maxStars) maxStars = other.stars;
         if (def) {
           dps += slotSustainedDps(other, def, buffs);
           slotFireReadout(other, def, buffs, fireScratch);
@@ -905,7 +945,11 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       const name = def?.name ?? '?';
       const b = weaponBoxes[boxCursor++]!;
       b.box.style.display = 'block';
-      b.label.textContent = count > 1 ? `${name} Lv${maxLevel} ×${count}` : `${name} Lv${maxLevel}`;
+      // 星级 + 所属系:同型合并成一格印 ×N,星级取同型最高那把(与 DPS 求和同一条合并口径)
+      const family = def ? throttleName(def.throttle) : '';
+      b.label.textContent =
+        `${name} ${'★'.repeat(maxStars)}${family ? ` · ${family}` : ''}` +
+        (count > 1 ? ` ×${count}` : '');
       b.value.textContent = formatDps(dps);
       if (def) {
         const color = fireReadoutColor(fireBest.state);
@@ -1120,6 +1164,9 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       // 上一局(或上一帧)弹的解锁提示属于旧世界:换局当场清掉,不赖到新局里
       clearToast();
       clearBanner();
+      // 法令 chip 签名复位:新局的名单与旧局无关,不等签名串自己撞出差异
+      lastEdictSig = '';
+      hideEdictTip();
       sync();
     },
     setPaused(next: boolean): void {

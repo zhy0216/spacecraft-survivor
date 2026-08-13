@@ -5,7 +5,7 @@
  * 旧版「选卡 → 甲板放置」的两阶段状态机随甲板网格整段删除,现在是**点卡即结算**的单阶段流程:
  *   弹卡(读 world.offer,3 张)→ 点一张 → world.takeUpgrade 当场结算 → resolve()(收卡、恢复战斗在 main.ts)。
  * 唯一子阶段是「换槽」:武器槽全满时点新武器卡,takeUpgrade 返回 ACQUIRE_REPLACE_NEEDED,弹替换
- * 选择层列出当前 4 槽 → 点某一槽 → **带着槽位再调一次 takeUpgrade(choice, slotIndex)** —— world.ts
+ * 选择层列出当前 8 槽 → 点某一槽 → **带着槽位再调一次 takeUpgrade(choice, slotIndex)** —— world.ts
  * 的文档口径:替换由 takeUpgrade 内部走 replaceWeapon 并在那一次完成结算,这里绝不直接调
  * replaceWeapon(否则 completeUpgrade 不跑,同一张卡下一帧当场再弹)。替换层 Esc / 右键 / 「返回
  * 重选」只退回选卡(不扣费、不恢复战斗);选卡阶段唯一的出口是「跳过」(world.skipUpgrade);另有
@@ -22,11 +22,11 @@
  * 同一条 URL 判定)才印 残骸/花费。
  */
 import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
-import { type EdictDef, edictLevel, EDICT_MAX_LEVEL, EDICTS, EDICT_THR_NONE } from '../data/edicts';
+import { edictDesc, edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
-import { THR_AMMO, THR_CHARGE, THR_HEAT, TOWER_MAX_LEVEL, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
-import { WEAPON_SLOT_COUNT } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, OFFER_WEAPON_UPGRADE, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { THR_CHARGE, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
+import { slotMaxStars, WEAPON_SLOT_COUNT } from '../sim/armory';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 
@@ -122,7 +122,7 @@ function kindIcon(list: string[], type: number): string {
 }
 
 export function cardIcon(opt: UpgradeOption): string {
-  if (opt.kind === OFFER_NEW_WEAPON || opt.kind === OFFER_WEAPON_UPGRADE) return kindIcon(TOWER_ICONS, opt.type);
+  if (opt.kind === OFFER_NEW_WEAPON) return kindIcon(TOWER_ICONS, opt.type);
   return kindIcon(EDICT_ICONS, opt.type);
 }
 
@@ -131,104 +131,45 @@ function num(v: number): string {
   return String(Math.round(v * 100) / 100);
 }
 
-// 节流系的名字与手感一句话(THR_*;三档正是三条系限定法令的作用锚点,故编号与语义都不许合并)
-const THROTTLE_NAMES = ['弹药系', '过热系', '充能系'];
+// 节流系的**手感一句话**(系名单一来源在 data/towers 的 THROTTLE_NAMES/throttleName;
+// 这里只多一句"为什么打不响",是武器卡独有的念法)
 const THROTTLE_DESCS = ['弹药系(打空要装填)', '过热系(贪连射会锁死)', '充能系(攒满才放)'];
 
-function throttleName(throttle: number): string {
-  return THROTTLE_NAMES[throttle] ?? `未知节流系(${throttle})`;
-}
-
 function throttleDesc(throttle: number): string {
-  return THROTTLE_DESCS[throttle] ?? throttleName(throttle);
+  return THROTTLE_DESCS[throttle] ?? `未知节流系(${throttle})`;
 }
 
 /**
- * 法令卡的一句话 = **念数值表里那几项非中性的字段**(船坞商店的法令卡也念它,见 refitFlow —— 
- * 同一张表两处各念一遍必然走散)(乘法档 1、加法档 0 = "这档用不上",
- * 调回中性那一句自己就消失)。法令是**全船被动**:作用系限定(throttle ≥ 0)的前缀读作
- * 「全船 X 系」;船体/经济/机动那几条(EDICT_THR_NONE)不作用于特定系,落在无前缀那几句。
- *
- * 念的是**一层的效果**而不是"当前总量":卡片上写的是"点下去会多出什么",
- * 而"已经叠到几层"由 cardLevelText 那一行单独报(「散热协议 ×2 → ×3」)—— 两件事分开说,
- * 玩家才不会把"这条法令有多强"和"这一张卡给多少"看混。
- */
-export function edictDesc(def: EdictDef): string {
-  const parts: string[] = [];
-  if (def.throttle !== EDICT_THR_NONE) {
-    const muls: string[] = [];
-    if (def.fireRateMul !== 1) muls.push(`射速 ×${num(def.fireRateMul)}`);
-    if (def.reloadMul !== 1) muls.push(`装填 ×${num(def.reloadMul)}`);
-    if (def.heatMaxMul !== 1) muls.push(`热上限 ×${num(def.heatMaxMul)}`);
-    if (def.chargeRateMul !== 1) muls.push(`充能 ×${num(def.chargeRateMul)}`);
-    if (muls.length > 0) parts.push(`全船${throttleName(def.throttle)} ${muls.join(' / ')}`);
-  }
-  if (def.damageMul !== 1) parts.push(`全武器伤害 ×${num(def.damageMul)}`);
-  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
-  if (def.damageTakenMul !== 1) parts.push(`受击 ×${num(def.damageTakenMul)}`);
-  if (def.xpMul !== 1) parts.push(`经验 ×${num(def.xpMul)}`);
-  if (def.magnetRadiusMul !== 1) parts.push(`磁吸半径 ×${num(def.magnetRadiusMul)}`);
-  if (def.turnRateAdd !== 0) {
-    parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
-  }
-  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
-  if (def.starCoinChanceAdd !== 0) {
-    parts.push(`星币概率 ${def.starCoinChanceAdd > 0 ? '+' : ''}${num(def.starCoinChanceAdd * 100)}%`);
-  }
-  // 一项都没有 = 数值表把这一条的效果全调成中性了。**不许印成空串**
-  return parts.length > 0 ? parts.join(' · ') : '这一条在数值表里没有任何效果';
-}
-
-/**
- * 表面 DPS(当前档现算):卡片弹出那一刻按数值表 + 等级算一遍,升一级重算一遍,不印过期的数。
+ * 表面 DPS(当前档现算):卡片弹出那一刻按数值表 + 星级算一遍,不印过期的数。
  * "表面" = 单目标持续输出的上限,不含装填/过热的停火窗与链跳/AoE 的群体收益;充能系节奏在
  * chargeTime;迫击炮的伤害全在落点(def.damage 恒 0),取 AoE 档。
  */
-export function towerDps(def: TowerDef, level: number): number {
-  const dmg = def.damage > 0 ? towerDamage(def, level) : towerAoeDamage(def, level);
-  const shots = towerBurst(def, level);
+export function towerDps(def: TowerDef, stars: number): number {
+  const dmg = def.damage > 0 ? towerDamage(def, stars) : towerAoeDamage(def, stars);
+  const shots = towerBurst(def, stars);
   if (def.throttle === THR_CHARGE) {
-    const charge = towerChargeTime(def, level);
+    const charge = towerChargeTime(def, stars);
     return charge > 0 ? (dmg * shots) / charge : 0;
   }
-  const interval = towerFireInterval(def, level);
+  const interval = towerFireInterval(def, stars);
   return interval > 0 ? (dmg * shots) / interval : 0;
 }
 
-/** 塔卡片上的伤害读数:升级报 `伤 X→Y/s`(这张卡承诺的正是那一级的跳变),新建只报拿到手那一级 */
-function dpsText(def: TowerDef, fromLevel: number, toLevel: number): string {
-  if (fromLevel >= 1 && toLevel > fromLevel) {
-    return `伤 ${num(towerDps(def, fromLevel))}→${num(towerDps(def, toLevel))}/s`;
-  }
-  return `伤 ${num(towerDps(def, toLevel))}/s`;
-}
-
-/** 新武器卡实际到手会是几级 = 存档级 + 1(未存过 = Lv1),夹在 TOWER_MAX_LEVEL 上(与 acquireWeapon 同一份算式) */
-function newWeaponGranted(world: World, opt: UpgradeOption): number {
-  const banked = world.weaponBankedLevels[opt.type] ?? 0;
-  return Math.min(TOWER_MAX_LEVEL, 1 + banked);
+/** 塔卡片上的伤害读数:新武器报拿到手那一级(恒 1★)的表面 DPS */
+function dpsText(def: TowerDef, stars: number): string {
+  return `伤 ${num(towerDps(def, stars))}/s`;
 }
 
 /**
- * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头)。塔(新武器/武器升级)报
- * "射界档 / 射程 / 表面 DPS / 节流系"四样,升级卡再报 X→Y 跳变;法令念数值表里非中性的字段。
- * world 只在读新武器的存档级时用到。
+ * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头)。武器卡报
+ * "射界档 / 射程 / 表面 DPS(1★)/ 节流系(含系名)"四样;法令念数值表里非中性的字段
+ * (edictDesc 已移入 data/edicts,系法令自带系名前缀、全船法令自带「全船」前缀)。
  */
-export function cardDesc(opt: UpgradeOption, world?: World): string {
+export function cardDesc(opt: UpgradeOption, _world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
     const def = TOWERS[opt.type];
     if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
-    const lv = world ? newWeaponGranted(world, opt) : 1;
-    return `射界 ${num(towerArcDeg(def, lv))}° · 射程 ${Math.round(towerRange(def, lv))} · ${dpsText(def, 0, lv)} · ${throttleDesc(def.throttle)}`;
-  }
-  if (opt.kind === OFFER_WEAPON_UPGRADE) {
-    const def = TOWERS[opt.type];
-    if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
-    const lv = opt.level;
-    if (lv >= TOWER_MAX_LEVEL) return `当前 Lv${TOWER_MAX_LEVEL}(满级) · 点这张卡不再涨级`;
-    if (lv >= 1) return `当前 Lv${Math.floor(lv)} → Lv${Math.floor(lv) + 1} · ${dpsText(def, lv, lv + 1)}`;
-    // 未拥有:level = 存档等级(opt.level 口径见 upgrade.ts),点了存到 lv+1,获得时兑现
-    return `未持有 · 等级存档 Lv${Math.max(1, lv + 1)}(获得时生效)`;
+    return `射界 ${num(towerArcDeg(def, 1))}° · 射程 ${Math.round(towerRange(def, 1))} · ${dpsText(def, 1)} · ${throttleDesc(def.throttle)}`;
   }
   const def = EDICTS[opt.type];
   if (!def) return `数值表里查不到这条法令(型号 ${opt.type})`;
@@ -236,26 +177,22 @@ export function cardDesc(opt: UpgradeOption, world?: World): string {
 }
 
 /**
- * 卡片上的等级行。三类各有各的话要说:新武器报"拿到手从几级起步"(存档级 + 1),
- * 已有同型再挂一句"第 N 把 · 三把合成"(那是合成的唯一入口,不写清楚玩家不会知道重复有用);
- * 武器升级已拥有 = 当前级、未拥有 = 存档等级;
- * 法令报**当前层 → 下一层**(「散热协议 ×2 → ×3」)—— 这就是"拿过两次就显示 ×2"那条要求的落点。
+ * 卡片上的等级行。两类各有各的话要说:
+ *   新武器报"已有 ★N · 再拿一把升 ★N+1"(同型 = 升星通路的原料;有配方且下一把合到 3★ 时
+ *   说"凑满 3★ 当场合成"—— 变身的名字在武器卡上够不着,这里先把入口说清楚);
+ *   法令报**当前层 → 下一层**(「散热协议 ×2 → ×3」)—— 这就是"拿过两次就显示 ×2"那条要求的落点。
  */
-export function cardLevelText(opt: UpgradeOption, world?: World): string {
+export function cardLevelText(opt: UpgradeOption, _world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
-    const lv = world ? newWeaponGranted(world, opt) : 1;
-    // opt.level = 槽里已有几把同型的最高等级(0 = 一把都没有,见 upgrade.ts 的 level 口径);
-    // 有同型且这一型有配方时,这张卡的真正价值是"往三合一凑一把",标题必须先说这件事
+    // opt.level = 槽里已有同型的最高星级(0 = 一把都没有,见 upgrade.ts 的 level 口径)
     const owned = opt.level > 0;
     const mergeable = mergeResultOf(opt.type) >= 0;
-    if (owned && mergeable) return `已有同型 · 再拿一把 · 凑满 3 把当场合成`;
-    return `新武器 · 获得后从 Lv${lv} 起步${mergeable ? ' · 可三合一合成' : ''}`;
-  }
-  if (opt.kind === OFFER_WEAPON_UPGRADE) {
-    const lv = opt.level;
-    if (lv >= TOWER_MAX_LEVEL) return `当前 Lv${TOWER_MAX_LEVEL}(满级)`;
-    if (lv >= 1) return `当前 Lv${Math.floor(lv)}`;
-    return '未持有 · 存档等级';
+    if (owned && mergeable && opt.level >= 2) {
+      return `已有 ★${opt.level} · 再拿一把 · 凑满 3★ 当场合成`;
+    }
+    if (owned && mergeable) return `已有 ★${opt.level} · 再拿一把升 ★${Math.min(3, opt.level + 1)} · 3★ 合成`;
+    if (owned) return `已有 ★${opt.level} · 再拿一把升 ★${Math.min(3, opt.level + 1)}`;
+    return '新武器 · 获得后从 ★1 起步';
   }
   // 法令:当前层 → 下一层。满层那一档正常不会出现在候选里(卡池已剔),留一句兜底文案
   const lv = Math.max(0, Math.floor(opt.level));
@@ -444,32 +381,21 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     onResolved();
   }
 
-  /** 这一型武器在槽里的最高等级(取用后现读,与回执文案同一份真相) */
-  function maxWeaponLevelNow(type: number): number {
-    let lv = 0;
-    for (let i = 0; i < world.weapons.length; i++) {
-      const slot = world.weapons[i]!;
-      if (slot.type === type && slot.level > lv) lv = slot.level;
-    }
-    return lv;
-  }
-
   /**
-   * 取用成功后的回执文案,按三类各说各的话。**在 takeUpgrade 之后调用**,等级/层数
+   * 取用成功后的回执文案,按两类各说各的话。**在 takeUpgrade 之后调用**,星级/层数
    * 一律现读 World —— 卡片承诺的是"点下去之后",回执说的就是"点下去之后"。
+   * 新武器卡:同型 = 升星(或 3★ 变身),回执说"升到 ★N"而不是干巴巴的"获得"。
    */
   function successToast(opt: UpgradeOption): string {
     const label = optionLabel(opt);
-    if (opt.kind === OFFER_NEW_WEAPON) return `获得:${label}`;
-    if (opt.kind === OFFER_WEAPON_UPGRADE) {
-      const lv = maxWeaponLevelNow(opt.type);
-      if (lv >= TOWER_MAX_LEVEL) return `${label} 已是满级 Lv${lv}`;
-      if (lv >= 1) return `${label} 升到 Lv${lv}`;
-      return `${label} 等级存档 Lv${world.weaponBankedLevels[opt.type] ?? 0}(获得时生效)`;
+    if (opt.kind === OFFER_NEW_WEAPON) {
+      const stars = slotMaxStars(world.weapons, opt.type);
+      if (stars > 1) return `${label} 升到 ★${stars}`;
+      return `获得:${label} ★1`;
     }
     // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
     const lv = edictLevel(world.edictLevels, opt.type);
-    return lv >= 2 ? `${label} ×${lv}` : `法令生效:${label} · 全船被动`;
+    return lv >= 2 ? `${label} ×${lv}` : `法令生效:${label}`;
   }
 
   /**
@@ -521,7 +447,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const def = TOWERS[slot.type];
       btn.disabled = false;
       btn.style.opacity = '1';
-      btn.textContent = `槽 ${i} · ${def?.name ?? `未知塔型(${slot.type})`} Lv${slot.level}`;
+      btn.textContent = `槽 ${i} · ${def?.name ?? `未知塔型(${slot.type})`} ★${slot.stars}`;
     }
     phase = PHASE_REPLACE;
     clearFlash();

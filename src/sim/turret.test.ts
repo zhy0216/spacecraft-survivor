@@ -15,7 +15,7 @@ describe('stepTurrets 槽位接线', () => {
     const grid = new SpatialHash<ReturnType<typeof createEnemy>>(64);
     stepTurrets(weapons, ship, grid, 1 / 60, null, createEdictBuffs());
     weapons[0]!.type = TOWER_AUTOCANNON;
-    weapons[0]!.level = 1;
+    weapons[0]!.stars = 1;
     weapons[0]!.ammo = towerMagazine(TOWERS[TOWER_AUTOCANNON]!, 1);
     const muzzle = { x: 0, y: 0 };
     slotMuzzleWorld(ship, 0, muzzle);
