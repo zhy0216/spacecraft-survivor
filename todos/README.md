@@ -22,7 +22,7 @@
 | 26 | [done/26-segment-closure-magnet-surge.md](done/26-segment-closure-magnet-surge.md) ✅ | 段落收束仪式 + 磁吸涌 | P1 | — |
 | 27 | [done/27-edict-value-compression.md](done/27-edict-value-compression.md) ✅ | 法令压档第一刀(散热/增幅) | P1 | — |
 | 28 | [done/28-keybinding-discoverability.md](done/28-keybinding-discoverability.md) ✅ | I / Tab 键位可发现性 | P2 | — |
-| 29 | [29-boss-summon-counts.md](29-boss-summon-counts.md) | Boss 召唤表补位(卫生修) | P2 | — |
+| 29 | [done/29-boss-summon-counts.md](done/29-boss-summon-counts.md) ✅ | Boss 召唤表补位(卫生修) | P2 | — |
 
 \* = 松耦合:环阵突围后的退潮窗希望接上 26 的磁吸涌,但不阻塞——25 可先落,犒赏拍后补。
 

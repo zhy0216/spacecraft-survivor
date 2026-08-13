@@ -168,6 +168,12 @@ describe('敌人数值表', () => {
     }
   });
 
+  it('Boss 召唤表长度 = ENEMY_KIND_COUNT(照抄 WaveBurst.counts 的钉法)', () => {
+    // 短一位就会静默漏掉一型(noUncheckedIndexedAccess 拦不住数据表写短):
+    // 加敌型忘补召唤表时,[4] 读出 undefined 被召唤循环当 0,不会报任何错
+    expect(BOSS.summonCounts.length).toBe(ENEMY_KIND_COUNT);
+  });
+
   it('孢子炮手:远程字段自洽 —— 行为是 BH_SPORE、不冲锋、弹幕参数齐全且为正', () => {
     const spore = ENEMIES[KIND_SPORE]!;
     expect(spore.behavior).toBe(BH_SPORE);

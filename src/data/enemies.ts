@@ -96,7 +96,7 @@ export const BOSS: BossDef = {
   summonInterval: 9, // 占位待调:每 9 秒召唤一批
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调
-  summonCounts: [6, 2, 0, 0], // 6 蜂群蛭 + 2 侧掠者,型号/数量直给
+  summonCounts: [6, 2, 0, 0, 0], // 6 蜂群蛭 + 2 侧掠者,型号/数量直给;长度契约与 WaveBurst.counts 同款(长度 = ENEMY_KIND_COUNT,短一位会静默漏一型)
   starCoins: 30, // 3 次重摇的价(10 × 3),占位待调
 };
 
