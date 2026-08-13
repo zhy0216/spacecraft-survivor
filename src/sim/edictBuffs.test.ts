@@ -48,15 +48,16 @@ describe('法令聚合', () => {
     expect(b.starCoinChance).toBeCloseTo(STARCOIN_DROP_CHANCE, 12);
   });
 
-  it('乘法档按层求幂:2 层散热协议 = ×1.5²,5 层 = ×1.5⁵', () => {
-    expect(agg((l) => (l[EDICT_COOLANT] = 2)).heatMaxMul[THR_HEAT]).toBeCloseTo(1.5 ** 2, 12);
-    expect(agg((l) => (l[EDICT_COOLANT] = EDICT_MAX_LEVEL)).heatMaxMul[THR_HEAT]).toBeCloseTo(1.5 ** 5, 12);
+  it('乘法档按层求幂:2 层散热协议 = ×1.25²,5 层 = ×1.25⁵', () => {
+    // 散热/增幅已按 5 层复利压档(27 号):1.5 → 1.25,5 层 ×7.6 → ×3.05
+    expect(agg((l) => (l[EDICT_COOLANT] = 2)).heatMaxMul[THR_HEAT]).toBeCloseTo(1.25 ** 2, 12);
+    expect(agg((l) => (l[EDICT_COOLANT] = EDICT_MAX_LEVEL)).heatMaxMul[THR_HEAT]).toBeCloseTo(1.25 ** 5, 12);
     expect(agg((l) => (l[EDICT_AMMO] = 3)).fireRateMul[THR_AMMO]).toBeCloseTo(1.25 ** 3, 12);
     expect(agg((l) => (l[EDICT_AMMO] = 3)).reloadMul[THR_AMMO]).toBeCloseTo(0.7 ** 3, 12);
     expect(agg((l) => (l[EDICT_CAPACITOR] = 2)).chargeRateMul[THR_CHARGE]).toBeCloseTo(1.3 ** 2, 12);
     expect(agg((l) => (l[EDICT_OVERDRIVE] = 4)).damageMul).toBeCloseTo(1.15 ** 4, 12);
     expect(agg((l) => (l[EDICT_ARMOR] = 3)).damageTakenMul).toBeCloseTo(0.8 ** 3, 12);
-    expect(agg((l) => (l[EDICT_XP] = 2)).xpMul).toBeCloseTo(1.5 ** 2, 12);
+    expect(agg((l) => (l[EDICT_XP] = 2)).xpMul).toBeCloseTo(1.25 ** 2, 12); // 增幅协议同样压档(27 号)
     expect(agg((l) => (l[EDICT_MAGNET] = 2)).magnetRadiusMul).toBeCloseTo(1.3 ** 2, 12);
     expect(agg((l) => (l[EDICT_CRUISE] = 2)).cruiseSpeedMul).toBeCloseTo(1.1 ** 2, 12);
   });
@@ -76,8 +77,8 @@ describe('法令聚合', () => {
     expect(b.fireRateMul[THR_AMMO]).toBeCloseTo(1.25, 12);
     expect(b.fireRateMul[THR_HEAT]).toBe(1);
     expect(b.fireRateMul[THR_CHARGE]).toBe(1);
-    // 散热协议只抬过热族的热上限
-    expect(b.heatMaxMul[THR_HEAT]).toBeCloseTo(1.5, 12);
+    // 散热协议只抬过热族的热上限(27 号压档后单层 ×1.25)
+    expect(b.heatMaxMul[THR_HEAT]).toBeCloseTo(1.25, 12);
     expect(b.heatMaxMul[THR_AMMO]).toBe(1);
     // 电容协议只抬充能族的充能速度
     expect(b.chargeRateMul[THR_CHARGE]).toBeCloseTo(1.3, 12);

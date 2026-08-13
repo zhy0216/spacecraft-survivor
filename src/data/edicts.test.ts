@@ -57,12 +57,12 @@ describe('法令表级不变量', () => {
     // 三条系限定档:数值逐字继承原支援表(合并的是两张表,不是两组数值)
     expect(EDICTS[EDICT_AMMO]!.fireRateMul).toBe(1.25); // 原弹药库
     expect(EDICTS[EDICT_AMMO]!.reloadMul).toBe(0.7);
-    expect(EDICTS[EDICT_COOLANT]!.heatMaxMul).toBe(1.5); // 原散热器
+    expect(EDICTS[EDICT_COOLANT]!.heatMaxMul).toBe(1.25); // 原散热器 1.5 按 5 层复利压档(27 号)
     expect(EDICTS[EDICT_CAPACITOR]!.chargeRateMul).toBe(1.3); // 原电容组
     // 全船档
     expect(EDICTS[EDICT_ARMOR]!.hullHpAdd).toBe(15); // 原装甲舱(不是结构加固的 20)
     expect(EDICTS[EDICT_ARMOR]!.damageTakenMul).toBe(0.8);
-    expect(EDICTS[EDICT_XP]!.xpMul).toBe(1.5);
+    expect(EDICTS[EDICT_XP]!.xpMul).toBe(1.25); // 原 1.5 按 5 层复利压档(27 号)
     expect(EDICTS[EDICT_MAGNET]!.magnetRadiusMul).toBe(1.3);
     expect(EDICTS[EDICT_GYRO]!.turnRateAdd).toBe(10);
     expect(EDICTS[EDICT_CRUISE]!.cruiseSpeedMul).toBe(1.1);

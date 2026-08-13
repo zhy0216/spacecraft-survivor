@@ -67,7 +67,7 @@ describe('整备面板纯文案', () => {
 
   it('法令效果文案逐项取自数值表(与升级三选一同一份 edictDesc,两处不许各念各的)', () => {
     expect(dockEdictEffect(EDICT_AMMO)).toBe('全船弹药系 射速 ×1.25 / 装填 ×0.7');
-    expect(dockEdictEffect(EDICT_COOLANT)).toBe('全船过热系 热上限 ×1.5');
+    expect(dockEdictEffect(EDICT_COOLANT)).toBe('全船过热系 热上限 ×1.25'); // 27 号压档:1.5 → 1.25
     expect(dockEdictEffect(EDICT_ARMOR)).toBe('船体 HP +15 · 受击 ×0.8');
     expect(dockEdictEffect(EDICT_GYRO)).toBe('转向 +10°/s');
     expect(dockEdictEffect(EDICT_MAGNET)).toBe('磁吸半径 ×1.3');
