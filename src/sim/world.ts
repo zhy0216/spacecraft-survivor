@@ -933,21 +933,24 @@ export class World {
   }
 
   /** peekNextBurst 的答复暂存与对外读数对象:整局复用,渲染帧现读不新增分配(铁律 3) */
-  private readonly burstPeek: BurstPeek = { etaSeconds: 0, offsetDeg: 0 };
-  private readonly burstWarningOut = { etaSeconds: 0, dirRad: 0 };
+  private readonly burstPeek: BurstPeek = { etaSeconds: 0, offsetDeg: 0, pattern: 0 };
+  private readonly burstWarningOut = { etaSeconds: 0, dirRad: 0, pattern: 0 };
 
   /**
    * 下一个侧压 burst 的预警读数(11 号罗盘的补课,HUD 预警箭头用):
    * etaSeconds = 还有几秒触发,dirRad = 世界系绝对角(脚本当前主压方向 + 脚本偏移,
-   * 与罗盘回退路径同源)。没有待触发的 burst(段内已放完 / 脚本走完 / 压测旁路)返回 null。
+   * 与罗盘回退路径同源);pattern = BURST_PATTERN_* 原样透传 —— 环阵时来向箭头没有意义,
+   * HUD/渲染层照它改画全环脉冲(25 号)。
+   * 没有待触发的 burst(段内已放完 / 脚本走完 / 压测旁路)返回 null。
    * 纯读取、零 rng、不进 checksum —— 它只是把脚本里本来就写着的事提前念给玩家听。
    * 返回的是整局复用的同一个对象,调用方当场读走,别跨帧存引用。
    */
-  burstWarning(): { etaSeconds: number; dirRad: number } | null {
+  burstWarning(): { etaSeconds: number; dirRad: number; pattern: number } | null {
     if (tuning.stressSpawn || this.wave.done) return null;
     if (!peekNextBurst(this.wave, this.burstPeek)) return null;
     this.burstWarningOut.etaSeconds = this.burstPeek.etaSeconds;
     this.burstWarningOut.dirRad = this.wave.dirRad + this.burstPeek.offsetDeg * DEG2RAD;
+    this.burstWarningOut.pattern = this.burstPeek.pattern;
     return this.burstWarningOut;
   }
 

@@ -63,22 +63,45 @@ export interface WaveTide {
 }
 
 /**
+ * 侧压事件的排布样式(25 号):把"一组怪怎么站"写进脚本,burst 才能从"更密"变成"异质"。
+ * 数字常量而不是 enum:与 enemies.ts 的 KIND_* 同口径,表里一眼可查、运行器 switch 分派。
+ */
+export const BURST_PATTERN_DIRECTIONAL = 0; // 方向流(既有口径):全组挤在 offsetDeg ± spreadDeg 的扇面里
+export const BURST_PATTERN_RING = 1; // 环阵:整环均布合围,罗盘瞬间失去"方向"这个读数
+
+/**
  * 定时侧压事件:段内某一刻**一次性**放出一组怪,用来打断"对着主压方向摆好舷就不动"的稳态。
  * 与主压流的分工是节奏上的:流是背景压力,事件是突发。
+ *
+ * 按 pattern 有两种排布(BURST_PATTERN_*):
+ *   - **方向流**(DIRECTIONAL):全组出生角落在 `主压方向 + offsetDeg ± spreadDeg` 的扇面里 —— 既有口径;
+ *   - **环阵**(RING):N = counts 总和,出生角 = `主压方向 + offsetDeg + i/N × 360°`(i = 0..N-1)
+ *     逐只均布,整环合围 —— 罗盘瞬间失去"方向"这个读数,玩家必须挑一个薄弱扇区集火突围;
+ *     突围后场上近乎空场,天然波谷正好接退潮窗。此时 spreadDeg 语义变为**逐只抖动半宽**(环阵建议填 2)。
+ * 两种 pattern 共用同一条**原子事件口径**:到点那一帧整组出、不被单帧上限截断(WaveElite 同款)。
  */
 export interface WaveBurst {
   /** 段内触发时刻(秒),必须 < duration;同段内数组按 at **升序**(运行器只往前扫,不回头找) */
   at: number;
   /**
-   * 相对**当时的主压方向**的偏移(度):±90 = 侧压(逼玩家换舷),180 = 背后(咬火力死角的船尾)。
+   * 相对**当时的主压方向**的偏移(度)。方向流:±90 = 侧压(逼玩家换舷),180 = 背后(咬火力死角的船尾);
+   * 环阵:整环的**环心指向**(0 = 环心压在主压方向本身,合围不分朝向)。
    * 写相对量而不是绝对角:主压方向在段内是转着的,写死绝对角的话,同一个"侧压"到了段尾就变成正面压了。
    */
   offsetDeg: number;
-  /** 半展宽(度),同 WaveStream.spreadDeg;事件一般比流窄 —— 要让人一眼看出"它们是一起从那边来的" */
+  /**
+   * 方向流:半展宽(度),同 WaveStream.spreadDeg;事件一般比流窄 —— 要让人一眼看出"它们是一起从那边来的"。
+   * 环阵:**逐只抖动半宽**(度),建议填 2 —— 每只在自己那份均布角上 ±2° 内抖一下,环不被抖成糊团。
+   */
   spreadDeg: number;
   /**
-   * 逐型只数,**下标 = KIND_***,顺序 蜂群蛭 / 侧掠者 / 尾随蛆 / 冲撞甲虫,
-   * 长度必须 = ENEMY_KIND_COUNT(短一位就会静默漏掉一型,单测钉住)。
+   * BURST_PATTERN_*(0 方向流 / 1 环阵)。**必填、不用可选字段**:全表显式写死,
+   * 运行器不用 `?? 0` 兜缺省,这张表拿起来一眼可查每一波是哪种排布。
+   */
+  pattern: number;
+  /**
+   * 逐型只数,**下标 = KIND_***,顺序 蜂群蛭 / 侧掠者 / 尾随蛆 / 冲撞甲虫 / 孢子炮手,
+   * 长度必须 = ENEMY_KIND_COUNT(短一位就会静默漏掉一型,单测钉住)。环阵下它的总和 N 就是环上只数。
    */
   counts: number[];
 }
@@ -161,9 +184,9 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 48s / 3 只(畅玩性调整,原 35s / 4 只):挪到第一次升级(前三档特价后约 20s 内见卡)
       // 大概率落地之后 —— 首秀从"裸装配考试"变成"刚拿到新塔正好试刀";总血量 80→60,
       // 一次处理不当也不再是 30-40% 船体的挫败源(整局无回血,教学段的坑要浅)
-      { at: 48, offsetDeg: 90, spreadDeg: 12, counts: [0, 3, 0, 0, 0] },
+      { at: 48, offsetDeg: 90, spreadDeg: 12, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 3, 0, 0, 0] },
       // 换到左舷:两次方向相反,玩家才会明白侧压不是固定一边(否则第一段就学歪了)
-      { at: 80, offsetDeg: -90, spreadDeg: 12, counts: [0, 4, 0, 0, 0] },
+      { at: 80, offsetDeg: -90, spreadDeg: 12, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 4, 0, 0, 0] },
     ],
     elites: [],
     tides: [
@@ -188,13 +211,17 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_STRAFER, rate0: 0.25, rate1: 0.6, spreadDeg: 35 },
     ],
     bursts: [
-      { at: 30, offsetDeg: 90, spreadDeg: 14, counts: [6, 3, 0, 0, 0] },
+      { at: 30, offsetDeg: 90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [6, 3, 0, 0, 0] },
+      // 环阵首秀(段中点 60s):16 只蜂群蛭在整环上均布合围,罗盘读数瞬间全向化 ——
+      // 没有"主压方向"可以摆了,必须挑一个薄弱扇区集火突围;spreadDeg 2 = 每只 ±2° 内抖,环不被抖糊
+      { at: 60, offsetDeg: 0, spreadDeg: 2, pattern: BURST_PATTERN_RING, counts: [16, 0, 0, 0, 0] },
       // 尾随蛆首秀,而且是从背后来的:船尾没塔的甲板会在这一下吃到教训
-      { at: 62, offsetDeg: 180, spreadDeg: 20, counts: [0, 0, 4, 0, 0] },
-      { at: 96, offsetDeg: -90, spreadDeg: 14, counts: [8, 4, 0, 0, 0] },
+      // (原 62s 挪到 76s:环阵突围后的捡拾退潮正好收成它的静场,62s 背袭会堵死突围的那口气)
+      { at: 76, offsetDeg: 180, spreadDeg: 20, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 0, 4, 0, 0] },
+      { at: 96, offsetDeg: -90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [8, 4, 0, 0, 0] },
       // 孢子炮手首秀:一小队从右舷斜后方压来 —— 它们一进 300px 就锚定喷吐,
       // 玩家第一次见识"得脱离航线过去杀"的远程威胁(下一段才进流,见文件头编排口径 2)
-      { at: 108, offsetDeg: 90, spreadDeg: 20, counts: [0, 0, 0, 0, 3] },
+      { at: 108, offsetDeg: 90, spreadDeg: 20, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 0, 0, 0, 3] },
     ],
     elites: [
       // 首只精英:侧掠者 + 狂热光环/装甲 —— "这只不一样"的教学时刻:
@@ -205,11 +232,14 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
     ],
     tides: [
       { at: 24, duration: 6, mul: 0.4 }, // 静场预告:30s 侧压接 40s 首只精英的连段
-      // 精英战后的捡拾退潮,顺势收成 62s 背袭的静场 —— 一口气两用:
-      // 磁力干扰精英刚把拾取半径掐过,这几秒正是把地上残骸清回来的窗口
-      { at: 50, duration: 10, mul: 0.4 },
-      { at: 68, duration: 14, mul: 1.35 }, // 背袭消化后的涨潮
-      { at: 89, duration: 6, mul: 0.45 }, // 静场预告:95s 尾随蛆精英 + 96s 侧压双连
+      // 精英战后的捡拾退潮(原 50–60s 那口气拆短,给环阵首秀留出专属的 5s 静场)
+      { at: 46, duration: 9, mul: 0.4 },
+      { at: 55, duration: 5, mul: 0.4 }, // 静场预告:60s 环阵首秀 —— 暴风雨前的安静
+      // 环阵突围后的捡拾退潮,顺势收成 76s 背袭的静场 —— 一口气两用:
+      // 突围完场上近乎空场,这几秒把残骸捡回来,尾随蛆首秀正好从船尾摸进来
+      { at: 64, duration: 10, mul: 0.4 },
+      { at: 80, duration: 14, mul: 1.35 }, // 背袭消化后的涨潮(原 68–82s 挪后,给环阵突围腾出空间)
+      { at: 94, duration: 5, mul: 0.45 }, // 静场预告:95s 尾随蛆精英 + 96s 侧压双连
       { at: 112, duration: 8, mul: 1.35 }, // 段尾高潮:108s 孢子首秀看清之后,最后 8 秒推向整备
     ],
   },
@@ -227,12 +257,12 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_SPORE, rate0: 0.3, rate1: 0.45, spreadDeg: 30 },
     ],
     bursts: [
-      { at: 25, offsetDeg: 90, spreadDeg: 14, counts: [8, 4, 0, 0, 0] },
-      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 6, 0, 0] },
+      { at: 25, offsetDeg: 90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [8, 4, 0, 0, 0] },
+      { at: 60, offsetDeg: 180, spreadDeg: 22, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 0, 6, 0, 0] },
       // 冲撞甲虫首秀:只有一只,而且从侧面来 —— 0.9s 前摇看得清,躲一次就学会了
-      { at: 95, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 1, 0] },
+      { at: 95, offsetDeg: -90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 6, 0, 1, 0] },
       // 斜后方 135°:既不是纯侧也不是纯背,逼玩家在"转过去接"和"跑开"之间选
-      { at: 110, offsetDeg: 135, spreadDeg: 25, counts: [10, 0, 4, 0, 0] },
+      { at: 110, offsetDeg: 135, spreadDeg: 25, pattern: BURST_PATTERN_DIRECTIONAL, counts: [10, 0, 4, 0, 0] },
     ],
     elites: [
       // 相位蜂群蛭:能量系(激光/电弧/磁轨/迫击炮)对它减半,机炮/点防反而才是正解 ——
@@ -267,12 +297,17 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { kind: KIND_SPORE, rate0: 0.5, rate1: 0.9, spreadDeg: 30 },
     ],
     bursts: [
-      { at: 25, offsetDeg: -90, spreadDeg: 14, counts: [0, 6, 0, 2, 0] },
-      { at: 60, offsetDeg: 180, spreadDeg: 22, counts: [0, 0, 8, 0, 0] },
-      { at: 95, offsetDeg: 90, spreadDeg: 14, counts: [12, 6, 0, 0, 0] },
-      { at: 108, offsetDeg: -135, spreadDeg: 25, counts: [0, 4, 4, 3, 0] },
+      { at: 25, offsetDeg: -90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 6, 0, 2, 0] },
+      // 收尾段的 180° 背袭(原 60s 挪到 50s:60s 让位给环阵加强版,见下条)——文件头口径 3
+      // "中后段插入 180°(背后)"在收尾段同样要兑现:船尾是火力死角,这一下收"甲板怎么排"的账
+      { at: 50, offsetDeg: 180, spreadDeg: 22, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 0, 8, 0, 0] },
+      // 环阵加强版(段中点 60s):24 蜂群蛭 + 4 侧掠者整环合围 —— 侧掠者混进环里,
+      // 挑错扇区突围就要吃它们贴脸的侧切。收尾段的密度下这圈比首秀那圈更难撕开
+      { at: 60, offsetDeg: 0, spreadDeg: 2, pattern: BURST_PATTERN_RING, counts: [24, 4, 0, 0, 0] },
+      { at: 95, offsetDeg: 90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [12, 6, 0, 0, 0] },
+      { at: 108, offsetDeg: -135, spreadDeg: 25, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 4, 4, 3, 0] },
       // 终局正面压上(offset 0 = 主压方向本身):脚本的最后一口气,活过它就是胜利
-      { at: 116, offsetDeg: 0, spreadDeg: 30, counts: [16, 8, 0, 4, 0] },
+      { at: 116, offsetDeg: 0, spreadDeg: 30, pattern: BURST_PATTERN_DIRECTIONAL, counts: [16, 8, 0, 4, 0] },
     ],
     elites: [
       // 狂热光环侧掠者:收尾段怪最密,光环的收益最大 —— 它活着,整片虫潮都在加速
@@ -285,7 +320,11 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 这里的静场只够倒一口气认清"接下来是谁",不够回血回神
       { at: 20, duration: 5, mul: 0.45 }, // 静场预告:25s 侧压
       { at: 34, duration: 6, mul: 0.4 }, // 静场预告:40s 狂热光环精英
-      { at: 54, duration: 6, mul: 0.45 }, // 静场预告:60s 背袭(70s 虫群母巢解锁位也借这口气)
+      { at: 44, duration: 6, mul: 0.45 }, // 静场预告:50s 背袭(原 60s 背袭的静场一并前挪)
+      { at: 55, duration: 5, mul: 0.45 }, // 背袭消化 + 静场预告:60s 环阵加强版(原 54–60s,收成 5s 预告)
+      // 环阵突围后的捡拾退潮,顺势收成 70s 虫群母巢(解锁后)的静场 —— 一口气两用:
+      // 突围完场上近乎空场,这几秒把残骸捡回来,母巢正好借这口气进场
+      { at: 64, duration: 6, mul: 0.4 },
       { at: 79, duration: 6, mul: 0.4 }, // 静场预告:85s 收尾小Boss
       // 终局涨潮:95/108/116 三连侧压一路推到墙上,不再给低谷 —— 活过这 26 秒就是胜利
       { at: 94, duration: 26, mul: 1.4 },

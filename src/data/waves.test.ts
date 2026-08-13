@@ -15,6 +15,8 @@ import { tuning } from '../sim/config';
 import { AFFIX_COUNT } from './affixes';
 import { ENEMIES, ENEMY_KIND_COUNT, KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM } from './enemies';
 import {
+  BURST_PATTERN_DIRECTIONAL,
+  BURST_PATTERN_RING,
   SPAWN_RADIUS,
   SPAWN_RADIUS_BAND,
   WAVE_LOCKED_ELITES,
@@ -161,7 +163,32 @@ describe('波次脚本', () => {
         expect(b.offsetDeg, seg.name).toBeLessThanOrEqual(180);
         expect(b.spreadDeg).toBeGreaterThanOrEqual(0);
         expect(b.spreadDeg).toBeLessThan(90);
+
+        // pattern 必填 ∈ {方向流, 环阵}(25 号):运行器按 === BURST_PATTERN_RING 分派,
+        // 写成别的数会被静默当方向流出 —— 表要一眼可查、不许有第三种没实现的排布
+        expect([BURST_PATTERN_DIRECTIONAL, BURST_PATTERN_RING], seg.name).toContain(b.pattern);
       }
+    }
+  });
+
+  it('环阵(25 号):真表至少一环、首秀不在教学段,抖动半宽 < 半个均布槽宽(环不被抖成糊团)', () => {
+    const rings: { seg: string; at: number; n: number; spreadDeg: number }[] = [];
+    let firstSeg = -1;
+    for (let si = 0; si < WAVE_SEGMENTS.length; si++) {
+      for (const b of WAVE_SEGMENTS[si]!.bursts) {
+        if (b.pattern !== BURST_PATTERN_RING) continue;
+        if (firstSeg < 0) firstSeg = si;
+        rings.push({ seg: WAVE_SEGMENTS[si]!.name, at: b.at, n: burstTotal(b.counts), spreadDeg: b.spreadDeg });
+      }
+    }
+    // 机制真的被用上:表里加了环阵却一条都不排 = 整件事等于没做
+    expect(rings.length).toBeGreaterThan(0);
+    // 首秀不在教学段:环阵是"罗盘失效"的阵型时刻,教学段罗盘还没教明白就失效等于白教
+    // (与精英/孢子"教学段不塞"同一条编排口径)
+    expect(firstSeg, '环阵首秀不该落在教学段').toBeGreaterThan(0);
+    // 抖动半宽必须小于半个均布槽宽(180°/N):一只抖进邻居的槽里,"整环均布合围"的读数就糊了
+    for (const ring of rings) {
+      expect(ring.spreadDeg, `${ring.seg}@${ring.at}s 的抖动半宽`).toBeLessThan(180 / ring.n);
     }
   });
 

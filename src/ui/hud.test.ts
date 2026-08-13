@@ -8,7 +8,7 @@ import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
-import { WAVE_SEGMENTS } from '../data/waves';
+import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import type { WeaponSlot } from '../sim/armory';
 import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
 import {
@@ -201,7 +201,7 @@ interface StubWorld {
   wave: { segment: number; segTime: number };
   threatDirection: number;
   threatIntensity: number;
-  burstWarning(): { etaSeconds: number; dirRad: number } | null;
+  burstWarning(): { etaSeconds: number; dirRad: number; pattern: number } | null;
   enemies: { items: StubEnemy[] };
   /** 已持有法令的层数表:HUD 徽记按它逐条查名字,层数 ≥ 2 的挂 ×N */
   edictLevels: number[];
@@ -533,7 +533,9 @@ describe('createHud', () => {
 
   it('burst 预警:进窗才亮出第二支箭头,窗外与无事件时都藏着', () => {
     const hud = createHud({
-      world: stubWorld({ burstWarning: () => ({ etaSeconds: 1.5, dirRad: 0 }) }) as unknown as World,
+      world: stubWorld({
+        burstWarning: () => ({ etaSeconds: 1.5, dirRad: 0, pattern: 0 }),
+      }) as unknown as World,
     });
     const root = dom.ui.children[0]!;
     const warn = root.children[2]!;
@@ -542,11 +544,50 @@ describe('createHud', () => {
     expect(warn.style.opacity).not.toBe('');
 
     // 距触发还远(窗外):预警不该常驻刷屏
-    hud.setWorld(stubWorld({ burstWarning: () => ({ etaSeconds: 30, dirRad: 0 }) }) as unknown as World);
+    hud.setWorld(
+      stubWorld({ burstWarning: () => ({ etaSeconds: 30, dirRad: 0, pattern: 0 }) }) as unknown as World,
+    );
     expect(warn.style.display).toBe('none');
     // 本段 burst 已放完 / 脚本走完:burstWarning 返回 null
     hud.setWorld(stubWorld() as unknown as World);
     expect(warn.style.display).toBe('none');
+  });
+
+  it('burst 预警:环阵改画全环脉冲 —— 钉在屏心的正圆随 eta 合拢,箭头两件套让位', () => {
+    const hud = createHud({
+      world: stubWorld({
+        burstWarning: () => ({ etaSeconds: 1.5, dirRad: 0, pattern: BURST_PATTERN_RING }),
+      }) as unknown as World,
+    });
+    const root = dom.ui.children[0]!;
+    const warn = root.children[2]!;
+    expect(warn.style.display).toBe('block');
+    // 环子层亮、箭头两件套藏:全环脉冲没有"来向",不该挂着方向箭头
+    expect(warn.children[0]!.style.display).toBe('none'); // shaft
+    expect(warn.children[1]!.style.display).toBe('none'); // tip
+    expect(warn.children[2]!.style.display).toBe('block'); // ring
+    // 环是钉在屏幕中心的正圆(1000×600 桩视口 → 圆心 500,300),不是贴边的方向箭头
+    expect(Number.parseFloat(warn.style.left!)).toBeCloseTo(500, 6);
+    expect(Number.parseFloat(warn.style.top!)).toBeCloseTo(300, 6);
+    const w1 = Number.parseFloat(warn.style.width!);
+    expect(w1).toBeGreaterThan(0);
+    expect(Number.parseFloat(warn.style.height!)).toBeCloseTo(w1, 6);
+    // 合拢感:eta 越近环半径越小 —— 换一个更近的 eta,环当场收一圈
+    hud.setWorld(
+      stubWorld({
+        burstWarning: () => ({ etaSeconds: 0.5, dirRad: 0, pattern: BURST_PATTERN_RING }),
+      }) as unknown as World,
+    );
+    expect(Number.parseFloat(warn.style.width!)).toBeLessThan(w1);
+    // 换回方向流:箭头两件套复亮、环子层收回 —— 同一枚节点两种形态互不残留
+    hud.setWorld(
+      stubWorld({
+        burstWarning: () => ({ etaSeconds: 1.5, dirRad: 0, pattern: 0 }),
+      }) as unknown as World,
+    );
+    expect(warn.children[0]!.style.display).toBe('block');
+    expect(warn.children[1]!.style.display).toBe('block');
+    expect(warn.children[2]!.style.display).toBe('none');
   });
 
   it('火力统计:理论 DPS 逐槽求和出格,同型合并 ×N 且发射读数取最快就绪那把,空槽格藏着', () => {

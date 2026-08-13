@@ -79,7 +79,7 @@ import {
   towerRange,
 } from '../data/towers';
 import { SHOP_BEACON_LIFETIME, SHOP_BEACON_RADIUS } from '../data/economy';
-import { SPAWN_RADIUS } from '../data/waves';
+import { BURST_PATTERN_RING, SPAWN_RADIUS } from '../data/waves';
 import { type Arc, slotArc } from '../sim/arc';
 import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
 import { tuning } from '../sim/config';
@@ -458,6 +458,17 @@ const ELITE_WARN_KEY_STRIDE = 1 << 20;
  */
 const BOSS_WARN_BLINK_HZ = 2;
 
+// —— 环阵 burst 预警(25 号)——屏幕空间,挂在 stage 上,不进 worldLayer ——
+/**
+ * 预警窗(秒):与 ui/hud 的 BURST_WARNING_WINDOW 同值 —— render 不反向依赖 ui(见
+ * setArcOverlay 的依赖方向注释),而两套预警必须同进同出,这里照抄一份,改口径时两处一起改。
+ */
+const BURST_RING_WARN_WINDOW = 3;
+/** 全环脉冲的闪烁频率:与 HUD 的 burst 预警同一招、同一节奏(渲染帧现算 sin,不依赖 CSS keyframes) */
+const BURST_RING_BLINK_HZ = 3;
+/** 环合拢到船心时保留的最小半径(px):收没了会变成"砸在船身上的一点",留一圈读得出"围死了" */
+const BURST_RING_MIN_RADIUS = 8;
+
 /**
  * 精英出场预警的帧判定(纯函数,便于单测):当前帧是否处于预警窗口内
  * —— 存在下一个未触发的精英(peekNextElite 的答复),且距出生 ≤ ELITE_WARN_LEAD 秒。
@@ -522,6 +533,9 @@ const eliteSpawnScreen: Vec2 = { x: 0, y: 0 };
 /** Boss 本体/召唤预告环的暂存(世界 → 屏幕换算),与精英那对同一条口径 */
 const bossWarnWorld: Vec2 = { x: 0, y: 0 };
 const bossWarnScreen: Vec2 = { x: 0, y: 0 };
+/** 环阵预警环心的暂存(世界 → 屏幕换算):burstRingG 挂在 stage(屏幕空间),画之前必须换算 */
+const burstRingWorld: Vec2 = { x: 0, y: 0 };
+const burstRingScreen: Vec2 = { x: 0, y: 0 };
 
 /**
  * 按敌人定义生成灰盒剪影几何。形状与体型是色相之外的第二条辨识通道(色盲安全):
@@ -1012,6 +1026,11 @@ export class Renderer {
    */
   private readonly bossWarnG = new Graphics();
   /**
+   * 环阵 burst 预警层(25 号):挂在 stage(屏幕空间),与 eliteWarnG / bossWarnG 同一条口径 ——
+   * 全环脉冲是 HUD 级读数(方向箭头对环阵无意义:没有来向),不被镜头缩放/平移带着走。
+   * 每帧 clear 后按需重画,整局一层复用。
+   */
+  private readonly burstRingG = new Graphics();  /**
    * 出场音的去重锁:Boss 阶段(0/1/2)的上次可见值。只在 bossPhase 从别的值翻进 1 的
    * 那一帧响 playBossWarn() 一次 —— 渲染帧与逻辑帧不同步(120Hz 屏上同一逻辑帧会被采样
    * 两次),不锁存就会把一次出场当成两次。初值 -1:重开换世界后第一帧必与 0 不同,
@@ -1283,7 +1302,7 @@ export class Renderer {
     // 星野压在静态远景之上、世界层之下:它是世界锚定的方位参照(接替旧边界圈),
     // 但终究是背景 —— 不许盖住任何实体
     if (this.backgroundSprite) app.stage.addChild(this.backgroundSprite);
-    app.stage.addChild(...this.starfield.views, this.worldLayer, this.eliteWarnG, this.bossWarnG);
+    app.stage.addChild(...this.starfield.views, this.worldLayer, this.eliteWarnG, this.bossWarnG, this.burstRingG);
   }
 
   /**
@@ -1484,6 +1503,9 @@ export class Renderer {
     // 精英出场预警(出生前 ~2s):屏幕空间一层,读 wave 的只读游标 —— 零 rng、零状态改动,
     // 只把脚本里早就写着的事提前念给玩家听。放在帧末:镜头/船体变换都已落地。
     this.syncEliteWarning(sx, sy);
+    // 环阵 burst 预警(25 号):同上,屏幕空间一层,读 world.burstWarning 的只读读数 ——
+    // 方向流不画(那是 HUD 箭头的事),只有下一个 burst 是环阵时才亮全环脉冲
+    this.syncBurstRingWarning(sx, sy);
     // Boss 战提示(出场音 + 召唤预告,15 号):同上,屏幕空间一层,读 world 的 bossPhase /
     // bossSummonCooldown —— 零 rng、零状态改动,只把 sim 里早就写着的事念给玩家听。
     this.syncBossWarn(sx, sy, alpha);
@@ -2703,6 +2725,42 @@ export class Renderer {
     g.moveTo(px + r, py)
       .arc(px, py, r, 0, (1 - closeness) * Math.PI * 2)
       .stroke({ width: 2.5, color: tint, alpha: 0.85 * blink });
+  }
+
+  /**
+   * 环阵 burst 预警(25 号):下一个未触发的 burst 是环阵时,以船为心画一圈收缩的全环脉冲 ——
+   * 全环合围的"阵型时刻"在怪出生前就铺出来(方向箭头对环阵无意义:没有来向)。
+   *
+   * 数据源 = world.burstWarning(peekNextBurst 的只读游标),与 HUD 的 burst 预警同一份读数、
+   * 零 rng、零状态改动,只把脚本里早就写着的事提前念给玩家听。预警消失不需要专门判定:
+   * burst 实际触发(burstNext 前移)或该段结束后,peek 要么换到下一个事件、要么返回 null,
+   * 环自然熄灭 —— 与精英预警同一条口径。
+   *
+   * 视觉:正圆从屏缘随剩余 eta 合拢向船(越近环越收越实),叠一层随 eta 的快闪;
+   * 威胁红与 HUD 的 burst 预警同色 —— 两套预警读的是同一件事,颜色不能打架。
+   */
+  private syncBurstRingWarning(shipX: number, shipY: number): void {
+    const g = this.burstRingG;
+    g.clear();
+    const w = this.world;
+    // 压测旁路/脚本走完时 burstWarning 返回 null;方向流 burst 不画环(那是 HUD 箭头的事)
+    const burst = w.burstWarning();
+    if (!burst || burst.pattern !== BURST_PATTERN_RING || burst.etaSeconds > BURST_RING_WARN_WINDOW) return;
+    const closeness = 1 - burst.etaSeconds / BURST_RING_WARN_WINDOW; // 0 → 1:越近环越收越实
+    const blink = 0.55 + 0.45 * Math.abs(Math.sin(burst.etaSeconds * Math.PI * BURST_RING_BLINK_HZ));
+    const half = Math.min(this.app.screen.width, this.app.screen.height) / 2;
+    const radius = Math.max(BURST_RING_MIN_RADIUS, half * (0.05 + 0.95 * (1 - closeness)));
+    // shipX/shipY 是插值世界位姿,而 burstRingG 挂在 stage(屏幕空间)——必须经 worldLayer
+    // 换算(与 bossWarnG/eliteWarnG 同一条口径):地图无限、船在世界系无界漂移,
+    // 直接画会钉在屏幕左上角、越漂越远,永远不在船心
+    burstRingWorld.x = shipX;
+    burstRingWorld.y = shipY;
+    this.worldLayer.toGlobal(burstRingWorld, burstRingScreen);
+    g.circle(burstRingScreen.x, burstRingScreen.y, radius).stroke({
+      width: 2 + closeness * 3,
+      color: 0xff5f77,
+      alpha: (0.45 + 0.55 * closeness) * blink,
+    });
   }
 
   private syncParticles(

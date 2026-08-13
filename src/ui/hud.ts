@@ -10,7 +10,7 @@ import { BOSS, KIND_BOSS } from '../data/enemies';
 import { edictLevel, EDICTS } from '../data/edicts';
 import { TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
-import { WAVE_SEGMENTS } from '../data/waves';
+import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import { audioBus } from '../render/audio';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { tuning } from '../sim/config';
@@ -524,7 +524,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   warnShaft.style.cssText = THREAT_SHAFT_CSS + 'background:none;border-top:2px dashed ' + THREAT_COLOR + ';height:0!important;';
   const warnTip = document.createElement('div');
   warnTip.style.cssText = THREAT_TIP_CSS;
-  warn.append(warnShaft, warnTip);
+  // 环阵 burst 的预警形态(25 号):同一枚 warn 节点改画全环脉冲 —— 方向箭头回答"哪边来",
+  // 全环回答"没边可躲"。虚线整圆 + 随 eta 合拢 + 快闪,罗盘失效感由预警形态先声夺人。
+  // 默认藏着:方向流的预警照旧走箭头两件套,环子层不进 DOM 之外的任何路径
+  const warnRing = document.createElement('div');
+  warnRing.style.cssText =
+    'position:absolute;inset:0;border-radius:50%;box-sizing:border-box;' +
+    'border:2px dashed ' + THREAT_COLOR + ';display:none;';
+  warn.append(warnShaft, warnTip, warnRing);
 
   // 静音开关:默认有声(开)。点击只切 audioBus 总线增益并改自己的文字/颜色,
   // 不新增任何窗口监听、不动 sim;按钮本体是 div,不会抢键盘焦点(Enter/空格不受干扰)
@@ -880,24 +887,47 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     const burst = world.burstWarning();
     if (burst && burst.etaSeconds <= BURST_WARNING_WINDOW) {
       const closeness = 1 - burst.etaSeconds / BURST_WARNING_WINDOW;
-      const wv = threatVisual(
-        burst.dirRad,
-        THREAT_INTENSITY_MAX * (0.4 + 0.6 * closeness),
-        window.innerWidth,
-        window.innerHeight,
-        rightGutter,
-      );
       const blink = 0.55 + 0.45 * Math.abs(Math.sin(burst.etaSeconds * Math.PI * 3));
-      warn.style.display = 'block';
-      warn.style.left = `${wv.x}px`;
-      warn.style.top = `${wv.y}px`;
-      warn.style.width = `${wv.sizePx}px`;
-      warn.style.height = `${wv.sizePx}px`;
-      warn.style.opacity = String(wv.opacity * blink);
-      warn.style.transform = `translate(-50%,-50%) rotate(${wv.rotationDeg}deg)`;
-      warnTip.style.borderTopWidth = `${wv.sizePx * 0.25}px`;
-      warnTip.style.borderBottomWidth = `${wv.sizePx * 0.25}px`;
-      warnTip.style.borderLeftWidth = `${wv.sizePx * 0.42}px`;
+      if (burst.pattern === BURST_PATTERN_RING) {
+        // 环阵:没有"来向"可言 —— 箭头两件套让位,整枚节点改画成钉在屏幕中心的
+        // 全环脉冲,环从屏缘随 eta 合拢向船心(全环合围感在怪出生前就铺出来)。
+        // 半径/透明度/辉光全随 closeness 走,快闪与方向流同一招
+        const half = Math.min(window.innerWidth, window.innerHeight);
+        const radius = half * (0.06 + 0.42 * (1 - closeness));
+        warn.style.display = 'block';
+        warn.style.left = `${window.innerWidth / 2}px`;
+        warn.style.top = `${window.innerHeight / 2}px`;
+        warn.style.width = `${radius * 2}px`;
+        warn.style.height = `${radius * 2}px`;
+        warn.style.opacity = String((0.5 + 0.5 * closeness) * blink);
+        warn.style.transform = 'translate(-50%,-50%)';
+        warn.style.filter = `drop-shadow(0 0 ${4 + closeness * 10}px rgba(255,95,119,.9))`;
+        warnShaft.style.display = 'none';
+        warnTip.style.display = 'none';
+        warnRing.style.display = 'block';
+      } else {
+        const wv = threatVisual(
+          burst.dirRad,
+          THREAT_INTENSITY_MAX * (0.4 + 0.6 * closeness),
+          window.innerWidth,
+          window.innerHeight,
+          rightGutter,
+        );
+        warn.style.display = 'block';
+        warn.style.left = `${wv.x}px`;
+        warn.style.top = `${wv.y}px`;
+        warn.style.width = `${wv.sizePx}px`;
+        warn.style.height = `${wv.sizePx}px`;
+        warn.style.opacity = String(wv.opacity * blink);
+        warn.style.transform = `translate(-50%,-50%) rotate(${wv.rotationDeg}deg)`;
+        warn.style.filter = '';
+        warnShaft.style.display = 'block';
+        warnTip.style.display = 'block';
+        warnRing.style.display = 'none';
+        warnTip.style.borderTopWidth = `${wv.sizePx * 0.25}px`;
+        warnTip.style.borderBottomWidth = `${wv.sizePx * 0.25}px`;
+        warnTip.style.borderLeftWidth = `${wv.sizePx * 0.42}px`;
+      }
     } else {
       warn.style.display = 'none';
     }

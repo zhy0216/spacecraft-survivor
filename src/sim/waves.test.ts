@@ -13,6 +13,8 @@ import { SIM_DT, SIM_HZ } from '../core/loop';
 import { Rng } from '../core/rng';
 import { UNLOCKS } from '../data/unlocks';
 import {
+  BURST_PATTERN_DIRECTIONAL,
+  BURST_PATTERN_RING,
   WAVE_LOCKED_ELITES,
   WAVE_MAX_SPAWN_PER_TICK,
   WAVE_MAX_STREAMS,
@@ -52,7 +54,7 @@ function stream(p: Partial<WaveStream> = {}): WaveStream {
   return { kind: 0, rate0: 0, rate1: 0, spreadDeg: 0, ...p };
 }
 function burst(p: Partial<WaveBurst> = {}): WaveBurst {
-  return { at: 0, offsetDeg: 0, spreadDeg: 0, counts: [0, 0, 0, 0], ...p };
+  return { at: 0, offsetDeg: 0, spreadDeg: 0, pattern: 0, counts: [0, 0, 0, 0], ...p };
 }
 function segment(p: Partial<WaveSegment> = {}): WaveSegment {
   return {
@@ -679,6 +681,125 @@ describe('出怪方向', () => {
     stepWaves(createWaveState(), 0.5, rngB, wide);
     expect(wide.list.map((e) => e.kind)).toEqual(flat.list.map((e) => e.kind));
     expect(rngB.calls).toBe(rngA.calls);
+  });
+});
+
+describe('环阵 burst(25 号:BURST_PATTERN_RING,整环均布合围)', () => {
+  /** 同一份脚本:段长 10、方向恒 0、只有一条 at=0 的 burst —— 一帧触发,零流零精英,base = 0 */
+  const ringScript = (counts: number[], spreadDeg = 2, pattern: number = BURST_PATTERN_RING): void =>
+    useScript(
+      segment({
+        duration: 10,
+        dirStartDeg: 0,
+        dirEndDeg: 0,
+        bursts: [burst({ at: 0, offsetDeg: 0, spreadDeg, pattern, counts })],
+      }),
+    );
+
+  it('同帧整组出 N 只(N = counts 总和),逐型按下标升序、跨型连续编号,游标到点即消费', () => {
+    ringScript([16, 4, 0, 0, 0]);
+    const s = createWaveState();
+    const r = rec();
+    stepWaves(s, 0.1, new Rng(1), r);
+    // 一帧之内 20 只全部落地:环阵与方向 burst 同一条原子事件口径,不被单帧上限截断
+    expect(r.list).toHaveLength(20);
+    expect(r.list.map((e) => e.kind)).toEqual([
+      ...new Array<number>(16).fill(0),
+      ...new Array<number>(4).fill(1),
+    ]);
+    expect(s.burstNext).toBe(1);
+  });
+
+  it('均布:spreadDeg 0 时出生角逐只钉在 base + i/N × 360° 上(抖动为 0 = 纯几何,且仍每只一掷)', () => {
+    const N = 16;
+    ringScript([16, 0, 0, 0, 0], 0);
+    const s = createWaveState();
+    const r = rec();
+    const rng = new CountingRng(3);
+    stepWaves(s, 0.1, rng, r);
+    r.list.forEach((e, i) => {
+      expect(e.kind).toBe(0);
+      // i = 出生次序(跨型连续下标),均布角 = i/N × 360°;展宽 0 时抖动恒 0,角度是纯几何
+      expect(e.angle / DEG2RAD).toBeCloseTo((360 / N) * i, 9);
+    });
+    expect(rng.calls).toBe(N); // 展宽为 0 也照样每只掷一次:消耗次数与展宽无关(既有口径)
+  });
+
+  it('环回:整环是闭合的 —— 按出生角排序后首尾相邻间隔也 = 360°/N(允许抖动误差 ±2×spreadDeg)', () => {
+    const N = 16;
+    const spread = 2;
+    const stepDeg = 360 / N;
+    for (let seed = 1; seed <= 4; seed++) {
+      ringScript([16, 0, 0, 0, 0], spread);
+      const s = createWaveState();
+      const r = rec();
+      stepWaves(s, 0.1, new Rng(seed), r);
+      expect(r.list).toHaveLength(N);
+      // 相邻间隔 = 槽宽 + (后一只抖动 − 前一只抖动) ∈ [360/N − 2×spread, 360/N + 2×spread];
+      // 首尾那一条跨 2π 收口,同样要闭合 —— 收口断了就是环上豁了一个口子
+      const sorted = r.list.map((e) => wrapAngle(e.angle)).sort((a, b) => a - b);
+      for (let i = 0; i < N; i++) {
+        const a = sorted[i]!;
+        const b = sorted[(i + 1) % N]!;
+        const gap = (i === N - 1 ? b + Math.PI * 2 - a : b - a) / DEG2RAD;
+        expect(gap).toBeGreaterThanOrEqual(stepDeg - 2 * spread - 1e-9);
+        expect(gap).toBeLessThanOrEqual(stepDeg + 2 * spread + 1e-9);
+      }
+    }
+  });
+
+  it('抖动半宽上限:每只只在自己的均布角 ±spreadDeg 内抖,跨种子不越界,且真的在抖', () => {
+    const N = 16;
+    const spread = 2;
+    const step = (Math.PI * 2) / N;
+    let deviated = false;
+    for (let seed = 1; seed <= 20; seed++) {
+      ringScript([16, 0, 0, 0, 0], spread);
+      const s = createWaveState();
+      const r = rec();
+      stepWaves(s, 0.1, new Rng(seed), r);
+      r.list.forEach((e, i) => {
+        const dev = wrapAngle(e.angle - step * i) / DEG2RAD;
+        expect(Math.abs(dev)).toBeLessThanOrEqual(spread + 1e-9);
+        if (Math.abs(dev) > 1) deviated = true;
+      });
+    }
+    // 抖动是真的在抖:20 个种子 × 16 只里必有离开均布槽超过 1° 的 ——
+    // 全钉在槽上说明抖动被静默抹掉了(环还是环,但"每只一掷"的账就错了)
+    expect(deviated).toBe(true);
+  });
+
+  it('原子口径:环阵不被单帧上限截断(N > WAVE_MAX_SPAWN_PER_TICK 也一帧出完)', () => {
+    const n = WAVE_MAX_SPAWN_PER_TICK + 5;
+    ringScript([n, 0, 0, 0, 0]);
+    const s = createWaveState();
+    const r = rec();
+    stepWaves(s, 0.1, new Rng(1), r);
+    expect(r.list).toHaveLength(n);
+    expect(r.list.every((e) => e.kind === 0)).toBe(true);
+  });
+
+  it('rng 合同:环阵每只恰好 1 次抖动掷,与方向 burst 同 counts 同 seed 双跑消耗逐字相同', () => {
+    const counts = [16, 4, 0, 0, 0];
+
+    ringScript(counts, 2);
+    const ringS = createWaveState();
+    const ringRec = rec();
+    const ringRng = new CountingRng(20260825);
+    stepWaves(ringS, 0.1, ringRng, ringRec);
+    expect(ringRec.list).toHaveLength(20);
+    expect(ringRng.calls).toBe(20); // 每只恰好 1 次,不多不少(README 口径点名要的专项钉)
+
+    ringScript(counts, 2, BURST_PATTERN_DIRECTIONAL);
+    const dirRec = rec();
+    const dirRng = new CountingRng(20260825);
+    stepWaves(createWaveState(), 0.1, dirRng, dirRec);
+    expect(dirRec.list).toHaveLength(20);
+    expect(dirRng.calls).toBe(20);
+
+    // "逐字相同"的最强形式:同 seed 各跑一遍,两条 rng 流站回同一格,下一掷数值相同 ——
+    // ring 分支多掷/少掷任何一次都会在这里当场露馅(与 boss.test.ts 的"补给后同格"同款)
+    expect(ringRng.next()).toBe(dirRng.next());
   });
 });
 

@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 23 | [done/23-loadout-edict-pairing.md](done/23-loadout-edict-pairing.md) ✅ | 起手法令按节流系配对 | P0 | — |
 | 24 | [done/24-broadside-resonance.md](done/24-broadside-resonance.md) ✅ | 齐射共振(broadside 时刻复活) | P0 | — |
-| 25 | [25-ring-burst.md](25-ring-burst.md) | 环阵事件(波次脚本 pattern) | P1 | 26* |
+| 25 | [done/25-ring-burst.md](done/25-ring-burst.md) ✅ | 环阵事件(波次脚本 pattern) | P1 | 26* |
 | 26 | [26-segment-closure-magnet-surge.md](26-segment-closure-magnet-surge.md) | 段落收束仪式 + 磁吸涌 | P1 | — |
 | 27 | [27-edict-value-compression.md](27-edict-value-compression.md) | 法令压档第一刀(散热/增幅) | P1 | — |
 | 28 | [28-keybinding-discoverability.md](28-keybinding-discoverability.md) | I / Tab 键位可发现性 | P2 | — |

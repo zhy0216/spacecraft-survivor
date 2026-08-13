@@ -24,10 +24,14 @@
  * 只缩放流的记账速率 —— 它改"出多少只",不改"每只怎么掷"(见 tideMulAt 的注释)。
  * 出场顺序 = 侧压 → 主压流 → 精英(帧末):精英排在帧末,触发帧内的普通怪
  * 与无精英脚本逐只一致(帧间序列从下一帧起才整体顺延)。
+ * 环阵 burst(25 号,BURST_PATTERN_RING)只是侧压事件内部的"逐只怎么摆":每只仍恰好一次
+ * rng.next()(均布角上的抖动),与方向 burst 的消耗数逐字相同 —— World 侧的半径/side
+ * 两掷原样不动,"每只 3 掷"的消耗合同一个字不破。
  */
 import type { Rng } from '../core/rng';
 import { UNLOCKS } from '../data/unlocks';
 import {
+  BURST_PATTERN_RING,
   WAVE_LOCKED_ELITES,
   WAVE_MAX_SPAWN_PER_TICK,
   WAVE_MAX_STREAMS,
@@ -161,6 +165,11 @@ export interface BurstPeek {
   etaSeconds: number;
   /** 相对当时主压方向的偏移(度,照抄脚本;换算成绝对角是调用方的事 —— 它有 dirRad,这里没有) */
   offsetDeg: number;
+  /**
+   * BURST_PATTERN_*(0 方向流 / 1 环阵,照抄脚本):预警形态按它分派 ——
+   * 方向流画来向箭头,环阵改画全环脉冲(罗盘失效感由预警形态先声夺人,25 号)。
+   */
+  pattern: number;
 }
 
 /**
@@ -179,6 +188,7 @@ export function peekNextBurst(s: WaveState, out: BurstPeek): boolean {
   const eta = b.at - s.segTime;
   out.etaSeconds = eta > 0 ? eta : 0;
   out.offsetDeg = b.offsetDeg;
+  out.pattern = b.pattern;
   return true;
 }
 
@@ -413,14 +423,34 @@ export function stepWaves(
     const base = s.dirRad + b.offsetDeg * DEG2RAD;
     const spread = b.spreadDeg * DEG2RAD;
     const counts = b.counts;
-    // 逐型按下标 0..N 升序出,顺序定死:改某一型的只数只会在序列末尾增减,不会整条错位
-    for (let k = 0; k < counts.length; k++) {
-      const n = counts[k]!;
-      for (let j = 0; j < n; j++) {
-        // 计进 spawned,但**不被本帧上限截断**:事件是原子的,它没有 debt 可以留账,
-        // 截断只能把这几只凭空吞掉。counts 写成天文数字是数据自检该抓的事,不该在这里变成静默丢怪
-        spawned++;
-        sink.spawn(k, base + (rng.next() * 2 - 1) * spread);
+    // 计进 spawned,但**不被本帧上限截断**:事件是原子的,它没有 debt 可以留账,
+    // 截断只能把这几只凭空吞掉。counts 写成天文数字是数据自检该抓的事,不该在这里变成静默丢怪
+    if (b.pattern === BURST_PATTERN_RING) {
+      // 环阵(25 号):N = counts 总和,逐只出生角 = base + i/N × 360°(i = 跨型连续下标),
+      // 整环均布合围 —— 罗盘瞬间失去"方向"这个读数,玩家必须挑一个薄弱扇区集火突围。
+      // rng 口径与方向 burst 逐字相同:每只恰好一次 rng.next()(均布角上的抖动,
+      // 半宽 = spreadDeg),半径/side 两掷仍在 World 侧原样发生,"每只 3 掷"合同不破。
+      // 逐型按下标 0..N 升序出,顺序定死:改某一型的只数只会在序列末尾增减,不会整条错位
+      let total = 0;
+      for (let k = 0; k < counts.length; k++) total += counts[k]!;
+      const step = (Math.PI * 2) / Math.max(1, total); // 总数为 0 是数据自检该抓的事,这里只兜不吐 NaN
+      let i = 0;
+      for (let k = 0; k < counts.length; k++) {
+        const n = counts[k]!;
+        for (let j = 0; j < n; j++) {
+          spawned++;
+          sink.spawn(k, base + step * i + (rng.next() * 2 - 1) * spread);
+          i++;
+        }
+      }
+    } else {
+      // 方向流(既有口径):全组挤在 offsetDeg ± spreadDeg 的扇面里
+      for (let k = 0; k < counts.length; k++) {
+        const n = counts[k]!;
+        for (let j = 0; j < n; j++) {
+          spawned++;
+          sink.spawn(k, base + (rng.next() * 2 - 1) * spread);
+        }
       }
     }
   }
