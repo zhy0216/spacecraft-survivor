@@ -188,9 +188,9 @@ export function slotHasSpace(weapons: readonly WeaponSlot[]): boolean {
 }
 
 /**
- * 这一型武器在槽里的最高星级(没有 = 0)。三处共用:
- *   World.mergeOrInstall 拿它找吸收目标;卡池(upgrade.ts / rollShopWeapons)拿它剔掉已满 3★ 的同型;
- *   UI(upgradeFlow / refitFlow)拿它印"已有 ★N · 再拿一把升 ★N+1"。
+ * 这一型武器在槽里的最高星级(没有 = 0)。两处共用:
+ *   卡池(upgrade.ts / rollShopWeapons)拿它剔掉已满 3★ 的同型;
+ *   UI(upgradeFlow / refitFlow)拿它判断"这一型入手过没有"。
  */
 export function slotMaxStars(weapons: readonly WeaponSlot[], type: number): number {
   let stars = 0;
@@ -199,4 +199,17 @@ export function slotMaxStars(weapons: readonly WeaponSlot[], type: number): numb
     if (s.type === type && s.stars > stars) stars = s.stars;
   }
   return stars;
+}
+
+/**
+ * 这一型武器在槽里某个星级的把数(三合一升星要凑三把同星,卡面文案按它报
+ * "已有 ★1 ×2 · 再来一把合成 ★2")。与 slotMaxStars 同一份遍历口径。
+ */
+export function slotStarCount(weapons: readonly WeaponSlot[], type: number, stars: number): number {
+  let n = 0;
+  for (let i = 0; i < weapons.length; i++) {
+    const s = weapons[i]!;
+    if (s.type === type && s.stars === stars) n++;
+  }
+  return n;
 }

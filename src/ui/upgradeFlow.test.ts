@@ -15,7 +15,7 @@ import {
   EDICTS,
 } from '../data/edicts';
 import { isMergeResult } from '../data/merges';
-import { TOWER_AUTOCANNON, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
+import { TOWER_AUTOCANNON, TOWER_MISSILE_NEST, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import {
@@ -88,24 +88,49 @@ describe('升级卡片纯文案', () => {
     expect(cardIcon(edictOpt(99))).toBe('?');
   });
 
-  it('新武器描述按 1★ 报数值与系,等级行按升星通路说话', () => {
+  it('新武器描述按 1★ 报数值与系,等级行按同型同星把数说话', () => {
     const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    const asWorld = worldAsWorld(world);
     const def = TOWERS[TOWER_AUTOCANNON];
     expect(def).toBeDefined();
     if (!def) return;
-    const desc = cardDesc(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world));
+    const desc = cardDesc(newWeaponOpt(TOWER_AUTOCANNON), asWorld);
     expect(desc).toContain(String(Math.round(towerRange(def, 1))));
     expect(desc).toContain(String(Math.round(towerDps(def, 1) * 100) / 100));
     expect(desc).toContain('弹药系'); // 武器卡标好所属系
     // 未拥有:从 1★ 起步
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toBe('新武器 · 获得后从 ★1 起步');
-    // 已有 1★(有配方):先说升星、再说 3★ 合成
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON, 1), worldAsWorld(world))).toBe(
-      '已有 ★1 · 再拿一把升 ★2 · 3★ 合成',
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('新武器 · 获得后从 ★1 起步');
+    // 1× 1★:报把数 + 三合一规则
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★1 ×1 · 三把同星合一');
+    // 2× 1★:下一张卡当场合 ★2
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★1 ×2 · 再来一把合成 ★2');
+    // 2× 1★ + 2× 2★:下一张卡 ★1 合一、★2 满三把连锁合到 ★3(有配方 = 当场合成)
+    world.weapons[0]!.stars = 2;
+    world.weapons[1]!.stars = 2;
+    world.weapons[2]!.type = TOWER_AUTOCANNON;
+    world.weapons[2]!.stars = 1;
+    world.weapons[3]!.type = TOWER_AUTOCANNON;
+    world.weapons[3]!.stars = 1;
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe(
+      '已有 ★2 ×2 ★1 ×2 · 再来一把连合到 ★3 合成',
     );
-    // 已有 2★(有配方):下一把就是 3★ 变身
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON, 2), worldAsWorld(world))).toBe(
-      '已有 ★2 · 再拿一把 · 凑满 3★ 当场合成',
+    // 无配方塔(导弹巢):同样连锁,但没有"合成"尾巴
+    const nest = createStubWorld([newWeaponOpt(TOWER_MISSILE_NEST)]);
+    const nestWorld = worldAsWorld(nest);
+    nest.weapons[0]!.type = TOWER_MISSILE_NEST;
+    nest.weapons[0]!.stars = 2;
+    nest.weapons[1]!.type = TOWER_MISSILE_NEST;
+    nest.weapons[1]!.stars = 2;
+    nest.weapons[2]!.type = TOWER_MISSILE_NEST;
+    nest.weapons[2]!.stars = 1;
+    nest.weapons[3]!.type = TOWER_MISSILE_NEST;
+    nest.weapons[3]!.stars = 1;
+    expect(cardLevelText(newWeaponOpt(TOWER_MISSILE_NEST), nestWorld)).toBe(
+      '已有 ★2 ×2 ★1 ×2 · 再来一把连合到 ★3',
     );
   });
 

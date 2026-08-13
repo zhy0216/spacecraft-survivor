@@ -29,7 +29,7 @@
  * 暂停归 main)→ hide() / onResolved()(run.paused = false 在 main.ts)。
  * RefitFlowUi 不再 extends PlacementUiState:纯商店没有拾格/高亮,渲染层不再接它。
  */
-import { slotMaxStars, WEAPON_SLOT_COUNT } from '../sim/armory';
+import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
@@ -408,17 +408,31 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
         ? `${throttleName(def.throttle)} · ${Math.round(towerArcDeg(def, 1))}° · ` +
           `射程 ${Math.round(towerRange(def, 1))} · ${Math.round(previewSustainedDps(world, type, 1))}/s`
         : '数值表里没有这一型';
-      // 已拥有同型 = 买下直接吸收升星(不占槽);未拥有才谈落位(空槽 / 替换)
-      const ownedStars = slotMaxStars(world.weapons, type);
+      // 同型同星的实际把数:三合一升星按它说话,同型买下也照常落槽(空槽 / 替换)
+      const c1 = slotStarCount(world.weapons, type, 1);
+      const c2 = slotStarCount(world.weapons, type, 2);
+      const c3 = slotStarCount(world.weapons, type, 3);
       const mergeResult = mergeResultOf(type);
       const notes: string[] = [];
-      if (ownedStars >= 2 && mergeResult >= 0) {
-        notes.push(`已有 ★${ownedStars} · 再拿一把合成「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
-      } else if (ownedStars > 0) {
-        notes.push(`已有 ★${ownedStars} · 再拿一把升 ★${Math.min(3, ownedStars + 1)}`);
+      if (c1 + c2 + c3 > 0) {
+        const parts: string[] = [];
+        if (c3 > 0) parts.push(`★3 ×${c3}`);
+        if (c2 > 0) parts.push(`★2 ×${c2}`);
+        if (c1 > 0) parts.push(`★1 ×${c1}`);
+        notes.push(`已有 ${parts.join(' ')}`);
       } else {
         notes.push('入手 ★1');
-        notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
+      }
+      notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
+      // 买下 = 一把 ★1。两种"当场触发"提前说;合到 ★3 的变身名字也只在这里亮出来
+      if (c1 === 2) {
+        if (c2 === 2) {
+          notes.push(mergeResult >= 0 ? `买下连合 ★3 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」` : '买下连合 ★3');
+        } else {
+          notes.push('买下合成 ★2');
+        }
+      } else if (mergeResult >= 0 && c2 === 2) {
+        notes.push(`再合一把 ★2 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
       }
       card.innerHTML =
         `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
@@ -455,6 +469,31 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
+   * 买卡前的武器快照:回执按"买前 → 买后"的差说话(落新 ★1 / 三合一升星 / ★3 变身),
+   * 与 upgradeFlow 的 weaponSnapshot 同一条口径。
+   */
+  function weaponBefore(type: number): { max: number; result: number } {
+    const result = mergeResultOf(type);
+    return {
+      max: slotMaxStars(world.weapons, type),
+      result: result >= 0 ? slotStarCount(world.weapons, result, 3) : 0,
+    };
+  }
+
+  /** 买成之后的回执:三合一当场升星 / ★3 变身时,回执把结果说出来而不是干巴巴的"已购入" */
+  function weaponReceipt(type: number, before: { max: number; result: number }): string {
+    const name = TOWERS[type]?.name ?? '未知武器';
+    const result = mergeResultOf(type);
+    const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
+    if (afterResult > before.result) {
+      return `已购入：${name} 合 ★3 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+    }
+    const afterMax = slotMaxStars(world.weapons, type);
+    if (afterMax > before.max) return `已购入：${name} 合到 ★${afterMax}`;
+    return `已购入：${name}`;
+  }
+
+  /**
    * 买第 index 张武器卡。槽有空位 → 世界当场落位;槽满 → ACQUIRE_REPLACE_NEEDED
    * (不扣星币、货架不动),转入替换态(选槽在左侧舰船图上);其余失败码照 refitDenyMessage 说人话。
    */
@@ -463,8 +502,10 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const card = weaponCards[index];
     if (!card || card.disabled) return; // 售出置灰自守:真 DOM 不会点穿 disabled,桩会
     const type = world.shopWeapons[index];
+    if (type === undefined || type < 0) return;
+    const before = weaponBefore(type);
     const code = world.buyShopWeapon(index);
-    if (code === ACQUIRE_REPLACE_NEEDED && type !== undefined && type >= 0) {
+    if (code === ACQUIRE_REPLACE_NEEDED) {
       pendingBuy = { index, type };
       syncPanel();
       return;
@@ -474,7 +515,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    flash(`已购入：${TOWERS[type ?? -1]?.name ?? '未知武器'}`, OK_COLOR);
+    flash(weaponReceipt(type, before), OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }
@@ -492,6 +533,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       oldSlot && oldSlot.type >= 0
         ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} ★${oldSlot.stars}`
         : null;
+    const before = weaponBefore(pending.type);
     const code = world.buyShopWeapon(pending.index, slotIndex);
     pendingBuy = null;
     if (code === ACQUIRE_REPLACE_NEEDED) {
@@ -505,8 +547,11 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
+    // 换装的回执:换下的旧武器照报,三合一升星/★3 变身照 weaponReceipt 的口径补一句
+    const receipt = weaponReceipt(pending.type, before);
     const name = TOWERS[pending.type]?.name ?? '未知武器';
-    flash(oldName ? `已换装：${name} → ${oldName}` : `已购入：${name}`, OK_COLOR);
+    const fusion = receipt.slice(`已购入：${name}`.length); // '' / ' 合到 ★2' / ' 合 ★3 变身「…」'
+    flash(oldName ? `已换装：${name}${fusion} → ${oldName}` : receipt, OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }

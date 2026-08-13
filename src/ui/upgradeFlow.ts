@@ -25,7 +25,7 @@ import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
 import { edictDesc, edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { THR_CHARGE, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
-import { slotMaxStars, WEAPON_SLOT_COUNT } from '../sim/armory';
+import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
 import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
@@ -178,21 +178,33 @@ export function cardDesc(opt: UpgradeOption, _world?: World): string {
 
 /**
  * 卡片上的等级行。两类各有各的话要说:
- *   新武器报"已有 ★N · 再拿一把升 ★N+1"(同型 = 升星通路的原料;有配方且下一把合到 3★ 时
- *   说"凑满 3★ 当场合成"—— 变身的名字在武器卡上够不着,这里先把入口说清楚);
+ *   新武器按**槽里同型同星的实际把数**说话(三合一升星:同星凑满 3 把当场合一 ——
+ *   下一张卡能不能当场触发要在卡面上说清,变身的名字在武器卡上够不着,这里先把入口说清楚);
  *   法令报**当前层 → 下一层**(「散热协议 ×2 → ×3」)—— 这就是"拿过两次就显示 ×2"那条要求的落点。
  */
-export function cardLevelText(opt: UpgradeOption, _world?: World): string {
+export function cardLevelText(opt: UpgradeOption, world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
-    // opt.level = 槽里已有同型的最高星级(0 = 一把都没有,见 upgrade.ts 的 level 口径)
-    const owned = opt.level > 0;
-    const mergeable = mergeResultOf(opt.type) >= 0;
-    if (owned && mergeable && opt.level >= 2) {
-      return `已有 ★${opt.level} · 再拿一把 · 凑满 3★ 当场合成`;
+    const weapons = world?.weapons;
+    const c1 = weapons ? slotStarCount(weapons, opt.type, 1) : 0;
+    const c2 = weapons ? slotStarCount(weapons, opt.type, 2) : 0;
+    const c3 = weapons ? slotStarCount(weapons, opt.type, 3) : 0;
+    if (c1 + c2 + c3 === 0) {
+      // 没给 world(纯函数兜底)时用卡面自带的 opt.level 说话,数字只会更保守
+      return opt.level > 0 ? `已有 ★${opt.level} · 三把同星合一` : '新武器 · 获得后从 ★1 起步';
     }
-    if (owned && mergeable) return `已有 ★${opt.level} · 再拿一把升 ★${Math.min(3, opt.level + 1)} · 3★ 合成`;
-    if (owned) return `已有 ★${opt.level} · 再拿一把升 ★${Math.min(3, opt.level + 1)}`;
-    return '新武器 · 获得后从 ★1 起步';
+    const parts: string[] = [];
+    if (c3 > 0) parts.push(`★3 ×${c3}`);
+    if (c2 > 0) parts.push(`★2 ×${c2}`);
+    if (c1 > 0) parts.push(`★1 ×${c1}`);
+    const holdings = parts.join(' ');
+    const mergeable = mergeResultOf(opt.type) >= 0;
+    // 下一张卡 = 一把 ★1。两种"当场触发"要提前说:
+    //   凑满三把 ★1 合一;若这一合让 ★2 也凑满三把,连锁合到 ★3(有配方 = 当场变身合成武器)
+    if (c1 === 2 && c2 === 2) {
+      return `已有 ${holdings} · 再来一把连合到 ★3${mergeable ? ' 合成' : ''}`;
+    }
+    if (c1 === 2) return `已有 ${holdings} · 再来一把合成 ★2`;
+    return `已有 ${holdings} · 三把同星合一`;
   }
   // 法令:当前层 → 下一层。满层那一档正常不会出现在候选里(卡池已剔),留一句兜底文案
   const lv = Math.max(0, Math.floor(opt.level));
@@ -384,18 +396,34 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   /**
    * 取用成功后的回执文案,按两类各说各的话。**在 takeUpgrade 之后调用**,星级/层数
    * 一律现读 World —— 卡片承诺的是"点下去之后",回执说的就是"点下去之后"。
-   * 新武器卡:同型 = 升星(或 3★ 变身),回执说"升到 ★N"而不是干巴巴的"获得"。
+   * 新武器卡按"点前 → 点后"的差说话:落了新 ★1(获得)/ 三合一升星(合到 ★N)/
+   * 合到 ★3 变身(名字直取合成结果)。beforeMax/beforeResult 是点卡前的快照。
    */
-  function successToast(opt: UpgradeOption): string {
+  function successToast(opt: UpgradeOption, beforeMax: number, beforeResult: number): string {
     const label = optionLabel(opt);
     if (opt.kind === OFFER_NEW_WEAPON) {
-      const stars = slotMaxStars(world.weapons, opt.type);
-      if (stars > 1) return `${label} 升到 ★${stars}`;
+      const result = mergeResultOf(opt.type);
+      const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
+      if (afterResult > beforeResult) {
+        return `${label} 合 ★3 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+      }
+      const afterMax = slotMaxStars(world.weapons, opt.type);
+      if (afterMax > beforeMax) return `${label} 合到 ★${afterMax}`;
       return `获得:${label} ★1`;
     }
     // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
     const lv = edictLevel(world.edictLevels, opt.type);
     return lv >= 2 ? `${label} ×${lv}` : `法令生效:${label}`;
+  }
+
+  /** 点卡前的武器快照:回执按"点前 → 点后"的差说话(见 successToast) */
+  function weaponSnapshot(opt: UpgradeOption): { max: number; result: number } {
+    if (opt.kind !== OFFER_NEW_WEAPON) return { max: 0, result: 0 };
+    const result = mergeResultOf(opt.type);
+    return {
+      max: slotMaxStars(world.weapons, opt.type),
+      result: result >= 0 ? slotStarCount(world.weapons, result, 3) : 0,
+    };
   }
 
   /**
@@ -409,9 +437,10 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     const opt = world.offer[index];
     // 越界/空卡:候选比卡片少时那张卡本就是藏起来的,这一句是拦网
     if (!opt) return;
+    const before = weaponSnapshot(opt);
     const code = world.takeUpgrade(index);
     if (code >= 0) {
-      flash(successToast(opt), OK_COLOR);
+      flash(successToast(opt, before.max, before.result), OK_COLOR);
       audioBus.playPlace();
       resolve();
       return;
@@ -468,9 +497,10 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       resolve();
       return;
     }
+    const before = weaponSnapshot(opt);
     const code = world.takeUpgrade(chosen, slotIndex);
     if (code >= 0) {
-      flash(`获得:${optionLabel(opt)}`, OK_COLOR);
+      flash(successToast(opt, before.max, before.result), OK_COLOR);
       audioBus.playPlace();
       resolve();
       return;

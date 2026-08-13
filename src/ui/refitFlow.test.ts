@@ -450,7 +450,7 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_ARMOR]!.name} ×1`);
   });
 
-  it('武器卡印出数值与系名、已有同型时印升星/合成进度(不占槽),未拥有才报落位方向', () => {
+  it('武器卡印出数值与系名、同型照报落位方向,同星把数凑到 2 时预说当场合成', () => {
     world.weapons[0]!.type = TOWER_AUTOCANNON;
     world.weapons[0]!.stars = 1;
     world.weapons[1]!.type = TOWER_AUTOCANNON;
@@ -460,10 +460,11 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(card.innerHTML).toContain('射程');
     expect(card.innerHTML).toContain('/s');
     expect(card.innerHTML).toContain('弹药系'); // 商店武器卡标好所属系
-    // 已有 1★ 同型:买下直接吸收升星,不需要槽,也不报落位方向
-    expect(card.innerHTML).toContain('已有 ★1 · 再拿一把升 ★2');
-    expect(card.innerHTML).not.toContain('装到');
-    // 悬停/替换那类流程不在这里;未拥有那一档:清空同型后重画,报「入手 ★1」+ 落位方向
+    // 2× 1★ 同型:报同星把数、照报落位方向(同型也占槽),并预说买下当场合 ★2
+    expect(card.innerHTML).toContain('已有 ★1 ×2');
+    expect(card.innerHTML).toContain('买下合成 ★2');
+    expect(card.innerHTML).toContain('装到');
+    // 未拥有那一档:清空同型后重画,报「入手 ★1」+ 落位方向
     world.weapons[0]!.type = -1;
     world.weapons[0]!.stars = 0;
     world.weapons[1]!.type = -1;

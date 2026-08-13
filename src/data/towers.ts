@@ -27,17 +27,17 @@ export const TOWER_RAILGUN = 3; // 磁轨炮
 export const TOWER_PD = 4; // 点防阵列
 export const TOWER_MORTAR = 5; // 等离子迫击炮
 
-// —— 合成武器(用户设计会重写,取代 17 号旧"空间进化塔"):三合一合成(3×相同基础武器
-// → 1 把更强武器,data/merges.ts)的结果。编号 6..11 与 merges.ts 的配方顺序**一一对应**
-// (下标错位 = 配方张冠李戴,merges.test 钉着这条)。
+// —— 合成武器(用户设计会重写,取代 17 号旧"空间进化塔"):三合一升星合成
+// (3× 同型 2★ → 合 3★ 的那一刻变身,data/merges.ts)的结果。编号 6..11 与 merges.ts 的配方
+// 顺序**一一对应**(下标错位 = 配方张冠李戴,merges.test 钉着这条)。
 // 每把合成武器的"签名"(三把拼一把买断的那条机制)写在对应塔的字段注释里,其余数值全部占位待调 ——
-// 合成的判据与触发流程住在 sim/world.ts(获得第 3 把当场合成),本表只负责"变成什么"。
-export const TOWER_STORM_CANNON = 6; // 3×自动机炮 → 风暴机炮(不再装填、双管齐射)
-export const TOWER_AURORA = 7; // 3×激光棱镜 → 极光阵列(光束穿透、无过热)
-export const TOWER_ANNIHILATION = 8; // 3×磁轨炮 → 湮灭长矛(全屏贯穿、充能更快)
-export const TOWER_THUNDER = 9; // 3×电弧塔 → 雷霆王冠(链数翻倍)
-export const TOWER_DELUGE = 10; // 3×迫击炮 → 焦土骤雨(三连发、落点更大)
-export const TOWER_THORN = 11; // 3×点防 → 荆棘星幕(击落弹幕拦截旗子)
+// 合成的判据与触发流程住在 sim/world.ts(World.fuseTriplesOf 合到 3★ 当场变身),本表只负责"变成什么"。
+export const TOWER_STORM_CANNON = 6; // 3×自动机炮(合 3★)→ 风暴机炮(不再装填、双管齐射)
+export const TOWER_AURORA = 7; // 3×激光棱镜(合 3★)→ 极光阵列(光束穿透、无过热)
+export const TOWER_ANNIHILATION = 8; // 3×磁轨炮(合 3★)→ 湮灭长矛(全屏贯穿、充能更快)
+export const TOWER_THUNDER = 9; // 3×电弧塔(合 3★)→ 雷霆王冠(链数翻倍)
+export const TOWER_DELUGE = 10; // 3×迫击炮(合 3★)→ 焦土骤雨(三连发、落点更大)
+export const TOWER_THORN = 11; // 3×点防(合 3★)→ 荆棘星幕(击落弹幕拦截旗子)
 
 // —— 进阶塔(19 号 issue,GDD §10 的"只解锁内容"):条件式解锁后进三选一池。
 // 不是进化塔(不在 evolutions.ts 的配方表里),isEvolutionTower(12) 恒 false ——
