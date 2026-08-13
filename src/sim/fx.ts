@@ -33,6 +33,10 @@ export const FXV_HULL_HIT = 6; // 撞进核心区:真掉血
 // 真实 aoeRadius 上),这只是"一只怪没了"的短促句号,画法与色域(敌方红紫)都不同。
 export const FXV_KILL = 7; // 敌人死亡爆点:radius = 敌半径,towerType 借放敌型下标(取 enemyTint 配色)
 export const FXV_IMPACT = 8; // 直射弹命中火花:确认子弹确实打在敌人身上
+// 齐射共振(24 号):短窗内相邻三槽都开过火 → 舷侧闪光。towerType 一格借放**三元组中心槽下标**
+// (沿用 FXV_KILL 借放敌型的同款手法:这是第八个以外的 kind,没理由为它单开一格字段);
+// 渲染层照它取 WEAPON_SLOT_FACING[中心槽] + heading 画那道舷侧弧光。radius 恒 0。
+export const FXV_RESONANCE = 9;
 
 /**
  * 上面这两种的存续秒数。**刻意不进 data/towers 的 FX_LIFE_* 那一组** ——
@@ -48,6 +52,8 @@ export const FX_LIFE_HULL_HIT = 0.22; // 占位待调 —— 比火花长:真掉
 // FX_LIFE_BLAST 之外的量级 —— 终局约 8 杀/秒,0.25s 存续让在场爆点稳定在个位数,远低于 500 弹预算
 export const FX_LIFE_KILL = 0.25; // 占位待调
 export const FX_LIFE_IMPACT = 0.1;
+// 共振闪光与击杀爆点同量级:它是低频事件(冷却 4s 兜底),0.5s 够眼睛追完一道舷侧弧光
+export const FX_LIFE_RESONANCE = 0.5; // 占位待调
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),
@@ -67,7 +73,8 @@ export interface FxEvent {
   /**
    * 来源塔型(TOWER_*):渲染层据此取 def.tint 选色,不必再回查是谁打的。
    * **FXV_KILL 例外**:死亡不是任何一座塔打出来的,这一格借放**敌型下标**(KIND_*),
-   * 渲染层照它取 enemyTint 配色 —— 借字段而不是加一格,是因为其余七种 kind 用不上第八个数字。
+   * 渲染层照它取 enemyTint 配色;**FXV_RESONANCE 同理借放三元组中心槽下标**(见常量注释)——
+   * 借字段而不是加一格,是因为其余七种 kind 用不上第八个数字。
    */
   towerType: number;
   /** 剩余存续秒。初值取 data/towers 的 FX_LIFE_*,由 World 每帧扣 dt */
@@ -170,8 +177,9 @@ export interface FireSink {
   query(x: number, y: number, r: number, out: Enemy[]): void;
   /**
    * 记一次开火:槽位下标(WEAPON_SLOT_COUNT 内的编号)。
-   * 旧版的 broadside(单舷 ≥3 塔同帧开火)统计随甲板四舷删除,实现方(World)目前只收不记 ——
-   * 签名保留 slotIndex 是给将来 HUD 的"每槽开火计数"留的口子,也是"这座塔开火"的唯一事件通道。
+   * 旧版的 broadside(单舷 ≥3 塔同帧开火)统计随甲板四舷删除,签名保留 slotIndex 是
+   * "这座塔开火"的唯一事件通道。24 号起实现方(World)据此落账 lastFiredTick,
+   * 做齐射共振判定(短窗内相邻三槽都开过火 → FXV_RESONANCE)—— 纯表现统计,零 rng。
    */
   fired(slotIndex: number): void;
 }

@@ -23,6 +23,11 @@
  * FXV_MUZZLE(炮口闪)的坐标是 sim 在开火那一帧用 slotMuzzleWorld 算好的**世界坐标**,
  * 画进 muzzleFxG(压在 shipG 之上)即可,渲染层不再回查槽位。
  *
+ * 齐射共振(FXV_RESONANCE,24 号 v1 纯演出,不加伤害):短窗内相邻三槽齐射的那一下,
+ * 沿那面舷画一道冷色弧光、播 broadside 和弦 —— towerType 借放三元组中心槽下标(见 sim/fx.ts),
+ * 朝向 = WEAPON_SLOT_FACING[中心槽] + 插值 heading(铁律 2);音画的一次消费锁
+ * (audioPlayed / juicePlayed)与其余事件同一条,时停/高刷屏下只响一声、只闪一次。
+ *
  * 受击表现(改版 09 号):甲板四舷随网格删除后,受击只有"撞进船心圆 = 真掉血"一层
  * (sim/damage 的 shipRadius),旧的被撞舷闪红 / edgePenalty 整段删除;
  * 世界只交 FXV_HULL_HIT(暖红扩散环)与 FXV_SPARK 事件。broadside 镜头顿挫
@@ -76,7 +81,7 @@ import {
 import { SHOP_BEACON_LIFETIME, SHOP_BEACON_RADIUS } from '../data/economy';
 import { SPAWN_RADIUS } from '../data/waves';
 import { type Arc, slotArc } from '../sim/arc';
-import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT } from '../sim/armory';
+import { type WeaponSlot, WEAPON_HARDPOINTS, WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
 import { tuning } from '../sim/config';
 import { shipRadius } from '../sim/damage';
 import type { Drop } from '../sim/drop';
@@ -86,6 +91,7 @@ import {
   FX_LIFE_HULL_HIT,
   FX_LIFE_IMPACT,
   FX_LIFE_KILL,
+  FX_LIFE_RESONANCE,
   FX_LIFE_SPARK,
   FXV_BEAM,
   FXV_BLAST,
@@ -95,6 +101,7 @@ import {
   FXV_KILL,
   FXV_LANCE,
   FXV_MUZZLE,
+  FXV_RESONANCE,
   FXV_SPARK,
 } from '../sim/fx';
 import { lerpAngle, type Vec2 } from '../sim/ship';
@@ -276,6 +283,17 @@ const FX_KILL_EXPAND = 2.5;
 const FX_KILL_RAY = 1.4;
 const FX_KILL_RAY_WIDTH = 1.6;
 const FX_KILL_DIRS = [1, 0, 0, 1, -1, 0, 0, -1];
+
+// —— 齐射共振(24 号,v1 纯演出,不加伤害)——短窗内相邻三槽齐射的那一下,沿这面舷
+// 铺一道冷色弧光:半径取船体受击圆(damage.shipRadius 全仓唯一口径,贴船壳外缘),
+// 角跨 = 相邻三槽张成的整面 90° 舷,中心 = WEAPON_SLOT_FACING[中心槽] + heading。
+// 两笔同一条弧(宽晕 + 亮芯),与光束同款双通道;色域一路冷白,不借任何一座塔的 tint ——
+// 它是整条舷的和声,不是哪一门炮的功劳。
+const RESONANCE_ARC_SPAN = Math.PI / 2;
+const RESONANCE_ARC_GLOW_WIDTH = 5;
+const RESONANCE_ARC_GLOW_ALPHA = 0.35;
+const RESONANCE_ARC_CORE_WIDTH = 2;
+const RESONANCE_ARC_CORE_ALPHA = 0.9;
 
 // —— 伤害飘字(畅玩性)——
 /** 飘字池容量 = 同屏上限。环形复用,池满顶掉最旧,绝不 new */
@@ -1434,7 +1452,7 @@ export class Renderer {
     });
 
     // 开火光效:瞬时判定的四类全在这一层。**不插值**(见 drawFx)
-    this.drawFx();
+    this.drawFx(sh);
 
     // 船体:炮位只在槽位内容变化时重建(签名检查),炮管旋转与炮口线每帧同步(它们跟着炮管转),
     // 容器只吃插值位姿,子层几何一律是局部坐标 —— 船与炮位一同旋转由此成立(见文件头)
@@ -1963,8 +1981,10 @@ export class Renderer {
    * 逐事件 stroke/fill 而不是攒成一条 path:alpha 是逐事件的(每个事件的 life 各不相同),
    * 攒在一起就只能共用一个 alpha,淡出这条通道当场作废。同屏事件数被"射速 × 存续"钉死在
    * 与塔数同量级(十几个到几十个),与 500 弹那条口径不在一个数量级上,故不设配额上限。
+   * @param heading 船的插值朝向(铁律 2):FXV_RESONANCE 的舷侧弧光朝
+   *   WEAPON_SLOT_FACING[中心槽] + heading 铺开,用插值角才不按 60Hz 逻辑帧台阶抖。
    */
-  private drawFx(): void {
+  private drawFx(heading: number): void {
     const g = this.fxG;
     g.clear();
     const muzzleG = this.muzzleFxG;
@@ -2117,6 +2137,28 @@ export class Renderer {
             .stroke({ width: FX_MUZZLE_RING_WIDTH, color: FX_CORE_COLOR, alpha: t })
             .circle(e.x0, e.y0, FX_MUZZLE_CORE_RADIUS)
             .fill({ color: FX_CORE_COLOR, alpha: t });
+          break;
+        }
+        case FXV_RESONANCE: {
+          // 齐射共振(24 号,v1 纯演出):towerType 借放三元组中心槽下标(见 sim/fx.ts),不是塔型 ——
+          // 上面按塔型取的 def/color 对这一种 kind 不适用,弧光走自己的冷白双通道(宽晕 + 亮芯)。
+          // 弧朝 WEAPON_SLOT_FACING[中心槽] + heading 铺开,角跨 = 相邻三槽张成的整面 90° 舷;
+          // 槽位下标越界(数值表写坏)兜底成船头朝向,与 sim/armory 的 slotArcCenter 同一条口径。
+          // 半径取船体受击圆:弧贴在船壳外缘;"沿舷侧"而不是从炮口射出去。
+          // 音频走 audioBus 既有 broadside 和弦档(素材 + C-E-G-C' 合成兜底,见 audio.ts),
+          // audioPlayed 一次消费锁已在上方统一消费:时停/高刷屏下这一声只响一次。
+          if (playAudio) audioBus.playBroadside();
+          const t = fxFade(e.life, FX_LIFE_RESONANCE);
+          const a = (WEAPON_SLOT_FACING[e.towerType] ?? 0) + heading;
+          const r = shipRadius(tuning.shipLength);
+          const half = RESONANCE_ARC_SPAN / 2;
+          // arc 之前 moveTo 到弧起点:Graphics 路径是连续的,不挪笔会从上一条子路径收笔处拉直线过来
+          g.moveTo(e.x0 + Math.cos(a - half) * r, e.y0 + Math.sin(a - half) * r)
+            .arc(e.x0, e.y0, r, a - half, a + half)
+            .stroke({ width: RESONANCE_ARC_GLOW_WIDTH, color: FX_CORE_COLOR, alpha: RESONANCE_ARC_GLOW_ALPHA * t });
+          g.moveTo(e.x0 + Math.cos(a - half) * r, e.y0 + Math.sin(a - half) * r)
+            .arc(e.x0, e.y0, r, a - half, a + half)
+            .stroke({ width: RESONANCE_ARC_CORE_WIDTH, color: FX_CORE_COLOR, alpha: RESONANCE_ARC_CORE_ALPHA * t });
           break;
         }
         default:
@@ -2357,6 +2399,8 @@ export class Renderer {
       if (e.kind === FXV_HULL_HIT) this.shakeTrauma += 0.85;
       else if (e.kind === FXV_IMPACT) this.shakeTrauma += 0.08;
       else if (e.kind === FXV_KILL) this.shakeTrauma += 0.035;
+      // 齐射共振的轻震:≤ 击杀档 —— 它是自己船的齐射不是挨打,只给"这一舷响了"的手感
+      else if (e.kind === FXV_RESONANCE) this.shakeTrauma += 0.03;
     }
     this.shakeTrauma = Math.min(
       SHAKE_MAX_TRAUMA,

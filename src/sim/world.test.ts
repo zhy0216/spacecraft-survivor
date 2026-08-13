@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DOCK_REPAIR_PRICE, STARTING_STAR_COINS } from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
-import { TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
+import { TOWER_ARC, TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
 import { tuning } from './config';
+import { FX_LIFE_RESONANCE, FXV_RESONANCE } from './fx';
 import { World } from './world';
 
 describe('World 槽位制核心接线', () => {
@@ -232,5 +233,107 @@ describe('逐武器 DPS 读数', () => {
     expect(a.dpsOf(TOWER_AUTOCANNON)).toBeGreaterThan(0);
     expect(b.dpsOf(TOWER_AUTOCANNON)).toBe(0);
     expect(a.checksum()).toBe(b.checksum());
+  });
+});
+
+describe('齐射共振(24 号)', () => {
+  // fired 走私有 sink(塔开火的唯一事件通道),与 sim 侧单测"直接调入口"同一条手法
+  const fire = (world: World, slot: number): void =>
+    (world as unknown as { sink: { fired(slotIndex: number): void } }).sink.fired(slot);
+  const resonances = (world: World) => world.fx.items.filter((e) => e.kind === FXV_RESONANCE);
+  // 三种不同塔型填满 0/1/2 三槽(同型三把会合成,不同型不合成)
+  const loadThree = (world: World): void => {
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0);
+    expect(world.acquireWeapon(TOWER_LASER)).toBe(0);
+    expect(world.acquireWeapon(TOWER_ARC)).toBe(0);
+  };
+
+  it('相邻三槽窗口内开火触发共振:fx 池出现 FXV_RESONANCE,life > 0', () => {
+    const world = new World(30);
+    loadThree(world);
+    fire(world, 0);
+    fire(world, 1);
+    expect(resonances(world)).toHaveLength(0);
+    fire(world, 2);
+    const evs = resonances(world);
+    expect(evs).toHaveLength(1);
+    expect(evs[0]!.life).toBeCloseTo(FX_LIFE_RESONANCE, 6);
+  });
+
+  it('只有两槽开火不触发', () => {
+    const world = new World(31);
+    loadThree(world);
+    fire(world, 0);
+    fire(world, 1);
+    expect(resonances(world)).toHaveLength(0);
+  });
+
+  it('7-0-1 环回三元组触发(mod 8),事件中心槽 = 0', () => {
+    const world = new World(32);
+    loadThree(world);
+    expect(world.swapWeapons(2, 7)).toBe(0); // 槽 2 的炮挪到 7:7/0/1 成一舷
+    fire(world, 7);
+    fire(world, 0);
+    expect(resonances(world)).toHaveLength(0);
+    fire(world, 1);
+    const evs = resonances(world);
+    expect(evs).toHaveLength(1);
+    expect(evs[0]!.towerType).toBe(0);
+  });
+
+  it('三元组中间夹空槽不触发', () => {
+    const world = new World(33);
+    loadThree(world);
+    expect(world.swapWeapons(1, 5)).toBe(0); // 0 与 2 有炮、1 空:0-1-2 不成立
+    fire(world, 0);
+    fire(world, 2);
+    fire(world, 5);
+    expect(resonances(world)).toHaveLength(0);
+  });
+
+  it('窗口过期后再开第三炮不触发', () => {
+    const world = new World(34);
+    loadThree(world);
+    fire(world, 0);
+    fire(world, 1);
+    // 推过 RESONANCE_WINDOW(0.5s = 30 tick)再加两帧余量:前两炮的账过期
+    for (let i = 0; i < 32; i++) world.step();
+    fire(world, 2);
+    expect(resonances(world)).toHaveLength(0);
+  });
+
+  it('冷却期内二次齐射不重复触发,冷却结束后恢复', () => {
+    const world = new World(35);
+    loadThree(world);
+    fire(world, 0);
+    fire(world, 1);
+    fire(world, 2);
+    expect(resonances(world)).toHaveLength(1);
+    expect(world.resonanceCooldown).toBe(4);
+    // 冷却期内(0.5s 窗远小于 4s)再齐射:不再推第二个事件
+    fire(world, 0);
+    fire(world, 1);
+    fire(world, 2);
+    expect(resonances(world)).toHaveLength(1);
+    // 冷却走完(4s = 240 tick)后再次齐射:恢复触发
+    for (let i = 0; i < 241; i++) world.step();
+    expect(world.resonanceCooldown).toBe(0);
+    expect(resonances(world)).toHaveLength(0);
+    fire(world, 0);
+    fire(world, 1);
+    fire(world, 2);
+    expect(resonances(world)).toHaveLength(1);
+  });
+
+  it('1-2-3 触发时事件携带正确中心槽下标 towerType = 2', () => {
+    const world = new World(36);
+    loadThree(world);
+    expect(world.swapWeapons(0, 3)).toBe(0); // 槽 0 的炮挪到 3:1/2/3 成一舷
+    fire(world, 3);
+    fire(world, 2);
+    fire(world, 1);
+    const evs = resonances(world);
+    expect(evs).toHaveLength(1);
+    expect(evs[0]!.towerType).toBe(2);
   });
 });

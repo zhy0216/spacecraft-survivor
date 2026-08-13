@@ -144,6 +144,7 @@ import {
   FX_LIFE_HULL_HIT,
   FX_LIFE_IMPACT,
   FX_LIFE_KILL,
+  FX_LIFE_RESONANCE,
   FX_LIFE_SPARK,
   type FireSink,
   type FxEvent,
@@ -154,6 +155,7 @@ import {
   FXV_KILL,
   FXV_LANCE,
   FXV_MUZZLE,
+  FXV_RESONANCE,
   FXV_SPARK,
   resetFxEvent,
 } from './fx';
@@ -268,6 +270,8 @@ const mergeSlots: number[] = [];
  * 放进去只会让平衡调整与受击反馈莫名其妙地耦在一起(理由全文见 sim/fx.ts)。
  * FXV_MUZZLE 数值表没给档 —— 它只是"炮口闪一下",退回最短的那一档(与光束同长)即可;
  * 表里没有的数不该由 sim 现发明一个,那就成了第二处真相。
+ * FXV_RESONANCE 同理取 sim/fx.ts 的 FX_LIFE_RESONANCE:共振不是任何一座塔开火,
+ * 与击杀/受击同一条"不进数值表"的理由。
  */
 function fxLife(kind: number): number {
   switch (kind) {
@@ -285,10 +289,29 @@ function fxLife(kind: number): number {
       return FX_LIFE_KILL;
     case FXV_IMPACT:
       return FX_LIFE_IMPACT;
+    case FXV_RESONANCE:
+      return FX_LIFE_RESONANCE;
     default:
       return FX_LIFE_BEAM;
   }
 }
+
+/**
+ * —— 齐射共振判定(24 号,broadside 时刻复活)——
+ * 8 槽每 45° 一档朝向,相邻三槽正好张成一面 90° 的"舷":短窗内相邻三槽都开过火
+ * → 推一条 FXV_RESONANCE 表现事件(舷侧闪光 + 和弦)。
+ * **v1 刻意做成表现层**:lastFiredTick / 共振冷却计时器不进 checksum、不进 runSave ——
+ * 先例是逐武器 DPS 的 2.5s 一阶平滑(fcc6c1b:"按实际结算量归账,不进 checksum"),它们只喂
+ * fx、不参与任何判定、一次 rng 都不掷;读档后统计清零,代价只是"读档头半秒不共振",可接受
+ * (todos/24 口径说明)。两常量**不进 sim/config.ts**:调参面板绑不读取的旋钮是审计点过名的
+ * 死代码模式,进面板就必须真绑。
+ */
+/** 判定窗(秒):三槽的最近开火都落在这段窗内才算一次共振。占位待调 */
+const RESONANCE_WINDOW = 0.5;
+/** 判定窗折算成 tick 数(SIM_DT 是编译期常量,模块加载时算一次,热路径只做整数比较) */
+const RESONANCE_WINDOW_TICKS = RESONANCE_WINDOW / SIM_DT;
+/** 两次共振之间的最短间隔(秒):触发后置位、逐帧减,冷却期内不触发也不推事件。占位待调 */
+const RESONANCE_COOLDOWN = 4;
 
 /**
  * 局终结果码(08 号 T3),由 World.result 持有、settleOutcome 置位。
@@ -738,6 +761,20 @@ export class World {
   peakDps = 0;
 
   /**
+   * —— 齐射共振统计(24 号,v1 纯表现)—— 与 threatRate / dpsByType 同一条
+   * "纯统计、只喂 fx、不参与任何判定"的口径,故**不进 checksum、不进 runSave**
+   * (读档后统计清零,代价只是"读档头半秒不共振",口径全文见 RESONANCE_WINDOW 那段)。
+   */
+  /** 每槽最近一次开火的 tick 数(长度 = WEAPON_SLOT_COUNT,初值 -1 = 从未开火)。 */
+  readonly lastFiredTick: number[] = new Array<number>(WEAPON_SLOT_COUNT).fill(-1);
+  /**
+   * 共振冷却剩余秒(> 0 = 冷却期内,判定照走但不触发、不推事件)。触发那一帧置
+   * RESONANCE_COOLDOWN,step 帧尾逐帧减 SIM_DT —— 与 boost 那批秒数计时器同一条写法,
+   * 只是这一条不进 checksum(它不参与任何判定)。
+   */
+  resonanceCooldown = 0;
+
+  /**
    * 加速技能(空格,畅玩性)的两个计时器,秒。boostTime > 0 = 加速窗内:巡航上限与推力
    * 都按 tuning.boost* 放大(乘进 stepShip 的 cruiseMul/accelMul);boostCooldown 从
    * **触发那一帧**起算(含加速窗本身),归零前不许再次触发。
@@ -798,9 +835,28 @@ export class World {
       this.pushHitFx(FXV_HULL_HIT, x, y, dealt, 0);
     },
     // 开火事件(改版):旧版的 broadside(单舷 ≥3 塔同帧开火)统计随甲板四舷删除,
-    // 签名保留 slotIndex 是给将来 HUD 的"每槽开火计数"留的口子,目前只收不记
+    // 签名保留 slotIndex 是"这座塔开火"的唯一事件通道。24 号起在此落账 lastFiredTick
+    // 并做齐射共振判定(纯统计、零 rng、不进 checksum —— 见 RESONANCE_WINDOW 那段)
     fired: (slotIndex) => {
-      void slotIndex;
+      // 落账:记录的是"这个槽位开过火",不是"这把武器"—— 合成/替换换掉武器**不清**它,
+      // 于是换位聚拢三塔后,过去短窗内的旧开火照样能凑成一面舷(判定只认槽位下标)。
+      this.lastFiredTick[slotIndex] = this.tick;
+      // 冷却期内不触发也不推事件(触发那一帧置 RESONANCE_COOLDOWN 秒)
+      if (this.resonanceCooldown > 0) return;
+      // 每次落账后只查**包含该槽的三个相邻三元组**(i-2..i / i-1..i+1 / i..i+2,mod 8 环回),
+      // 中心分别是 i-1 / i / i+1 —— 不必扫全圈:其余三元组不含本槽,本槽刚落的账影响不到它们。
+      const windowStart = this.tick - RESONANCE_WINDOW_TICKS;
+      for (let d = -1; d <= 1; d++) {
+        const center = (slotIndex + d + WEAPON_SLOT_COUNT) % WEAPON_SLOT_COUNT;
+        if (this.resonanceTripletReady(center, windowStart)) {
+          this.resonanceCooldown = RESONANCE_COOLDOWN;
+          // v1 只做演出:推一条 FXV_RESONANCE 事件,towerType 借放三元组中心槽下标
+          // (渲染层照 WEAPON_SLOT_FACING[中心槽] + heading 画舷侧弧光),坐标填船位、
+          // radius 恒 0、life 走 fxLife(kind) —— 与其余 fx 事件同一条唯一生命周期路径。
+          this.sink.fx(FXV_RESONANCE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, center);
+          return;
+        }
+      }
     },
   };
 
@@ -1266,6 +1322,11 @@ export class World {
       e.life -= SIM_DT;
       if (e.life <= 0) this.fx.despawnAt(i);
     }
+    // 共振冷却同一条"纯表现"口径,跟着 fx 老化一起走帧(逐帧减 dt、夹 0):
+    // 它不参与任何判定、不进 checksum,只决定"这一帧的齐射还推不推演出"
+    if (this.resonanceCooldown > 0) {
+      this.resonanceCooldown = Math.max(0, this.resonanceCooldown - SIM_DT);
+    }
 
     this.reap();
 
@@ -1621,6 +1682,22 @@ export class World {
    */
   dpsOf(type: number): number {
     return type >= 0 && type < TOWER_KIND_COUNT ? this.dpsByType[type]! : 0;
+  }
+
+  /**
+   * 齐射共振(24 号):以 center 为中心的三元组(center-1 / center / center+1,mod 8 环回)
+   * 三槽是否都成立 —— **空槽即断**(type < 0 不是舷:空槽插在三塔中间就绝不许共振),
+   * 且三槽的最近开火都落在 windowStart 之后的窗内(-1 哨兵 = 从未开火,天然不落窗)。
+   * 纯统计零 rng,只喂 fired 的判定,不进 checksum(见 RESONANCE_WINDOW 那段)。
+   */
+  private resonanceTripletReady(center: number, windowStart: number): boolean {
+    for (let d = -1; d <= 1; d++) {
+      const s = (center + d + WEAPON_SLOT_COUNT) % WEAPON_SLOT_COUNT;
+      if (this.weapons[s]!.type < 0) return false;
+      const t = this.lastFiredTick[s]!;
+      if (t < 0 || t < windowStart) return false;
+    }
+    return true;
   }
 
   /**
