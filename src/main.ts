@@ -33,7 +33,7 @@ import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
-import { Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
+import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
 import { applyStartingLoadout } from './sim/loadout';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
@@ -71,6 +71,9 @@ if (DEBUG) document.title = 'STARWRECK 星骸 · dev';
 
 /** 击杀 hitstop 的冻结时长(ms):40-60ms 的一记顿挫,再长就是卡顿(占位待调) */
 const HITSTOP_MS = 45;
+
+/** 段落横幅的存留秒数(26 号):3 秒够读完一行,到点由 hud 侧渐隐 */
+const BANNER_SECONDS = 3;
 
 async function boot(): Promise<void> {
   const input = new Input();
@@ -283,6 +286,10 @@ async function boot(): Promise<void> {
   // 加速技能音效的沿检测基准(与 lastScrap 同一条增量检测写法):boostTime 从 0 变正的
   // 那一帧 = 触发帧,响一声推进器点火;窗内持续为真不重复响
   let lastBoostActive = false;
+  // Boss 战横幅(26 号)的沿检测基准:bossPhase 从别的值翻进 1 的那一帧弹「封锁线接敌」。
+  // 判据与渲染层出场音同一条 bossWarnOnEnter(见 renderer.syncBossWarn);换局在 startRun
+  // 按新世界现值对齐 —— 读档直接落在 Boss 战里不重弹
+  let bossPhaseSeen = 0;
   // 本局已 toast 过的解锁位掩码(19 号):与 progress.unlockMask 同编码。局内检测跨过阈值
   // 就置位,防止同一局里"300 杀达标"这类条件每帧弹一次 —— 置位过的不再重复提示
   let announcedMask = 0;
@@ -449,8 +456,12 @@ async function boot(): Promise<void> {
     // 并切到独立整备界面。普通升级即使同帧够钱也会被 World 延后，不会叠两层时停。
     // 商店信标生成(每跨一个航段一次):世界**不停**,玩家自己决定去不去接 ——
     // 这里只播一声提示,信标本体由渲染层画、倒计时由 HUD 报
-    world.onShopBeacon = () => {
+    world.onShopBeacon = (segment) => {
       audioBus.playEliteWarn();
+      // 段落收束横幅(26 号):segment 是跨段后**新航段**的下标(0-based),跨进 index N
+      // 即"航段 N 刚肃清" —— 与 HUD 航段读数的 1-based 显示一字对齐(segmentReadout 印 index+1)。
+      // 第 4 段走完 wave.done,信标不生成、此回调不响,收束由 Boss 战那条横幅接棒(见 ticker)
+      hud.showBanner(`航段 ${segment} 肃清 · 补给信标已投放`, BANNER_SECONDS);
     };
 
     world.onRefitOffer = (segmentIndex) => {
@@ -493,6 +504,8 @@ async function boot(): Promise<void> {
     // 玩家一进游戏先吃一记莫名其妙的顿帧
     lastKills = world.kills;
     hitstopUntil = 0;
+    // Boss 战横幅的沿检测基准同属上一局:按新世界现值对齐(bossPhase 0→1→2 单调,同局只进战一次)
+    bossPhaseSeen = world.bossPhase;
     // 加速音效的沿检测基准同属上一局:新世界 boostTime 必然是 0,基准清回 false 对齐
     lastBoostActive = false;
     // 局内解锁 toast 的"已提示"记性也只属于这一局:换局清零(已开锁的位由掩码本身挡住,不会重弹)
@@ -795,6 +808,14 @@ async function boot(): Promise<void> {
     const boostActive = world.boostTime > 0;
     if (boostActive && !lastBoostActive) audioBus.playBoost();
     lastBoostActive = boostActive;
+    // Boss 战横幅(26 号):bossPhase 翻进 1 的那一帧弹「封锁线接敌」,与出场音同一套
+    // bossWarnOnEnter 判据;基准在 startRun 按新世界现值对齐
+    if (world.bossPhase !== bossPhaseSeen) {
+      if (bossWarnOnEnter(bossPhaseSeen, world.bossPhase)) {
+        hud.showBanner('封锁线接敌', BANNER_SECONDS);
+      }
+      bossPhaseSeen = world.bossPhase;
+    }
     // 残骸拾取:scrap 值爬升的那一帧响一声轻快高频叮(增量检测,首帧基准在 startRun 里已对齐,
     // 不会误触发;升级花掉残骸是下降,不响)
     if (world.scrap > lastScrap) audioBus.playCollect();

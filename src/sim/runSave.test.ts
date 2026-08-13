@@ -104,6 +104,36 @@ describe('局内存档:capture → restore', () => {
     expect(world.rng.state).toBe(rngBefore);
   });
 
+  it('v3 快照携带磁吸涌计时:涌进行中存档,读档 checksum 一致且继续推进逐帧一致', () => {
+    const world = freshRun(600);
+    world.magnetSurgeTime = 1.37; // 涌走到一半的那一帧(跨段置位 2.5 后的任意中间值)
+    const snap = captureRun(world, META);
+    expect(snap.magnetSurgeTime).toBe(1.37);
+    const restored = restoreRun(snap);
+    expect(restored.magnetSurgeTime).toBe(1.37);
+    expect(restored.checksum()).toBe(world.checksum());
+    // JSON 往返:序列化同样带着这个数,读回来一字不差
+    const back = parseRunSnapshot(serializeRunSnapshot(snap));
+    expect(back).not.toBeNull();
+    expect(back!.magnetSurgeTime).toBe(1.37);
+    expect(restoreRun(back!).checksum()).toBe(world.checksum());
+    // 涌还醒着继续推进 90 帧(1.5s):吸拾判定与计时衰减两边同一份,checksum 逐帧一致
+    for (let seg = 0; seg < 3; seg++) {
+      runTo(world, 30);
+      runTo(restored, 30);
+      expect(restored.checksum()).toBe(world.checksum());
+    }
+    // 1.37s - 1.5s 已越过 0:两边同归于 0,不是一边漏了计时器一边还有
+    expect(world.magnetSurgeTime).toBe(0);
+    expect(restored.magnetSurgeTime).toBe(0);
+  });
+
+  it('v2 旧档判废(26 号升版):版本对不上直接拒收,不产出一个涌消失的半死世界', () => {
+    const snap = captureRun(freshRun(60), META);
+    const v2json = serializeRunSnapshot(snap).replace('"v":3', '"v":2');
+    expect(parseRunSnapshot(v2json)).toBeNull();
+  });
+
   it('局内的账(击杀/精英/武器战报)读档后不被抹掉', () => {
     const world = freshRun(900);
     world.kills = 137;

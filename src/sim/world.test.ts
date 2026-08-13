@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { DOCK_REPAIR_PRICE, STARTING_STAR_COINS } from '../data/economy';
+import { afterEach, describe, expect, it } from 'vitest';
+import { SIM_DT } from '../core/loop';
+import { AFFIX_ARMORED, AFFIX_FRENZY, AFFIX_PHASED } from '../data/affixes';
+import {
+  DOCK_REPAIR_PRICE,
+  MAGNET_SURGE_ELITE,
+  MAGNET_SURGE_SEGMENT,
+  STARTING_STAR_COINS,
+} from '../data/economy';
 import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
 import { TOWER_ARC, TOWER_AUTOCANNON, TOWER_LASER, TOWER_MAX_LEVEL } from '../data/towers';
+import { WAVE_SEGMENTS, type WaveSegment } from '../data/waves';
 import { tuning } from './config';
 import { FX_LIFE_RESONANCE, FXV_RESONANCE } from './fx';
 import { World } from './world';
@@ -335,5 +343,133 @@ describe('齐射共振(24 号)', () => {
     const evs = resonances(world);
     expect(evs).toHaveLength(1);
     expect(evs[0]!.towerType).toBe(2);
+  });
+});
+
+describe('磁吸涌(26 号)', () => {
+  // 短脚本手法与 boss.test.ts 同口径:真脚本 120s 段干等不起,splice 进来跑完必须还原,
+  // 否则污染同文件后续用例(stepWaves 每帧现读 WAVE_SEGMENTS)
+  const REAL = WAVE_SEGMENTS.slice();
+  afterEach(() => {
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
+  });
+  const shortSeg = (name: string, duration: number): WaveSegment => ({
+    name,
+    duration,
+    dirStartDeg: 0,
+    dirEndDeg: 0,
+    streams: [],
+    bursts: [],
+    elites: [],
+    tides: [],
+  });
+  const useScript = (...segs: WaveSegment[]): WaveSegment[] =>
+    WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...segs);
+  /** 杀一只精英(affixes ≠ 0):spawn → 置词缀位 → 致死 → step 让帧尾 reap 落账 */
+  const killElite = (world: World, affix: number): void => {
+    const e = world.enemies.spawn();
+    e.hp = e.maxHp = 10;
+    e.affixes = 1 << affix;
+    world.damageEnemy(e, 99);
+    world.step();
+  };
+
+  it('跨段那一帧置 MAGNET_SURGE_SEGMENT(帧尾照 SIM_DT 减一格),此后逐帧衰减', () => {
+    // 段长刻意不取整帧(0.505s):跨段帧无歧义(与 boss.test.ts 同口径)
+    useScript(shortSeg('a', 0.505), shortSeg('b', 0.505));
+    const world = new World(40);
+    let guard = 0;
+    while (world.wave.segment === 0 && guard < 200) {
+      world.step();
+      guard++;
+    }
+    expect(world.wave.segment).toBe(1);
+    // 置位在跨段帧的出怪块、衰减排在 stepDrops 之后(同帧先吃满倍率再减一格)
+    expect(world.magnetSurgeTime).toBeCloseTo(MAGNET_SURGE_SEGMENT - SIM_DT, 6);
+    // 再走一帧恰好再少一格:计时是逐帧减 dt 的真状态
+    world.step();
+    expect(world.magnetSurgeTime).toBeCloseTo(MAGNET_SURGE_SEGMENT - 2 * SIM_DT, 6);
+  });
+
+  it('精英死亡置 MAGNET_SURGE_ELITE,涌进行中取 max 不叠加', () => {
+    const world = new World(41);
+    killElite(world, AFFIX_FRENZY);
+    expect(world.eliteKills).toBe(1);
+    expect(world.magnetSurgeTime).toBe(MAGNET_SURGE_ELITE);
+    // 余量 1.5s 时再杀:max(1.5 - SIM_DT, 2.0) = 2.0 —— 补满,不叠加成 3.5
+    world.magnetSurgeTime = 1.5;
+    killElite(world, AFFIX_ARMORED);
+    expect(world.magnetSurgeTime).toBe(MAGNET_SURGE_ELITE);
+    // 余量高于 ELITE 时再杀:max 保留现值 —— 连杀精英不把涌抻成常态
+    world.magnetSurgeTime = 2.3;
+    killElite(world, AFFIX_PHASED);
+    expect(world.magnetSurgeTime).toBeCloseTo(2.3 - SIM_DT, 6);
+  });
+
+  it('涌期间远处(> 基础半径 80、< 弃置半径 2000)掉落被锁定并收取;涌结束新掉落回基础半径', () => {
+    useScript(shortSeg('a', 60), shortSeg('b', 60));
+    const world = new World(43);
+    const farDrop = (value: number) => {
+      const d = world.drops.spawn();
+      d.x = d.px = 500; // 500:tuning.dropMagnetRadius(80) 之上、DROP_CULL_RADIUS(2000) 之内
+      d.y = d.py = 0;
+      d.value = value;
+      return d;
+    };
+    // 无涌:500px 超基础起吸半径,不起吸、不锁定(也没出弃置半径,原样躺着)
+    const stray = farDrop(10);
+    world.step();
+    expect(stray.magnet).toBe(false);
+    expect(world.drops.size).toBe(1);
+
+    // 涌开始:同一颗下一帧起吸判定进半径(80 × 25 = 2000),当场锁定 ——
+    // 锁定是单向的(进过半径一次就永不放手),此后照飞照收
+    world.magnetSurgeTime = MAGNET_SURGE_ELITE;
+    world.step();
+    expect(stray.magnet).toBe(true);
+
+    // 锁定后一路收到船里(500px ÷ 400px/s ≈ 1.25s < 2.0s 涌窗):全额进账
+    const before = world.scrap;
+    while (world.drops.size > 0) world.step();
+    expect(world.scrap).toBe(before + 10);
+    // 涌自然衰减归零(60s 短段内没有第二处触发点)
+    while (world.magnetSurgeTime > 0) world.step();
+    expect(world.magnetSurgeTime).toBe(0);
+
+    // 涌结束后的新掉落到远处:回到基础半径,不被锁定(仍在弃置半径内,不被折半回收)
+    const next = farDrop(7);
+    world.step();
+    expect(next.magnet).toBe(false);
+    expect(world.drops.size).toBe(1);
+  });
+
+  it('涌计时进 checksum:同 seed 一边置涌一边不置,哈希当场分叉', () => {
+    const a = new World(44);
+    const b = new World(44);
+    a.step();
+    b.step();
+    expect(a.checksum()).toBe(b.checksum());
+    a.magnetSurgeTime = 1;
+    expect(a.checksum()).not.toBe(b.checksum());
+  });
+
+  it('双世界同 seed 同操作:跨段置位与涌衰减不破 checksum 逐帧一致', () => {
+    useScript(shortSeg('a', 10), shortSeg('b', 10));
+    const a = new World(45);
+    const b = new World(45);
+    // 10s 段:第一段边界在 ~600 帧,700 帧时涌(2.5s)已走到还剩 ~0.8s ——
+    // 覆盖"跨段置位那一帧"与"涌衰减中的帧"两类逐帧哈希
+    let surgeAtCross = -1;
+    for (let i = 0; i < 700; i++) {
+      a.step();
+      b.step();
+      expect(a.checksum()).toBe(b.checksum());
+      if (surgeAtCross < 0 && a.wave.segment === 1) surgeAtCross = a.magnetSurgeTime;
+    }
+    expect(a.wave.segment).toBe(1);
+    // 跨段那一帧两边的涌计时逐位相同(置位同帧、衰减同帧)
+    expect(surgeAtCross).toBeCloseTo(MAGNET_SURGE_SEGMENT - SIM_DT, 6);
+    expect(a.magnetSurgeTime).toBe(b.magnetSurgeTime);
+    expect(a.magnetSurgeTime).toBeGreaterThan(0);
   });
 });

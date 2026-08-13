@@ -273,3 +273,18 @@ export const UPGRADE_OFFER_COOLDOWN = 5;
  * 那一局本就要输,此时最不该做的事就是再为一屏捡不到的残骸付遍历与绘制的钱。
  */
 export const DROP_MAX_ALIVE = 1200;
+
+/**
+ * —— 磁吸涌(26 号)—— 跨段 / 精英击杀触发的限时全场磁吸。
+ * 三个数**全部占位待调**:RADIUS_MUL = 25 × 起吸半径 80 = 2000,恰等于 sim/drop.ts 的
+ * DROP_CULL_RADIUS(弃置半径)⇒ 涌期间起吸半径 ≈ 全场,连被甩在身后的残骸都够得着,
+ * 正是"哗——全进账"的那一下。
+ * 触发与递减口径见 World.magnetSurgeTime:跨段那一帧置 SEGMENT 秒(与商店信标同帧)、
+ * 精英死亡置 ELITE 秒(取 max 不叠加,连杀精英不把涌抻成常态),每帧减 SIM_DT
+ * (时停期间 world.step 不跑,计时器自然冻结 —— 时停不消耗涌)。
+ * 倍率与磁力协议(EDICT_MAGNET 的 magnetRadiusMul)/ 磁力干扰(AFFIX_MAGNETIC 的 pickupMul)
+ * 同一条连乘链,一律连乘不设例外。
+ */
+export const MAGNET_SURGE_SEGMENT = 2.5;
+export const MAGNET_SURGE_ELITE = 2.0;
+export const MAGNET_SURGE_RADIUS_MUL = 25;

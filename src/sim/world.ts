@@ -67,6 +67,9 @@ import {
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
   DROP_MAX_ALIVE,
+  MAGNET_SURGE_ELITE,
+  MAGNET_SURGE_RADIUS_MUL,
+  MAGNET_SURGE_SEGMENT,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   SHOP_BEACON_LIFETIME,
@@ -785,6 +788,20 @@ export class World {
   boostTime = 0;
   boostCooldown = 0;
 
+  /**
+   * 磁吸涌剩余秒(26 号):> 0 = 涌期间,起吸半径的连乘链尾部再乘 MAGNET_SURGE_RADIUS_MUL
+   * (25 × 80 = 2000 ≈ 弃置半径,即"全场");0 = 无涌。
+   * 两个置位点都零 rng、都是确定性时刻:跨段那一帧(与 spawnShopBeacon 同帧,1→2、2→3、3→4
+   * 三次)置 MAGNET_SURGE_SEGMENT;精英死亡(reap 落账处)置 max(现值, MAGNET_SURGE_ELITE)——
+   * 取 max 不叠加,连杀精英不把涌抻成常态。每帧在 stepDrops **之后**减 SIM_DT
+   * (照 resonanceCooldown 同款写法):置位那一帧就是涌的第一帧,当帧磁吸吃到满倍率;
+   * 时停期间 step 不跑,计时器自然冻结 —— 时停不消耗涌,正是想要的。
+   * 它是逐帧演化的真状态:直接决定残骸的起吸判定,漏了它,涌期间"这颗吸不吸得上"的分叉
+   * 就从确定性口径下漏掉,故进 checksum(×100,与 boost 那批秒数字段同一条量化理由)、进 runSave。
+   * 锁定机制(drop.ts 的"进过半径就永不放手")原样吃这个半径:涌结束后已锁定的照飞。
+   */
+  magnetSurgeTime = 0;
+
   private scratch: Enemy[] = [];
 
   /**
@@ -1098,6 +1115,10 @@ export class World {
       // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
       stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
       if (this.wave.segment !== segmentBefore && !this.wave.done) {
+        // 磁吸涌(26 号):跨段那一帧置位,与 spawnShopBeacon 同帧 —— 1→2、2→3、3→4 三次
+        // (第 4 段走完那一帧 wave.done 已置位、这条分支进不来,"进 Boss 不发信标"的既有行为
+        // 原样保留)。零 rng:跨段是确定性时刻,不碰随机序列。
+        this.magnetSurgeTime = MAGNET_SURGE_SEGMENT;
         // 跨段那一帧一次掷定三样,**顺序定死**(信标位置 → 法令货架 → 武器货架):
         // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
         // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
@@ -1168,6 +1189,10 @@ export class World {
     // 磁力协议(拾取半径 +30%/层):与词缀干扰同一个倍率连乘 —— 层数变了当帧即读
     // (聚合在帧首刷过)。未持有 = ×1,既有链路逐位一字不差
     magnetMul *= this.buffs.magnetRadiusMul;
+    // 磁吸涌(26 号)接在这条连乘链尾部:与磁力协议/磁力干扰同一条链,一律连乘 ——
+    // 涌的倍率大到干扰减半也罩全场,不必开例外。锁定机制(drop.ts 的"进过半径就永不放手")
+    // 原样吃这个半径:涌结束后已锁定的照飞,这正是想要的"哗——全进账"
+    if (this.magnetSurgeTime > 0) magnetMul *= MAGNET_SURGE_RADIUS_MUL;
     // 粗筛半径 = 船体受击圆(damage.shipRadius 的唯一口径,与精筛同一份几何)
     const contactR = shipRadius(tuning.shipLength);
 
@@ -1314,6 +1339,13 @@ export class World {
     // 经验倍率(buffs.xpMul)由 stepDrops 内部乘好 —— 这一句只进账
     this.scrap += stepDrops(this.drops, ship.x, ship.y, SIM_DT, magnetMul, this.buffs.xpMul);
 
+    // 磁吸涌计时排在 stepDrops **之后**递减(照 resonanceCooldown 同款写法,逐帧减 dt、夹 0):
+    // 置位那一帧(跨段在此前的出怪块、精英死亡在帧尾的 reap)的拾取已经吃到满倍率,
+    // 涌的时长一步不缩;时停期间 step 不跑,计时器自然冻结 —— 时停不消耗涌(想要的)。
+    if (this.magnetSurgeTime > 0) {
+      this.magnetSurgeTime = Math.max(0, this.magnetSurgeTime - SIM_DT);
+    }
+
     // 船体受击结算:粗筛名单 → 受击圆精筛 → 扣血(顺序理由见块注释与 settleHullDamage)
     this.settleHullDamage();
 
@@ -1453,7 +1485,12 @@ export class World {
       this.kills++;
       // 精英击杀计数(19 号):与 spawnDrop 同一条"affixes ≠ 0 即精英"的判定,
       // Boss 绝不用 affixes 位故不计入;与 kills 同一条回收帧记账、不进 checksum
-      if (e.affixes !== 0) this.eliteKills++;
+      if (e.affixes !== 0) {
+        this.eliteKills++;
+        // 磁吸涌(26 号):精英死亡置位。取 max 不叠加 —— 连杀精英不把涌抻成常态,
+        // 只是"余量不足 2 秒就补满"(跨段那次是直接赋值)。零 rng:死亡是确定性时刻。
+        this.magnetSurgeTime = Math.max(this.magnetSurgeTime, MAGNET_SURGE_ELITE);
+      }
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
       // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum。
@@ -2398,6 +2435,9 @@ export class World {
     // × 100 的量化理由与那批秒数字段一字同源(1/8 的步长抓不住单帧差)
     acc(this.boostTime * 100);
     acc(this.boostCooldown * 100);
+    // 磁吸涌(26 号)紧跟加速计时器:它直接决定起吸半径(涌 × 25 ≈ 全场),差一帧就是
+    // "这颗残骸吸不吸得上"当帧分叉 —— 照 boost 那批秒数字段同一条 × 100 量化理由进哈希
+    acc(this.magnetSurgeTime * 100);
     // 武器槽紧跟着船(改版 §5,取代旧甲板的逐格哈希):槽位与节流状态是逐帧演化的真状态,
     // 漏了它们,"某座塔的装填提前了一帧"这类分叉就从确定性口径下漏掉了 ——
     // 而节流状态恰恰决定了下一帧谁开火。顺序 = 槽位下标 0..3,永不改。

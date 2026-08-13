@@ -35,6 +35,8 @@ const HP_COLOR = '#73d9e8';
 const SCRAP_COLOR = '#e6c878';
 const STAR_COLOR = '#ffd86e';
 const THREAT_COLOR = '#ff5f77';
+/** 段落横幅的浅色大字(26 号):全 HUD 最亮的一档字 —— 信息条该比任何读数都亮 */
+const BANNER_COLOR = '#dceaff';
 
 const ROOT_CSS =
   'position:fixed;inset:0;pointer-events:none!important;user-select:none;opacity:1;' +
@@ -157,6 +159,20 @@ const TOAST_CSS =
 
 /** 解锁 toast 的存留时长(ms):到点自动消失(简单口径:闪现一下,不赖到局末) */
 const UNLOCK_TOAST_MS = 2600;
+
+/**
+ * 段落横幅(26 号):与解锁 toast **分通道**的段落信息条 —— 不排队、直接覆盖式显示,
+ * 旧话没有排队价值(段落信息是"此刻发生了什么",过期即作废)。屏中上浅色大字,
+ * 显示 seconds 秒后 CSS 过渡渐隐;时停跟随根节点整层淡出(setPaused 改 root 的 opacity,
+ * 与 toast 同一条口径)。不挂设置开关:横幅是信息不是 juice(26 号口径说明)。
+ * top 压在顶栏中列(计时器)下方、横向居中 —— 战斗时玩家视线就在屏中上这一带。
+ */
+const BANNER_CSS =
+  'position:absolute;left:50%;top:156px;transform:translateX(-50%);display:none;' +
+  `color:${BANNER_COLOR};font-size:28px;letter-spacing:.18em;text-align:center;white-space:pre;` +
+  'text-shadow:0 0 14px rgba(154,220,255,.4),0 2px 8px rgba(0,0,0,.6);';
+/** 横幅到点后的渐隐时长(ms):整秒后 500ms 渐隐,不啪地消失 */
+const BANNER_FADE_MS = 500;
 
 /**
  * 低血量警告的屏边红晕(畅玩性)。满屏径向渐变(中心透明 → 边缘暖红),pointer-events:none
@@ -454,6 +470,11 @@ export interface HudUi {
    * 阈值检测驱动(达成瞬间弹一次);根节点 pointer-events:none,不抢焦点。
    */
   toast(msg: string): void;
+  /**
+   * 段落横幅(26 号):屏中上浅色大字,显示 seconds 秒后渐隐。与 toast 分通道:
+   * 不排队、直接覆盖式显示(段落信息没有排队价值);时停跟随整层淡出,与 toast 同口径。
+   */
+  showBanner(text: string, seconds: number): void;
 }
 
 interface BarEls {
@@ -690,6 +711,40 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     }, UNLOCK_TOAST_MS);
   }
 
+  // 段落横幅(26 号):与解锁 toast 分通道 —— toast 按需闪现解锁,横幅是段落信息、
+  // 直接覆盖式显示(新话当场顶掉旧话,不排队也不续命)。两个计时器:到点启渐隐、
+  // 渐隐完清 DOM(display:none);换局(setWorld)清掉上一局的话
+  const banner = document.createElement('div');
+  banner.style.cssText = BANNER_CSS;
+  let bannerFadeTimer = 0;
+  let bannerHideTimer = 0;
+  function clearBanner(): void {
+    if (bannerFadeTimer) window.clearTimeout(bannerFadeTimer);
+    if (bannerHideTimer) window.clearTimeout(bannerHideTimer);
+    bannerFadeTimer = 0;
+    bannerHideTimer = 0;
+    banner.textContent = '';
+    banner.style.display = 'none';
+  }
+  function showBanner(text: string, seconds: number): void {
+    clearBanner();
+    banner.textContent = text;
+    // 显示瞬开(transition:none 挡掉 CSS 过渡的渐入),渐隐走 transition —— 只淡出、不淡入
+    banner.style.transition = 'none';
+    banner.style.opacity = '1';
+    banner.style.display = 'block';
+    bannerFadeTimer = window.setTimeout(() => {
+      bannerFadeTimer = 0;
+      banner.style.transition = `opacity ${BANNER_FADE_MS}ms ease`;
+      banner.style.opacity = '0';
+      bannerHideTimer = window.setTimeout(() => {
+        bannerHideTimer = 0;
+        banner.textContent = '';
+        banner.style.display = 'none';
+      }, BANNER_FADE_MS);
+    }, Math.max(0, seconds) * 1000);
+  }
+
   // 低血量红晕:铺满全屏的警告层,长在 HUD 根里 —— 时停淡出(setPaused 改 root opacity)
   // 自动带上它,点击穿透继承根的 pointer-events:none
   const vignette = document.createElement('div');
@@ -714,7 +769,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 
-  root.append(top, threat, warn, muteBtn, elite, boss, unlockToast, radar, vignette);
+  root.append(top, threat, warn, muteBtn, elite, boss, unlockToast, banner, radar, vignette);
   document.getElementById('ui')!.appendChild(root);
 
   function sync(): void {
@@ -1037,6 +1092,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       world = next;
       // 上一局(或上一帧)弹的解锁提示属于旧世界:换局当场清掉,不赖到新局里
       clearToast();
+      clearBanner();
       sync();
     },
     setPaused(next: boolean): void {
@@ -1046,5 +1102,6 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     },
     sync,
     toast,
+    showBanner,
   };
 }

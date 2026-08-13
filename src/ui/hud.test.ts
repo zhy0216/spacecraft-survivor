@@ -291,9 +291,9 @@ describe('createHud', () => {
     expect(root.style.cssText).toContain('pointer-events:none');
     // 只含上沿读数(左列纵队:vitals/星币/法令/图鉴/火力全在 grid 第一格里)、
     // 两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关、屏下缘两根血条(精英 + Boss)、
-    // 解锁 toast、战术雷达以及低血量红晕(畅玩性),
+    // 解锁 toast、段落横幅(26 号,display:none 的常驻节点)、战术雷达以及低血量红晕(畅玩性),
     // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
-    expect(root.children.length).toBe(9);
+    expect(root.children.length).toBe(10);
     expect(dom.windowListeners).toBe(0);
   });
 

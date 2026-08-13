@@ -49,8 +49,11 @@ import { RESULT_RUNNING, World } from './world';
  * 存档结构版本。**改了任何一条字段表(顺序 / 数量 / 含义)就必须 +1** ——
  * 旧档此后判废(见文件头"版本号进结构"那段)。stride 常量的单测会替你记住这件事:
  * 往 Enemy 里加一个字段而忘了这里,runSave.test.ts 的字段数守卫当场变红。
+ *
+ * v3(26 号磁吸涌):快照新增 magnetSurgeTime 标量 —— 它影响拾取半径、进 checksum,必须存;
+ * **本批只有这一个 issue 升存档版本**,v2 旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 2;
+export const RUN_SAVE_VERSION = 3;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -113,6 +116,12 @@ export interface RunSnapshot {
   debt: number[];
   /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolled(0/1), refitPending(0/1), boostTime, boostCooldown */
   econ: number[];
+  /**
+   * 磁吸涌剩余秒(26 号):0 = 无涌。它决定起吸半径(涌 × 25 ≈ 全场)→ 进 checksum,
+   * 照文件头"存的是 checksum 认的那一份状态"的清单口径,必须存 —— 漏了它,
+   * 读档后涌消失,这一局的经济账从读档帧起与"没存过档"的局分叉。
+   */
+  magnetSurgeTime: number;
   /** 地图商店信标:active(0/1), x, y, ttl, segment */
   beacon: number[];
   /** 待选候选卡,N × OF_STRIDE(长度 0 = 没有待选) */
@@ -261,6 +270,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       world.boostTime,
       world.boostCooldown,
     ],
+    magnetSurgeTime: world.magnetSurgeTime,
     beacon: [
       world.shopBeaconActive ? 1 : 0,
       world.shopBeaconX,
@@ -333,6 +343,7 @@ export function restoreRun(snap: RunSnapshot): World {
   world.refitPending = snap.econ[5]! !== 0;
   world.boostTime = snap.econ[6]!;
   world.boostCooldown = snap.econ[7]!;
+  world.magnetSurgeTime = snap.magnetSurgeTime;
   world.shopBeaconActive = snap.beacon[0]! !== 0;
   world.shopBeaconX = snap.beacon[1]!;
   world.shopBeaconY = snap.beacon[2]!;
@@ -493,7 +504,15 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   const unlockMask = scalar('unlockMask');
   const rng = scalar('rng');
   const tick = scalar('tick');
-  if (seed === null || loadout === null || unlockMask === null || rng === null || tick === null) {
+  const magnetSurgeTime = scalar('magnetSurgeTime');
+  if (
+    seed === null ||
+    loadout === null ||
+    unlockMask === null ||
+    rng === null ||
+    tick === null ||
+    magnetSurgeTime === null
+  ) {
     return null;
   }
   const ship = nums('ship', 6);
@@ -545,6 +564,7 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     unlockMask: Math.floor(unlockMask),
     rng: rng >>> 0,
     tick: Math.max(0, Math.floor(tick)),
+    magnetSurgeTime: Math.max(0, magnetSurgeTime),
     ship,
     weapons,
     edicts,
