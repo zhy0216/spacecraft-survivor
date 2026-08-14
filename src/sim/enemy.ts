@@ -113,9 +113,11 @@ export interface Enemy {
   speedMul: number;
   /**
    * 个体接近角偏的 cos/sin(畅玩性)。± tuning.enemyAngleJitterDeg,出生时从 animSeed 的
-   * 另一个分数折出,与 speedMul 解耦(同一套 ×137 取小数的折法)。只对直线追船型
-   * (BH_SEEK / BH_SEEK_CHARGE)的接近段生效:蜂群散成扇形包抄而不是单列纵队;
-   * |角偏| < 90° → 径向分量仍为正,包抄到脸只是迟早。存 cos/sin 免热循环三角。
+   * 另一个分数折出,与 speedMul 解耦(同一套 ×137 取小数的折法)。两处生效:
+   * 直线追船型(BH_SEEK / BH_SEEK_CHARGE)把期望方向旋 bias 角,蜂群散成扇形包抄而不是
+   * 单列纵队;绕行型(BH_STRAFE / BH_STRAFE_CHARGE)把 bias 加进驻留方位角(strafeOffsetRad),
+   * 同舷的一队沿驻留圆弧错开、不再叠同一个不动点。|bias| < 90° 对两路都成立,包抄/驻留
+   * 的几何不会串舷。存 cos/sin 免热循环三角(seek 那路热循环零三角,绕行那路折算 atan2)。
    */
   biasCos: number;
   biasSin: number;
@@ -360,6 +362,21 @@ function chargeRangeOf(e: Enemy, def: EnemyDef): number {
 }
 
 /**
+ * 绕行型的个体驻留方位(相对船头的偏角):数据表 strafeOffsetDeg 只分左右舷(e.side),
+ * 同舷的一队侧掠者/尾随蛆若共享同一 offsetRad,就会全收敛到 steering.strafe 那个**唯一**
+ * 的稳定不动点 —— 这正是"移动着移动着全挤在一起"的根源。这里把出生哈希折出的个体角偏
+ * (biasCos/biasSin,与 seek 型的扇形包抄同源)叠加进 offsetRad:每只的驻留锚点沿驻留圆弧
+ * 错开,不再叠同一点。接近段与起手判据共用,锚点与"该不该起手"永远同口径。
+ * 热循环多一次 atan2(bias 存的是 cos/sin,要转回角度);绕行型是少数,占比最大的 seek 型
+ * 那一路依旧零三角,不做成每帧现折新差分。
+ */
+function strafeOffsetRad(e: Enemy, def: EnemyDef): number {
+  const offsetRad = def.strafeOffsetDeg * DEG2RAD * e.side;
+  // jitter 归零时 biasSin 恒 0,整段跳过(与 seek 分支同款,不白付 atan2)
+  return e.biasSin !== 0 ? offsetRad + Math.atan2(e.biasSin, e.biasCos) : offsetRad;
+}
+
+/**
  * 够不够格起手前摇。不冲锋的型永远 false —— 它们的冲锋参数全是 0,
  * 放进来就会以"射程 0"起手,渲染层的前摇指示也会对着永不冲锋的敌人闪。
  */
@@ -373,8 +390,9 @@ function shouldWindup(e: Enemy, def: EnemyDef, ship: Ship): boolean {
   if (dx * dx + dy * dy > range * range) return false;
   if (def.behavior === BH_SEEK_CHARGE) return true;
 
-  // 绕行型还得先真绕到位:方位没对就只是"路过射程",这一票否决才让它从舷侧起手
-  const targetBearing = ship.heading + def.strafeOffsetDeg * DEG2RAD * e.side;
+  // 绕行型还得先真绕到位:方位没对就只是"路过射程",这一票否决才让它从舷侧起手。
+  // 起手判据以**它自己**的个体驻留方位为心(strafeOffsetRad),与接近段的锚点同口径
+  const targetBearing = ship.heading + strafeOffsetRad(e, def);
   const angErr = wrapAngle(targetBearing - Math.atan2(dy, dx));
   return Math.abs(angErr) < WINDUP_BEARING_TOL;
 }
@@ -525,9 +543,19 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
       if (isSpore) {
         sporeSeek(e, ship, def, speed, out);
       } else if (def.behavior === BH_STRAFE || def.behavior === BH_STRAFE_CHARGE) {
-        // offsetRad 带上 e.side:同一型的两半分别从左右舷压过来,不会挤成一条线
-        const offsetRad = def.strafeOffsetDeg * DEG2RAD * e.side;
-        strafe(e.x, e.y, ship.x, ship.y, ship.heading, offsetRad, def.strafeRadius, speed, out);
+        // offsetRad 带 e.side 分左右舷,再叠加出生哈希折出的个体角偏(strafeOffsetRad):
+        // 同舷的一队沿驻留圆弧错开,不再叠在 steering.strafe 那唯一的不动点上
+        strafe(
+          e.x,
+          e.y,
+          ship.x,
+          ship.y,
+          ship.heading,
+          strafeOffsetRad(e, def),
+          def.strafeRadius,
+          speed,
+          out,
+        );
       } else {
         seek(e.x, e.y, ship.x, ship.y, speed, out);
         // 个体角偏(只对直线追船型):把期望方向旋 bias 角 —— 蜂群散成扇形包抄,

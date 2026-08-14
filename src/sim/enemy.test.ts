@@ -537,11 +537,15 @@ describe('侧掠者:必须先绕到舷侧才起手(BH_STRAFE_CHARGE)', () => {
     const def = ENEMIES[KIND_STRAFER]!;
     const e = spawn(KIND_STRAFER, 0, 400, 1); // 从船尾外侧出发,方位差 90°、距离也不够
 
+    // 个体驻留方位 = 数据表舷侧 + 出生哈希折出的个体偏,与 sim/enemy 的 strafeOffsetRad 同口径
+    const targetBearing =
+      ship.heading + def.strafeOffsetDeg * DEG2RAD * e.side + Math.atan2(e.biasSin, e.biasCos);
+
     let angErrAtWindup = -1;
     let distAtWindup = -1;
     for (let i = 0; i < 60 * 60 && angErrAtWindup < 0; i++) {
       const bearing = Math.atan2(e.y - ship.y, e.x - ship.x); // 船 → 敌,全仓统一口径
-      const angErr = Math.abs(wrapAngle(ship.heading + 90 * DEG2RAD - bearing));
+      const angErr = Math.abs(wrapAngle(targetBearing - bearing));
       const dist = Math.hypot(e.x - ship.x, e.y - ship.y);
       stepOnce(e, ship);
       if (e.state === ST_WINDUP) {
@@ -551,8 +555,52 @@ describe('侧掠者:必须先绕到舷侧才起手(BH_STRAFE_CHARGE)', () => {
     }
 
     expect(angErrAtWindup).toBeGreaterThanOrEqual(0); // 确实起手了,不是空过 3600 帧
-    expect(angErrAtWindup).toBeLessThan(30 * DEG2RAD); // 起手时人在舷侧,不是在追尾
+    expect(angErrAtWindup).toBeLessThan(30 * DEG2RAD); // 起手时人在自己的舷侧位,不是在追尾
     expect(distAtWindup).toBeLessThanOrEqual(def.chargeRange);
+  });
+});
+
+describe('绕行型的个体驻留方位(修:同舷的一队不再叠同一个不动点)', () => {
+  it('侧掠者的接近方向随各自 bias 错开:同一位置只换个体偏,期望速度方向跟着换', () => {
+    const ship = shipAt(0, 0);
+    const out = v();
+    const e = spawn(KIND_STRAFER, 0, 400, 1); // 舷侧方位还没绕到,仍停在接近段
+    e.biasCos = 1;
+    e.biasSin = 0; // 个体偏归零:锚点 = 数据表定值(侧掠者 90° → +X)
+
+    stepEnemyBehavior(e, ship, SIM_DT, out);
+    const a0 = Math.atan2(out.y, out.x);
+
+    // 同一只、同一位置,只把个体偏改成 +10°:驻留方位跟着偏,接近方向必须错开
+    e.biasCos = Math.cos(10 * DEG2RAD);
+    e.biasSin = Math.sin(10 * DEG2RAD);
+    stepEnemyBehavior(e, ship, SIM_DT, out);
+    const a1 = Math.atan2(out.y, out.x);
+
+    // 全部锁死同一个方位 = 同舷侧掠者全挤进同一个锚点(修的正是它);
+    // 方向差 10° 的偏角在 260 驻留半径上约等于 45px 的弧向错开
+    expect(a0).not.toBeCloseTo(a1, 3);
+  });
+
+  it('尾随蛆驻留到各自锚点:一队沿驻留圆弧散开,不再全叠在船尾正后方同一个点', () => {
+    const ship = shipAt(0, 0);
+    const def = ENEMIES[KIND_TRAILER]!;
+    const rests: number[] = [];
+    for (let i = 0; i < 60; i++) {
+      const e = spawn(KIND_TRAILER, -800 + i * 27, 900 - i * 13, 1);
+      for (let t = 0; t < 20 * 60; t++) stepOnce(e, ship); // 驻留型不冲锋,积到稳态
+      const dist = Math.hypot(e.x - ship.x, e.y - ship.y);
+      expect(dist).toBeGreaterThan(def.strafeRadius - 3); // 驻留在自己的半径圆上
+      expect(dist).toBeLessThan(def.strafeRadius + 3);
+      const rest = Math.atan2(e.y - ship.y, e.x - ship.x);
+      // 仍是船尾(180° 驻留 + 个体偏 ≤ jitter):散开没有把"尾随蛆占住船尾"这个机制打没
+      expect(Math.abs(wrapAngle(rest - Math.PI / 2))).toBeLessThan(12 * DEG2RAD);
+      rests.push(rest);
+    }
+    // 若没有个体偏,60 只全停在同一个方位(锚点 = 数据表定值),跨度为 0 —— 这正是修的 bug
+    const lo = Math.min(...rests);
+    const hi = Math.max(...rests);
+    expect(hi - lo).toBeGreaterThan(4 * DEG2RAD);
   });
 });
 
