@@ -17,11 +17,11 @@ export const ENEMY_ART_URLS = [
 ] as const;
 
 /**
- * Boss 专属贴图(round-2):KIND_BOSS 不进 ENEMIES 表,故不占 ENEMY_ART_URLS 下标,单独一张。
+ * Boss 专属贴图(round-5):KIND_BOSS 不进 ENEMIES 表,故不占 ENEMY_ART_URLS 下标,单独一张。
  * 加载失败时 Renderer 回退到底座型(冲撞甲虫)的纹理放大 —— 与逐型回退同一条"坏一张不塌一局"的口径。
  */
 export const BOSS_ART_URL = new URL(
-  '../../assets/game/fal-round-2/enemies/boss-war-beetle.png',
+  '../../assets/game/fal-round-5/enemies/boss-war-beetle.png',
   import.meta.url,
 ).href;
 

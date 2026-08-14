@@ -1,5 +1,5 @@
 /**
- * 设置页 —— DOM 覆盖层,永不 import pixi(与暂停/结算/起手界面同一条铁律 1 边界)。
+ * 设置页 —— DOM 覆盖层,永不 import pixi(与暂停/结算界面同一条铁律 1 边界)。
  *
  * **整页只建一次、两个入口共用**(标题界面的「设置」与暂停菜单的「设置」):
  * 建两份的话,在暂停菜单里调过的音量回到标题界面就会显示成旧值 —— 两个页面各记各的,
@@ -27,7 +27,7 @@ const IDLE_COLOR = '#5f7a99';
 const VALUE_COLOR = '#c8dcf0';
 const LINE_COLOR = '#2b4a6e';
 
-/** 满屏遮罩,与暂停/结算/起手界面同款(铺满吃下全部 pointer-events) */
+/** 满屏遮罩,与暂停/结算界面同款(铺满吃下全部 pointer-events) */
 const ROOT_CSS =
   'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
   'background:rgba(5,7,13,.86);' +

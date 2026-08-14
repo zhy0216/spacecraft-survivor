@@ -5,13 +5,13 @@
  * **整页只建一次**(与 settingsMenu 同一条纪律):DOM 与 window 监听器都在 createCodexUi 里挂,
  * 反复 show/hide 不重建 —— 建两份就是两份 Esc 监听器、两块遮罩。
  *
- * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令/起手),内容是卡片网格 ——
+ * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令),内容是卡片网格 ——
  * 每张卡一张大图(56px)+ 名称,未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
  * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
  * **星级三档全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
  *
- * 配图口径:有生成贴图的用真实 PNG(6 基础塔 / 5 敌型 + Boss / 起手双武器,URL 清单与渲染层
+ * 配图口径:有生成贴图的用真实 PNG(6 基础塔 / 5 敌型 + Boss,URL 清单与渲染层
  * 同源,见 render/artUrls.ts —— 本文件不 import pixi,但可以 import 纯字符串清单);没贴图的
  * 画程序化 SVG 徽章(合成武器回退底座塔贴图、导弹巢与法令用升级卡片同一套字形 + 数值表 tint)。
  *
@@ -32,7 +32,6 @@ import {
   type EnemyDef,
 } from '../data/enemies';
 import { EDICT_MAX_LEVEL, EDICTS, type EdictDef } from '../data/edicts';
-import { LOADOUTS } from '../data/loadout';
 import { MERGES } from '../data/merges';
 import {
   FX_MORTAR,
@@ -53,7 +52,6 @@ import {
   UNLOCK_COLLECT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
-  UNLOCK_LOADOUT,
   UNLOCK_TOWER,
   UNLOCKS,
   type UnlockEntry,
@@ -111,7 +109,7 @@ const CELL_CSS =
   'display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 2px 5px;' +
   'border-radius:6px;border:1px solid rgba(43,74,110,.45);background:rgba(10,16,26,.5);';
 const CELL_LOCKED_CSS = CELL_CSS + 'opacity:.45;';
-/** 配图容器:恒定 56px 高,单图 56px、双图(起手)并排 34px —— 网格行高不因配图张数参差 */
+/** 配图容器:恒定 56px 高,单图 56px —— 网格行高不因配图张数参差 */
 const CELL_ART_CSS = 'display:flex;gap:3px;align-items:center;height:56px;';
 const CELL_IMG_CSS = 'object-fit:contain;background:rgba(5,7,13,.6);' +
   'border:1px solid rgba(43,74,110,.6);border-radius:4px;';
@@ -229,7 +227,7 @@ export interface CodexRow {
 }
 
 export interface CodexSection {
-  /** 过滤器键:'weapons' | 'enemies' | 'edicts' | 'loadouts'(DOM 层按它过滤) */
+  /** 过滤器键:'weapons' | 'enemies' | 'edicts'(DOM 层按它过滤) */
   key: string;
   title: string;
   rows: CodexRow[];
@@ -359,21 +357,6 @@ function edictHover(type: number): string[] {
   return [edictSummaryText(def), `最多 ${EDICT_MAX_LEVEL} 层`];
 }
 
-/** 起手悬停行:表内描述 + 开局武器/法令名单(名字读数据表,改名自动跟上) */
-function loadoutHover(index: number): string[] {
-  const l = LOADOUTS[index]!;
-  const wNames = l.weapons.map((w) => TOWERS[w]?.name ?? `#${w}`).join(' + ');
-  const eParts: string[] = [];
-  for (let i = 0; i < l.edicts.length; i++) {
-    const t = l.edicts[i]!;
-    if (l.edicts.indexOf(t) !== i) continue; // 重复持有只数一次,×N 报层数
-    let n = 0;
-    for (const x of l.edicts) if (x === t) n++;
-    eParts.push(`${EDICTS[t]?.name ?? `#${t}`}×${n}`);
-  }
-  return [l.desc, `开局武器 ${wNames}`, `开局法令 ${eParts.join(' + ')}`];
-}
-
 /**
  * 内容锁反查:UNLOCKS 里 kind+type 对应的条目下标;没有 = 这条内容不在解锁表里,恒解锁
  * (基础武器/敌人/法令全部如此 —— 解锁表只管"入池闸门",不管目录本身)。
@@ -408,7 +391,7 @@ function rowForLocked(
 }
 
 /**
- * 全量目录:武器 → 敌人 → 法令 → 起手配置(船形剪影是图片,DOM 层直接摆 progress.silhouettes)。
+ * 全量目录:武器 → 敌人 → 法令(船形剪影是图片,DOM 层直接摆 progress.silhouettes)。
  * 分区标题「武器/敌人」取目录语义,与结算图鉴块的「塔/敌人」分类名并立 ——
  * 那里是解锁项的窄块,这里是通读目录,读法不同(若需统一再并一处)。
  */
@@ -473,15 +456,6 @@ export function codexRows(progress: Progress): CodexSection[] {
   }
   sections.push({ key: 'edicts', title: '法令', rows: edicts });
 
-  const loadouts: CodexRow[] = [];
-  for (let i = 0; i < LOADOUTS.length; i++) {
-    const art = imgArt(...LOADOUTS[i]!.weapons.map((w) => TOWER_ART_URLS[w]));
-    loadouts.push(
-      rowForLocked(mask, UNLOCK_LOADOUT, i, LOADOUTS[i]!.name, loadoutHover(i), art),
-    );
-  }
-  sections.push({ key: 'loadouts', title: '起手配置', rows: loadouts });
-
   return sections;
 }
 
@@ -504,7 +478,6 @@ const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'weapons', label: '武器' },
   { key: 'enemies', label: '敌人' },
   { key: 'edicts', label: '法令' },
-  { key: 'loadouts', label: '起手' },
 ];
 
 export function createCodexUi(hooks: CodexHooks): CodexUi {

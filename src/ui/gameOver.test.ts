@@ -16,7 +16,6 @@ import {
   UNLOCK_COLLECT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
-  UNLOCK_LOADOUT,
   UNLOCK_TOWER,
   UNLOCKS,
 } from '../data/unlocks';
@@ -175,26 +174,22 @@ describe('summaryText', () => {
   });
 });
 
-describe('collectionCategoryName / collectionItemName(19 号图鉴,20 号加起手配置)', () => {
-  it('分类名按 UNLOCK_* 给五类文案,未知 kind 印码不静默(与 resultTitle 的未知码同一口径)', () => {
+describe('collectionCategoryName / collectionItemName(19 号图鉴)', () => {
+  it('分类名按 UNLOCK_* 给四类文案,未知 kind 印码不静默(与 resultTitle 的未知码同一口径)', () => {
     expect(collectionCategoryName(UNLOCK_TOWER)).toBe('塔');
     expect(collectionCategoryName(UNLOCK_ELITE)).toBe('敌人');
     expect(collectionCategoryName(UNLOCK_EDICT)).toBe('法令');
     expect(collectionCategoryName(UNLOCK_COLLECT)).toBe('船形剪影');
-    expect(collectionCategoryName(UNLOCK_LOADOUT)).toBe('起手配置');
     expect(collectionCategoryName(99)).toBe('分类 99');
   });
 
-  it('条目名从内容表读:塔/法令取数据表名,精英条目带底敌型名,起手配置取 LOADOUTS 名', () => {
+  it('条目名从内容表读:塔/法令取数据表名,精英条目带底敌型名', () => {
     // 导弹巢 / 超载协议在内容表与 UNLOCKS 表同名 —— 数据表改名,图鉴跟着走
     expect(collectionItemName(UNLOCKS[0]!)).toBe('导弹巢');
     expect(collectionItemName(UNLOCKS[1]!)).toBe('超载协议');
     // 虫群母巢的底敌型 = WAVE_LOCKED_ELITES[0].kind → 冲撞甲虫(这条钉着两表的下标咬合)
     expect(collectionItemName(UNLOCKS[2]!)).toBe('虫群母巢(冲撞甲虫精英)');
     expect(collectionItemName(UNLOCKS[3]!)).toBe('船形收藏');
-    // 20 号追加的两条起手配置锁(下标 4/5,只增不改):名字读 LOADOUTS 表
-    expect(collectionItemName(UNLOCKS[4]!)).toBe('炮击开局');
-    expect(collectionItemName(UNLOCKS[5]!)).toBe('狙击开局');
   });
 });
 
@@ -492,7 +487,7 @@ describe('createGameOverUi', () => {
     expect(dom.ui.children.length).toBe(1);
   });
 
-  it('图鉴:已解锁项彩色、未解锁项灰显(降透明度 + 标注)(19 号,20 号加起手配置)', () => {
+  it('图鉴:已解锁项彩色、未解锁项灰显(降透明度 + 标注)(19 号)', () => {
     const ui = make();
     // 掩码位 0 = 导弹巢已解锁,其余内容锁全关
     ui.show(
@@ -507,17 +502,14 @@ describe('createGameOverUi', () => {
     expect(edict.style.cssText).toContain('opacity:.45');
     const elite = findEl(cardEl, (el) => el.textContent === '虫群母巢(冲撞甲虫精英)(未解锁)')!;
     expect(elite.style.cssText).toContain('opacity:.45');
-    // 起手配置与内容锁同栏:未解锁灰显(20 号)
-    const loadout = findEl(cardEl, (el) => el.textContent === '炮击开局(未解锁)')!;
-    expect(loadout.style.cssText).toContain('opacity:.45');
-    // 计数头:5 条内容解锁里开了 1 条(船形收藏无条件,不计入分子分母)
+    // 计数头:3 条内容解锁里开了 1 条(船形收藏无条件,不计入分子分母)
     const title = findEl(cardEl, (el) => el.textContent.startsWith('图鉴'))!;
-    expect(title.textContent).toBe('图鉴 · 内容解锁 1/5');
+    expect(title.textContent).toBe('图鉴 · 内容解锁 1/3');
     // 全解锁时计数头到顶,条目不再带"(未解锁)"
     ui.show(
       summary({
         progressStats: {
-          unlockMask: 0b111111,
+          unlockMask: 0b1111,
           wins: 1,
           kills: 9999,
           eliteKills: 14,
@@ -526,7 +518,7 @@ describe('createGameOverUi', () => {
       }),
     );
     expect(findEl(cardEl, (el) => el.textContent.startsWith('图鉴'))!.textContent).toBe(
-      '图鉴 · 内容解锁 5/5',
+      '图鉴 · 内容解锁 3/3',
     );
     expect(findEl(cardEl, (el) => el.textContent === '导弹巢(未解锁)')).toBeUndefined();
   });

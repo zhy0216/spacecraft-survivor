@@ -11,7 +11,7 @@ import {
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import { WEAPON_SLOT_COUNT } from './armory';
 import { tuning } from './config';
-import { applyStartingLoadout } from './loadout';
+import { applyRandomStart } from './loadout';
 import { OFFER_EDICT, OFFER_NEW_WEAPON } from './upgrade';
 import { ACQUIRE_REPLACE_NEEDED, RESULT_WIN, World } from './world';
 
@@ -26,9 +26,9 @@ describe('槽位制经济参数', () => {
     expect(OFFER_WEIGHT_NEW_WEAPON + OFFER_WEIGHT_EDICT).toBe(100);
   });
 
-  it('起始装配与商店都读取固定武器槽而非甲板边界', () => {
+  it('随机起手与商店都读取固定武器槽而非甲板边界', () => {
     const world = new World(1);
-    applyStartingLoadout(world);
+    applyRandomStart(world);
     expect(world.weapons.some((slot) => slot.type >= 0)).toBe(true);
     // 槽位数从 armory 现读:8 个槽围成一圈是设计口径,写死数字的话改口径这条就成了假绿
     expect(world.weapons).toHaveLength(WEAPON_SLOT_COUNT);
@@ -74,10 +74,10 @@ describe('真脚本长跑:一局自然升级次数窗口(12–15)', () => {
       tuning.stressSpawn = false;
       tuning.enemyContactDamageScale = 0;
       tuning.enemySporeDamageScale = 0;
-      const a = new World(20260802);
-      const b = new World(20260802);
-      applyStartingLoadout(a);
-      applyStartingLoadout(b);
+      const a = new World(20260809);
+      const b = new World(20260809);
+      applyRandomStart(a);
+      applyRandomStart(b);
 
       // 多留 1 秒兜住逐帧浮点跨段边界;正常会在 WAVE_TOTAL_TIME 左右进入 Boss 战、
       // 击杀 Boss 后落成 RESULT_WIN 再提前退出

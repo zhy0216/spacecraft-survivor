@@ -10,7 +10,7 @@ import {
 } from './artUrls';
 
 /**
- * fal.ai 生成资源的运行时映射(round-1 首批四敌/六塔/四支援;round-2 补孢子炮手与 Boss)。
+ * fal.ai 生成资源的运行时映射(round-1 首批四敌/六塔/四支援;round-2 补孢子炮手;round-5 重绘 Boss)。
  *
  * URL 清单住在 ./artUrls(纯字符串、无 pixi,ui 图鉴同源引用);本文件只负责把清单装成
  * Texture。这里故意引用 assets/game 下的运行时版本,而不是 investigations 里保留的生产源图:
@@ -29,7 +29,7 @@ export interface GeneratedArtTextures {
    * 所以任一部件加载失败就把整型置 null,渲染层照旧走单件贴图那条路(逐型回退,不影响别的型)。
    */
   readonly enemyRigParts: readonly (readonly Texture[] | null)[];
-  /** Boss 专属(round-2);null = 回退底座型纹理放大(见 artUrls.BOSS_ART_URL 注释) */
+  /** Boss 专属(round-5);null = 回退底座型纹理放大(见 artUrls.BOSS_ART_URL 注释) */
   readonly boss: Texture | null;
   readonly towers: readonly (Texture | null)[];
   readonly supports: readonly (Texture | null)[];

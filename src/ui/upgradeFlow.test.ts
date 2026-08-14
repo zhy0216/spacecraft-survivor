@@ -29,7 +29,7 @@ import {
   EDICT_INVALID_TYPE,
   type World,
 } from '../sim/world';
-import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps } from './upgradeFlow';
+import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps, upgradeComparison, upgradeComparisonText } from './upgradeFlow';
 
 function newWeaponOpt(type: number, level = 0): UpgradeOption {
   return { kind: OFFER_NEW_WEAPON, type, level };
@@ -167,6 +167,38 @@ describe('skipRefund', () => {
     expect(skipRefund(509)).toBe(509 - UPGRADE_SKIP_FEE);
     expect(skipRefund(UPGRADE_SKIP_FEE)).toBe(0);
     expect(skipRefund(-5)).toBe(0);
+  });
+});
+
+describe('upgradeComparison(升星前后预览)', () => {
+  it('新武器显示从无到 1★ 的 DPS/射程变化,不修改 World', () => {
+    const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    const comparison = upgradeComparison(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world));
+    expect(comparison.beforeStars).toBe(0);
+    expect(comparison.afterStars).toBe(1);
+    expect(comparison.beforeDps).toBeNull();
+    expect(comparison.afterDps).toBe(towerDps(TOWERS[TOWER_AUTOCANNON]!, 1));
+    expect(upgradeComparisonText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toContain('DPS — →');
+    expect(world.weapons.every((slot) => slot.type < 0)).toBe(true);
+  });
+
+  it('两把 1★ 再来一张预览为 2★,三把 2★ 连锁预览为 3★', () => {
+    const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    expect(upgradeComparison(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world)).afterStars).toBe(2);
+    world.weapons[0]!.stars = 2;
+    world.weapons[1]!.stars = 2;
+    world.weapons[2]!.type = TOWER_AUTOCANNON;
+    world.weapons[2]!.stars = 2;
+    expect(upgradeComparison(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world)).afterStars).toBe(3);
+  });
+
+  it('法令预览按当前层 → 下一层,并在满层时夹住', () => {
+    expect(upgradeComparison(edictOpt(EDICT_COOLANT, 2)).afterStars).toBe(3);
+    expect(upgradeComparison(edictOpt(EDICT_COOLANT, EDICT_MAX_LEVEL)).afterStars).toBe(EDICT_MAX_LEVEL);
   });
 });
 

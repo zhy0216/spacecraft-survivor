@@ -71,7 +71,7 @@ const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spac
 const SLOT_CELL: number[] = [1, 2, 5, 8, 7, 6, 3, 0];
 
 export interface ArmoryPanelHooks {
-  /** 能不能开面板?(main 传 `() => !run.paused` —— 时停/结算/起手选择时 I 键不响应) */
+  /** 能不能开面板?(main 传 `() => !run.paused` —— 时停/结算时 I 键不响应) */
   canOpen(): boolean;
   /** 打开:main 置 run.paused = true 并 loop.halt() 冻结世界 */
   onOpen(): void;

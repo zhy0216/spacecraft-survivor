@@ -19,13 +19,11 @@
  */
 import { EDICTS } from '../data/edicts';
 import { ENEMIES } from '../data/enemies';
-import { LOADOUTS } from '../data/loadout';
 import { TOWERS } from '../data/towers';
 import {
   UNLOCK_COLLECT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
-  UNLOCK_LOADOUT,
   UNLOCK_TOWER,
   UNLOCKS,
   type UnlockEntry,
@@ -263,8 +261,6 @@ export function collectionCategoryName(kind: number): string {
       return '法令';
     case UNLOCK_COLLECT:
       return '船形剪影';
-    case UNLOCK_LOADOUT:
-      return '起手配置';
     default:
       return `分类 ${kind}`;
   }
@@ -292,9 +288,6 @@ export function collectionItemName(entry: UnlockEntry): string {
       const base = eliteBaseName(entry);
       return base === null ? entry.name : `${entry.name}(${base}精英)`;
     }
-    case UNLOCK_LOADOUT:
-      // 起手配置的条目名从 data/loadout.ts 读:配置表改名,图鉴跟着走(与塔/法令同一口径)
-      return LOADOUTS[entry.type]?.name ?? entry.name;
     default:
       return entry.name;
   }
@@ -353,11 +346,10 @@ export function createGameOverUi(opts: {
   const btn = document.createElement('button');
   btn.style.cssText = BTN_CSS;
   // 键位写在按钮上:结算界面没有别的地方能提示"Enter 也行",而重开是这里唯一的动作。
-  // 20 号起重开先经过起手配置选择界面,按钮把这一步写进标签,别让玩家以为按完就直接开船
-  btn.textContent = '再来一局(Enter · 选起手)';
+  btn.textContent = '再来一局(Enter)';
   // 「再试这一局」摆在「再来一局」下面:换种子重开仍是主动作(同一份怪潮打第二遍没什么可玩的),
   // 同 seed 重试是"这一局我想再练一次"的次动作 —— 顺序即优先级。
-  // 同 seed = 同起手(重试不经过选择界面),标签上写明,免得和"再来一局"的区别只剩一个括号
+  // 起手由种子派生(随机开局),同 seed 重试连起手一起原样重来,标签上写明,免得和"再来一局"的区别只剩一个括号
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
   retryBtn.textContent = '再试这一局(R · 同种子同起手)';
@@ -463,7 +455,7 @@ export function createGameOverUi(opts: {
     for (const c of content) if ((mask & (1 << c.index)) !== 0) unlocked++;
     collectionTitleEl.textContent = `图鉴 · 内容解锁 ${unlocked}/${content.length}`;
     collectionItemsEl.replaceChildren();
-    for (const kind of [UNLOCK_TOWER, UNLOCK_ELITE, UNLOCK_EDICT, UNLOCK_LOADOUT]) {
+    for (const kind of [UNLOCK_TOWER, UNLOCK_ELITE, UNLOCK_EDICT]) {
       const members = content.filter((c) => c.entry.kind === kind);
       if (members.length === 0) continue;
       const label = document.createElement('div');

@@ -10,7 +10,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EDICT_KIND_COUNT, EDICTS } from './edicts';
-import { LOADOUTS } from './loadout';
 import { isMergeResult } from './merges';
 import { TOWER_KIND_COUNT, TOWERS } from './towers';
 import {
@@ -22,7 +21,6 @@ import {
   UNLOCK_COUNT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
-  UNLOCK_LOADOUT,
   UNLOCK_TOWER,
   unlockMet,
   UNLOCKS,
@@ -33,13 +31,7 @@ import { WAVE_LOCKED_ELITES } from './waves';
 
 /** 四类条件的合法编号集合:未知编号在 unlockMet 里会落进 default(无条件放行),测试钉住 */
 const COND_KINDS = [COND_FIRST_WIN, COND_KILLS, COND_ELITE_KILLS, COND_NONE];
-const UNLOCK_KINDS = [
-  UNLOCK_TOWER,
-  UNLOCK_EDICT,
-  UNLOCK_ELITE,
-  UNLOCK_COLLECT,
-  UNLOCK_LOADOUT,
-];
+const UNLOCK_KINDS = [UNLOCK_TOWER, UNLOCK_EDICT, UNLOCK_ELITE, UNLOCK_COLLECT];
 
 describe('条件式解锁表', () => {
   it('条目齐全,id 唯一且非空', () => {
@@ -51,7 +43,7 @@ describe('条件式解锁表', () => {
     for (const u of UNLOCKS) expect(u.name.length).toBeGreaterThan(0);
   });
 
-  it('五类解锁项各自引用合法型号:塔/法令落在表内,精英落在槽位内,起手配置落在 LOADOUTS 内,收藏无内容', () => {
+  it('四类解锁项各自引用合法型号:塔/法令落在表内,精英落在槽位内,收藏无内容', () => {
     for (const u of UNLOCKS) {
       expect(UNLOCK_KINDS).toContain(u.kind);
       if (u.kind === UNLOCK_TOWER) {
@@ -69,13 +61,6 @@ describe('条件式解锁表', () => {
         expect(u.type).toBeGreaterThanOrEqual(0);
         expect(u.type).toBeLessThan(WAVE_LOCKED_ELITES.length);
         expect(WAVE_LOCKED_ELITES[u.type]!.unlockId).toBe(u.id);
-      } else if (u.kind === UNLOCK_LOADOUT) {
-        // 起手配置引用 = LOADOUTS 下标,且两表同名(解锁 toast 与卡片读的是同一个名字)
-        expect(Number.isInteger(u.type)).toBe(true);
-        expect(u.type).toBeGreaterThanOrEqual(0);
-        expect(u.type).toBeLessThan(LOADOUTS.length);
-        expect(LOADOUTS[u.type], `配置 ${u.type} 没有条目`).toBeDefined();
-        expect(LOADOUTS[u.type]!.name).toBe(u.name);
       } else {
         expect(u.type).toBe(0); // 收藏类没有内容下标
       }

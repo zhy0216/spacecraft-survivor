@@ -56,6 +56,7 @@ const CARD_ICON_CSS =
 const CARD_TITLE_CSS = `color:${OK_COLOR};font-size:15px;letter-spacing:.06em;margin-bottom:6px;`;
 const CARD_DESC_CSS = 'min-height:3.2em;'; // 描述行留常驻高度:三张卡长短不一,不撑住则等级行参差
 const CARD_LEVEL_CSS = `color:${IDLE_COLOR};margin-top:6px;`;
+const CARD_COMPARE_CSS = `display:block;color:${VALUE_COLOR};font-size:11px;line-height:1.5;margin-top:4px;`;
 const BTN_CSS =
   'padding:7px 18px;border-radius:6px;cursor:pointer;font:inherit;' +
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.1em;`;
@@ -75,6 +76,13 @@ const TOAST_CSS =
   'font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;' +
   'pointer-events:none;user-select:none;';
 const FLASH_MS = 1400; // 提示条存留时长(ms)
+const TRANSITION_CSS =
+  'position:fixed;inset:0;display:none;z-index:30;align-items:center;justify-content:center;' +
+  'pointer-events:none;background:radial-gradient(circle,rgba(154,220,255,.24) 0%,rgba(4,8,14,0) 58%);' +
+  `color:${OK_COLOR};font:700 20px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;` +
+  'letter-spacing:.14em;text-shadow:0 0 12px rgba(154,220,255,.9),0 0 34px rgba(154,220,255,.5);';
+const TRANSITION_STYLE =
+  '@keyframes starwreck-upgrade-spotlight{0%{opacity:0;transform:scale(.72)}18%{opacity:1;transform:scale(1)}72%{opacity:1;transform:scale(1.04)}100%{opacity:0;transform:scale(1.18)}}';
 
 /**
  * 玩家模式不印残骸/花费(残骸数由 HUD 管);与 main.ts 同一条 ?debug 判定。
@@ -219,6 +227,93 @@ export function cardLevelText(opt: UpgradeOption, world?: World): string {
   return `法令 · 当前 ×${lv} → ×${lv + 1}(上限 ×${EDICT_MAX_LEVEL})`;
 }
 
+/**
+ * 卡片上的升星前后数值预览。它只读当前槽位并在内存中模拟“再拿一把”的合成链，
+ * 不改 World、不消耗 rng；渲染层和 UI 都可以用同一份结果来表达即将发生的变化。
+ */
+export interface UpgradeComparison {
+  readonly beforeType: number;
+  readonly afterType: number;
+  readonly beforeStars: number;
+  readonly afterStars: number;
+  readonly beforeDps: number | null;
+  readonly afterDps: number | null;
+  readonly beforeRange: number | null;
+  readonly afterRange: number | null;
+}
+
+function previewWeapon(opt: UpgradeOption, world?: World): UpgradeComparison {
+  const type = opt.type;
+  const def = TOWERS[type];
+  if (!def) {
+    return {
+      beforeType: type, afterType: type, beforeStars: 0, afterStars: 0,
+      beforeDps: null, afterDps: null, beforeRange: null, afterRange: null,
+    };
+  }
+  const counts = [0, 0, 0];
+  for (const slot of world?.weapons ?? []) {
+    if (slot.type === type && slot.stars >= 1 && slot.stars <= 3) counts[slot.stars - 1]!++;
+  }
+  let beforeStars = counts[2]! > 0 ? 3 : counts[1]! > 0 ? 2 : counts[0]! > 0 ? 1 : 0;
+  const beforeType = type;
+  // 这张卡等价于添一把 1★，然后按 World.fuseTriplesOf 的同一条链连锁合成。
+  counts[0]!++;
+  let afterType = type;
+  for (let star = 0; star < 2; star++) {
+    while (counts[star]! >= 3) {
+      counts[star]! -= 3;
+      counts[star + 1]!++;
+      if (star === 1) {
+        const result = mergeResultOf(afterType);
+        if (result >= 0) afterType = result;
+      }
+    }
+  }
+  const afterStars = counts[2]! > 0 ? 3 : counts[1]! > 0 ? 2 : counts[0]! > 0 ? 1 : 0;
+  // 没有传 World 时保守地按候选自身 level 推导，不虚构持有数量。
+  if (!world && opt.level > 0) beforeStars = Math.min(3, Math.floor(opt.level));
+  const afterDef = TOWERS[afterType] ?? def;
+  return {
+    beforeType,
+    afterType,
+    beforeStars,
+    afterStars: Math.max(afterStars, beforeStars === 0 ? 1 : afterStars),
+    beforeDps: beforeStars > 0 ? towerDps(def, beforeStars) : null,
+    afterDps: towerDps(afterDef, Math.max(afterStars, beforeStars === 0 ? 1 : afterStars)),
+    beforeRange: beforeStars > 0 ? towerRange(def, beforeStars) : null,
+    afterRange: towerRange(afterDef, Math.max(afterStars, beforeStars === 0 ? 1 : afterStars)),
+  };
+}
+
+export function upgradeComparison(opt: UpgradeOption, world?: World): UpgradeComparison {
+  if (opt.kind === OFFER_NEW_WEAPON) return previewWeapon(opt, world);
+  const level = Math.max(0, Math.min(EDICT_MAX_LEVEL, Math.floor(opt.level)));
+  return {
+    beforeType: opt.type,
+    afterType: opt.type,
+    beforeStars: level,
+    afterStars: Math.min(EDICT_MAX_LEVEL, level + 1),
+    beforeDps: null,
+    afterDps: null,
+    beforeRange: null,
+    afterRange: null,
+  };
+}
+
+function fmtPreviewNumber(value: number | null): string {
+  return value === null ? '—' : num(value);
+}
+
+/** 视觉层的一行短文案；数字仍来自 upgradeComparison 的纯结果。 */
+export function upgradeComparisonText(opt: UpgradeOption, world?: World): string {
+  const c = upgradeComparison(opt, world);
+  if (opt.kind !== OFFER_NEW_WEAPON) {
+    return `层数 ×${c.beforeStars} → ×${c.afterStars}`;
+  }
+  return `DPS ${fmtPreviewNumber(c.beforeDps)} → ${fmtPreviewNumber(c.afterDps)} · 射程 ${fmtPreviewNumber(c.beforeRange)} → ${fmtPreviewNumber(c.afterRange)}`;
+}
+
 /** 跳过返还 = cost − 手续费。**与 World.skipUpgrade 调的是同一个 skipRefundFor**:分家的话提示与到账会各走各的 */
 export function skipRefund(cost: number): number {
   return skipRefundFor(cost);
@@ -271,7 +366,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     return el;
   }
 
-  // —— DOM:三个直接子节点(卡片面板 + 换槽选择层 + 左下角提示条),append 进 #ui,行内 style ——
+  // —— DOM:卡片面板 + 换槽选择层 + 提示条 + 升星过场,append 进 #ui,行内 style ——
   const headEl = makeDiv(HEAD_CSS);
   const cardsEl = makeDiv(CARDS_CSS);
   const rerollBtn = makeBtn(BTN_CSS, `重摇(${REROLL_PRICE} 星币)`);
@@ -288,10 +383,16 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   picker.append(pickerTitle, pickerSlots, pickerBack);
 
   const toast = makeDiv(TOAST_CSS);
+  const transition = makeDiv(TRANSITION_CSS);
+  transition.textContent = '✦ 升星确认';
   const ui = document.getElementById('ui')!;
+  const styleEl = document.createElement('style');
+  styleEl.textContent = TRANSITION_STYLE;
+  document.head?.appendChild(styleEl);
   ui.appendChild(panel);
   ui.appendChild(picker);
   ui.appendChild(toast);
+  ui.appendChild(transition);
 
   const cards: CardEls[] = [];
   const slotBtns: HTMLButtonElement[] = [];
@@ -341,6 +442,26 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     }, FLASH_MS);
   }
 
+  function playUpgradeTransition(opt: UpgradeOption, comparison = upgradeComparison(opt, world)): void {
+    const isStarUpgrade = opt.kind === OFFER_NEW_WEAPON
+      ? comparison.beforeStars > 0 && comparison.afterStars > comparison.beforeStars
+      : comparison.beforeStars > 0 && comparison.afterStars > comparison.beforeStars;
+    if (!isStarUpgrade) return;
+    const label = opt.kind === OFFER_NEW_WEAPON
+      ? `✦ 升星 · ${cardTitle(opt)} · ★${comparison.afterStars}`
+      : `✦ 法令叠层 · ${cardTitle(opt)} · ×${comparison.afterStars}`;
+    transition.textContent = label;
+    transition.style.display = 'flex';
+    transition.style.animation = 'none';
+    // 强制一次 reflow 让连续两次升星也能重新触发专属过场。
+    void (transition as unknown as { offsetWidth?: number }).offsetWidth;
+    transition.style.animation = 'starwreck-upgrade-spotlight 420ms ease-out both';
+    window.setTimeout(() => {
+      transition.style.display = 'none';
+      transition.style.animation = '';
+    }, 460);
+  }
+
   /** 重摇按钮的置灰态,每次弹卡 / 重摇之后现读 World 刷新一次:星币不足或本档已摇过都不可点(置灰只是读数,裁决以返回码为准) */
   function syncRerollState(): void {
     const enabled = world.starCoins >= REROLL_PRICE && !world.offerRerolled;
@@ -380,7 +501,13 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       card.icon.style.borderRadius = '8px';
       card.title.textContent = cardTitle(opt);
       card.desc.textContent = cardDesc(opt, world);
-      card.level.textContent = cardLevelText(opt, world);
+      const levelText = cardLevelText(opt, world);
+      card.level.textContent = levelText;
+      // 用 innerHTML 加一个不改变旧四节点契约的视觉副行；测试桩只读 textContent，
+      // 浏览器则显示实际的“前 → 后”数字对比。
+      const preview = upgradeComparisonText(opt, world);
+      (card.level as unknown as { innerHTML: string }).innerHTML =
+        `${levelText}<span style="${CARD_COMPARE_CSS}">${preview}</span>`;
     }
     skipBtn.textContent = `跳过(手续费 ${UPGRADE_SKIP_FEE} · 返还 ${skipRefund(world.upgradeCost)})`;
   }
@@ -445,10 +572,12 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     const opt = world.offer[index];
     // 越界/空卡:候选比卡片少时那张卡本就是藏起来的,这一句是拦网
     if (!opt) return;
+    const preview = upgradeComparison(opt, world);
     const before = weaponSnapshot(opt);
     const code = world.takeUpgrade(index);
     if (code >= 0) {
       flash(successToast(opt, before.max, before.result), OK_COLOR);
+      playUpgradeTransition(opt, preview);
       audioBus.playPlace();
       resolve();
       return;
@@ -506,9 +635,11 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       return;
     }
     const before = weaponSnapshot(opt);
+    const preview = upgradeComparison(opt, world);
     const code = world.takeUpgrade(chosen, slotIndex);
     if (code >= 0) {
       flash(successToast(opt, before.max, before.result), OK_COLOR);
+      playUpgradeTransition(opt, preview);
       audioBus.playPlace();
       resolve();
       return;
@@ -630,6 +761,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       hide();
       // 上一局最后那条提示(连同它的超时)一并抹掉:新船开出去的第一眼不该挂着上一局的回执
       clearFlash();
+      transition.style.display = 'none';
+      transition.style.animation = '';
     },
   };
 }

@@ -1,0 +1,12 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro",
+  "request_id": "019ffd95-7a5a-7393-ba0b-b7e69b512290",
+  "source": "enemies/boss-war-beetle-nanobanana-source.png",
+  "processed": "enemies/boss-war-beetle-nanobanana.png",
+  "runtime": "assets/game/fal-round-5/enemies/boss-war-beetle.png",
+  "aspect_ratio": "1:1",
+  "resolution": "1K",
+  "background_removal": "remove_chroma_key.py --auto-key border --soft-matte --despill",
+  "prompt": "A single enormous armored war beetle boss for STARWRECK, a top-down orthographic cutout sprite on a flat #00ff00 chroma-key background, broad beetle-like alien war machine, heavy asymmetrical carapace plates, glowing crimson core, four readable legs, high-detail sci-fi bio-mechanical design, centered facing right, no text, no logo, no watermark, no cast shadow, no floor, no extra creatures."
+}

@@ -5,7 +5,7 @@
  *
  * ## 它解决的问题:进来就已经在打了
  *
- * 在此之前页面一载入就直接弹起手配置、选完当场开跑 —— 于是"上一局打到一半关了页面"
+ * 在此之前页面一载入就直接开跑 —— 于是"上一局打到一半关了页面"
  * 与"想改个设置"这两件事都无处安放。标题界面把开跑前的四条路摆在同一屏上:
  * 继续上次航行 / 开一局新的 / 设置 / 图鉴。
  *
@@ -17,8 +17,7 @@
  *   - 「新航行」此时变成**两段式**:点一次先问"确定要放弃存档吗",再点才真的走。
  * 不用浏览器 confirm():那东西会抢走焦点与键盘,而且长得跟游戏一点关系都没有。
  *
- * 纯函数(continueLineText / newRunLabel)全部导出,Node 里直接钉,不装 jsdom ——
- * 与 ui/loadoutFlow.ts 的纯函数同一条测试口径。
+ * 纯函数(continueLineText / newRunLabel)全部导出,Node 里直接钉,不装 jsdom。
  */
 import type { RunSaveDigest } from '../sim/runSave';
 import { formatDuration, segmentLabel } from './gameOver';
@@ -79,7 +78,7 @@ export function newRunLabel(hasSave: boolean, confirming: boolean): string {
 export interface TitleScreenHooks {
   /** 「继续上次航行」:main 读档建世界、接线开跑 */
   onContinue(): void;
-  /** 「开始/新航行」:main 走起手配置选择,选完开新局(有存档时已由本页二段确认过) */
+  /** 「开始/新航行」:main 直接开新局,起手由本局种子现抽(有存档时已由本页二段确认过) */
   onNewRun(): void;
   /** 「设置」:main 收起本页、弹设置页,关掉后再把本页弹回来 */
   onSettings(): void;

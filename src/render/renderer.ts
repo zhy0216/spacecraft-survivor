@@ -170,6 +170,10 @@ const ENEMY_VISUAL_SPAN = (tuning.shipLength + CELL * SHIP_HULL_LENGTH_PAD) * 1.
 const ENEMY_HEAVY_VISUAL_SCALE = 1.15;
 /** Boss 是收尾焦点:视觉比碰撞体额外放大,碰撞与预警判定仍走 bossRadius()。 */
 const BOSS_VISUAL_SCALE = 1.35;
+/** Boss 的预警环不贴着视觉边缘:留出一圈冷色负空间,避免高细节贴图把倒计时环吃掉。 */
+const BOSS_TELEGRAPH_RING_GAP = 10;
+/** 召唤倒计时环比本体再外扩一档,与 Boss 的视觉尺寸而不是碰撞圆对齐。 */
+const BOSS_SUMMON_RING_GAP = 16;
 /** fal.ai 候选图的正面朝纹理上方(-Y),而船体局部 0 弧度朝船头(+X),两者相差 90°。 */
 const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
 
@@ -883,7 +887,7 @@ export class Renderer {
   private bossPc: ParticleContainer;
   private bossParticles: Particle[] = [];
   private bossBucket: Enemy[] = [];
-  /** Boss 的实际纹理与 tint(round-2 专属图,加载失败回退底座型;构造时定死,sync 只读) */
+  /** Boss 的实际纹理与 tint(round-5 专属图,加载失败回退底座型;构造时定死,sync 只读) */
   private bossTexture: Texture;
   private bossTextureTint = 0xffffff;
   private bossTextureScale = 1;
@@ -1160,7 +1164,7 @@ export class Renderer {
       }
     }
 
-    // —— Boss(15 号):round-2 的专属贴图,加载失败回退底座型纹理放大 ——
+    // —— Boss(15 号):round-5 的专属贴图,加载失败回退底座型纹理放大 ——
     // 静态缩放使剪影外接半径 = bossRadius()(sim/boss.ts 的唯一口径),
     // 判定体多大画多大 —— 与"灰盒阶段视觉 = 判定"同一条口径,换不换贴图都不动摇
     const bossGenerated = generatedArt.boss ?? null;
@@ -2705,7 +2709,11 @@ export class Renderer {
       g.moveTo(x, y).lineTo(x + e.lockX * reach, y + e.lockY * reach);
       // 夹住 [0,1]:面板改 chargeWindup 时正在前摇的 Boss 不至于画出巨环
       const t = Math.max(0, Math.min(1, e.timer / BOSS.chargeWindup)); // 1 → 0
-      g.circle(x, y, bossRadius() * (1 + TELEGRAPH_RING_GROWTH * t));
+      g.circle(
+        x,
+        y,
+        bossRadius() * BOSS_VISUAL_SCALE * (1 + TELEGRAPH_RING_GROWTH * t) + BOSS_TELEGRAPH_RING_GAP,
+      );
     }
     if (drawn > 0) {
       g.stroke({ width: TELEGRAPH_WIDTH, color: tint, alpha: TELEGRAPH_ALPHA });
@@ -2792,7 +2800,10 @@ export class Renderer {
 
     // 倒计时环:圈在 Boss 本体外沿(半径 = bossRadius × 镜头缩放 + 一圈余量,与判定体同源),
     // 满环 = 刚进窗,弧长随剩余冷却收没 = 召唤触发 —— 与精英预警的倒计时环同一语言
-    const r = Math.max(6, bossRadius() * this.worldLayer.scale.x + 6);
+    const r = Math.max(
+      6,
+      bossRadius() * this.worldLayer.scale.x * BOSS_VISUAL_SCALE + BOSS_SUMMON_RING_GAP,
+    );
     g.moveTo(bossWarnScreen.x + r, bossWarnScreen.y)
       .arc(bossWarnScreen.x, bossWarnScreen.y, r, 0, frac * Math.PI * 2)
       .stroke({ width: 2.5, color: tint, alpha: 0.85 * blink });

@@ -55,9 +55,12 @@ import { RESULT_RUNNING, World } from './world';
  *   触发从"跨段 / 精英死亡自动置位"改为"拾起磁吸宝物",magnetSurgeTime 标量原样保留。
  * v5(星级系统):武器槽的 level(1..5)改语义为 stars(1..3,2★/3★ = 旧 Lv3/Lv5 档);
  *   删除 weaponBankedLevels 字段与 OFFER_WEAPON_UPGRADE 类别 —— 存档不再有"存档等级"。
+ * v6(随机开局):删除 loadout 字段 —— 起手配置系统随选择界面一并删除,开局改为由
+ *   world.rng 派生的随机装配(applyRandomStart),不再有独立的开跑前配置输入;
+ *   槽位与 rng 游标本就存着,读档不需要这个字段。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 5;
+export const RUN_SAVE_VERSION = 6;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -90,7 +93,7 @@ export const OF_STRIDE = 3;
 
 /**
  * 一局的存档。字段分组照"这是什么"分,不照"存在哪"分:
- * 开跑前输入(seed / loadout / unlockMask)、随机游标、逐帧演化的真状态、实体池。
+ * 开跑前输入(seed / unlockMask)、随机游标、逐帧演化的真状态、实体池。
  *
  * 数组一律是**扁平数字数组**(见上面 stride 那段);标量分组用具名字段,读起来还认得出是什么。
  */
@@ -99,8 +102,6 @@ export interface RunSnapshot {
   v: number;
   /** 本局种子(开跑前输入)。读档 = new World(seed, unlockMask) 再把状态填回去 */
   seed: number;
-  /** 本局起手配置下标(LOADOUTS)。**只为"再试一局"沿用**:读档本身不重放起手,槽位是存下来的 */
-  loadout: number;
   /** 存档那一刻的解锁掩码(开跑前输入,决定卡池与解锁精英槽位) */
   unlockMask: number;
   /** rng 游标(mulberry32 状态)。漏了它读档后随机序列会退回开头,见文件头 */
@@ -154,12 +155,10 @@ export interface RunSnapshot {
   drops: number[];
 }
 
-/** 存档那一刻的额外输入 —— World 自己不知道的两样开跑前配置(种子归 World 但起手不归) */
+/** 存档那一刻的额外输入 —— World 自己不知道的开跑前配置(种子归 World 但不归它自己的构造参数) */
 export interface RunSaveMeta {
   /** 本局种子。World 不保存构造参数,故由流程层(main)递进来 */
   seed: number;
-  /** 本局起手配置下标(LOADOUTS) */
-  loadout: number;
 }
 
 /**
@@ -254,7 +253,6 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
   return {
     v: RUN_SAVE_VERSION,
     seed: meta.seed,
-    loadout: meta.loadout,
     unlockMask: world.unlockMask,
     rng: world.rng.state,
     tick: world.tick,
@@ -298,8 +296,8 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
  * 把快照放回一个**全新的 World**。不提供"就地读进旧 World"的路子,理由与 World 不加 reset()
  * 一字同源:池 / rng / 槽位全新才谈得上一条干净的轨迹 —— 而读档恰恰是最需要它的时刻。
  *
- * **不走 applyStartingLoadout**:槽位是存下来的那一份,再套一遍起手配置就是把玩家半局的
- * 武器覆盖回开局那四门炮(读档最惨烈的一种失败,且盘面看着还挺正常)。
+ * **不走 applyRandomStart**:槽位是存下来的那一份,再套一遍随机起手就是把玩家半局的
+ * 武器覆盖回开局那两门炮(读档最惨烈的一种失败,且盘面看着还挺正常)。
  *
  * 顺序有讲究:先 rng(此后不许再有任何掷点)、再标量、再波次(restoreWaveState 内部要重拼
  * 派生量)、最后灌池。插值基准(px/py/pheading)一律对齐成当前值 —— 新 World 的实体是从
@@ -501,14 +499,12 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   };
 
   const seed = scalar('seed');
-  const loadout = scalar('loadout');
   const unlockMask = scalar('unlockMask');
   const rng = scalar('rng');
   const tick = scalar('tick');
   const magnetSurgeTime = scalar('magnetSurgeTime');
   if (
     seed === null ||
-    loadout === null ||
     unlockMask === null ||
     rng === null ||
     tick === null ||
@@ -559,7 +555,6 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     // 种子与游标夹成无符号 32 位:Rng 内部就是这么用的(见 core/rng.ts),
     // 手改过的存档塞个小数进来会走出一条谁也复现不了的序列
     seed: seed >>> 0,
-    loadout: Math.max(0, Math.floor(loadout)),
     unlockMask: Math.floor(unlockMask),
     rng: rng >>> 0,
     tick: Math.max(0, Math.floor(tick)),

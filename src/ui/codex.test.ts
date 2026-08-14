@@ -161,17 +161,17 @@ describe('codexStatsText / codexUnlockStats', () => {
     );
   });
 
-  it('内容解锁计数剔掉船形收藏(无条件,不占分子分母):空进度 0/5,全解锁 5/5', () => {
-    expect(codexUnlockStats(progress(0))).toEqual({ unlocked: 0, total: 5 });
-    expect(codexUnlockStats(progress(FULL_MASK))).toEqual({ unlocked: 5, total: 5 });
+  it('内容解锁计数剔掉船形收藏(无条件,不占分子分母):空进度 0/3,全解锁 3/3', () => {
+    expect(codexUnlockStats(progress(0))).toEqual({ unlocked: 0, total: 3 });
+    expect(codexUnlockStats(progress(FULL_MASK))).toEqual({ unlocked: 3, total: 3 });
   });
 });
 
 describe('codexRows', () => {
-  it('分区顺序与过滤器键:武器 → 敌人 → 法令 → 起手配置', () => {
+  it('分区顺序与过滤器键:武器 → 敌人 → 法令', () => {
     const sections = codexRows(progress(0));
-    expect(sections.map((s) => s.title)).toEqual(['武器', '敌人', '法令', '起手配置']);
-    expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts', 'loadouts']);
+    expect(sections.map((s) => s.title)).toEqual(['武器', '敌人', '法令']);
+    expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts']);
   });
 
   it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图与渲染层同源', () => {
@@ -279,26 +279,6 @@ describe('codexRows', () => {
     expect(ammo.art?.kind).toBe('svg');
     expect(svgOf(ammo.art)).toContain('▦'); // EDICT_ICONS[0]
     expect(svgOf(ammo.art)).toContain(tintHex(EDICTS[EDICT_AMMO]!.tint));
-  });
-
-  it('起手配置:悬停报描述与开局名单,配图 = 开局武器贴图各一张', () => {
-    const loadouts = codexRows(progress(0))[3]!.rows;
-    expect(loadouts.length).toBe(4);
-    const bombard = loadouts.find((r) => r.name === '炮击开局')!;
-    expect(bombard.locked).toBe(true);
-    expect(bombard.hover[bombard.hover.length - 1]).toBe('未解锁 · 累计精英击杀 5');
-    const standard = loadouts.find((r) => r.name === '标准起手')!;
-    expect(standard.locked).toBe(false);
-    expect(standard.hover[0]).toContain('弹药');
-    expect(standard.hover[1]).toBe('开局武器 自动机炮 + 自动机炮');
-    expect(standard.hover[2]).toBe('开局法令 弹药协议×1');
-    // 标准起手 = 双自动机炮:配图两张、同一张图
-    expect(standard.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[0], TOWER_ART_URLS[0]] });
-    const unlocked = codexRows(progress(FULL_MASK))[3]!.rows.find(
-      (r) => r.name === '狙击开局',
-    )!;
-    expect(unlocked.locked).toBe(false);
-    expect(unlocked.hover[0]).toContain('磁轨炮');
   });
 });
 
@@ -489,7 +469,7 @@ describe('createCodexUi', () => {
     const ui = make();
     ui.show();
     const title = findEl(root(dom), (el) => el.textContent.startsWith('图鉴 ·'))!;
-    expect(title.textContent).toBe('图鉴 · 内容解锁 0/5');
+    expect(title.textContent).toBe('图鉴 · 内容解锁 0/3');
     const stats = findEl(root(dom), (el) => el.textContent.startsWith('胜场'))!;
     expect(stats.textContent).toBe('胜场 1 · 总击杀 100 · 精英击杀 2');
     // 卡片名是纯名称(数值在悬停里);分区标题在
@@ -552,7 +532,7 @@ describe('createCodexUi', () => {
     const ui = make();
     ui.show();
     const thumbs = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
-    // 武器 13 卡 + 敌人 8 卡 + 法令 10 卡 + 起手 4 卡(双图),配图数必然远多于零
+    // 武器 13 卡 + 敌人 8 卡 + 法令 10 卡,配图数必然远多于零
     expect(thumbs.length).toBeGreaterThan(20);
     expect(thumbs.some((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
     const svg = thumbs.find((el) => el.src.startsWith('data:image/svg+xml'));

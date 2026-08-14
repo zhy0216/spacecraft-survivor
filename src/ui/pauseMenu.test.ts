@@ -3,7 +3,7 @@
  * ① Esc 只在战斗运行中(canPause)响应 —— 升级/整备/结算时停(run.paused = true)
  *    按 Esc 不该弹菜单,否则时停里 Esc 会同时被流程与菜单抢着消费;
  * ② hide() 是纯收起、不触发 onResume —— restart/retry 换局时 main 用它关菜单,
- *    若 hide 把 run.paused 翻回 false,起手选择期间世界就还在跑。
+ *    若 hide 把 run.paused 翻回 false,时停期间世界就还在跑。
  * 与 createGameOverUi 同一条破例理由:这两条错都要等真人开第二局才看得见。
  * 桩只提供 createPauseMenu 真的会碰的那几样(createElement/getElementById/append +
  * window.addEventListener + activeElement),绝不发展成半个 jsdom。

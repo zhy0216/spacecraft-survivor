@@ -17,9 +17,11 @@
  * 当场停手(回调是在 step 回调里响的,那一刻 while 还没走完)。
  *
  * 存档改版起,**开跑前的那一屏也只在这一层**:页面载入不再直接开打,而是
- * 标题界面(继续 / 新航行 / 设置)→ 起手配置选择 → startRun。三条入口最后都汇进
+ * 标题界面(继续 / 新航行 / 设置)→ startRun。两条入口最后都汇进
  * startRun 这一个装配点(读档多一条 restored 分支,见其参数),理由与首局/重开
  * 不许各写一份是同一条:装配漏接一样,要等真人走到那条入口才看得见。
+ * 随机开局起,开局不再有任何选择步骤:起手两座塔由 world.rng 现抽(sim/loadout.ts),
+ * 在 startRun 的非 restored 分支落地 —— 同 seed 同起手,retry 与读档都不重放。
  *
  * **存档时机也只在这一层**(sim/runSave.ts 只提供纯粹的 capture/restore,它不知道"何时"):
  * 一律挑**世界已经冻住的那些点** —— 升级时停 / 整备时停 / 暂停菜单 / 页面隐藏。
@@ -34,7 +36,7 @@ import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unloc
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
 import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
-import { applyStartingLoadout } from './sim/loadout';
+import { applyRandomStart } from './sim/loadout';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
 import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
@@ -43,7 +45,6 @@ import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPane
 import { createGameOverUi } from './ui/gameOver';
 import { createHud } from './ui/hud';
 import { loadIPressed, markIPressed } from './ui/keyHintStorage';
-import { createLoadoutFlow } from './ui/loadoutFlow';
 import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
 import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
@@ -113,11 +114,7 @@ async function boot(): Promise<void> {
   // **本局**的种子。restart 换种子时更新,retry(同 seed 重试)原样再用 ——
   // 没有它的话被特定波次组合打死后想"再试同一局"只能手改 URL ?seed= 刷新页面
   let runSeed = seed;
-  // **本局**的起手配置(LOADOUTS 下标,20 号)。与 runSeed 同一条纪律:
-  // 它是**开跑前输入** —— restart 经选择界面更新,retry 原样沿用(同 seed 重试 = 连起手一起重来);
-  // 选择发生在 World 构造之前,故同 seed + 同配置 → 同一条轨迹(选择本身不碰 rng)
-  let loadoutIndex = 0;
-  // 首局标记:boot 里预建的 World 还没装配过 —— 选择界面回调用它分辨"送预建 World"与"新建 World"
+  // 首局标记:boot 里预建的 World 还没装配过 —— 「新航行」回调用它分辨"送预建 World"与"新建 World"
   let firstRun = true;
   // 元进度存档(19 号):页载时读一次,此后每局结算(onGameOver)写一次。
   // World 构造时注入 unlockMask(卡池过滤与解锁精英门控读它);掩码 0 = 全未解锁,首局就是这么起步的。
@@ -239,7 +236,7 @@ async function boot(): Promise<void> {
         run.paused = false;
       },
       onRestart: () => {
-        // restart 会先置 run.paused = true 再弹起手选择,菜单自己关掉即可
+        // restart 直接开新局,菜单自己关掉即可
         restart();
       },
       onRetry: () => {
@@ -337,7 +334,7 @@ async function boot(): Promise<void> {
    */
   function saveRun(): boolean {
     if (!runActive || !canSaveRun(world)) return false;
-    return saveRunSnapshot(captureRun(world, { seed: runSeed, loadout: loadoutIndex }));
+    return saveRunSnapshot(captureRun(world, { seed: runSeed }));
   }
 
   /**
@@ -354,14 +351,13 @@ async function boot(): Promise<void> {
     // 期间重开过的旧局结算直接作废,不会在"新一局"头上弹"上一局"的卡片
     runToken++;
     world = next;
-    // 正式开局才套用起手配置。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
-    // 而「这一局怎么开场」是 data/loadout.ts 的数值配置,经 sim/loadout 逐条填槽的唯一入口。
-    // 20 号:套哪一套由 loadoutIndex 定(开局选择界面选完才走到这里,retry 原样沿用上一局的)
+    // 正式开局才套随机起手。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
+    // 而「这一局怎么开场」是 sim/loadout.ts 的随机装配 —— 从 world.rng 派生,同 seed 必同起手。
     //
     // **读档进来的世界一律跳过这一句**(restored):它的槽位是存档里那一份 ——
-    // 再套一遍起手配置就是把玩家半局攒下的武器覆盖回开局那四门炮,而盘面看着还挺正常
+    // 再套一遍随机起手就是把玩家半局攒下的武器覆盖回开局那两门炮,而盘面看着还挺正常
     // (船在、怪在、时间也对),是读档最惨烈也最难自查的一种失败
-    if (!restored) applyStartingLoadout(world, loadoutIndex);
+    if (!restored) applyRandomStart(world);
     loop = new FixedStepLoop(() => {
       // 必须在每个逻辑帧边界重新取样:一帧一采才让"按住 A 的时长"精确对应转过的角度,
       // 掉帧补步时也照样一步一次,手感不随渲染帧率漂移。
@@ -596,7 +592,6 @@ async function boot(): Promise<void> {
       armoryPanel,
       hud,
       gameOver,
-      loadoutFlow,
       titleScreen,
       settingsMenu,
       codex,
@@ -614,54 +609,27 @@ async function boot(): Promise<void> {
    * 「再来一局」的换种子入口(结算界面的按钮/Enter 与调参面板的重开按钮共用)。
    * 种子 = seed + 局数:`?seed=` 仍然能复现**第一局**(01 号的确定性口径),
    * 而重开不会每局一模一样 —— 同一份怪潮打第二遍就没什么可玩的了。
-   * 20 号起**先弹起手配置选择界面**:玩家挑完这一局怎么开场,onSelect 才真正装配新局。
-   * 选择期间世界必须冻着:结算/时停进来时 run.paused 本来就是 true,这一句兜住
-   * 调参面板在战斗中点重开的路径(那个瞬间 run.paused 还是 false)。
+   * 起手由新种子现抽(applyRandomStart 读 world.rng),不需要任何选择步骤。
    * 函数声明(而不是 const)是为了给上面的 createGameOverUi / createDebugPanel 提前引用:
    * 这两个面板都只建一次,而它们建的时候这一局还没开始装配。
    */
   function restart(): void {
     runIndex++;
     runSeed = seed + runIndex;
-    run.paused = true;
-    loadoutFlow.show(progress.unlockMask);
+    startRun(new World(runSeed, progress.unlockMask));
   }
 
   /**
-   * 「再试这一局」的同 seed 入口(畅玩性调整):runSeed 不动、runIndex 不消耗,
-   * **loadoutIndex 也不动** —— 同 seed 重试连起手配置一起原样重来,不弹选择界面
-   * (20 号口径:起手是"这一局"的一部分,想换起手请走「再来一局」)。
-   * 新 World 拿到的就是刚打完那一局的种子 —— 确定性口径("同 seed + 同输入 → 同轨迹")
-   * 天然支撑它:35s 侧压从哪边来、哪一段最凶,死过一次就都是可用的知识。
+   * 「再试这一局」的同 seed 入口(畅玩性调整):runSeed 不动、runIndex 不消耗。
+   * 新 World 拿到的就是刚打完那一局的种子 —— 随机起手从同一条 rng 序列派生,
+   * 连起手一起原样重来(起手与波次同源:都是 seed 的函数)。确定性口径
+   * ("同 seed + 同输入 → 同轨迹")天然支撑它:35s 侧压从哪边来、哪一段最凶,
+   * 死过一次就都是可用的知识。
    * 它同时修复了调参面板那条"验不了同 seed 可复现"的遗留(面板现在两个按钮都有)。
    */
   function retry(): void {
     startRun(new World(runSeed, progress.unlockMask));
   }
-
-  // 起手配置选择界面(20 号)—— 只建一次,重开走 show/hide(与结算界面同一条教训)。
-  // onSelect 是"玩家挑完了"的唯一去处:收界面 → 决定装配哪一艘 World →
-  // 交给 startRun 那一条**与重开完全相同的装配流程**(首局与重开不许各写一份,那会漏接线)。
-  // 首局送的是 boot 里预建、渲染层已按其槽位建好层的那个 World;重开则新建 ——
-  // 由 firstRun 分辨,换种子(retry 外的所有来路)在 restart 里已先算好 runSeed
-  const loadoutFlow = createLoadoutFlow({
-    onSelect: (index) => {
-      loadoutIndex = index;
-      loadoutFlow.hide();
-      if (firstRun) {
-        firstRun = false;
-        startRun(world);
-      } else {
-        startRun(new World(runSeed, progress.unlockMask));
-      }
-    },
-    // Esc 取消出口(二轮审查):此前是死锁界面 —— 起手选择占满全屏、title 已藏、
-    // 暂停/升级/结算都占着,不选卡就出不去。回标题即可:世界本来就冻着,没装配过的新局
-    // 不需要任何清理;从暂停菜单「再来一局」进来的,标题的「继续」仍指向那份暂停存档
-    onCancel: () => {
-      toTitle();
-    },
-  });
 
   /**
    * 回标题界面。**存档在调用之前由调用方决定存不存** —— 「保存并退出」先存再回,
@@ -676,7 +644,6 @@ async function boot(): Promise<void> {
     upgradeFlow.hide();
     refitFlow.hide();
     armoryPanel.hide();
-    loadoutFlow.hide();
     titleScreen.show(titleDigest());
   }
 
@@ -722,8 +689,8 @@ async function boot(): Promise<void> {
 
   /**
    * 标题界面(进游戏的第一屏)。四条出口:
-   *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不套起手配置**);
-   *   新航行 —— 走原来那条起手配置选择,选完开新局;
+   *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不重放起手**);
+   *   新航行 —— 直接开新局(首局送预建 World,之后换种子新建);
    *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来;
    *   图鉴 —— 收起自己弹图鉴页(与设置同一条让路)。
    * 读档失败(存档损坏 / 存储不可用)不弹错误框,直接退回"没有存档"的标题:
@@ -736,16 +703,19 @@ async function boot(): Promise<void> {
         titleScreen.show(null);
         return;
       }
-      // 存档里带着开跑前那两样输入(种子与起手配置):不接回来的话,读档后再点
-      // 「再试一局」会用标题界面那个默认种子重开 —— 那是另一局
+      // 存档里带着种子:不接回来的话,读档后再点「再试一局」会用标题界面那个默认种子重开
+      // —— 那是另一局(起手由种子派生,读档这局的随机起手已经长在槽位里,不需要额外状态)
       runSeed = loaded.snapshot.seed;
-      loadoutIndex = loaded.snapshot.loadout;
       firstRun = false; // 预建的那个空 World 就此作废,重开走"新建"那条
       startRun(loaded.world, true);
     },
     onNewRun: () => {
-      run.paused = true;
-      loadoutFlow.show(progress.unlockMask);
+      if (firstRun) {
+        firstRun = false;
+        startRun(world); // 首局送 boot 里预建、渲染层已按其槽位建好层的那个 World
+      } else {
+        restart(); // 换种子直接开新局,起手由新种子现抽
+      }
     },
     onSettings: () => {
       titleScreen.hide();
@@ -758,10 +728,9 @@ async function boot(): Promise<void> {
   });
 
   // 进游戏第一屏:标题界面(继续 / 新航行 / 设置),而不是直接开打。
-  // 起手配置选择退到「新航行」之后 —— 它仍是开新局的必经一步(GDD §10「起手配置…可在开局选择」),
-  // 只是不再是页面载入后玩家看到的第一样东西。
+  // 「新航行」直接开新局(随机起手在 startRun 落地),不再有独立的起手选择一步。
   // **先冻结再弹**:此刻 ticker 已挂上(见 boot 末尾),run.paused 挡住 loop.advance,
-  // 选择期间世界停在首帧,选完 startRun 收尾时一并恢复
+  // 标题期间世界停在首帧,开跑由 startRun 收尾时一并恢复
   run.paused = true;
   toTitle();
 

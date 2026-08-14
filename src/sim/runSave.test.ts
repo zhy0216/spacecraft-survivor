@@ -15,7 +15,7 @@ import { createBullet } from './bullet';
 import { createDrop } from './drop';
 import { createEnemy } from './enemy';
 import { createEnemyBullet } from './enemyBullet';
-import { applyStartingLoadout } from './loadout';
+import { applyRandomStart } from './loadout';
 import {
   BU_STRIDE,
   DR_STRIDE,
@@ -37,7 +37,7 @@ import { WEAPON_SLOT_COUNT } from './armory';
 import type { ShipCommand } from './ship';
 import { RESULT_RUNNING, World } from './world';
 
-const META = { seed: 20260801, loadout: 0 };
+const META = { seed: 20260801 };
 
 /**
  * 跑一局到第 n 帧。**输入不是恒定的**:一直朝同一个方向开的话船会飞出怪群,
@@ -56,7 +56,7 @@ function runTo(world: World, frames: number): void {
 
 function freshRun(frames: number): World {
   const world = new World(META.seed);
-  applyStartingLoadout(world, META.loadout);
+  applyRandomStart(world);
   runTo(world, frames);
   return world;
 }
@@ -128,10 +128,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v4 旧档判废(星级系统升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v5 旧档判废(随机开局升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v4json = serializeRunSnapshot(snap).replace('"v":5', '"v":4');
-    expect(parseRunSnapshot(v4json)).toBeNull();
+    const v5json = serializeRunSnapshot(snap).replace('"v":6', '"v":5');
+    expect(parseRunSnapshot(v5json)).toBeNull();
   });
 
   it('局内的账(击杀/精英/武器战报)读档后不被抹掉', () => {
@@ -154,7 +154,7 @@ describe('局内存档:capture → restore', () => {
     expect(restored.starCoins).toBe(3);
   });
 
-  it('起手配置不被重放:读档拿的是存下来的槽位,不是开局那四门炮', () => {
+  it('起手不被重放:读档拿的是存下来的槽位,不是开局那两门随机炮', () => {
     const world = freshRun(60);
     // 手动改一个槽,模拟"半局里换过武器":读档必须拿到改后的这一份
     world.weapons[0]!.type = 3;

@@ -19,7 +19,7 @@ const IDLE_COLOR = '#5f7a99';
 const VALUE_COLOR = '#c8dcf0';
 const LINE_COLOR = '#2b4a6e';
 
-/** 满屏遮罩,与结算/起手界面同款:铺满吃下全部 pointer-events,菜单期间点不到战场 */
+/** 满屏遮罩,与结算界面同款:铺满吃下全部 pointer-events,菜单期间点不到战场 */
 const ROOT_CSS =
   'position:fixed;inset:0;display:none;align-items:center;justify-content:center;' +
   'background:rgba(5,7,13,.82);' +
@@ -46,13 +46,13 @@ const KEY_CSS = `color:${VALUE_COLOR};display:inline-block;width:76px;text-align
 const KEYDESC_CSS = `color:${IDLE_COLOR};display:inline-block;text-align:left;letter-spacing:.06em;`;
 
 export interface PauseMenuHooks {
-  /** 战斗运行中?(main 传 `() => !run.paused`;时停/结算/起手选择时不响应 Esc) */
+  /** 战斗运行中?(main 传 `() => !run.paused`;时停/结算时不响应 Esc) */
   canPause(): boolean;
   /** 玩家按了 Esc / 「继续」:main 置 run.paused = true 冻结世界 */
   onPause(): void;
   /** 「继续」:main 置 run.paused = false 恢复战斗 */
   onResume(): void;
-  /** 「再来一局」(换种子):main 走 restart —— 弹起手选择,由 main 顺带 hide 本菜单 */
+  /** 「再来一局」(换种子):main 走 restart —— 直接开新局,由 main 顺带 hide 本菜单 */
   onRestart(): void;
   /** 「再试一局」(同种子同起手):main 走 retry */
   onRetry(): void;

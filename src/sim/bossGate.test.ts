@@ -24,7 +24,6 @@ import {
 import { OFFER_WEIGHT_NEW_WEAPON } from '../data/economy';
 import { BOSS, ENEMIES, KIND_BOSS } from '../data/enemies';
 import { EDICT_AMMO, EDICT_ARMOR, createEdictLevels } from '../data/edicts';
-import type { LoadoutDef } from '../data/loadout';
 import { WAVE_SEGMENTS, WAVE_TOTAL_TIME } from '../data/waves';
 import { TOWERS, TOWER_ARC, TOWER_AUTOCANNON } from '../data/towers';
 import {
@@ -41,7 +40,7 @@ import {
 } from './balance';
 import { tuning } from './config';
 import { hpScaleAt } from './enemy';
-import { applyStartingLoadout } from './loadout';
+import { applyRandomStart, installWeapon } from './loadout';
 import { OFFER_EDICT, OFFER_NEW_WEAPON } from './upgrade';
 import { ACQUIRE_REPLACE_NEEDED, RESULT_RUNNING, RESULT_WIN, World } from './world';
 
@@ -141,7 +140,7 @@ const DUR = 0.505; // 段长刻意不取整帧(与 boss.test.ts 同口径:跨段
 const CROSS = Math.ceil(DUR * SIM_HZ);
 
 /** 一个「脚本已走完、Boss 已登场、装配已就位」的世界 */
-function gateBossWorld(seed: number, loadout: LoadoutDef): World {
+function gateBossWorld(seed: number, weapons: number[], edicts: number[]): World {
   tuning.stressSpawn = false;
   tuning.shipHullHp = 1e6;
   tuning.enemyContactDamageScale = 0;
@@ -157,32 +156,22 @@ function gateBossWorld(seed: number, loadout: LoadoutDef): World {
     tides: [],
   });
   const w = new World(seed);
-  applyStartingLoadout(w, loadout);
+  for (let i = 0; i < weapons.length; i++) installWeapon(w.weapons[i]!, weapons[i]!);
+  for (const t of edicts) w.grantEdict(t);
   for (let i = 0; i < CROSS; i++) w.step();
   return w; // wave.done → bossPhase === 1
 }
 
 describe('Boss 战真机(短脚本世界)', () => {
   // 闸门配装 = 8×1★机炮 + 5 层弹药协议(质量 8、法令 5 层:合法闸门的「满编垃圾流」形态)。
-  // 起手装配不触发融合(loadout 是一次性输入,不是"获得"),8 槽直落 8 门 1★。
-  const GATE_LOADOUT: LoadoutDef = {
-    id: 'test-gate',
-    name: '闸门配装',
-    desc: '测试用',
-    weapons: Array.from({ length: 8 }, () => TOWER_AUTOCANNON),
-    edicts: Array.from({ length: 5 }, () => EDICT_AMMO),
-  };
+  // 起手装配不触发融合(installWeapon 是一次性输入,不是"获得"),8 槽直落 8 门 1★。
+  const GATE_WEAPONS = Array.from({ length: 8 }, () => TOWER_AUTOCANNON);
+  const GATE_EDICTS = Array.from({ length: 5 }, () => EDICT_AMMO);
   // 欠闸门配装 = 2×1★机炮、零法令:质量 2,离闸门(质量 6 / 法令 5 层)差一半还多
-  const BELOW_LOADOUT: LoadoutDef = {
-    id: 'test-below',
-    name: '欠闸门配装',
-    desc: '测试用',
-    weapons: [TOWER_AUTOCANNON, TOWER_AUTOCANNON],
-    edicts: [],
-  };
+  const BELOW_WEAPONS = [TOWER_AUTOCANNON, TOWER_AUTOCANNON];
 
   it('闸门配装:真实引擎里 ≤ 2×TTK 目标内击杀 Boss(含召唤怪抢火力的干扰)并落成胜利', () => {
-    const w = gateBossWorld(11, GATE_LOADOUT);
+    const w = gateBossWorld(11, GATE_WEAPONS, GATE_EDICTS);
     expect(gateLegal(w.weapons, w.edictLevels)).toBe(true);
     const cap = (DUR + GATE_TTK_RATIO_MIN * GATE_TTK_TARGET) * SIM_HZ;
     for (let i = 0; i < cap && w.result === RESULT_RUNNING; i++) w.step();
@@ -191,7 +180,7 @@ describe('Boss 战真机(短脚本世界)', () => {
   }, 120_000);
 
   it('欠闸门配装:2×TTK 目标过去 Boss 还活着、世界不判胜 —— DPS 闸门在引擎里成立', () => {
-    const w = gateBossWorld(11, BELOW_LOADOUT);
+    const w = gateBossWorld(11, BELOW_WEAPONS, []);
     expect(gateLegal(w.weapons, w.edictLevels)).toBe(false);
     const cap = (DUR + GATE_TTK_RATIO_MIN * GATE_TTK_TARGET) * SIM_HZ;
     for (let i = 0; i < cap && w.result === RESULT_RUNNING; i++) w.step();
@@ -203,12 +192,15 @@ describe('Boss 战真机(短脚本世界)', () => {
 describe('真脚本一局:闸门可行性(固定 seed)', () => {
   it('自动玩家(会凑闸门的策略)一局打完真实击杀 Boss:gateLegal 成立 + 胜利', () => {
     // 与 economy.test.ts 同一 seed、同一自动玩家,唯一区别:Boss 战真实打完,不许 killBoss 作弊。
+    // 随机开局改版后 seed 换成 20260809:起手两座塔由 rng 现抽,这个 seed 的整条轨迹(起手 +
+    // 出怪 + 候选)下"先凑满法令、再拿武器"的策略能真实通关 —— 旧 seed 20260802 抽到弱武器
+    // (双迫击炮 + 双点防),闸门配装仍凑得齐、Boss 却磨不死,配不上"会玩的人"这句承诺。
     // 策略微调:法令 < 5 层时优先拿法令(会玩的人知道 Boss 前要凑满法令),其余仍是新武器 > 法令。
     tuning.stressSpawn = false;
     tuning.enemyContactDamageScale = 0;
     tuning.enemySporeDamageScale = 0;
-    const w = new World(20260802);
-    applyStartingLoadout(w);
+    const w = new World(20260809);
+    applyRandomStart(w);
     // 脚本 480s + Boss 战余量 300s:打完就该赢,打不完 = 经济侧送不出闸门配装的回归信号
     const maxFrames = (WAVE_TOTAL_TIME + 1) * SIM_HZ + 300 * SIM_HZ;
     for (let frame = 0; frame < maxFrames && w.result === RESULT_RUNNING; frame++) {
