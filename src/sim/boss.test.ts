@@ -378,9 +378,9 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     // BOSS.starCoins,绝不会是别的数(面额本身没变,变的只是给不给)。命中与否由那一掷决定,
     // 与 seed 绑定;两档都从开局白送的 STARTING_STAR_COINS 起算(那是余额的地板,不是收入)
     expect([STARTING_STAR_COINS, STARTING_STAR_COINS + BOSS.starCoins]).toContain(w.starCoins);
-    // 经验走掉落物:原地必掉一颗,面额 = 底座 scrap × BOSS.hpMul(Boss 档 12 倍)
+    // 经验走掉落物:原地必掉一颗,面额 = 底座 scrap × BOSS.dropMul(掉落档,与 hpMul 解耦)
     expect(w.drops.size).toBe(1);
-    expect(w.drops.items[0]!.value).toBe(ENEMIES[BOSS.baseKind]!.scrap * BOSS.hpMul);
+    expect(w.drops.items[0]!.value).toBe(ENEMIES[BOSS.baseKind]!.scrap * BOSS.dropMul);
   });
 
   it('Boss 撞击复用 09 受击模型:撞核心区扣 bossContactDamage(大质量,比底座更疼)', () => {

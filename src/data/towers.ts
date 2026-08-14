@@ -230,7 +230,7 @@ export const TOWERS: TowerDef[] = [
     name: '激光棱镜',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(GDD §5.2)
     range: 340, // 占位待调
-    damage: 3, // 占位待调(每 tick;10Hz → 30 dps,"融精英"靠的是持续而不是单发)
+    damage: 3.2, // 自动求解:L₁≈19.6;再平衡跑 npm run balance
     // "持续光束"= 10Hz 的单体伤害 tick + 一条每次开火续命的可视化:
     // 视觉连续、判定离散、确定性简单 —— 真做成 dps × dt 的连续积分,伤害就会跟着帧长漂
     fireInterval: 0.1, // 占位待调
@@ -260,7 +260,7 @@ export const TOWERS: TowerDef[] = [
     pierceAtLv5: 0, // 无 Lv3/Lv5 跳变(GDD §5.5 把"光束穿透"留给了相位切割者进化)
     tint: 0x3ff0e0, // 占位待调(高饱和青)
     growth: {
-      damage: 1.28, // 占位待调(单体输出塔,伤害曲线最陡)
+      damage: 1.8, // 平衡重锚:机炮锚线自带双管/曳光弹跳变,每星步进 ≈ 3.5,光束无跳变全靠这一档追平
       // 射速档恒 1:0.1s 是"把持续伤害离散化"的口径,不是射速旋钮 ——
       // 调快它等于偷偷加 dps,还会让热量收支跟着变,升级效果就说不清了
       fireRate: 1,
@@ -276,8 +276,8 @@ export const TOWERS: TowerDef[] = [
     name: '电弧塔',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
     range: 260, // 占位待调(短程仍是它的代价,只比机炮的 68%,但不再是抽到即坏卡的 58%)
-    damage: 7, // 占位待调(首跳伤害,之后逐跳 × chainFalloff)
-    fireInterval: 0.55, // 占位待调(Lv1 单体 ≈ 12.7 DPS:仍不如机炮 15,但三目标 ≈ 27,清群定位成立)
+    damage: 2.5, // 平衡重锚:单发轻但链跳几何和 ≈ ×2.19(走廊按多目标火力定价,易塔锚线 8.4 只有机炮的 64%)
+    fireInterval: 0.55, // 占位待调(1★ 单体 ≈ 4.5 DPS;链全中 ≈ 10,配锚线 8.4 —— 清蜂群的定位不变)
     turnRate: 300, // 占位待调
     aimTolDeg: 12, // 占位待调(放电不挑准头,广弧塔的容差也该宽)
     throttle: THR_HEAT,
@@ -304,8 +304,8 @@ export const TOWERS: TowerDef[] = [
     pierceAtLv5: 0,
     tint: 0x8ae8ff, // 占位待调(最亮的一档电白蓝)
     growth: {
-      damage: 1.2, // 占位待调
-      fireRate: 1.08, // 占位待调
+      damage: 1.62, // 平衡重锚:链跳随星增链但增速递减,伤害档要补回机炮锚线的步进斜率
+      fireRate: 1.1, // 平衡重锚(与伤害档合起来每星步进 ≈ 3.5,追平锚线)
       range: 1.05, // 占位待调
       heatMax: 1.15, // 占位待调
       chargeRate: 1,
@@ -318,7 +318,7 @@ export const TOWERS: TowerDef[] = [
     name: '磁轨炮',
     arcDeg: ARC_VERY_NARROW_DEG, // 极窄 30°(GDD §5.2:轴线艺术)
     range: 700, // 占位待调(全场最远,换极窄弧)
-    damage: 45, // 占位待调(线上全员吃满,不衰减)
+    damage: 86, // 自动求解:L₁≈50.0;再平衡跑 npm run balance
     // 充能系恒 0:节奏全由 chargeTime 给。再压一层冷却,两个旋钮就会打架
     fireInterval: 0,
     turnRate: 120, // 占位待调(最沉的炮管:想让它开火基本得把船摆正)
@@ -347,7 +347,7 @@ export const TOWERS: TowerDef[] = [
     pierceAtLv5: 0,
     tint: 0x6c7cff, // 占位待调(最深的一档靛蓝)
     growth: {
-      damage: 1.3, // 占位待调(爆发塔,伤害曲线最陡)
+      damage: 1.7, // 自动求解:成长斜率追平锚线;再平衡跑 npm run balance
       fireRate: 1, // 恒 1:充能系的 fireInterval 本就是 0,成长全给 chargeRate
       range: 1.06, // 占位待调
       heatMax: 1,
@@ -361,7 +361,7 @@ export const TOWERS: TowerDef[] = [
     name: '点防阵列',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
     range: 210, // 占位待调(近防:射程仍全场最短 = 机炮的 55%,但漏怪贴脸前多一秒反应窗)
-    damage: 3, // 占位待调(单发轻、靠射速堆;持续 DPS ≈ 18.2 > 机炮 13.2,"最后一道近防闸"才对症)
+    damage: 1.4, // 平衡重锚:全场最容易的塔之一(难度 0.37)→ 锚线 8.6,单发从 3 压到 1.4,持续 ≈ 8.5
     fireInterval: 0.12, // 占位待调
     turnRate: 540, // 占位待调(转得最快:近身目标的角速度最大,慢一点就永远追不上)
     aimTolDeg: 10, // 占位待调
@@ -391,8 +391,8 @@ export const TOWERS: TowerDef[] = [
     pierceAtLv5: 0,
     tint: 0x5ce8b4, // 占位待调(最偏绿的一档冷色,与其余五塔一眼分开)
     growth: {
-      damage: 1.22, // 占位待调
-      fireRate: 1.1, // 占位待调
+      damage: 1.7, // 平衡重锚:易塔的 1★ 被压得很低,全靠这一档追平机炮锚线的步进斜率
+      fireRate: 1.11, // 平衡重锚(与伤害档合起来每星步进 ≈ 3.5)
       range: 1.04, // 占位待调(近防的射程刻意不怎么长)
       heatMax: 1,
       chargeRate: 1,
@@ -428,14 +428,14 @@ export const TOWERS: TowerDef[] = [
     chainFalloff: 0,
     lanceWidth: 0,
     aoeRadius: 90, // 占位待调
-    aoeDamage: 34, // 占位待调(落点全员吃满;等级成长走 towerAoeDamage,与 towerDamage 同口径)
+    aoeDamage: 20, // 平衡重锚:走廊按落点期望命中数(≈ ×3.83)定价,单发从 34 压到 20 —— 落点全员吃满
     interceptsProjectiles: false,
     burst: 0, // 非恒发塔(恒发签名在进化塔轨道火雨上)
     burstAtLv3: 0,
     pierceAtLv5: 0, // 无跳变(GDD §5.5 把"三连发"留给了轨道火雨进化)
     tint: 0x3d8ad6, // 占位待调(最暗的一档钢蓝)
     growth: {
-      damage: 1.26, // 占位待调:迫击炮的伤害全在 AoE,这一档喂的是 towerAoeDamage
+      damage: 1.67, // 平衡重锚:与 chargeRate 档合起来每星步进 ≈ 3.5;伤害全在 AoE,这一档喂的是 towerAoeDamage
       fireRate: 1,
       range: 1.06, // 占位待调
       heatMax: 1,
@@ -452,7 +452,7 @@ export const TOWERS: TowerDef[] = [
     name: '风暴机炮',
     arcDeg: ARC_WIDE_DEG, // 机炮 100° + 50°(= 大 50%,两种读法同数)= 150°,恰好落在广角档
     range: 380, // 占位待调(= 机炮)
-    damage: 6, // 占位待调
+    damage: 8.1, // 自动求解:L₃≈231.5(合成溢价);再平衡跑 npm run balance
     fireInterval: 0.25, // 占位待调(比机炮 0.4 快六成:三把拼一把买断的"倾泻"签名)
     turnRate: 360, // 占位待调
     aimTolDeg: 6, // 占位待调
@@ -495,7 +495,7 @@ export const TOWERS: TowerDef[] = [
     name: '极光阵列',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(= 激光)
     range: 380, // 占位待调(比激光略远)
-    damage: 3, // 占位待调(每 tick)
+    damage: 5.2, // 平衡重锚:穿透 ×2 × 线宽覆盖 × 无过热 ⇒ 3★ 锚线 348,单发 3 → 5.2(每 tick)
     fireInterval: 0.1, // 占位待调(10Hz 离散化口径同激光)
     turnRate: 240, // 占位待调
     aimTolDeg: 3, // 占位待调
@@ -539,7 +539,7 @@ export const TOWERS: TowerDef[] = [
     name: '湮灭长矛',
     arcDeg: ARC_VERY_NARROW_DEG, // 极窄 30°(= 磁轨,轴线艺术不变)
     range: 900, // 占位待调("全屏贯穿":比磁轨 700 再远一截,射程本身就是贯穿的数值化)
-    damage: 50, // 占位待调(比磁轨略高)
+    damage: 154, // 平衡重锚:合成溢价 1.5 × 最难档(难度 6.08)⇒ 3★ 锚线 997,单发 50 → 154
     fireInterval: 0, // 充能系恒 0
     turnRate: 120, // 占位待调(= 磁轨)
     aimTolDeg: 2, // 占位待调
@@ -582,7 +582,7 @@ export const TOWERS: TowerDef[] = [
     name: '雷霆王冠',
     arcDeg: ARC_WIDE_DEG, // 广 150°(= 电弧)
     range: 260, // 占位待调(= 电弧)
-    damage: 7, // 占位待调(首跳伤害)
+    damage: 12, // 平衡重锚:链数翻倍的签名在链跳几何和里只值 ×1.17(2.77→3.24 增速递减),单发 7 → 12 补足溢价线
     fireInterval: 0.55, // 占位待调(= 电弧)
     turnRate: 300, // 占位待调
     aimTolDeg: 12, // 占位待调
@@ -645,7 +645,7 @@ export const TOWERS: TowerDef[] = [
     chainFalloff: 0,
     lanceWidth: 0,
     aoeRadius: 105, // 占位待调(比迫击炮 90 略大:"覆盖更广"的合成签名)
-    aoeDamage: 34, // 占位待调(= 迫击炮)
+    aoeDamage: 27, // 平衡重锚:三连发 × 落点命中 × 合成溢价 ⇒ 3★ 锚线 517,单发 34 → 27
     interceptsProjectiles: false,
     burst: 3, // **三连发**(合成签名):一次充能泄放三颗落点弹(sim/turret.ts 的 fireMortar 读它)
     burstAtLv3: 0,
@@ -666,7 +666,7 @@ export const TOWERS: TowerDef[] = [
     name: '荆棘星幕',
     arcDeg: ARC_WIDE_DEG, // 广 150°(= 点防)
     range: 210, // 占位待调(= 点防)
-    damage: 3, // 占位待调
+    damage: 6.5, // 平衡重锚:点防被压到 1.4 后,荆棘的合成溢价线(3★ 172)要单发 6.5 才追得上
     fireInterval: 0.09, // 占位待调(比点防 0.12 再快一档:"星幕"密度的合成签名)
     turnRate: 540, // 占位待调(= 点防)
     aimTolDeg: 10, // 占位待调
@@ -738,15 +738,15 @@ export const TOWERS: TowerDef[] = [
     chainFalloff: 0, // 非链式
     lanceWidth: 0, // 非穿透线
     aoeRadius: 110, // 占位待调(比迫击炮 90 大:导弹的落点就该比炮弹糊得开)
-    aoeDamage: 26, // 占位待调(单发略轻于迫击炮 34,但一夹六发 ≈ 156 全中 —— 密度换单发)
+    aoeDamage: 3.9, // 自动求解:L₁≈12.5;再平衡跑 npm run balance(落点期望命中 ≈ ×5.2 把易塔的锚线摊得很薄,「补死角的保险」正是 GDD 定位)
     interceptsProjectiles: false,
     burst: 0, // 非恒发塔(一次开火一发;密度由 1.2s 间隔 × 6 发弹夹给)
     burstAtLv3: 0, // 不做 Lv3 跳变:进阶塔的定位是"节流系交叉",不是叠等级小跳变
     pierceAtLv5: 0,
     tint: 0x4ec4f0, // 占位待调(中档天蓝,与 0x66c2ff 机炮拉开一档但仍在冷色域)
     growth: {
-      damage: 1.25, // 占位待调:伤害全在 AoE,这一档喂的是 towerAoeDamage
-      fireRate: 1.1, // 占位待调
+      damage: 1.66, // 平衡重锚:与射速档合起来每星步进 ≈ 3.5;伤害全在 AoE,这一档喂的是 towerAoeDamage
+      fireRate: 1.11, // 平衡重锚(弹夹加法成长附带的 duty 提升也在这条账里)
       range: 1.06, // 占位待调
       heatMax: 1,
       chargeRate: 1, // 不用的乘法档填 1 = 无成长

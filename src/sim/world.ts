@@ -1597,9 +1597,10 @@ export class World {
 
     // 经验掉落物:面额 = 该敌型的 scrap 面值 × 档位倍率 ——
     // 精英 ×3 读 ELITE.scrapMul(旧"3× 残骸"占位字段,16 号后 sim 不再读它,这里重新启用);
-    // Boss ×12 读 BOSS.hpMul(数值表里与"12 倍"同值的唯一倍率 —— 加独立字段请改 data/enemies)
+    // Boss 读 BOSS.dropMul(平衡系统解耦:旧口径挂在 hpMul 上,hpMul 被闸门抬到 52 后
+    // 掉落会跟着变 600 残骸 —— 掉落是经济账、血量是战斗账,两笔账不共用一个旋钮)
     const base = isBoss ? ENEMIES[BOSS.baseKind]!.scrap : ENEMIES[e.kind]!.scrap;
-    const value = isBoss ? base * BOSS.hpMul : e.affixes !== 0 ? base * ELITE.scrapMul : base;
+    const value = isBoss ? base * BOSS.dropMul : e.affixes !== 0 ? base * ELITE.scrapMul : base;
     if (value > 0 && this.drops.size < DROP_MAX_ALIVE) {
       const d = this.drops.spawn();
       d.x = d.px = e.x;

@@ -46,8 +46,14 @@ export interface BossDef {
   name: string;
   /** 体型放大倍率:碰撞半径 = 底座 radius × 它(bossRadius() 的唯一来源) */
   scale: number;
-  /** Boss HP = 底座 hp × 它,再乘 GDD §14 的时间缩放(出生时一次) */
+  /** Boss HP = 底座 hp × 它,再乘 GDD §14 的时间缩放(出生时一次)。
+   *  不再手填:由 Boss 闸门反推(见 sim/balance.ts 的 bossHpMulForGate —— 闸门配装的
+   *  净 DPS × TTK 目标,单测钉 1% 自洽),这里只留最近一次推导的整数值供快速翻阅 */
   hpMul: number;
+  /** Boss 击杀掉落的经验面额 = 底座 scrap × 它。**独立于 hpMul** ——
+   *  旧口径把掉落挂在 hpMul 上(掉 12 倍),hpMul 被闸门抬到 52 后掉落会跟着变 600 残骸;
+   *  掉落是经济账,血量是战斗账,两笔账不该共用一个旋钮(加字段解耦见 world.ts 的掉落结算) */
+  dropMul: number;
   /** 接触伤害 = 底座 contactDamage × 它(大质量撞击伤害更高,09 号模型只换数值) */
   contactDamageMul: number;
   /** 接近段速度 = 底座 speed × 它(大而慢,才压得出"巨型个体"的压迫感) */
@@ -84,7 +90,12 @@ export const BOSS: BossDef = {
   baseKind: KIND_BEETLE,
   name: '合围巨兽',
   scale: 2.5, // 底座半径 14 → 35:比精英(14 × 1.5 = 21)还大一圈
-  hpMul: 12, // 底座 40 → 480(8 分钟时间缩放后 ≈ 826)
+  hpMul: 52, // 闸门反推(平衡系统):Boss HP = 40 × 1.72 × 52 ≈ 3578。
+  // 推导:最弱合法闸门配装(星级质量 ≥ 6、≥3 把武器,取走廊火力最小)≈ 60.3 DPS,
+  // 扣掉清场需求(召唤 151.4 HP/9s ≈ 16.8 DPS)后净 DPS 43.5 × TTK 目标 82.5s / 68.8 ≈ 52.2 → 取整 52。
+  // 欠闸门配装(如 3×1★ ≈ 35 DPS)净 TTK ≈ 200s,期间召唤 22 批 ≈ 3300 未清 HP 把船淹没 ——
+  // 纯 DPS 闸门的完整账见 sim/bossGate.test.ts。调闸门松紧改 data/balance 的 GATE_TTK_TARGET,不是手改这个数。
+  dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦
   contactDamageMul: 2, // 底座 18 → 36:大质量撞击
   speedMul: 0.8, // 底座 70 → 56:大而慢
   accelMul: 0.5, // 底座 4 → 2:转向迟钝

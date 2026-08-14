@@ -98,23 +98,36 @@ describe('slotSustainedDps(理论持续 DPS —— 火力面板的固定数值)'
     expect(slotSustainedDps(slot, def, buffs)).toBeCloseTo((20 * 6) / (19 * 0.4 + 1.5), 5);
   });
 
-  it('无装填买断(风暴机炮)= 纯射速,双管齐射进发数:2×6/0.25 = 48', () => {
+  it('无装填买断(风暴机炮)= 纯射速,双管齐射进发数:2×伤害/间隔(公式重放,数值由平衡求解器拥有)', () => {
     const { slot, def } = setup(TOWER_STORM_CANNON);
-    expect(slotSustainedDps(slot, def, buffs)).toBeCloseTo(48, 5);
+    expect(slotSustainedDps(slot, def, buffs)).toBeCloseTo((2 * def.damage) / def.fireInterval, 5);
   });
 
-  it('过热系摊上锁死罚时:激光 = 30 × 3/(3+2) = 18;无过热签名(极光)不打折 = 30', () => {
+  it('过热系摊上锁死罚时:激光 = 突速 × 锁死周期占比;无过热签名(极光)不打折(公式重放,数值由求解器拥有)', () => {
     const laser = setup(TOWER_LASER);
-    expect(slotSustainedDps(laser.slot, laser.def, buffs)).toBeCloseTo(18, 5);
+    const heatRate = laser.def.heatPerShot / laser.def.fireInterval - laser.def.coolPerSec;
+    const firing = laser.def.heatMax / heatRate;
+    const laserExpected =
+      (laser.def.damage / laser.def.fireInterval) * (firing / (firing + laser.def.overheatLock));
+    expect(slotSustainedDps(laser.slot, laser.def, buffs)).toBeCloseTo(laserExpected, 5);
     const aurora = setup(TOWER_AURORA);
-    expect(slotSustainedDps(aurora.slot, aurora.def, buffs)).toBeCloseTo(30, 5);
+    expect(slotSustainedDps(aurora.slot, aurora.def, buffs)).toBeCloseTo(
+      aurora.def.damage / aurora.def.fireInterval,
+      5,
+    );
   });
 
   it('充能系 = 每发 ÷ 蓄力时长;迫击炮取落点伤害(def.damage 恒 0 不算成哑炮)', () => {
     const rail = setup(TOWER_RAILGUN);
-    expect(slotSustainedDps(rail.slot, rail.def, buffs)).toBeCloseTo(45 / 2.4, 5);
+    expect(slotSustainedDps(rail.slot, rail.def, buffs)).toBeCloseTo(
+      rail.def.damage / rail.def.chargeTime,
+      5,
+    );
     const mortar = setup(TOWER_MORTAR);
-    expect(slotSustainedDps(mortar.slot, mortar.def, buffs)).toBeCloseTo(34 / 3, 5);
+    expect(slotSustainedDps(mortar.slot, mortar.def, buffs)).toBeCloseTo(
+      mortar.def.aoeDamage / mortar.def.chargeTime,
+      5,
+    );
   });
 
   it('法令聚合抬得动它:弹药协议(射速 + 装填)让机炮的持续 DPS 变大,叠第二层再变大', () => {
