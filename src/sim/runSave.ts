@@ -64,9 +64,11 @@ import { RESULT_RUNNING, World } from './world';
  * v8(个体差分):敌人新增 speedMul / biasCos / biasSin 三个字段(EN_STRIDE 15→18)。
  *   它们是出生时从 animSeed × 当时 tuning 差分旋钮折出的定值 —— 读档时不可重算
  *   (调过旋钮再读档,重算会把整场怪的速度/角偏偷偷洗成新档位),必须随实体存。
+ * v9(武器逐星弹道表现):我方子弹新增出膛 stars 快照(BU_STRIDE 14→15)。它不参与伤害判定,
+ *   但决定弹尾、命中与迫击炮落点的星级外观;读档后旧弹不能集体变成当前槽位的星级。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 8;
+export const RUN_SAVE_VERSION = 9;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -89,8 +91,8 @@ export const RUN_SAVE_VERSION = 8;
  * 读档时重算会因旋钮变化(或版本演进)把整场怪的个体差分洗成另一个档位。
  */
 export const EN_STRIDE = 18;
-/** 一颗我方子弹占几个格子:x, y, vx, vy, kind, damage, life, pierce, radius, aoeRadius, aoeDamage, towerType, throttle, intercept(0/1)。不存 px/py */
-export const BU_STRIDE = 14;
+/** 一颗我方子弹占几个格子:x, y, vx, vy, kind, damage, life, pierce, radius, aoeRadius, aoeDamage, towerType, stars, throttle, intercept(0/1)。不存 px/py */
+export const BU_STRIDE = 15;
 /** 一颗敌方弹丸占几个格子:x, y, vx, vy, kind, damage, life, radius。不存 px/py */
 export const EB_STRIDE = 8;
 /** 一颗掉落物占几个格子:x, y, vx, vy, value, magnet(0/1), kind。不存 px/py */
@@ -255,6 +257,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       b.aoeRadius,
       b.aoeDamage,
       b.towerType,
+      b.stars,
       b.throttle,
       b.intercept ? 1 : 0,
     );
@@ -424,8 +427,9 @@ export function restoreRun(snap: RunSnapshot): World {
     b.aoeRadius = snap.bullets[o + 9]!;
     b.aoeDamage = snap.bullets[o + 10]!;
     b.towerType = snap.bullets[o + 11]!;
-    b.throttle = snap.bullets[o + 12]!;
-    b.intercept = snap.bullets[o + 13]! !== 0;
+    b.stars = snap.bullets[o + 12]!;
+    b.throttle = snap.bullets[o + 13]!;
+    b.intercept = snap.bullets[o + 14]! !== 0;
   }
   for (let o = 0; o + EB_STRIDE <= snap.enemyBullets.length; o += EB_STRIDE) {
     const b = world.enemyBullets.spawn();

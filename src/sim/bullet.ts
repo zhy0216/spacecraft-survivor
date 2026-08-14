@@ -81,6 +81,12 @@ export interface Bullet {
   /** 来源塔型(TOWER_*):渲染层据此选纹理/色,09/10 号 issue 的伤害归因也认它 */
   towerType: number;
   /**
+   * 出膛星级快照(1..3):表现层据此画弹尾、命中与落点演出。
+   * 与 damage / towerType 同一条生命周期口径:塔在弹丸飞行途中升星或被替换,
+   * 已经出膛的这一发仍保持原来的外观,也不会把同型低星弹误画成高星弹。
+   */
+  stars: number;
+  /**
    * 来源塔的节流系(THR_*):伤害结算处(World.damageEnemy)的词缀抗性判定认它 ——
    * 装甲抗弹药系、相位抗能量系(14 号)。**发射那一刻定死**,与 damage 同一条口径:
    * 塔被拆掉也不该改变已经出膛的这一发的"伤害类型"。
@@ -112,6 +118,7 @@ export function createBullet(): Bullet {
     aoeRadius: 0,
     aoeDamage: 0,
     towerType: 0,
+    stars: 0,
     throttle: 0, // 0 = THR_AMMO(机炮系);直射弹与抛射弹都只在开火时被覆写
     intercept: false,
   };
@@ -138,6 +145,7 @@ export function resetBullet(b: Bullet): void {
   b.aoeRadius = 0;
   b.aoeDamage = 0;
   b.towerType = 0;
+  b.stars = 0;
   b.throttle = 0; // 漏清:上一发的能量系节流会原样带给下一发(抗性判定认的就是它)
   b.intercept = false; // 漏清:上一发的拦截标记会原样带给下一发,普通弹凭空变成只打弹丸
 }
@@ -231,6 +239,7 @@ function hitDirect(b: Bullet, sink: FireSink): boolean {
     b.towerType,
     best.lastHit,
     best.maxHp > 0 ? best.lastHit / best.maxHp : 0,
+    b.stars,
   );
   if (b.pierce <= 0) return false;
   b.pierce--;
@@ -271,7 +280,7 @@ function pushPast(b: Bullet, e: Enemy, r: number): boolean {
  * 落点偏了多少的唯一读数,吞掉它就等于让迫击炮的抛射变成一次没有反馈的猜谜。
  */
 function blast(b: Bullet, sink: FireSink): void {
-  sink.fx(FXV_BLAST, b.x, b.y, b.x, b.y, b.aoeRadius, b.towerType);
+  sink.fx(FXV_BLAST, b.x, b.y, b.x, b.y, b.aoeRadius, b.towerType, 0, 0, b.stars);
 
   // 全仓唯一一次敢超过一个 cell 的邻域查询,是有意的例外:爆点可能落在 stepTurrets 那份
   // 以船心为心的候选之外(抛射弹本就是越过前排打远处),不自己问一次哈希就会漏掉半圈人。

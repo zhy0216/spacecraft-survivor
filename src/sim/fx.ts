@@ -12,6 +12,7 @@
  * 混进哈希只会让"渲染改一下淡出时长"看起来像确定性回归。同理它**不做插值**(最多差一逻辑帧)。
  * 坐标一律**世界坐标**(不是甲板局部坐标):链电与磁轨的终点本就在船外,局部系表达不了。
  */
+import { FX_LIFE_BEAM, FX_LIFE_BLAST, FX_LIFE_CHAIN, FX_LIFE_LANCE } from '../data/towers';
 import type { Enemy } from './enemy';
 import type { Bullet } from './bullet';
 
@@ -56,7 +57,40 @@ export const FX_LIFE_KILL = 0.25; // 占位待调
 export const FX_LIFE_IMPACT = 0.1;
 // 共振闪光与击杀爆点同量级:它是低频事件(冷却 4s 兜底),0.5s 够眼睛追完一道舷侧弧光
 export const FX_LIFE_RESONANCE = 0.5; // 占位待调
-export const FX_LIFE_STAR_UPGRADE = 0.55;
+export const FX_LIFE_STAR_UPGRADE = 0.85;
+
+/**
+ * 一次表现事件的完整存续时间。开火事件按出膛星级延长余波,其余事件保持既有定值。
+ * 这份函数同时供 World 写入 life 与 Renderer 计算淡出比例,避免两边各维护一张时长表。
+ * 光束刻意不延长:它靠 0.1s tick 连续续命,延长会在停火后拖出不真实的残留光束。
+ */
+export function fxLifeForStars(kind: number, stars = 0): number {
+  const s = stars >= 3 ? 3 : stars >= 2 ? 2 : 1;
+  switch (kind) {
+    case FXV_CHAIN:
+      return FX_LIFE_CHAIN * (s === 3 ? 1.65 : s === 2 ? 1.25 : 1);
+    case FXV_LANCE:
+      return FX_LIFE_LANCE * (s === 3 ? 2.35 : s === 2 ? 1.4 : 1);
+    case FXV_BLAST:
+      return FX_LIFE_BLAST * (s === 3 ? 1.8 : s === 2 ? 1.25 : 1);
+    case FXV_MUZZLE:
+      return FX_LIFE_BEAM * (s === 3 ? 1.75 : s === 2 ? 1.3 : 1);
+    case FXV_IMPACT:
+      return FX_LIFE_IMPACT * (s === 3 ? 2.2 : s === 2 ? 1.45 : 1);
+    case FXV_SPARK:
+      return FX_LIFE_SPARK;
+    case FXV_HULL_HIT:
+      return FX_LIFE_HULL_HIT;
+    case FXV_KILL:
+      return FX_LIFE_KILL;
+    case FXV_RESONANCE:
+      return FX_LIFE_RESONANCE;
+    case FXV_STAR_UPGRADE:
+      return FX_LIFE_STAR_UPGRADE;
+    default:
+      return FX_LIFE_BEAM;
+  }
+}
 
 /**
  * 一次开火/命中的可视化事件。字段全是扁平数字(照 Enemy/Bullet 的口径),
@@ -68,7 +102,7 @@ export interface FxEvent {
   /** 起点(炮口) */
   x0: number;
   y0: number;
-  /** 终点(命中点)。FXV_BLAST 时 = 爆心,与 x0/y0 相同 */
+  /** 终点(命中点)。FXV_BLAST 时 = 爆心;FXV_MUZZLE 时只借 x0→x1 表示开火方向 */
   x1: number;
   y1: number;
   /** FXV_BLAST 的 AoE 半径,其余种类恒 0 */

@@ -61,19 +61,19 @@ import {
 } from '../data/enemies';
 import {
   FX_BULLET,
-  FX_LIFE_BEAM,
-  FX_LIFE_BLAST,
-  FX_LIFE_CHAIN,
-  FX_LIFE_LANCE,
   FX_MORTAR,
+  TOWER_AUTOCANNON,
   TOWER_AURORA,
   TOWER_ANNIHILATION,
   TOWER_ARC,
   TOWER_DELUGE,
   TOWER_LASER,
   TOWER_MORTAR,
+  TOWER_PD,
   TOWER_RAILGUN,
+  TOWER_STORM_CANNON,
   TOWER_THUNDER,
+  TOWER_THORN,
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
@@ -95,11 +95,10 @@ import { ENEMY_HIT_FLASH, enemyRadius, ST_SPORE_WINDUP, ST_WINDUP } from '../sim
 import { BOSS_WINDUP, bossRadius } from '../sim/boss';
 import {
   FX_LIFE_HULL_HIT,
-  FX_LIFE_IMPACT,
   FX_LIFE_KILL,
   FX_LIFE_RESONANCE,
-  FX_LIFE_STAR_UPGRADE,
   FX_LIFE_SPARK,
+  fxLifeForStars,
   FXV_BEAM,
   FXV_BLAST,
   FXV_CHAIN,
@@ -319,6 +318,22 @@ const FX_HULL_HIT_WIDTH = 2.5;
 const FX_IMPACT_COLOR = 0xc8f4ff;
 const FX_IMPACT_LEN = 6;
 const FX_IMPACT_WIDTH = 1.4;
+/** 逐星真实弹道的程序化尾迹。路径按塔型/星级分组后一次 stroke,不为每颗弹新建事件对象。 */
+const BULLET_TRAIL_LENGTH = [0, 4, 10, 19] as const;
+const BULLET_TRAIL_WIDTH = [0, 1.1, 2.1, 3.6] as const;
+const BULLET_TRAIL_ALPHA = [0, 0.38, 0.56, 0.72] as const;
+const BULLET_TRAIL_CORE_WIDTH = 1.05;
+const MORTAR_ORBIT_RADIUS = 7;
+const MORTAR_ORBIT_PARTICLES = 3;
+/** 3★ 命中星芒与爆炸碎片的固定方向:零随机,同一发在存续期内不会抖成噪点。 */
+const FX_STAR_DIRS = [
+  1, 0,
+  0.5, 0.866,
+  -0.5, 0.866,
+  -1, 0,
+  -0.5, -0.866,
+  0.5, -0.866,
+] as const;
 
 /**
  * 击杀爆点 FXV_KILL(畅玩性调整):敌人死亡处一个从敌半径向外扩的短促圆环 + 四条放射短线。
@@ -923,6 +938,27 @@ function fxFade(life: number, full: number): number {
   return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
+/** 表现层统一的星级夹取。旧档/坏值回落 1★,不让数组下标与线宽算出 NaN。 */
+export function visualStarTier(stars: number): 1 | 2 | 3 {
+  return stars >= 3 ? 3 : stars >= 2 ? 2 : 1;
+}
+
+function isAutocannonFamily(type: number): boolean {
+  return type === TOWER_AUTOCANNON || type === TOWER_STORM_CANNON;
+}
+
+function isPointDefenseFamily(type: number): boolean {
+  return type === TOWER_PD || type === TOWER_THORN;
+}
+
+function isRailFamily(type: number): boolean {
+  return type === TOWER_RAILGUN || type === TOWER_ANNIHILATION;
+}
+
+function isMortarFamily(type: number): boolean {
+  return type === TOWER_MORTAR || type === TOWER_DELUGE;
+}
+
 /**
  * 读数比例夹取。`!(t > 0)` 而不是 `t < 0`:**NaN 与任何数比较都是 false**,写成前者才把
  * NaN 一并接住 —— 数值表被改坏时,除出来的 NaN 会让 Graphics 画出长度 NaN 的矩形,
@@ -1047,6 +1083,8 @@ export class Renderer {
    * 上一帧打出去的光束就会甩到别处去。
    */
   private fxG = new Graphics();
+  /** 真弹丸的逐星尾迹/迫击炮环绕微光:压在弹体粒子之下,每帧 clear 后按现存弹丸程序化重画。 */
+  private bulletTrailG = new Graphics();
   /** 炮口闪专层：压在船体之上；其余命中/弹道 FX 仍在船体之下，不能反过来糊住自己的船。 */
   private muzzleFxG = new Graphics();
   /**
@@ -1411,6 +1449,7 @@ export class Renderer {
     // 磁吸宝物(26 号改)紧跟经验残骸:同一层带,宝物压在上——"特别的那一颗"读得出来
     this.worldLayer.addChild(this.dropOrbPc);
     this.worldLayer.addChild(this.sporeBulletPc);
+    this.worldLayer.addChild(this.bulletTrailG);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     // 加速拖尾压在开火光效之下、弹之上:它是船自己的航迹,不该糊住"这一发打中了"的读数
     this.worldLayer.addChild(this.boostTrailG);
@@ -1618,6 +1657,7 @@ export class Renderer {
       const slot = this.bulletSlot[b.towerType];
       if (slot !== undefined && slot >= 0) bBuckets[slot]!.push(b);
     }
+    this.drawBulletTrails(alpha);
     for (let s = 0; s < bBuckets.length; s++) {
       this.syncParticles(this.bulletParticles[s]!, this.bulletPcs[s]!, bBuckets[s]!, {
         texture: this.bulletTextures[s]!,
@@ -1750,6 +1790,7 @@ export class Renderer {
     this.world = world;
     this.weaponSig = '';
     this.muzzleFxG.clear();
+    this.bulletTrailG.clear();
     this.eliteWarnKey = -1;
     this.bossPhaseSeen = -1;
     this.bossEntranceLeft = 0;
@@ -1936,10 +1977,63 @@ export class Renderer {
       slotArc(i, 0, towerArcDeg(def, slot.stars), arcTmp);
       // 不必 wrapAngle:cos/sin 对超出 ±π 的角一样正确,折回只是白算两次三角函数
       const a = arcTmp.center + slot.turretOffset;
-      g.moveTo(hp.x, hp.y).lineTo(hp.x + Math.cos(a) * SLOT_MUZZLE_LEN, hp.y + Math.sin(a) * SLOT_MUZZLE_LEN);
-      drawn++;
+      const stars = visualStarTier(slot.stars);
+      const multiBarrel = stars >= 2 && (isAutocannonFamily(def.type) || isPointDefenseFamily(def.type));
+      if (multiBarrel) {
+        const nx = -Math.sin(a);
+        const ny = Math.cos(a);
+        const spread = isPointDefenseFamily(def.type) ? 1.6 : def.bulletRadius;
+        for (let side = -1; side <= 1; side += 2) {
+          const x0 = hp.x + nx * spread * side;
+          const y0 = hp.y + ny * spread * side;
+          g.moveTo(x0, y0).lineTo(x0 + Math.cos(a) * SLOT_MUZZLE_LEN, y0 + Math.sin(a) * SLOT_MUZZLE_LEN);
+          drawn++;
+        }
+      } else {
+        g.moveTo(hp.x, hp.y).lineTo(hp.x + Math.cos(a) * SLOT_MUZZLE_LEN, hp.y + Math.sin(a) * SLOT_MUZZLE_LEN);
+        drawn++;
+      }
     }
     if (drawn > 0) g.stroke({ width: SLOT_MUZZLE_WIDTH, color: SLOT_MUZZLE_COLOR });
+
+    // 第二趟只画少量逐星常驻读数,避免把圆环/扫描扇混进上面那批炮口线路径里一起描边。
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const slot = w[i]!;
+      const def = TOWERS[slot.type];
+      const hp = WEAPON_HARDPOINTS[i];
+      if (!def || !hp) continue;
+      const stars = visualStarTier(slot.stars);
+      slotArc(i, 0, towerArcDeg(def, slot.stars), arcTmp);
+      const a = arcTmp.center + slot.turretOffset;
+
+      if (stars >= 2 && isPointDefenseFamily(def.type)) {
+        const scan = this.animClock * (stars === 3 ? 5.5 : 3.8) + i * 0.7;
+        const r = stars === 3 ? 8.5 : 6.5;
+        g.circle(hp.x, hp.y, r).stroke({
+          width: stars === 3 ? 1.5 : 1,
+          color: def.tint,
+          alpha: stars === 3 ? 0.36 : 0.22,
+        });
+        g.moveTo(hp.x + Math.cos(scan) * r, hp.y + Math.sin(scan) * r)
+          .arc(hp.x, hp.y, r, scan, scan + (stars === 3 ? Math.PI * 0.78 : Math.PI * 0.48))
+          .stroke({ width: stars === 3 ? 2 : 1.4, color: FX_CORE_COLOR, alpha: 0.62 });
+      }
+
+      // 3★ 充能重武器在最后约 28% 充能段出现"向炮口收缩"的读数,不延迟真实开火。
+      if (stars === 3 && def.throttle === THR_CHARGE && slot.charge > 0.72) {
+        const q = clamp01((slot.charge - 0.72) / 0.28);
+        const tipX = hp.x + Math.cos(a) * SLOT_MUZZLE_LEN;
+        const tipY = hp.y + Math.sin(a) * SLOT_MUZZLE_LEN;
+        const r = 11 - q * 7;
+        g.circle(tipX, tipY, r).stroke({ width: 1.2 + q * 1.8, color: def.tint, alpha: 0.28 + q * 0.55 });
+        for (let k = 0; k < 3; k++) {
+          const p = this.animClock * 6 + (k / 3) * Math.PI * 2;
+          g.circle(tipX + Math.cos(p) * r, tipY + Math.sin(p) * r, 1.1 + q * 0.8);
+        }
+        g.fill({ color: FX_CORE_COLOR, alpha: 0.5 + q * 0.42 });
+        g.circle(tipX, tipY, 1.5 + q * 2.2).fill({ color: FX_CORE_COLOR, alpha: 0.72 + q * 0.25 });
+      }
+    }
   }
 
   /** 常驻星级徽记:一颗星保持干净炮位,2★/3★ 用冷金色菱点分层。 */
@@ -2285,6 +2379,93 @@ export class Renderer {
   }
 
   /**
+   * 真实弹丸的逐星尾迹。按「塔型桶 × 星级」合并路径后一次 stroke:
+   * 500 弹压测下最多几十次描边,不会退化成每颗弹一次 Graphics 提交。
+   * 迫击炮的环绕微光同样只画表现,不生成 Bullet、不参与碰撞。
+   */
+  private drawBulletTrails(alpha: number): void {
+    const g = this.bulletTrailG;
+    g.clear();
+
+    for (let s = 0; s < this.bulletBuckets.length; s++) {
+      const bucket = this.bulletBuckets[s]!;
+      const def = this.bulletDefs[s]!;
+      for (let tier = 1 as 1 | 2 | 3; tier <= 3; tier = (tier + 1) as 1 | 2 | 3) {
+        let paths = 0;
+        const pointDefense = isPointDefenseFamily(def.type);
+        const mortar = def.fx === FX_MORTAR;
+        const lengthMul = pointDefense ? 0.72 : mortar ? 1.25 : 1;
+        const len = BULLET_TRAIL_LENGTH[tier] * lengthMul;
+
+        for (let i = 0; i < bucket.length; i++) {
+          const b = bucket[i]!;
+          if (visualStarTier(b.stars) !== tier) continue;
+          const speed = Math.hypot(b.vx, b.vy);
+          if (speed <= 0) continue;
+          const x = b.px + (b.x - b.px) * alpha;
+          const y = b.py + (b.y - b.py) * alpha;
+          const ux = b.vx / speed;
+          const uy = b.vy / speed;
+          g.moveTo(x - ux * len, y - uy * len).lineTo(x, y);
+          paths++;
+        }
+        if (paths > 0) {
+          g.stroke({
+            width: BULLET_TRAIL_WIDTH[tier],
+            color: def.tint,
+            alpha: BULLET_TRAIL_ALPHA[tier],
+          });
+        }
+
+        // 2★/3★ 再描一条冷白细芯:宽晕交代能量量级,细芯交代真实运动方向。
+        if (tier >= 2 && paths > 0) {
+          for (let i = 0; i < bucket.length; i++) {
+            const b = bucket[i]!;
+            if (visualStarTier(b.stars) !== tier) continue;
+            const speed = Math.hypot(b.vx, b.vy);
+            if (speed <= 0) continue;
+            const x = b.px + (b.x - b.px) * alpha;
+            const y = b.py + (b.y - b.py) * alpha;
+            const core = len * (tier === 3 ? 0.78 : 0.62);
+            g.moveTo(x - (b.vx / speed) * core, y - (b.vy / speed) * core).lineTo(x, y);
+          }
+          g.stroke({
+            width: BULLET_TRAIL_CORE_WIDTH,
+            color: FX_CORE_COLOR,
+            alpha: tier === 3 ? 0.92 : 0.72,
+          });
+        }
+
+        if (!mortar || tier < 2) continue;
+        let motes = 0;
+        let rings = 0;
+        for (let i = 0; i < bucket.length; i++) {
+          const b = bucket[i]!;
+          if (visualStarTier(b.stars) !== tier) continue;
+          const x = b.px + (b.x - b.px) * alpha;
+          const y = b.py + (b.y - b.py) * alpha;
+          const count = tier === 3 ? MORTAR_ORBIT_PARTICLES : 2;
+          const phase = this.animClock * (tier === 3 ? 5.2 : 3.6) + b.x * 0.003 + b.y * 0.002;
+          // 最后 180ms 把环绕光点吸回弹芯:不延迟真实落点，只给 3★ 爆炸补上“压缩 → 爆发”的前半拍。
+          const landingScale = 0.25 + 0.75 * clamp01(b.life / 0.18);
+          for (let k = 0; k < count; k++) {
+            const a = phase + (k / count) * Math.PI * 2;
+            const r = MORTAR_ORBIT_RADIUS * (tier === 3 ? 1 : 0.72) * landingScale;
+            g.circle(x + Math.cos(a) * r, y + Math.sin(a) * r, tier === 3 ? 1.35 : 1);
+            motes++;
+          }
+          if (tier === 3) {
+            g.circle(x, y, (5.5 + Math.sin(phase * 0.7) * 0.8) * landingScale);
+            rings++;
+          }
+        }
+        if (motes > 0) g.fill({ color: FX_CORE_COLOR, alpha: tier === 3 ? 0.9 : 0.65 });
+        if (rings > 0) g.stroke({ width: 1.2, color: def.tint, alpha: 0.52 });
+      }
+    }
+  }
+
+  /**
    * 开火光效(05 号 issue T5):照 world.fx.items 逐个事件画,按 life 淡出。
    *
    * **不做插值**:FxEvent 的坐标是"开火那一逻辑帧"的世界坐标,给它插值就得再存一份 prev、
@@ -2327,9 +2508,26 @@ export class Renderer {
         case FXV_BEAM: {
           // 细实线 + **常亮**:激光是 10Hz 的伤害 tick + 每帧续命的可视化(见 05 设计约定),
           // 按 life 线性淡出会把"持续光束"画成一闪一闪的虚线 —— 那正好毁掉它与另外三类的区别
-          const t = fxFade(e.life, FX_LIFE_BEAM);
-          const star = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          const star = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, star));
           const starMul = star <= 1 ? 1 : star === 2 ? 1.55 : 2.2;
+          const dx = e.x1 - e.x0;
+          const dy = e.y1 - e.y0;
+          const len = Math.hypot(dx, dy);
+          if (star >= 2 && len > 0) {
+            const nx = -dy / len;
+            const ny = dx / len;
+            const offset = star === 3 ? 4.5 : 2.5;
+            for (let side = -1; side <= 1; side += 2) {
+              g.moveTo(e.x0 + nx * offset * side, e.y0 + ny * offset * side)
+                .lineTo(e.x1 + nx * offset * side, e.y1 + ny * offset * side);
+            }
+            g.stroke({
+              width: star === 3 ? 2 : 1.2,
+              color,
+              alpha: (star === 3 ? 0.36 : 0.25) * t,
+            });
+          }
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
             .stroke({ width: FX_BEAM_GLOW_WIDTH * starMul, color, alpha: FX_BEAM_GLOW_ALPHA * t });
@@ -2340,20 +2538,92 @@ export class Renderer {
               color: FX_CORE_COLOR,
               alpha: FX_BEAM_CORE_ALPHA_FLOOR + (1 - FX_BEAM_CORE_ALPHA_FLOOR) * t,
             });
+          if (star === 3 && len > 0) {
+            // 三颗能量节沿判定线稳定流向目标;只画表现,不新增伤害 tick。
+            const phase = (this.animClock * 0.9 + e.x0 * 0.0017 + e.y0 * 0.0011) % 1;
+            for (let k = 0; k < 3; k++) {
+              const f = (phase + k / 3) % 1;
+              g.circle(e.x0 + dx * f, e.y0 + dy * f, 1.5 + 0.8 * t);
+            }
+            g.fill({ color: FX_CORE_COLOR, alpha: 0.72 * t });
+            // 炮口三片光阑 + 命中日冕:建立 3★ 激光自己的几何签名。
+            const base = Math.atan2(dy, dx);
+            for (let k = 0; k < 3; k++) {
+              const a = base + (k / 3) * Math.PI * 2;
+              g.moveTo(e.x0 + Math.cos(a) * 3, e.y0 + Math.sin(a) * 3)
+                .lineTo(e.x0 + Math.cos(a) * 9, e.y0 + Math.sin(a) * 9);
+            }
+            g.stroke({ width: 1.5, color: FX_CORE_COLOR, alpha: 0.7 * t });
+            const corona = 5 + Math.sin(this.animClock * 9) * 1.2;
+            g.circle(e.x1, e.y1, corona).stroke({ width: 2, color, alpha: 0.58 * t });
+          }
           break;
         }
         case FXV_CHAIN: {
           // 一跳一个事件,首尾相接自然连成整条链;折角是它与光束唯一的形状差别,故必须画
-          const t = fxFade(e.life, FX_LIFE_CHAIN);
-          const star = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
-          this.strokeChainHop(e.x0, e.y0, e.x1, e.y1, color, FX_CHAIN_ALPHA * t * (star >= 3 ? 1.18 : star === 2 ? 1.08 : 1));
+          const star = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, star));
+          if (star >= 2) {
+            this.strokeChainHop(
+              e.x0,
+              e.y0,
+              e.x1,
+              e.y1,
+              color,
+              (star === 3 ? 0.34 : 0.22) * t,
+              star === 3 ? 3.8 : 2.8,
+              -0.52,
+            );
+          }
+          if (star === 3) {
+            this.strokeChainHop(e.x0, e.y0, e.x1, e.y1, color, 0.32 * t, 5.2, 1);
+          }
+          this.strokeChainHop(
+            e.x0,
+            e.y0,
+            e.x1,
+            e.y1,
+            star === 3 ? FX_CORE_COLOR : color,
+            FX_CHAIN_ALPHA * t * (star >= 3 ? 1.18 : star === 2 ? 1.08 : 1),
+            star === 3 ? 2.4 : FX_CHAIN_WIDTH,
+            1,
+          );
+          if (star >= 2) {
+            const nodeR = star === 3 ? 4.5 : 2.8;
+            g.circle(e.x1, e.y1, nodeR).stroke({ width: star === 3 ? 1.8 : 1.2, color, alpha: 0.7 * t });
+            if (star === 3) {
+              for (let k = 0; k < FX_STAR_DIRS.length; k += 2) {
+                const dx = FX_STAR_DIRS[k]! * nodeR * 1.8;
+                const dy = FX_STAR_DIRS[k + 1]! * nodeR * 1.8;
+                g.moveTo(e.x1, e.y1).lineTo(e.x1 + dx, e.y1 + dy);
+              }
+              g.stroke({ width: 1.1, color: FX_CORE_COLOR, alpha: 0.54 * t });
+            }
+          }
           break;
         }
         case FXV_LANCE: {
           // 唯一"越来越细"的一类:光柱随 life 从 FX_LANCE_WIDTH 收成一条芯线,
           // 读起来就是"贯穿的那一瞬间已经过去,现在只剩余波"
-          const t = fxFade(e.life, FX_LIFE_LANCE);
-          const lanceStars = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          const lanceStars = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, lanceStars));
+          const dx = e.x1 - e.x0;
+          const dy = e.y1 - e.y0;
+          const len = Math.hypot(dx, dy);
+          const nx = len > 0 ? -dy / len : 0;
+          const ny = len > 0 ? dx / len : 0;
+          if (lanceStars >= 2 && len > 0) {
+            const offset = lanceStars === 3 ? 8 : 4.5;
+            for (let side = -1; side <= 1; side += 2) {
+              g.moveTo(e.x0 + nx * offset * side, e.y0 + ny * offset * side)
+                .lineTo(e.x1 + nx * offset * side, e.y1 + ny * offset * side);
+            }
+            g.stroke({
+              width: lanceStars === 3 ? 3.2 : 1.8,
+              color,
+              alpha: (lanceStars === 3 ? 0.28 : 0.2) * t,
+            });
+          }
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
             .stroke({
@@ -2364,15 +2634,45 @@ export class Renderer {
             });
           g.moveTo(e.x0, e.y0)
             .lineTo(e.x1, e.y1)
-            .stroke({ width: FX_LANCE_CORE_WIDTH, color: FX_CORE_COLOR, alpha: t });
+            .stroke({ width: lanceStars === 3 ? 3.2 : FX_LANCE_CORE_WIDTH, color: FX_CORE_COLOR, alpha: t });
+          if (lanceStars === 3 && len > 0) {
+            const p = 1 - t;
+            const ring = 8 + p * 28;
+            g.circle(e.x0, e.y0, ring).stroke({ width: 3.2 * t, color: FX_CORE_COLOR, alpha: 0.72 * t });
+            g.circle(e.x1, e.y1, ring * 0.72).stroke({ width: 2.2 * t, color, alpha: 0.48 * t });
+            // 空间裂痕:沿射线定距放六段交错短缝,随余波慢慢拉开。
+            for (let k = 1; k <= 6; k++) {
+              const f = k / 7;
+              const cx = e.x0 + dx * f;
+              const cy = e.y0 + dy * f;
+              const side = k % 2 === 0 ? 1 : -1;
+              const crack = 5 + 13 * p;
+              g.moveTo(cx - nx * crack * side, cy - ny * crack * side)
+                .lineTo(cx + nx * crack * 0.35 * side, cy + ny * crack * 0.35 * side);
+            }
+            g.stroke({ width: 1.5, color, alpha: 0.38 * t });
+          }
           break;
         }
         case FXV_STAR_UPGRADE: {
-          const t = fxFade(e.life, FX_LIFE_STAR_UPGRADE);
+          const t = fxFade(e.life, fxLifeForStars(e.kind, e.stars));
           const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(e.stars || 1)));
           const p = 1 - t;
           const r = FX_STAR_UPGRADE_R0 + (FX_STAR_UPGRADE_R1 - FX_STAR_UPGRADE_R0) * p;
-    const tint = FX_STAR_COLORS[stars - 1] ?? FX_STAR_COLORS[0];
+          const tint = FX_STAR_COLORS[stars - 1] ?? FX_STAR_COLORS[0];
+          if (stars === 3) {
+            // 前段向内抽离、随后点燃核心:与后面的向外签名爆发形成方向反差。
+            const collapse = clamp01((0.2 - p) / 0.2);
+            if (collapse > 0) {
+              const cr = 18 + collapse * 46;
+              for (let k = 0; k < FX_STAR_DIRS.length; k += 2) {
+                g.circle(e.x0 + FX_STAR_DIRS[k]! * cr, e.y0 + FX_STAR_DIRS[k + 1]! * cr, 2.2);
+              }
+              g.fill({ color: FX_CORE_COLOR, alpha: collapse * 0.85 });
+            }
+            const ignite = clamp01(1 - Math.abs(p - 0.22) / 0.14);
+            if (ignite > 0) g.circle(e.x0, e.y0, 8 + ignite * 20).fill({ color: FX_CORE_COLOR, alpha: ignite * 0.72 });
+          }
           g.circle(e.x0, e.y0, r).stroke({ width: 3 + stars, color: tint, alpha: t * 0.9 });
           g.circle(e.x0, e.y0, r * 0.48).stroke({ width: 2, color: FX_CORE_COLOR, alpha: t });
           this.drawStarUpgradeBurst(g, e, heading, stars, t, tint);
@@ -2383,7 +2683,9 @@ export class Renderer {
           // 唯一的圆。实心盘一直摊在**真实 aoeRadius** 上交代"炸到多大一片",
           // 扩张环负责"炸了"这件事本身 —— 环收尾那一帧正好压在盘的边界上,
           // 于是这一层同样守得住射界叠加层那条"可视化 = 实际作用范围"的口径。
-          const t = fxFade(e.life, FX_LIFE_BLAST);
+          const stars = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, stars));
+          const p = 1 - t;
           const r = e.radius * (FX_BLAST_START + (1 - FX_BLAST_START) * (1 - t));
           g.circle(e.x0, e.y0, e.radius).fill({ color, alpha: FX_BLAST_FILL_ALPHA * t });
           g.circle(e.x0, e.y0, r).stroke({
@@ -2391,6 +2693,31 @@ export class Renderer {
             color: FX_CORE_COLOR,
             alpha: t,
           });
+          if (stars >= 2) {
+            const inner = e.radius * (0.18 + p * 0.64);
+            g.circle(e.x0, e.y0, inner).stroke({
+              width: stars === 3 ? 3.2 : 2,
+              color,
+              alpha: (stars === 3 ? 0.68 : 0.45) * t,
+            });
+          }
+          if (stars === 3) {
+            const outer1 = e.radius * (0.48 + p * 0.9);
+            const outer2 = e.radius * (0.62 + p * 1.12);
+            g.circle(e.x0, e.y0, outer1).stroke({ width: 2.1, color: FX_CORE_COLOR, alpha: 0.42 * t });
+            g.circle(e.x0, e.y0, outer2).stroke({ width: 1.4, color, alpha: 0.24 * t });
+            const flash = clamp01((0.24 - p) / 0.24);
+            if (flash > 0) g.circle(e.x0, e.y0, e.radius * (0.14 + 0.2 * flash)).fill({ color: FX_CORE_COLOR, alpha: flash * 0.82 });
+            const shardStart = e.radius * (0.35 + p * 0.45);
+            const shardEnd = shardStart + e.radius * (0.22 + p * 0.3);
+            for (let k = 0; k < FX_STAR_DIRS.length; k += 2) {
+              const ux = FX_STAR_DIRS[k]!;
+              const uy = FX_STAR_DIRS[k + 1]!;
+              g.moveTo(e.x0 + ux * shardStart, e.y0 + uy * shardStart)
+                .lineTo(e.x0 + ux * shardEnd, e.y0 + uy * shardEnd);
+            }
+            g.stroke({ width: 1.8, color: FX_CORE_COLOR, alpha: 0.55 * t });
+          }
           break;
         }
         case FXV_SPARK: {
@@ -2427,11 +2754,28 @@ export class Renderer {
           break;
         }
         case FXV_IMPACT: {
-          const t = fxFade(e.life, FX_LIFE_IMPACT);
-          const len = FX_IMPACT_LEN * t;
+          const stars = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, stars));
+          const len = FX_IMPACT_LEN * t * (stars === 3 ? 1.7 : stars === 2 ? 1.25 : 1);
           g.moveTo(e.x0 - len, e.y0).lineTo(e.x0 + len, e.y0);
           g.moveTo(e.x0, e.y0 - len).lineTo(e.x0, e.y0 + len);
-          g.stroke({ width: FX_IMPACT_WIDTH, color: FX_IMPACT_COLOR, alpha: t });
+          g.stroke({ width: FX_IMPACT_WIDTH * (stars === 3 ? 1.45 : 1), color: FX_IMPACT_COLOR, alpha: t });
+          if (stars >= 2) {
+            const p = 1 - t;
+            g.circle(e.x0, e.y0, 3 + p * (stars === 3 ? 12 : 6)).stroke({
+              width: stars === 3 ? 2 : 1.2,
+              color,
+              alpha: (stars === 3 ? 0.66 : 0.42) * t,
+            });
+          }
+          if (stars === 3) {
+            for (let k = 0; k < FX_STAR_DIRS.length; k += 2) {
+              const ux = FX_STAR_DIRS[k]!;
+              const uy = FX_STAR_DIRS[k + 1]!;
+              g.moveTo(e.x0 + ux * 3, e.y0 + uy * 3).lineTo(e.x0 + ux * len * 1.25, e.y0 + uy * len * 1.25);
+            }
+            g.stroke({ width: 1.1, color: FX_CORE_COLOR, alpha: 0.72 * t });
+          }
           if (playAudio) audioBus.playHurt('spark');
           break;
         }
@@ -2468,15 +2812,49 @@ export class Renderer {
           // 否则同色实心圆落在同色塔块上仍等于没画。life 复用最短的 FX_LIFE_BEAM。
           // 坐标 = sim 开火那一帧用 slotMuzzleWorld 算好的世界坐标(见 sim/turret),
           // 渲染层不再回查槽位 —— 与光束/链电那几类同一份"事件自带世界坐标"的口径。
-          const t = fxFade(e.life, FX_LIFE_BEAM);
-          const stars = e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType);
+          const stars = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
+          const t = fxFade(e.life, fxLifeForStars(e.kind, stars));
           const radius = FX_MUZZLE_RADIUS * (0.65 + 0.35 * t) * (stars === 3 ? 1.3 : stars === 2 ? 1.12 : 1);
+          const aim = Math.atan2(e.y1 - e.y0, e.x1 - e.x0);
+          const nx = -Math.sin(aim);
+          const ny = Math.cos(aim);
           muzzleG
             .circle(e.x0, e.y0, radius)
             .fill({ color, alpha: FX_MUZZLE_ALPHA * t })
             .stroke({ width: FX_MUZZLE_RING_WIDTH, color: FX_CORE_COLOR, alpha: t })
             .circle(e.x0, e.y0, FX_MUZZLE_CORE_RADIUS)
             .fill({ color: FX_CORE_COLOR, alpha: t });
+          if (stars >= 2 && isAutocannonFamily(e.towerType)) {
+            const spread = 3.2;
+            for (let side = -1; side <= 1; side += 2) {
+              muzzleG.circle(e.x0 + nx * spread * side, e.y0 + ny * spread * side, radius * 0.42);
+            }
+            muzzleG.fill({ color: FX_CORE_COLOR, alpha: 0.84 * t });
+          }
+          if (stars === 3) {
+            const p = 1 - t;
+            const shock = radius * (1.1 + p * (isRailFamily(e.towerType) ? 3.4 : 1.8));
+            muzzleG.circle(e.x0, e.y0, shock).stroke({
+              width: isRailFamily(e.towerType) ? 3.2 : 2,
+              color: isRailFamily(e.towerType) ? FX_CORE_COLOR : color,
+              alpha: (isRailFamily(e.towerType) ? 0.82 : 0.52) * t,
+            });
+            const cone = isRailFamily(e.towerType) ? 26 : isMortarFamily(e.towerType) ? 18 : 13;
+            for (let side = -1; side <= 1; side += 2) {
+              const a = aim + side * (isRailFamily(e.towerType) ? 0.08 : 0.18);
+              muzzleG.moveTo(e.x0, e.y0).lineTo(e.x0 + Math.cos(a) * cone, e.y0 + Math.sin(a) * cone);
+            }
+            muzzleG.stroke({ width: 1.6, color: FX_CORE_COLOR, alpha: 0.68 * t });
+            if (e.towerType === TOWER_ARC || e.towerType === TOWER_THUNDER) {
+              const crown = 7 + p * 6;
+              for (let k = 0; k < FX_STAR_DIRS.length; k += 2) {
+                const ux = FX_STAR_DIRS[k]!;
+                const uy = FX_STAR_DIRS[k + 1]!;
+                muzzleG.moveTo(e.x0 + ux * 2, e.y0 + uy * 2).lineTo(e.x0 + ux * crown, e.y0 + uy * crown);
+              }
+              muzzleG.stroke({ width: 1.5, color, alpha: 0.72 * t });
+            }
+          }
           break;
         }
         case FXV_RESONANCE: {
@@ -2520,6 +2898,8 @@ export class Renderer {
     y1: number,
     color: number,
     alpha: number,
+    width = FX_CHAIN_WIDTH,
+    kinkScale = 1,
   ): void {
     const g = this.fxG;
     const dx = x1 - x0;
@@ -2529,14 +2909,14 @@ export class Renderer {
     // 单位法线:把折点推离连线用
     const nx = -dy / len;
     const ny = dx / len;
-    const amp = len * FX_CHAIN_KINK;
+    const amp = len * FX_CHAIN_KINK * kinkScale;
     g.moveTo(x0, y0);
     for (let k = 0; k < FX_CHAIN_KINK_AT.length; k++) {
       const s = FX_CHAIN_KINK_AT[k]!;
       const o = FX_CHAIN_KINK_OFF[k]! * amp;
       g.lineTo(x0 + dx * s + nx * o, y0 + dy * s + ny * o);
     }
-    g.lineTo(x1, y1).stroke({ width: FX_CHAIN_WIDTH, color, alpha });
+    g.lineTo(x1, y1).stroke({ width, color, alpha });
   }
 
   /**
@@ -2759,8 +3139,12 @@ export class Renderer {
       const e = items[i]!;
       if (e.juicePlayed) continue;
       e.juicePlayed = true;
+      const stars = visualStarTier(e.stars > 0 ? e.stars : this.fxStarsForTower(e.towerType));
       if (e.kind === FXV_HULL_HIT) this.shakeTrauma += 0.85;
-      else if (e.kind === FXV_IMPACT) this.shakeTrauma += 0.08;
+      else if (e.kind === FXV_LANCE && stars === 3) this.shakeTrauma += 0.95;
+      else if (e.kind === FXV_BLAST) this.shakeTrauma += stars === 3 ? 0.92 : stars === 2 ? 0.18 : 0;
+      else if (e.kind === FXV_STAR_UPGRADE && stars === 3) this.shakeTrauma += 0.72;
+      else if (e.kind === FXV_IMPACT) this.shakeTrauma += stars === 3 ? 0.24 : stars === 2 ? 0.12 : 0.08;
       else if (e.kind === FXV_KILL) this.shakeTrauma += 0.035;
       // 齐射共振的轻震:≤ 击杀档 —— 它是自己船的齐射不是挨打,只给"这一舷响了"的手感
       else if (e.kind === FXV_RESONANCE) this.shakeTrauma += 0.03;

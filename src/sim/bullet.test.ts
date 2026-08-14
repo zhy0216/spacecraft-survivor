@@ -52,6 +52,7 @@ interface FxLog {
   towerType: number;
   damage: number;
   dmgRatio: number;
+  stars: number;
 }
 interface QueryLog {
   x: number;
@@ -95,8 +96,8 @@ function harness(...enemies: Enemy[]): Harness {
       e.lastHit = amount; // 与 World.damageEnemy 同一条"实际结算量写给敌对象"的口径
       return applyDamage(e, amount);
     },
-    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0) => {
-      fxs.push({ kind, x0, y0, x1, y1, radius, towerType, damage, dmgRatio });
+    fx: (kind, x0, y0, x1, y1, radius, towerType, damage = 0, dmgRatio = 0, stars = 0) => {
+      fxs.push({ kind, x0, y0, x1, y1, radius, towerType, damage, dmgRatio, stars });
     },
     query: (x, y, r, out) => {
       queries.push({ x, y, r });
@@ -352,7 +353,7 @@ describe('抛射弹(BK_MORTAR):途中不碰撞,落点炸一片', () => {
   const R_BLAST = MORTAR.aoeRadius + R_SWARM;
 
   /** 一发飞 60 帧、落在 (600, 0) 的迫击炮弹 */
-  function mortarBullet(h: Harness): Bullet {
+  function mortarBullet(h: Harness, fields: Partial<Bullet> = {}): Bullet {
     return fire(h, {
       kind: BK_MORTAR,
       x: 0,
@@ -365,6 +366,7 @@ describe('抛射弹(BK_MORTAR):途中不碰撞,落点炸一片', () => {
       aoeRadius: MORTAR.aoeRadius,
       aoeDamage: MORTAR.aoeDamage,
       towerType: TOWER_MORTAR,
+      ...fields,
     });
   }
 
@@ -401,7 +403,7 @@ describe('抛射弹(BK_MORTAR):途中不碰撞,落点炸一片', () => {
 
   it('无条件推一个 FXV_BLAST(爆心/半径/塔型都对得上),哪怕一个人都没炸到', () => {
     const h = harness();
-    mortarBullet(h);
+    mortarBullet(h, { stars: 3 });
     h.step(60);
 
     expect(h.fxs.length).toBe(1);
@@ -415,6 +417,7 @@ describe('抛射弹(BK_MORTAR):途中不碰撞,落点炸一片', () => {
     // 画出来的圈 = 真的炸到的那个圈:射界叠加层"可视化 = 实际作用范围"的口径在这一层也成立
     expect(fx.radius).toBe(MORTAR.aoeRadius);
     expect(fx.towerType).toBe(TOWER_MORTAR);
+    expect(fx.stars).toBe(3); // 落地时继承出膛快照，不回查当前槽位
   });
 
   it('落点的死者不吃伤害(同帧被别人打死的不该再算一次)', () => {

@@ -94,10 +94,6 @@ import {
   mergeResultOf as dataMergeResultOf,
 } from '../data/merges';
 import {
-  FX_LIFE_BEAM,
-  FX_LIFE_BLAST,
-  FX_LIFE_CHAIN,
-  FX_LIFE_LANCE,
   THR_AMMO,
   THR_CHARGE,
   THR_HEAT,
@@ -108,7 +104,14 @@ import {
 } from '../data/towers';
 import { UNLOCK_EDICT, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
 import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
-import { createWeaponSlots, slotMaxStars, swapWeaponSlots, type WeaponSlot, WEAPON_SLOT_COUNT } from './armory';
+import {
+  createWeaponSlots,
+  slotMaxStars,
+  swapWeaponSlots,
+  type WeaponSlot,
+  WEAPON_HARDPOINTS,
+  WEAPON_SLOT_COUNT,
+} from './armory';
 import { type Bullet, createBullet, resetBullet, stepBullets } from './bullet';
 import { tuning } from './config';
 import { hullDamageTaken, hullMaxHp, shipRadius } from './damage';
@@ -143,23 +146,14 @@ import {
 } from './enemy';
 import {
   createFxEvent,
-  FX_LIFE_HULL_HIT,
-  FX_LIFE_IMPACT,
-  FX_LIFE_KILL,
-  FX_LIFE_RESONANCE,
-  FX_LIFE_STAR_UPGRADE,
-  FX_LIFE_SPARK,
+  fxLifeForStars,
   type FireSink,
   type FxEvent,
-  FXV_BLAST,
-  FXV_CHAIN,
   FXV_HULL_HIT,
   FXV_IMPACT,
   FXV_KILL,
-  FXV_LANCE,
   FXV_RESONANCE,
   FXV_STAR_UPGRADE,
-  FXV_SPARK,
   resetFxEvent,
 } from './fx';
 import type { EnemyBulletSink } from './enemyBullet';
@@ -268,41 +262,6 @@ const DPS_SMOOTH_DECAY = Math.exp(-SIM_DT / DPS_SMOOTH_TAU);
 const DPS_SMOOTH_IMPULSE = (1 - DPS_SMOOTH_DECAY) / SIM_DT;
 /** 两股相反压力把方向向量抵消时同样回退，避免 atan2(≈0,≈0) 给出随机抖动。 */
 const THREAT_DIRECTION_EPSILON = 1e-6;
-
-/**
- * 可视化事件的存续秒数:开火那几种一律取 data/towers 的 FX_LIFE_*,挨打这两种取 sim/fx.ts 的
- * FX_LIFE_SPARK / FX_LIFE_HULL_HIT(渲染层读的是同一批常量,两边才不会各算各的淡出时长)。
- * 挨打那两个刻意不进数值表:那张表是"某座塔开火的表现有多长",而船上一座塔都没有照样会被撞 ——
- * 放进去只会让平衡调整与受击反馈莫名其妙地耦在一起(理由全文见 sim/fx.ts)。
- * FXV_MUZZLE 数值表没给档 —— 它只是"炮口闪一下",退回最短的那一档(与光束同长)即可;
- * 表里没有的数不该由 sim 现发明一个,那就成了第二处真相。
- * FXV_RESONANCE 同理取 sim/fx.ts 的 FX_LIFE_RESONANCE:共振不是任何一座塔开火,
- * 与击杀/受击同一条"不进数值表"的理由。
- */
-function fxLife(kind: number): number {
-  switch (kind) {
-    case FXV_CHAIN:
-      return FX_LIFE_CHAIN;
-    case FXV_LANCE:
-      return FX_LIFE_LANCE;
-    case FXV_BLAST:
-      return FX_LIFE_BLAST;
-    case FXV_SPARK:
-      return FX_LIFE_SPARK;
-    case FXV_HULL_HIT:
-      return FX_LIFE_HULL_HIT;
-    case FXV_KILL:
-      return FX_LIFE_KILL;
-    case FXV_IMPACT:
-      return FX_LIFE_IMPACT;
-    case FXV_RESONANCE:
-      return FX_LIFE_RESONANCE;
-    case FXV_STAR_UPGRADE:
-      return FX_LIFE_STAR_UPGRADE;
-    default:
-      return FX_LIFE_BEAM;
-  }
-}
 
 /**
  * —— 齐射共振判定(24 号,broadside 时刻复活)——
@@ -861,7 +820,7 @@ export class World {
       e.y1 = y1;
       e.radius = radius;
       e.towerType = towerType;
-      e.life = fxLife(kind);
+      e.life = fxLifeForStars(kind, stars);
       e.damage = damage;
       e.dmgRatio = dmgRatio;
       e.stars = stars;
@@ -1365,8 +1324,8 @@ export class World {
 
     // 拦截弹 × 弹丸的命中结算(22 号):两边都移动完的这一帧末,线段 × 圆判定,
     // 命中 = 双回池 + FXV_IMPACT(确认这一发打在弹丸上)。零 rng、零分配
-    stepInterceptHits(this.bullets, this.enemyBullets, (towerType, x, y) => {
-      this.sink.fx(FXV_IMPACT, x, y, x, y, 0, towerType);
+    stepInterceptHits(this.bullets, this.enemyBullets, (towerType, x, y, stars) => {
+      this.sink.fx(FXV_IMPACT, x, y, x, y, 0, towerType, 0, 0, stars);
     });
 
     // 残骸:起吸 → 匀速直追 → 收取,收到多少当帧进账(规则全在 sim/drop.ts,这里只给它池与船心)。
@@ -1946,6 +1905,17 @@ export class World {
     return ACQUIRE_OK;
   }
 
+  /** 升星仪式锚在幸存武器硬点，而不是船心；事件仍使用世界坐标，不要求渲染层回查槽位。 */
+  private emitStarUpgrade(slotIndex: number, towerType: number, stars: number): void {
+    const hp = WEAPON_HARDPOINTS[slotIndex];
+    if (!hp) return;
+    const cos = Math.cos(this.ship.heading);
+    const sin = Math.sin(this.ship.heading);
+    const x = this.ship.x + hp.x * cos - hp.y * sin;
+    const y = this.ship.y + hp.x * sin + hp.y * cos;
+    this.sink.fx(FXV_STAR_UPGRADE, x, y, x, y, 0, towerType, 0, 0, stars);
+  }
+
   /**
    * 三合一升星合成(用户设计会):**同型同星的槽凑满 3 把 → 当场合为 1 把同型星 +1**。
    *   3× 1★ → 1× 2★;3× 2★ → 1× 3★(2★ 合成 3★ 时若这一型有配方,当场换装成配方结果塔,
@@ -1970,14 +1940,14 @@ export class World {
         const result = dataMergeResultOf(type);
         if (result >= 0) {
           this.installWeapon(keep, result, STAR_MAX);
-          this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, result, 0, 0, STAR_MAX);
+          this.emitStarUpgrade(keep, result, STAR_MAX);
         } else {
           this.weapons[keep]!.stars = STAR_MAX;
-          this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, type, 0, 0, STAR_MAX);
+          this.emitStarUpgrade(keep, type, STAR_MAX);
         }
       } else {
         this.weapons[keep]!.stars = next; // 升星不清节流状态:这不是免费装填
-        this.sink.fx(FXV_STAR_UPGRADE, this.ship.x, this.ship.y, this.ship.x, this.ship.y, 0, type, 0, 0, next);
+        this.emitStarUpgrade(keep, type, next);
       }
     }
   }

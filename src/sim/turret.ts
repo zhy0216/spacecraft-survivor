@@ -35,7 +35,7 @@ import { type FireSink, FXV_MUZZLE } from './fx';
 import { DEG2RAD, type Ship, wrapAngle } from './ship';
 import type { EdictBuffs } from './edictBuffs';
 import { canFire, onFired, slotTowerDef, stepThrottle } from './tower';
-import { candidates, fire, muzzle } from './turretFire';
+import { candidates, fire, muzzle, projectileBarrelOffset } from './turretFire';
 
 /** 当前这座塔的射界。逐塔覆写,不跨调用留值 */
 const arc: Arc = { center: 0, half: 0 };
@@ -165,7 +165,25 @@ export function stepTurrets(
     if (shots <= 0) continue;
     // 所有塔型共用的一次短促炮口闪:只在真正打出至少一发/一次结算后推事件,哑火不闪。
     // 一次 trigger 只推一条(双管仍是一座塔开了一次火),渲染层按 towerType 取同源冷色。
-    sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type, 0, 0, slot.stars);
+    // x1/y1 带一格单位方向给表现层:双炮口、压缩锥与重炮后坐环都要知道这发朝哪儿。
+    // 它仍是纯表现字段,不参与任何判定;旧的同点坐标只够画一个无方向圆点。
+    // 单发点防的真实炮口按弹夹余量左右交替；其它单发为 0，多管的总炮口闪仍留在中线，
+    // 由渲染层画成双节点。这里与 fireBullets 在 onFired 前读取同一份 slot，侧别必然一致。
+    const flashOffset = shots === 1 ? projectileBarrelOffset(slot, def, 0, shots) : 0;
+    const flashX = muzzle.x - Math.sin(aim) * flashOffset;
+    const flashY = muzzle.y + Math.cos(aim) * flashOffset;
+    sink.fx(
+      FXV_MUZZLE,
+      flashX,
+      flashY,
+      flashX + Math.cos(aim),
+      flashY + Math.sin(aim),
+      0,
+      def.type,
+      0,
+      0,
+      slot.stars,
+    );
     // 与 stepThrottle 传同一个 buffs:写进 cooldown 的那个间隔和逐帧夹取它的那个上限必须同源,
     // 否则法令倍率变化时写进去的新间隔会被下一帧按旧上限夹回去
     onFired(slot, def, shots, buffs);

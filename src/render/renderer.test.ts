@@ -17,6 +17,7 @@ import {
   hitFlashMix,
   type EnemyAnim,
   lerpColor,
+  visualStarTier,
 } from './renderer';
 
 /**
@@ -31,6 +32,17 @@ const peek = (etaSeconds: number): ElitePeek => ({
   kind: 0,
   count: 1,
   affixes: [],
+});
+
+describe('visualStarTier(逐星表现夹取)', () => {
+  it('旧值/坏值回落 1★，2★/3★ 只落在三个稳定档位', () => {
+    expect(visualStarTier(Number.NaN)).toBe(1);
+    expect(visualStarTier(0)).toBe(1);
+    expect(visualStarTier(1)).toBe(1);
+    expect(visualStarTier(2)).toBe(2);
+    expect(visualStarTier(3)).toBe(3);
+    expect(visualStarTier(99)).toBe(3);
+  });
 });
 
 describe('eliteWarnActive(窗口判定)', () => {

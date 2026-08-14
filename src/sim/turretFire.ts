@@ -21,6 +21,8 @@ import {
   FX_CHAIN,
   FX_LANCE,
   FX_MORTAR,
+  TOWER_PD,
+  TOWER_THORN,
   type TowerDef,
   towerChainCount,
   towerPierce,
@@ -46,6 +48,25 @@ export const candidates: Enemy[] = [];
  * 出 fireChain 前 `length = 0`(理由同 candidates:里面装的是池中对象,不许跨调用留着)。
  */
 const chained: Enemy[] = [];
+
+/**
+ * 一次实体弹开火的炮口法向偏移。多管按真实发数居中排开；2★/3★ 点防仍只发一颗，
+ * 但用弹夹余量奇偶确定性地左右交替。调用发生在 onFired 扣弹之前，因此普通射击、
+ * 拦截射击与炮口闪都能读取同一个侧别，不需要新增随机数或持久化计数器。
+ */
+export function projectileBarrelOffset(
+  slot: WeaponSlot,
+  def: TowerDef,
+  shotIndex: number,
+  shots: number,
+): number {
+  const step = def.bulletRadius * 2;
+  if (shots > 1) return -((shots - 1) / 2) * step + shotIndex * step;
+  if (slot.stars >= 2 && (def.type === TOWER_PD || def.type === TOWER_THORN)) {
+    return (Math.floor(slot.ammo) & 1) === 0 ? def.bulletRadius : -def.bulletRadius;
+  }
+  return 0;
+}
 
 /**
  * 按塔型分派一次开火。
@@ -106,27 +127,27 @@ function fireBullets(
   const damage = effectiveDamage(def, slot.stars, damageMul);
   const pierce = towerPierce(def, slot.stars);
   const life = range / def.bulletSpeed;
-  // 多发扇开的整束宽度 = **瞄准容差**,不为它新造一个旋钮:
-  // 于是每一发的方向都还落在"算打得到"的那个锥里(容差之外的方向本就不许开火),
-  // 而且扇开量随塔而变 —— 宽容差的近防散得开,窄容差的主炮几乎是并排两发。
-  // n = 1 时步长恒 0,不必分支;全程无随机(铁律 1)
-  const step = n > 1 ? (def.aimTolDeg * DEG2RAD) / (n - 1) : 0;
-  const base = -((n - 1) / 2) * step;
-
+  // 多管弹沿同一瞄准方向**平行**射出,只把出膛点沿炮口法线排开:
+  // 旧实现把 aimTolDeg 同时当作散布角,2★ 机炮两发会在远距离从小怪两侧稳定掠过 ——
+  // 升级反而降低命中率。aimTolDeg 的本职只是"允许多大误差时开火",不再兼任散布。
+  // 管间距 = 2 × 弹丸半径:n=2 时两个炮口恰为 ±radius,视觉上分得开、又不会夹空最小敌人。
+  const nx = -Math.sin(aim);
+  const ny = Math.cos(aim);
   for (let i = 0; i < n; i++) {
-    const a = aim + base + i * step;
+    const offset = projectileBarrelOffset(slot, def, i, n);
     const b = sink.spawnBullet();
     b.kind = BK_DIRECT;
-    b.x = b.px = muzzle.x;
-    b.y = b.py = muzzle.y;
-    b.vx = Math.cos(a) * def.bulletSpeed;
-    b.vy = Math.sin(a) * def.bulletSpeed;
+    b.x = b.px = muzzle.x + nx * offset;
+    b.y = b.py = muzzle.y + ny * offset;
+    b.vx = Math.cos(aim) * def.bulletSpeed;
+    b.vy = Math.sin(aim) * def.bulletSpeed;
     // 伤害在**发射那一刻定死**:塔升级、槽位被替换都不该改变已经出膛的这一发(见 sim/bullet.ts)
     b.damage = damage;
     b.life = life;
     b.pierce = pierce;
     b.radius = def.bulletRadius;
     b.towerType = def.type;
+    b.stars = slot.stars;
     // 节流系同 damage 一条口径定死:词缀抗性(14 号)在伤害结算处认它,飞行途中不回查塔
     b.throttle = def.throttle;
     // aoeRadius / aoeDamage 保持 resetBullet 清出来的 0:直射弹没有落点 AoE
@@ -177,6 +198,7 @@ function fireMortar(
     b.aoeRadius = def.aoeRadius;
     b.aoeDamage = damage;
     b.towerType = def.type;
+    b.stars = slot.stars;
     b.throttle = def.throttle; // 词缀抗性(14 号)的伤害系判据,发射那一刻定死
   }
   return n;

@@ -36,6 +36,7 @@ import { DEG2RAD, type Ship, wrapAngle } from './ship';
 import type { EdictBuffs } from './edictBuffs';
 import { canFire, effectiveDamage, onFired } from './tower';
 import type { Bullet } from './bullet';
+import { projectileBarrelOffset } from './turretFire';
 
 /** 当前这座塔的射界。逐塔覆写,不跨调用留值(与 turret.ts 同款暂存) */
 const arc: Arc = { center: 0, half: 0 };
@@ -145,11 +146,14 @@ export function stepInterception(
     const tx = best.x + best.vx * t;
     const ty = best.y + best.vy * t;
     const a = Math.atan2(ty - muzzle.y, tx - muzzle.x);
+    const barrelOffset = projectileBarrelOffset(slot, def, 0, 1);
+    const fireX = muzzle.x - Math.sin(a) * barrelOffset;
+    const fireY = muzzle.y + Math.cos(a) * barrelOffset;
 
     const b = sink.spawnBullet();
     b.kind = BK_DIRECT;
-    b.x = b.px = muzzle.x;
-    b.y = b.py = muzzle.y;
+    b.x = b.px = fireX;
+    b.y = b.py = fireY;
     b.vx = Math.cos(a) * def.bulletSpeed;
     b.vy = Math.sin(a) * def.bulletSpeed;
     b.damage = effectiveDamage(def, stars, buffs.damageMul);
@@ -157,11 +161,23 @@ export function stepInterception(
     b.pierce = towerPierce(def, stars);
     b.radius = def.bulletRadius;
     b.towerType = def.type;
+    b.stars = stars;
     b.throttle = def.throttle;
     b.intercept = true; // 拦截弹:只认弹丸,不认敌人(见 hitDirect 的分支与文件头)
 
     // 与 stepTurrets 同款:炮口闪、记节流代价、投一次"这座塔开火"的票
-    sink.fx(FXV_MUZZLE, muzzle.x, muzzle.y, muzzle.x, muzzle.y, 0, def.type, 0, 0, stars);
+    sink.fx(
+      FXV_MUZZLE,
+      fireX,
+      fireY,
+      fireX + Math.cos(a),
+      fireY + Math.sin(a),
+      0,
+      def.type,
+      0,
+      0,
+      stars,
+    );
     onFired(slot, def, 1, buffs);
     sink.fired(i);
   }
@@ -182,7 +198,7 @@ export function stepInterception(
 export function stepInterceptHits(
   bullets: Pool<Bullet>,
   projectiles: Pool<EnemyBullet>,
-  emit: (towerType: number, x: number, y: number) => void,
+  emit: (towerType: number, x: number, y: number, stars: number) => void,
 ): void {
   const bs = bullets.items;
   for (let i = bs.length - 1; i >= 0; i--) {
@@ -211,7 +227,7 @@ export function stepInterceptHits(
       // 命中:双回池 + 事件。倒序回收安全;emit 由 World 实现(记 FXV_IMPACT + 塔色)
       projectiles.despawnAt(j);
       bullets.despawnAt(i);
-      emit(b.towerType, p.x, p.y);
+      emit(b.towerType, p.x, p.y, b.stars);
       break; // 这颗拦截弹已经消失,不再与下一颗弹丸比较
     }
   }

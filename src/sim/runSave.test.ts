@@ -105,6 +105,19 @@ describe('局内存档:capture → restore', () => {
     expect(world.rng.state).toBe(rngBefore);
   });
 
+  it('场上旧弹的出膛星级随档保存:读档后不会按当前槽位星级集体换外观', () => {
+    const world = freshRun(60);
+    const bullet = world.bullets.spawn();
+    bullet.x = bullet.px = 123;
+    bullet.y = bullet.py = -45;
+    bullet.life = 2;
+    bullet.stars = 3;
+    world.weapons[0]!.stars = 1; // 故意与场上旧弹不同，证明没有通过槽位反推
+    const restored = restoreRun(captureRun(world, META));
+    const saved = restored.bullets.items.find((b) => b.x === 123 && b.y === -45);
+    expect(saved?.stars).toBe(3);
+  });
+
   it('v3 快照携带磁吸涌计时:涌进行中存档,读档 checksum 一致且继续推进逐帧一致', () => {
     const world = freshRun(600);
     world.magnetSurgeTime = 1.37; // 涌走到一半的那一帧(拾起宝物置位 2.0 后的任意中间值)
@@ -129,10 +142,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v7 旧档判废(个体差分升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v8 旧档判废(子弹星级快照升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v7json = serializeRunSnapshot(snap).replace('"v":8', '"v":7');
-    expect(parseRunSnapshot(v7json)).toBeNull();
+    const v8json = serializeRunSnapshot(snap).replace('"v":9', '"v":8');
+    expect(parseRunSnapshot(v8json)).toBeNull();
   });
 
   it('特价位(打折机制)随档保存:读档后特价不丢,checksum 一致', () => {
@@ -279,7 +292,7 @@ describe('局内存档:stride 与结构对表', () => {
     // animSeed 反过来:它虽是表现字段却**要存** —— 由出生位置 hash 而来,读档时无从重算
     expect(Object.keys(createEnemy()).length).toBe(EN_STRIDE + 6);
   });
-  it('Bullet:14 存 + px/py 不存', () => {
+  it('Bullet:15 存 + px/py 不存', () => {
     expect(Object.keys(createBullet()).length).toBe(BU_STRIDE + 2);
   });
   it('EnemyBullet:8 存 + px/py 不存', () => {

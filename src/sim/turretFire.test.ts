@@ -5,6 +5,7 @@
  * 在这里逐位钉死,不装 jsdom、不跑一帧世界。
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import { SIM_DT } from '../core/loop';
 import { Pool } from '../core/pool';
 import { KIND_BOSS, KIND_SWARM } from '../data/enemies';
 import {
@@ -13,6 +14,7 @@ import {
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_MORTAR,
+  TOWER_PD,
   TOWER_RAILGUN,
   TOWER_STORM_CANNON,
   TOWERS,
@@ -22,11 +24,11 @@ import {
   type TowerDef,
 } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from './armory';
-import { BK_DIRECT, BK_MORTAR, createBullet, resetBullet, type Bullet } from './bullet';
+import { BK_DIRECT, BK_MORTAR, createBullet, resetBullet, stepBullets, type Bullet } from './bullet';
 import { createEnemy, enemyRadius, type Enemy } from './enemy';
 import { FXV_BEAM, FXV_CHAIN, FXV_LANCE, type FireSink } from './fx';
 import { effectiveAoeDamage, effectiveDamage, slotShotsPerFire } from './tower';
-import { candidates, fire, muzzle } from './turretFire';
+import { candidates, fire, muzzle, projectileBarrelOffset } from './turretFire';
 
 interface Hit {
   e: Enemy;
@@ -41,10 +43,11 @@ interface FxRec {
   y0: number;
   x1: number;
   y1: number;
+  stars: number;
 }
 
 /** FireSink 记录桩:子弹走真池(逐字段可查),伤害与 fx 事件进数组(逐条可对账) */
-function mkSink(): {
+function mkSink(...queryEnemies: Enemy[]): {
   sink: FireSink;
   bullets: Pool<Bullet>;
   hits: Hit[];
@@ -59,12 +62,13 @@ function mkSink(): {
       hits.push({ e, amount, throttle, towerType });
       return false;
     },
-    fx: (kind, x0, y0, x1, y1) => {
-      fxs.push({ kind, x0, y0, x1, y1 });
+    fx: (kind, x0, y0, x1, y1, _radius, _towerType, _damage, _dmgRatio, stars = 0) => {
+      fxs.push({ kind, x0, y0, x1, y1, stars });
     },
     // 五条开火路径都不做邻域查询(候选由调用方填),桩只需要是合法的 FireSink
     query: (_x, _y, _r, out) => {
       out.length = 0;
+      for (let i = 0; i < queryEnemies.length; i++) out.push(queryEnemies[i]!);
     },
     fired: () => {},
   };
@@ -120,7 +124,7 @@ describe('直射弹(FX_BULLET)', () => {
     expect(bullets.size).toBe(0);
   });
 
-  it('发数走 slotShotsPerFire:出膛点在炮口、扇开全落在容差锥内,伤害/射程/穿透按星级当场定死', () => {
+  it('发数走 slotShotsPerFire:多管沿同一瞄准线平行出膛,伤害/射程/穿透/星级当场定死', () => {
     const { sink, bullets } = mkSink();
     muzzle.x = 10;
     muzzle.y = 20;
@@ -131,21 +135,41 @@ describe('直射弹(FX_BULLET)', () => {
     const shots = fire(mkSlot(TOWER_AUTOCANNON, 2), def, mkEnemy(1, 1), aim, range, sink, 1.5);
     expect(shots).toBe(n);
     expect(bullets.size).toBe(n);
-    const half = ((def.aimTolDeg * Math.PI) / 180) / 2;
+    const nx = -Math.sin(aim);
+    const ny = Math.cos(aim);
     for (let i = 0; i < n; i++) {
       const b = bullets.items[i]!;
       expect(b.kind).toBe(BK_DIRECT);
-      expect(b.x).toBe(10);
-      expect(b.y).toBe(20);
-      // 扇开整束宽 = 瞄准容差:每一发都还落在"算打得到"的锥里
-      expect(Math.abs(Math.atan2(b.vy, b.vx) - aim)).toBeLessThanOrEqual(half + 1e-9);
+      const offset = (i - (n - 1) / 2) * def.bulletRadius * 2;
+      expect(b.x).toBeCloseTo(10 + nx * offset, 12);
+      expect(b.y).toBeCloseTo(20 + ny * offset, 12);
+      // 双管只分开出膛点,方向不散开:升级后不会在远距离把小目标夹在两弹之间
+      expect(Math.atan2(b.vy, b.vx)).toBeCloseTo(aim, 12);
       // 伤害在发射那一刻按 stars 定死(星级系统接线:出膛后改塔不改这一发)
       expect(b.damage).toBe(effectiveDamage(def, 2, 1.5));
       expect(b.life).toBe(range / def.bulletSpeed);
       expect(b.pierce).toBe(towerPierce(def, 2));
       expect(b.towerType).toBe(def.type);
+      expect(b.stars).toBe(2);
       expect(b.throttle).toBe(def.throttle);
     }
+  });
+
+  it('2★ 机炮正对最大射程处的静止蜂群蛭:平行双管两发都命中,不再左右夹空', () => {
+    muzzle.x = 0;
+    muzzle.y = 0;
+    const def = TOWERS[TOWER_AUTOCANNON]!;
+    const range = towerRange(def, 2);
+    const target = mkEnemy(range, 0);
+    target.hp = target.maxHp = 1e9; // 两发都能落账,不被第一发击杀闩挡掉
+    const { sink, bullets, hits } = mkSink(target);
+
+    expect(fire(mkSlot(TOWER_AUTOCANNON, 2), def, target, 0, range, sink)).toBe(2);
+    const frames = Math.ceil((range / def.bulletSpeed) / SIM_DT);
+    for (let i = 0; i < frames; i++) stepBullets(bullets, SIM_DT, sink);
+
+    expect(hits).toHaveLength(2);
+    expect(hits.every((h) => h.e === target)).toBe(true);
   });
 
   it('星级接线:同塔 1★ 与 3★ 出膛伤害不同(数据层 getter 钉过,这里钉"开火真的带着 stars 走")', () => {
@@ -156,6 +180,18 @@ describe('直射弹(FX_BULLET)', () => {
     fire(mkSlot(TOWER_AUTOCANNON, 3), def, mkEnemy(1, 1), 0, 300, s3);
     expect(b3.items[0]!.damage).toBe(effectiveDamage(def, 3));
     expect(b3.items[0]!.damage).toBeGreaterThan(b1.items[0]!.damage);
+  });
+
+  it('2★/3★ 点防保持单发，但按扣弹前的弹夹余量确定性地左右交替炮口', () => {
+    const def = TOWERS[TOWER_PD]!;
+    const slot = mkSlot(TOWER_PD, 3);
+    slot.ammo = 80;
+    expect(projectileBarrelOffset(slot, def, 0, 1)).toBe(def.bulletRadius);
+    slot.ammo = 79;
+    expect(projectileBarrelOffset(slot, def, 0, 1)).toBe(-def.bulletRadius);
+    // 1★ 仍走中线；视觉变化不增加真实弹数。
+    slot.stars = 1;
+    expect(projectileBarrelOffset(slot, def, 0, 1)).toBe(0);
   });
 
   it('风暴机炮的双管齐射 = slotShotsPerFire 的恒发数 × 星级跳变,不是漏成单管', () => {
@@ -216,6 +252,7 @@ describe('光束(FX_BEAM)', () => {
     expect(fxs[0]!.y0).toBe(0);
     expect(fxs[0]!.x1).toBe(t.x);
     expect(fxs[0]!.y1).toBe(t.y);
+    expect(fxs[0]!.stars).toBe(1);
   });
 
   it('穿透光束(极光阵列):沿炮口→目标的射线扫到射程尽头 —— 线上全员吃满,线外/身后/射程外/尸体不吃', () => {
@@ -276,6 +313,7 @@ describe('链电(FX_CHAIN)', () => {
     // 每跳一条 FXV_CHAIN,渲染层首尾相接连成整条链
     expect(fxs).toHaveLength(total);
     expect(fxs.every((f) => f.kind === FXV_CHAIN)).toBe(true);
+    expect(fxs.every((f) => f.stars === 1)).toBe(true);
     // 链长改坏(0/负数):首目标照样吃这一下 —— "打得到却不掉血"比"少跳一只"难查得多
     const { sink: s2, hits: h2 } = mkSink();
     const zero = { ...def, chainCount: 0 } as TowerDef;
@@ -316,5 +354,6 @@ describe('穿透直线(FX_LANCE)', () => {
     expect(fxs).toHaveLength(1);
     expect(fxs[0]!.kind).toBe(FXV_LANCE);
     expect(fxs[0]!.x1).toBeCloseTo(range, 9);
+    expect(fxs[0]!.stars).toBe(1);
   });
 });
