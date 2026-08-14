@@ -125,7 +125,7 @@ const TOAST_CSS =
   `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.82);` +
   'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;pointer-events:none;white-space:pre-line;';
 const FLASH_MS = 1500;
-const SHOP_ART_URL = new URL('../../assets/game/ui/shop-bay.svg', import.meta.url).href;
+const SHOP_ART_URL = new URL('../../assets/game/ui/shop-bay-nanobanana.png', import.meta.url).href;
 const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
 
 export interface RefitFlowUi {

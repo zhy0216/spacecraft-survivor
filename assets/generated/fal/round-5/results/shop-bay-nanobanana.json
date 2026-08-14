@@ -1,0 +1,10 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro",
+  "request_id": "019ffd94-204d-7050-917c-7abf485af798",
+  "output": "ui/shop-bay-nanobanana-source.png",
+  "runtime": "assets/game/ui/shop-bay-nanobanana.png",
+  "aspect_ratio": "16:9",
+  "resolution": "1K",
+  "prompt": "A sci-fi salvage dock supply bay, wide 16:9 game key art, dark navy metal, cyan holographic lights, amber work lamps, organized weapon crates, empty space on the left for UI title text, no text or logos, no characters, no watermark."
+}
