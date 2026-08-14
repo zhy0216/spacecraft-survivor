@@ -422,6 +422,37 @@ describe('createGameOverUi', () => {
     expect(root(dom).style.display).toBe('none');
   });
 
+  it('传入胜利终幕钩子时:胜利确认战报进终幕,失败仍走原来的重开流程', () => {
+    let epilogues = 0;
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onRetry() {},
+      onTitle() {},
+      onVictoryContinue: () => epilogues++,
+    });
+    const buttons = dom.created.filter((el) => el.tagName === 'BUTTON');
+    const primary = buttons[0]!;
+    const retry = buttons[1]!;
+    const title = buttons[2]!;
+
+    ui.show(summary({ result: RESULT_WIN }));
+    expect(primary.textContent).toContain('确认战报');
+    expect(retry.style.display).toBe('none');
+    expect(title.style.display).toBe('none');
+    dom.key(keyEvent('Enter'));
+    expect(epilogues).toBe(1);
+    expect(restarts).toBe(0);
+    expect(root(dom).style.display).toBe('none');
+
+    ui.show(summary({ result: RESULT_LOSE }));
+    expect(primary.textContent).toBe('再来一局(Enter)');
+    expect(retry.style.display).toBe('block');
+    expect(title.style.display).toBe('block');
+    primary.listeners.get('click')!(undefined);
+    expect(restarts).toBe(1);
+    expect(epilogues).toBe(1);
+  });
+
   it('收着的时候 Enter 一律不认 —— 战斗中误按回车不该把正打着的一局重开掉', () => {
     const ui = make();
     dom.key(keyEvent('Enter'));

@@ -1,0 +1,13 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro",
+  "request_id": "01a000e9-b6d6-7af2-a6d6-a2e8051772ba",
+  "source": "ui/victory-epilogue-nanobanana-source.png",
+  "runtime": "assets/game/ui/victory-epilogue-nanobanana.webp",
+  "aspect_ratio": "16:9",
+  "resolution": "2K",
+  "output_format": "png",
+  "runtime_conversion": "cwebp -q 88 -m 6 -sharp_yuv",
+  "system_prompt": "You are the cinematic art director for a premium science-fiction roguelike. Produce one cohesive 16:9 game epilogue image with strong visual storytelling, readable silhouettes, restrained detail, and no typography or UI.",
+  "prompt": "Use case: stylized-concept. Asset type: fullscreen victory epilogue key art for STARWRECK. Primary request: show the instant after the player defeats the armored war-beetle blockade boss; this must feel like a hard-won victory that reveals a larger mystery and makes the player want another run. Scene/backdrop: deep space in a dark navy nebula, drifting wreckage from a gigantic crimson biomechanical beetle warship, a newly opened corridor into an unexplored star sector, and far away an ominous colossal hive-like silhouette barely visible through mist. Subject: a compact asymmetrical salvage spaceship built from welded blue-gray armor plates, exposed pipes, modular deck sections, cyan engine glow, and small orange hazard markings, flying away from camera through the shattered boss remains. The boss core is split open and projects a delicate cyan star-map signal pointing toward the distant hive, clearly communicating that the defeated enemy was only a gatekeeper. Style/medium: cinematic painterly science-fiction game concept art, premium key art, grounded industrial materials, cohesive with a dark navy and cyan player palette versus warm crimson enemy remains. Composition/framing: 16:9 landscape, dramatic wide shot, ship and broken boss concentrated from center to right, deep layered scale, quiet dark negative space across the left and lower-left for an external narrative overlay, strong visual path from ship to cyan signal to distant threat. Lighting/mood: exhausted triumph turning into awe and foreboding; cold cyan rim light, fading crimson embers, subtle volumetric nebula. Constraints: one image only; no words, letters, numbers, title, logo, watermark, border, HUD, menu, humans, cockpit close-up, extra ships, or green chroma background. Avoid: cheerful celebration, generic clean white spaceship, Star Wars likeness, crowded composition, illegible silhouettes."
+}

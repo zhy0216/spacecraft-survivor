@@ -284,11 +284,14 @@ export function collectionItemName(entry: UnlockEntry): string {
  *   补的是流程上的一个死角:玩家模式下 Esc 暂停菜单要求 `!run.paused`,而局终之后
  *   run.paused 恒为真 —— 没有这颗按钮的话,一局打完就只剩"再来一局/再试一局"两条路,
  *   想去改个设置或干脆歇一会儿都得刷新页面。
+ * @param opts.onVictoryContinue 胜利局确认战报后的去处。传入时，胜利卡的主按钮不直接重开，
+ *   而是进入全屏终幕；失败局仍保留再来一局 / 同种子重试 / 返回标题三条路。
  */
 export function createGameOverUi(opts: {
   onRestart: () => void;
   onRetry?: () => void;
   onTitle?: () => void;
+  onVictoryContinue?: () => void;
 }): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -339,6 +342,12 @@ export function createGameOverUi(opts: {
   // 可见性自己记一份,不去读 style.display 反解:Enter 的守卫读的就是它,
   // 而"面板收着的时候按 Enter 不该重开"是这道守卫唯一的职责
   let visible = false;
+  /** 最近一次 show 的结果码:胜利 + 有终幕钩子时,主动作从“重开”切成“确认战报” */
+  let shownResult = RESULT_LOSE;
+
+  function continuesToEpilogue(): boolean {
+    return shownResult === RESULT_WIN && opts.onVictoryContinue !== undefined;
+  }
 
   function hide(): void {
     visible = false;
@@ -350,6 +359,15 @@ export function createGameOverUi(opts: {
     // 不该依赖调用方记得那一句 —— 何况 onRestart 里要新建 World,那一瞬间面板还挂着就是花屏
     hide();
     opts.onRestart();
+  }
+
+  function primaryAction(): void {
+    if (!continuesToEpilogue()) {
+      restart();
+      return;
+    }
+    hide();
+    opts.onVictoryContinue?.();
   }
 
   function retry(): void {
@@ -445,7 +463,7 @@ export function createGameOverUi(opts: {
     }
   }
 
-  btn.addEventListener('click', restart);
+  btn.addEventListener('click', primaryAction);
   retryBtn.addEventListener('click', retry);
   titleBtn.addEventListener('click', toTitle);
 
@@ -453,7 +471,7 @@ export function createGameOverUi(opts: {
     // 收着的时候一律不认:战斗中按 Enter/R 不该把正打着的一局重开掉
     if (!visible || e.repeat || isTyping()) return;
     // R = 同 seed 重试(与放置阶段的旋转键无冲突:结算界面弹出时升级流程必然收着)
-    if (opts.onRetry && e.code === 'KeyR') {
+    if (!continuesToEpilogue() && opts.onRetry && e.code === 'KeyR') {
       e.preventDefault();
       retry();
       return;
@@ -463,11 +481,12 @@ export function createGameOverUi(opts: {
     // 默认会再派一次 click —— 那就是一次按键重开两局(第二局立刻被第三局顶掉,
     // 玩家只会看到"重开之后局数莫名其妙跳了")
     e.preventDefault();
-    restart();
+    primaryAction();
   });
 
   return {
     show(s: RunSummary): void {
+      shownResult = s.result;
       titleEl.textContent = resultTitle(s.result);
       // 整块面板只有这几个字用暖色(GDD §12);胜利则是我方冷色域
       titleEl.style.color = s.result === RESULT_LOSE ? LOSE_COLOR : OK_COLOR;
@@ -476,6 +495,12 @@ export function createGameOverUi(opts: {
       renderWeaponReport(s);
       renderUnlocks(s);
       renderCollection(s);
+      // 胜利时先让玩家确认完整战报，再进故事终幕；终幕本身点击后回主菜单，
+      // 所以这张卡不再同时摆重试/回标题三条岔路。失败流程保持原样。
+      const epilogueNext = continuesToEpilogue();
+      btn.textContent = epilogueNext ? '确认战报 · 查看航行结局(Enter)' : '再来一局(Enter)';
+      retryBtn.style.display = epilogueNext ? 'none' : 'block';
+      titleBtn.style.display = epilogueNext ? 'none' : 'block';
       visible = true;
       root.style.display = 'flex';
     },

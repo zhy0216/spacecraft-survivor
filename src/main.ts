@@ -61,6 +61,7 @@ import { applySettings, loadSettings, saveSettings } from './ui/settingsStorage'
 import { createCodexUi } from './ui/codex';
 import { createTitleScreen } from './ui/titleScreen';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
+import { createVictoryEpilogue } from './ui/victoryEpilogue';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
 
@@ -205,12 +206,21 @@ async function boot(): Promise<void> {
     },
   });
 
+  // 胜利终幕必须先于结算页构造:两者都监听 Enter；同一次 keydown 里结算页把终幕 show 出来时，
+  // 终幕监听器已经走过了“当前不可见”的分支，才不会同一按键又立刻把它关掉。
+  const victoryEpilogue = createVictoryEpilogue({ onClose: toTitle });
+
   // 结算界面同样**只建一次**(理由同上:每局多挂一份 Enter 监听器 = 一次回车重开好几局),
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
   // onTitle:局终之后回标题的出口。补的是流程死角 —— 玩家模式下 Esc 暂停菜单要求
   // `!run.paused`,而局终后 run.paused 恒真,没有这颗按钮就只剩重开两条路(见 gameOver.ts)。
   // 存档在 onGameOver 里已经删过,这里不必再管
-  const gameOver = createGameOverUi({ onRestart: restart, onRetry: retry, onTitle: toTitle });
+  const gameOver = createGameOverUi({
+    onRestart: restart,
+    onRetry: retry,
+    onTitle: toTitle,
+    onVictoryContinue: () => victoryEpilogue.show(),
+  });
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
   // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)。
@@ -516,6 +526,7 @@ async function boot(): Promise<void> {
     armoryPanel.hide(); // 上一局那张还开着的布局面板一并收掉(与 setWorld 同一条理由)
     hud.setWorld(world);
     gameOver.hide();
+    victoryEpilogue.hide();
 
     // UI 读数复位。**不动 tuning、不动 run.timeScale**:
     // 那些是玩家自己拖出来的调参状态,重开一局不该顺手替他复原
@@ -599,6 +610,7 @@ async function boot(): Promise<void> {
       armoryPanel,
       hud,
       gameOver,
+      victoryEpilogue,
       titleScreen,
       settingsMenu,
       codex,
@@ -648,6 +660,7 @@ async function boot(): Promise<void> {
     runActive = false;
     run.paused = true;
     gameOver.hide();
+    victoryEpilogue.hide();
     upgradeFlow.hide();
     refitFlow.hide();
     refitOpen = false; // 商店收掉:HUD 恢复随 run.paused 淡出
