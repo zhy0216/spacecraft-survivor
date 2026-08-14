@@ -82,6 +82,9 @@ interface StubEvent {
 }
 
 interface StubEl {
+  tagName: string;
+  src: string;
+  alt: string;
   style: Record<string, string>;
   textContent: string;
   innerHTML: string;
@@ -93,8 +96,11 @@ interface StubEl {
   addEventListener(type: string, handler: (event: StubEvent) => void): void;
 }
 
-function createStubEl(): StubEl {
+function createStubEl(tagName = 'div'): StubEl {
   const element: StubEl = {
+    tagName: tagName.toUpperCase(),
+    src: '',
+    alt: '',
     style: {},
     textContent: '',
     innerHTML: '',
@@ -145,7 +151,7 @@ function installDom(): StubDom {
     clearTimeout(id: number): void { dom.timers.delete(id); },
   };
   globals.document = {
-    createElement: (): StubEl => createStubEl(),
+    createElement: (tagName: string): StubEl => createStubEl(tagName),
     getElementById: (id: string): StubEl | null => id === 'ui' ? dom.ui : null,
   };
   return dom;
@@ -251,8 +257,9 @@ const refreshOf = (dom: StubDom): StubEl => weaponHeadOf(dom).children[1] as Stu
 const cardsOf = (dom: StubDom): StubEl => weaponSectionOf(dom).children[1] as StubEl;
 const pickerOf = (dom: StubDom): StubEl => weaponSectionOf(dom).children[2] as StubEl;
 const starSectionOf = (dom: StubDom): StubEl => shopOf(dom).children[3] as StubEl;
-const edictOf = (dom: StubDom, index: number): StubEl => starSectionOf(dom).children[index + 1] as StubEl;
-const repairOf = (dom: StubDom): StubEl => starSectionOf(dom).children[DOCK_EDICT_COUNT + 1] as StubEl;
+const edictCardsOf = (dom: StubDom): StubEl => starSectionOf(dom).children[1] as StubEl;
+const edictOf = (dom: StubDom, index: number): StubEl => edictCardsOf(dom).children[index] as StubEl;
+const repairOf = (dom: StubDom): StubEl => starSectionOf(dom).children[2] as StubEl;
 const finishOf = (dom: StubDom): StubEl => shopOf(dom).children[4] as StubEl;
 // 舰船图:root 的第二个孩子是它的容器(shop 仍是第一个),里头是 shipDiagram.root
 const boardOf = (dom: StubDom): StubEl => (rootOf(dom).children[1] as StubEl).children[0] as StubEl;
@@ -267,6 +274,8 @@ const edictWrapOf = (dom: StubDom): StubEl => (boardOf(dom).children[3] as StubE
 const chipLayerOf = (dom: StubDom): StubEl =>
   ringOf(dom).children[ringOf(dom).children.length - 1] as StubEl;
 const chipOf = (dom: StubDom, slot: number): StubEl => chipLayerOf(dom).children[slot] as StubEl;
+const hullArtOf = (dom: StubDom): StubEl => ringOf(dom).children[ringOf(dom).children.length - 2] as StubEl;
+const tooltipOf = (dom: StubDom): StubEl => rootOf(dom).children[2] as StubEl;
 
 describe('createRefitFlow 纯商店流程', () => {
   let dom: StubDom;
@@ -394,15 +403,22 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(toastOf(dom).textContent).toBe(refitDenyMessage(SHOP_NO_REFRESH_STARCOINS));
   });
 
-  it('法令行显示名称、效果与 25 星币价格，购买后下架', () => {
+  it('法令卡显示图片、名称与 25 星币价格，悬停才显示效果，购买后下架', () => {
     setup();
-    expect(edictOf(dom, 0).innerHTML).toContain(EDICTS[EDICT_AMMO]!.name);
-    expect(edictOf(dom, 0).innerHTML).toContain(dockEdictEffect(EDICT_AMMO));
-    expect(edictOf(dom, 0).innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
-    fire(edictOf(dom, 0), 'click');
+    const card = edictOf(dom, 0);
+    expect(card.innerHTML).toContain('<img');
+    expect(card.innerHTML).toContain(EDICTS[EDICT_AMMO]!.name);
+    expect(card.innerHTML).not.toContain(dockEdictEffect(EDICT_AMMO));
+    expect(card.innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
+    fire(card, 'mouseenter');
+    expect(tooltipOf(dom).textContent).toContain(dockEdictEffect(EDICT_AMMO).split(' ')[0]);
+    expect(tooltipOf(dom).style.display).toBe('block');
+    fire(card, 'mouseleave');
+    expect(tooltipOf(dom).style.display).toBe('none');
+    fire(card, 'click');
     expect(world.edictCalls).toEqual([0]);
-    expect(edictOf(dom, 0).disabled).toBe(true);
-    expect(edictOf(dom, 0).innerHTML).toContain('已售出');
+    expect(card.disabled).toBe(true);
+    expect(card.innerHTML).toContain('已售出');
   });
 
   it('修复按钮在满血时禁用，残血时调用 buyDockRepair', () => {
@@ -431,6 +447,10 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(chipOf(dom, 1).innerHTML).toContain('右前');
     expect(chipOf(dom, 1).innerHTML).toContain('空槽');
     expect((headOf(dom).children[1] as StubEl).innerHTML).toContain('60/100');
+    expect(((headOf(dom).children[0] as StubEl).children[1] as StubEl).textContent).toBe('舰船背包');
+    expect(hullArtOf(dom).tagName).toBe('IMG');
+    expect(hullArtOf(dom).src).toContain('scrapper-hull.png');
+    expect(hullArtOf(dom).alt).toBe('完整飞船');
   });
 
   it('悬停货架卡把武器虚装到第一个空槽上，移开还原；预览一次都不碰世界', () => {
@@ -484,20 +504,24 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_ARMOR]!.name} ×1`);
   });
 
-  it('武器卡印出数值与系名、同型照报落位方向,同星把数凑到 2 时预说当场合成', () => {
+  it('武器卡只放图片/名称/价格，悬停说明数值、落位方向与当场合成', () => {
     world.weapons[0]!.type = TOWER_AUTOCANNON;
     world.weapons[0]!.stars = 1;
     world.weapons[1]!.type = TOWER_AUTOCANNON;
     world.weapons[1]!.stars = 1;
     setup();
     const card = cardsOf(dom).children[0] as StubEl;
-    expect(card.innerHTML).toContain('射程');
-    expect(card.innerHTML).toContain('/s');
-    expect(card.innerHTML).toContain('弹药系'); // 商店武器卡标好所属系
+    expect(card.innerHTML).toContain('<img');
+    expect(card.innerHTML).toContain('autocannon.png');
+    expect(card.innerHTML).not.toContain('射程');
+    fire(card, 'mouseenter');
+    expect(tooltipOf(dom).textContent).toContain('射程');
+    expect(tooltipOf(dom).textContent).toContain('/s');
+    expect(tooltipOf(dom).textContent).toContain('弹药系');
     // 2× ★ 同型:报同星把数、照报落位方向(同型也占槽),并预说买下当场合 ★★
-    expect(card.innerHTML).toContain('已有 ★ ×2');
-    expect(card.innerHTML).toContain('买下合成 ★★');
-    expect(card.innerHTML).toContain('装到');
+    expect(tooltipOf(dom).textContent).toContain('已有 ★ ×2');
+    expect(tooltipOf(dom).textContent).toContain('买下合成 ★★');
+    expect(tooltipOf(dom).textContent).toContain('装到');
     // 未拥有那一档:清空同型后重画,报「入手 ★」+ 落位方向
     world.weapons[0]!.type = -1;
     world.weapons[0]!.stars = 0;
@@ -505,8 +529,9 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[1]!.stars = 0;
     fire(refreshOf(dom), 'click');
     const fresh = cardsOf(dom).children[0] as StubEl;
-    expect(fresh.innerHTML).toContain('入手 ★');
-    expect(fresh.innerHTML).toContain('装到「正前」'); // 全空，第一个空槽是槽 0
+    fire(fresh, 'mouseenter');
+    expect(tooltipOf(dom).textContent).toContain('入手 ★');
+    expect(tooltipOf(dom).textContent).toContain('装到「正前」'); // 全空，第一个空槽是槽 0
   });
 
   it('完成整备调用 completeRefit，成功才回调', () => {

@@ -33,6 +33,7 @@ import {
   towerRange,
 } from '../data/towers';
 import { edictScopeLabel, EDICTS } from '../data/edicts';
+import { SHIP_HULL_ART_URL } from '../render/artUrls';
 import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING, type WeaponSlot } from '../sim/armory';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
@@ -130,6 +131,11 @@ const HULL_CSS =
 const BOW_CSS =
   'position:absolute;left:50%;top:50%;width:24px;height:3px;margin:-44px 0 0 -12px;' +
   'border-radius:2px;background:#dff2ff;box-shadow:0 0 10px rgba(223,242,255,.6);';
+/** 真实舰壳图原图船头朝右；旋转 -90° 后与本图「船头朝上」的槽位口径对齐。 */
+const HULL_ART_CSS =
+  'position:absolute;left:50%;top:50%;width:154px;height:auto;' +
+  'transform:translate(-50%,-50%) rotate(-90deg);transform-origin:center;pointer-events:none;' +
+  'filter:drop-shadow(0 0 2px rgba(223,242,255,.65)) drop-shadow(0 10px 16px rgba(0,0,0,.5));';
 const CHIP_CSS =
   `position:absolute;width:${CHIP_W}px;height:${CHIP_H}px;box-sizing:border-box;` +
   'padding:5px 6px;border-radius:8px;font:inherit;line-height:1.35;text-align:center;display:flex;' +
@@ -154,8 +160,8 @@ export interface ShipDiagramIncoming {
 }
 
 export interface ShipDiagramState {
-  /** 'view' = 只读舰况;'pick' = 等玩家点一个槽(武器槽满时的替换购买) */
-  mode: 'view' | 'pick';
+  /** 'view' = 只读;'pick' = 商店替换;'swap' = 背包内点两个槽交换 */
+  mode: 'view' | 'pick' | 'swap';
   /** 虚装的武器;null = 没有待买的东西 */
   incoming: ShipDiagramIncoming | null;
   /**
@@ -163,6 +169,8 @@ export interface ShipDiagramState {
    * pick 态下本字段不看:那时"落到哪"由鼠标停在哪一格决定(hoverSlot)。
    */
   target: number;
+  /** swap 态下第一次点中的槽位;-1 / 省略 = 尚未选择 */
+  selected?: number;
 }
 
 export interface ShipDiagramUi {
@@ -173,8 +181,11 @@ export interface ShipDiagramUi {
 }
 
 export interface ShipDiagramOpts {
-  /** 点了第 slot 格(只在 mode = 'pick' 时响);不传 = 纯只读面板 */
+  /** 点了第 slot 格(只在 mode = 'pick' / 'swap' 时响);不传 = 纯只读面板 */
   onSlotClick?(slot: number): void;
+  /** 背包与商店默认共用同一个标题，特殊页可覆盖 */
+  title?: string;
+  eyebrow?: string;
 }
 
 /** 幽灵武器的 DPS 暂存槽:UI 侧也照铁律 3 复用一份,不为每次重画新建对象 */
@@ -212,10 +223,10 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   const titleBox = document.createElement('div');
   const eyebrow = document.createElement('div');
   eyebrow.style.cssText = EYEBROW_CSS;
-  eyebrow.textContent = 'YOUR SHIP';
+  eyebrow.textContent = opts.eyebrow ?? 'SHIP INVENTORY';
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
-  title.textContent = '舰船一览';
+  title.textContent = opts.title ?? '舰船背包';
   titleBox.append(eyebrow, title);
   const readout = document.createElement('div');
   readout.style.cssText = READOUT_CSS;
@@ -243,7 +254,13 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   hull.style.cssText = HULL_CSS;
   const bow = document.createElement('div');
   bow.style.cssText = BOW_CSS;
-  ring.append(hullEdge, hull, bow);
+  const hullArt = document.createElement('img');
+  hullArt.style.cssText = HULL_ART_CSS;
+  hullArt.src = SHIP_HULL_ART_URL;
+  hullArt.alt = '完整飞船';
+  // 资产加载失败时隐藏图片，下面的程序化船壳仍然可读。
+  hullArt.addEventListener('error', () => { hullArt.style.display = 'none'; });
+  ring.append(hullEdge, hull, bow, hullArt);
 
   // 槽位卡片:整局只建一次,此后每次 paint 只改文案与描边(与 armoryPanel 同一条生命周期)。
   // 单独装进一层 chipLayer 并**最后挂**:后挂 = 盖在扇形与船体之上(卡片永远可点),
@@ -288,7 +305,11 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   let lastState: ShipDiagramState = { mode: 'view', incoming: null, target: -1 };
 
   function clickSlot(slot: number): void {
-    if (lastState.mode !== 'pick') return; // 只读态点了也不响:换装的入口只有一个
+    if (lastState.mode === 'view') return;
+    if (lastState.mode === 'swap') {
+      opts.onSlotClick?.(slot);
+      return;
+    }
     // 空槽点不动:与画面上的 disabled 同一条判据(真 DOM 不会点穿 disabled,测试桩会)。
     // 少了这一句,"替换一个空槽"会被当成合法请求送进 World,而那本该是走不到的分支
     const s = lastWorld?.weapons[slot];
@@ -330,6 +351,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
     lastWorld = world;
     lastState = state;
     const pick = state.mode === 'pick';
+    const swap = state.mode === 'swap';
     // pick 态:虚装落在鼠标停着的那一格;view 态:落在调用方算好的空槽上
     const ghostAt = state.incoming ? (pick ? hoverSlot : state.target) : -1;
 
@@ -377,7 +399,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       chip.innerHTML = lines.join('');
 
       // 描边三态:待选(pick 态的可点格)/ 预览命中 / 常态。空槽走虚线,"这里还能装"是一眼的事
-      const highlight = ghostAt === slot || (pick && hoverSlot === slot);
+      const highlight = ghostAt === slot || (pick && hoverSlot === slot) || (swap && state.selected === slot);
       const dashed = !equipped && !ghost;
       chip.style.border = `1px ${dashed ? 'dashed' : 'solid'} ${highlight ? SEL_COLOR : LINE_COLOR}`;
       chip.style.background = highlight
@@ -392,8 +414,8 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
             ? '0 0 14px rgba(255,212,121,.26)'
             : 'none'
         : 'none';
-      // pick 态才可点:只读面板上的格子不是按钮,给出手型只会骗玩家点一下试试
-      const clickable = pick && !!equipped;
+      // 商店替换只能点已装武器；背包换位允许点空槽，用来把武器挪到空方位。
+      const clickable = swap || (pick && !!equipped);
       chip.disabled = !clickable;
       chip.style.cursor = clickable ? 'pointer' : 'default';
       chip.style.opacity = pick && !equipped ? '.45' : '1';
@@ -430,7 +452,11 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
 
     hint.textContent = pick
       ? '点一个武器槽把它换成新武器 · 扇形 = 该槽射界与射程'
-      : '扇形 = 该槽射界与射程 · 上方为船头';
+      : swap
+        ? state.selected !== undefined && state.selected >= 0
+          ? `已选中「${SLOT_FACING_NAME[state.selected] ?? `槽${state.selected}`}」 · 再点一个槽交换位置`
+          : '点两个武器槽交换位置 · 换位不消耗资源'
+        : '扇形 = 该槽射界与射程 · 上方为船头';
   }
 
   return { root, paint };

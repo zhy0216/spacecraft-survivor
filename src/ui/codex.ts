@@ -271,7 +271,7 @@ function imgArt(...urls: Array<string | undefined>): CodexArt | null {
  * (它们由底座 3★ 变身而来,悬停里标"底座合3★"两相印证 —— 渲染层对它们也只有 tint 色块兜底,
  * 图鉴给底座图反而比游戏里更易认);导弹巢与未知型画字形徽章。
  */
-function towerArt(type: number): CodexArt | null {
+export function towerArt(type: number): CodexArt | null {
   if (type >= 0 && type < TOWER_ART_URLS.length) return imgArt(TOWER_ART_URLS[type]);
   for (const r of MERGES) {
     if (r.result === type) return imgArt(TOWER_ART_URLS[r.base]);
@@ -282,7 +282,7 @@ function towerArt(type: number): CodexArt | null {
 }
 
 /** 法令配图:字形徽章,字形与升级卡片同表、tint 取数值表(与卡片色域同一支冷色) */
-function edictArt(type: number): CodexArt | null {
+export function edictArt(type: number): CodexArt | null {
   const def = EDICTS[type];
   if (def === undefined) return null;
   return {
@@ -315,7 +315,7 @@ function starLine(def: TowerDef, stars: number): string {
 }
 
 /** 武器悬停行:标题(合成武器带血统)+ 三条星级读数 */
-function weaponHover(type: number): string[] {
+export function weaponHover(type: number): string[] {
   const def = TOWERS[type];
   if (def === undefined) return [`未知塔型 #${type}`];
   let head = `${def.name} · ${throttleName(def.throttle)}`;
@@ -349,7 +349,7 @@ function eliteHover(entry: UnlockEntry): string[] {
 }
 
 /** 法令悬停行:效果摘要 + 叠层上限(满层即从卡池剔出,上限就是"这条能推多深") */
-function edictHover(type: number): string[] {
+export function edictHover(type: number): string[] {
   const def = EDICTS[type];
   if (def === undefined) return [`未知法令 #${type}`];
   return [edictSummaryText(def), `最多 ${EDICT_MAX_LEVEL} 层`];

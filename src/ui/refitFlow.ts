@@ -1,7 +1,7 @@
 /**
  * 航段整备流程 —— 纯商店(改版:甲板网格删除后的落点)。
  * 旧版的「左甲板工作区 + 三阶段(选拼块/焊接/重排)+ 空间进化」随甲板一起删除,
- * 本流程剩两块:**左侧舰船一览**(ui/shipDiagram)+ **右侧一栏商店** ——
+ * 本流程剩两块:**中间舰船背包**(ui/shipDiagram)+ **右侧一栏商店** ——
  * 武器商店(30 ★/把,各 3 张货架,不满 10 ★ 刷新,槽满转到舰船上点一格替换)、
  * 法令卡(25 ★ 即时生效、无占槽)、付费修复(25 ★ 回 40% HP,满血置灰)、完成整备
  * (completeRefit → hide + onResolved,恢复战斗在 main.ts)。与普通升级彻底分开:
@@ -15,7 +15,7 @@
  *
  * —— 为什么商店里要画船(用户反馈)——
  * 商店搬上地图后,买东西这一刻玩家已经离开了战斗视角:货架上写着"磁轨炮 30 ★",
- * 但"我现在有几把炮、哪个方向是缺口、这把买回来装哪儿"三问全靠记。左侧那张图就是答案 ——
+ * 但"我现在有几把炮、哪个方向是缺口、这把买回来装哪儿"三问全靠记。中间的舰船背包就是答案 ——
  * 八个槽按真实朝向围一圈、每把武器画出自己的射界扇形;**悬停一张货架卡**,它就以幽灵态
  * 虚装到即将落位的那一格上(槽满时则跟着鼠标落在待替换的那一格),于是"买它会变成什么样"
  * 是买之前看得见的事,而不是买完才知道。
@@ -23,7 +23,7 @@
  * —— 替换(武器槽满时)——
  * buyShopWeapon(index) 在槽满且没给替换位时返回 ACQUIRE_REPLACE_NEEDED —— **不扣星币、
  * 货架不动**(world.ts 的 doc 原文),于是"选槽失败/取消"天然一分钱不扣。
- * 面板转入 pick 态:**玩家在左侧舰船图上点一个槽** → 带着 slotIndex 重买一次
+ * 面板转入 pick 态:**玩家在中间舰船背包上点一个槽** → 带着 slotIndex 重买一次
  * (buyShopWeapon(index, slotIndex) 内部完成换装/扣费/下架/查三合一)。
  * 换成在船上点而不是在侧栏列 8 行,是因为要换掉哪一把取决于"它朝哪、射界多宽" ——
  * 那正是列表读不出、非得看图的东西。**不单独调 replaceWeapon**:它不扣星币,
@@ -48,7 +48,7 @@ import {
 } from '../data/economy';
 import { edictDesc, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
-import { throttleName, TOWERS, towerArcDeg, towerRange } from '../data/towers';
+import { TOWERS } from '../data/towers';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -62,11 +62,15 @@ import {
 } from '../sim/world';
 import { audioBus } from '../render/audio';
 import {
+  edictArt,
+  edictHover,
+  towerArt,
+  weaponHover,
+  type CodexArt,
+} from './codex';
+import {
   createShipDiagram,
-  previewSustainedDps,
   SLOT_FACING_NAME,
-  towerGlyph,
-  towerTintCss,
   type ShipDiagramState,
   type ShipDiagramUi,
 } from './shipDiagram';
@@ -83,7 +87,7 @@ const ROOT_CSS =
   'background:radial-gradient(120% 100% at 30% 50%,rgba(4,8,14,.42) 0%,rgba(3,6,11,.68) 100%);' +
   `color:${TEXT_COLOR};font:13px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;` +
   '-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;';
-/** 舰船图的容器:占满商店左边那一半,内容居中;屏太矮时让它自己滚,而不是把图裁掉 */
+/** 舰船背包的容器:占满货架以外的中央区,屏太矮时让它自己滚动 */
 const BOARD_WRAP_CSS =
   'position:absolute;left:0;top:0;bottom:0;right:340px;display:flex;align-items:center;' +
   'justify-content:center;padding:20px;box-sizing:border-box;overflow:auto;pointer-events:none;';
@@ -110,18 +114,21 @@ const REFRESH_BTN_CSS =
   `padding:4px 9px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
   `background:rgba(43,74,110,.28);color:${OK_COLOR};font:inherit;font-size:10px;cursor:pointer;` +
   'letter-spacing:.06em;white-space:nowrap;';
-// 一列而不是两列:武器卡要印下"节流系 · 射界 · 射程 · DPS"与合成进度,两列挤在 340px 侧栏里
-// 会把每一行都折断,而这些数正是"这把值不值 30 星币"的全部依据
-const CARDS_CSS = 'display:grid;grid-template-columns:1fr;gap:8px;';
+// 图鉴式货架：卡面只放大图、名称、价格，数值与合成说明收进悬停 tooltip。
+const CARDS_CSS = 'display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;';
 const CARD_CSS =
-  `min-height:72px;padding:11px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
+  `min-height:126px;padding:7px 5px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
   'background:rgba(18,29,45,.72);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);' +
-  `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;box-sizing:border-box;` +
-  'transition:border-color 100ms,background 100ms,opacity 100ms;';
-const ROW_CSS =
-  `width:100%;padding:8px 10px;border:1px solid ${LINE_COLOR};border-radius:6px;` +
-  'background:rgba(18,29,45,.72);' +
-  `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;transition:border-color 100ms,background 100ms,opacity 100ms;`;
+  `color:${TEXT_COLOR};font:inherit;text-align:center;cursor:pointer;box-sizing:border-box;` +
+  'display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:4px;' +
+  'transition:border-color 100ms,background 100ms,opacity 100ms,transform 100ms;';
+const ITEM_ART_CSS =
+  'display:block;width:68px;height:68px;max-width:100%;object-fit:contain;border-radius:6px;' +
+  'border:1px solid rgba(43,74,110,.6);background:rgba(5,7,13,.66);box-sizing:border-box;';
+const ITEM_NAME_CSS =
+  `display:block;color:${OK_COLOR};font-size:11px;line-height:1.25;min-height:2.5em;` +
+  'word-break:keep-all;overflow-wrap:normal;';
+const ITEM_PRICE_CSS = `display:block;color:${TEXT_COLOR};font-size:10px;line-height:1.25;`;
 const BTN_CSS =
   `width:100%;padding:9px 12px;border:1px solid ${LINE_COLOR};border-radius:6px;` +
   `background:rgba(43,74,110,.28);color:${OK_COLOR};font:inherit;cursor:pointer;letter-spacing:.04em;`;
@@ -132,13 +139,18 @@ const TOAST_CSS =
   'position:fixed;left:28px;bottom:28px;z-index:22;display:none;padding:8px 12px;border-radius:6px;' +
   `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.82);` +
   'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;pointer-events:none;white-space:pre-line;';
+const TIP_CSS =
+  'position:fixed;display:none;max-width:320px;white-space:pre-line;line-height:1.55;' +
+  'z-index:24;pointer-events:none;background:rgba(10,16,26,.98);' +
+  `border:1px solid rgba(43,74,110,.88);border-radius:7px;padding:9px 11px;` +
+  `color:${TEXT_COLOR};font-size:12px;box-shadow:0 12px 30px rgba(0,0,0,.42);`;
 const FLASH_MS = 1500;
 const SHOP_ART_URL = new URL('../../assets/game/ui/shop-bay-nanobanana.png', import.meta.url).href;
-const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
 const REFIT_STYLE =
   '.starwreck-refit-card,.starwreck-refit-button,.starwreck-refit-row{touch-action:manipulation;}' +
   '.starwreck-refit-card:focus-visible,.starwreck-refit-button:focus-visible,.starwreck-refit-row:focus-visible{' +
   'outline:2px solid #dff2ff;outline-offset:2px;box-shadow:0 0 0 4px rgba(154,220,255,.16);}' +
+  '.starwreck-refit-card:hover{border-color:#6d9bc4!important;background:rgba(31,51,75,.9)!important;transform:translateY(-1px);}' +
   '@media (max-width:760px){' +
   '.starwreck-refit-board{left:0!important;right:0!important;top:0!important;bottom:auto!important;' +
   'height:44vh!important;padding:max(10px,env(safe-area-inset-top)) 10px 10px!important;' +
@@ -147,7 +159,7 @@ const REFIT_STYLE =
   'height:56vh!important;padding:16px max(14px,env(safe-area-inset-right)) ' +
   'max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))!important;' +
   'gap:10px!important;border-left:0!important;border-top:1px solid #2b4a6e;box-shadow:0 -16px 38px rgba(0,0,0,.32);}' +
-  '.starwreck-refit-card,.starwreck-refit-row{min-height:76px!important;padding:12px!important;}' +
+  '.starwreck-refit-card,.starwreck-refit-row{min-height:118px!important;padding:7px 5px!important;}' +
   '.starwreck-refit-button{min-height:44px!important;}' +
   '.starwreck-refit-toast{left:max(10px,env(safe-area-inset-left))!important;right:max(10px,env(safe-area-inset-right))!important;' +
   'bottom:max(10px,env(safe-area-inset-bottom))!important;white-space:normal!important;}' +
@@ -283,7 +295,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   weaponSection.append(weaponHead, cards);
 
   // —— 替换态:武器槽满时盖住卡片的那一层。**槽位不在这里列** ——
-  // 要换掉哪一把取决于"它朝哪、射界多宽",那是列表读不出的东西,故选槽整个搬到左侧舰船图上
+  // 要换掉哪一把取决于"它朝哪、射界多宽",那是列表读不出的东西,故选槽整个搬到中间舰船背包上
   // (点击经 createShipDiagram 的 onSlotClick 回到 pickReplacement)。这里只留提示 + 退路。
   const picker = document.createElement('div');
   picker.style.cssText = SECTION_CSS;
@@ -307,18 +319,20 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   const starTitle = document.createElement('div');
   starTitle.style.cssText = SECTION_TITLE_CSS;
   starTitle.textContent = '法令卡';
-  starSection.appendChild(starTitle);
+  const edictCards = document.createElement('div');
+  edictCards.style.cssText = CARDS_CSS;
+  starSection.append(starTitle, edictCards);
   const edictRows: HTMLButtonElement[] = [];
   for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
     const row = document.createElement('button');
-    row.style.cssText = ROW_CSS;
-    row.className = 'starwreck-refit-row';
-    row.style.backgroundImage = `linear-gradient(90deg,rgba(18,29,45,.94),rgba(18,29,45,.7)),url("${EDICT_ART_URL}")`;
-    row.style.backgroundRepeat = 'no-repeat';
-    row.style.backgroundPosition = 'right center';
-    row.style.backgroundSize = '52px 52px';
+    row.style.cssText = CARD_CSS;
+    row.className = 'starwreck-refit-card starwreck-refit-row';
     row.addEventListener('click', () => buyDockEdict(i));
-    starSection.appendChild(row);
+    row.addEventListener('mouseenter', () => showEdictTip(i, row));
+    row.addEventListener('mouseleave', hideTip);
+    row.addEventListener('focus', () => showEdictTip(i, row));
+    row.addEventListener('blur', hideTip);
+    edictCards.appendChild(row);
     edictRows.push(row);
   }
   const repairBtn = document.createElement('button');
@@ -338,7 +352,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shop.append(shopHead, segment, weaponSection, starSection, finish);
   root.appendChild(shop);
 
-  // —— 左半屏:舰船一览(shop 之后挂,故 root.children[0] 仍是 shop) ——
+  // —— 中央区:舰船背包(shop 之后挂,故 root.children[0] 仍是 shop) ——
   const boardWrap = document.createElement('div');
   boardWrap.style.cssText = BOARD_WRAP_CSS;
   boardWrap.className = 'starwreck-refit-board';
@@ -349,10 +363,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   const toast = document.createElement('div');
   toast.style.cssText = TOAST_CSS;
   toast.className = 'starwreck-refit-toast';
+  const tip = document.createElement('div');
+  tip.style.cssText = TIP_CSS;
   const ui = document.getElementById('ui')!;
   const styleEl = document.createElement('style');
   styleEl.textContent = REFIT_STYLE;
   document.head?.appendChild(styleEl);
+  root.appendChild(tip);
   ui.append(root, toast);
 
   // 武器货架卡:与法令行同一条"只建一次、整局复用"的生命周期,syncPanel 只改文案与置灰
@@ -362,9 +379,17 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     card.style.cssText = CARD_CSS;
     card.className = 'starwreck-refit-card';
     card.addEventListener('click', () => buyWeapon(i));
-    // 悬停 = 在左边那张船图上虚装一把给你看(见文件头"为什么商店里要画船")
-    card.addEventListener('mouseenter', () => hoverCardChanged(i));
-    card.addEventListener('mouseleave', () => hoverCardChanged(-1));
+    // 悬停同时做两件事：舰船上虚装预览 + 像图鉴一样弹说明。
+    card.addEventListener('mouseenter', () => {
+      hoverCardChanged(i);
+      showWeaponTip(i, card);
+    });
+    card.addEventListener('mouseleave', () => {
+      hoverCardChanged(-1);
+      hideTip();
+    });
+    card.addEventListener('focus', () => showWeaponTip(i, card));
+    card.addEventListener('blur', hideTip);
     cards.appendChild(card);
     weaponCards.push(card);
   }
@@ -391,6 +416,106 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     if (flashTimer) window.clearTimeout(flashTimer);
     flashTimer = 0;
     toast.style.display = 'none';
+  }
+
+  /** 图鉴的配图结构 → 商店卡可直接使用的 src。多图条目货架只取第一张主图。 */
+  function artSrc(art: CodexArt | null): string | null {
+    if (art === null) return null;
+    if (art.kind === 'img') return art.urls[0] ?? null;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(art.svg)}`;
+  }
+
+  function itemArtHtml(art: CodexArt | null, fallback: string): string {
+    const src = artSrc(art);
+    if (src === null) {
+      return `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;color:${MUTED_COLOR};font-size:28px">${fallback}</span>`;
+    }
+    return `<img style="${ITEM_ART_CSS}" src="${src}" alt="">`;
+  }
+
+  function priceText(discounted: boolean, base: number): string {
+    return discounted
+      ? `特价 ${shopDiscountPrice(base)} ★（原价 ${base} ★）`
+      : `${base} ★`;
+  }
+
+  function placeTip(anchor: HTMLElement): void {
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const rect = typeof anchor.getBoundingClientRect === 'function'
+      ? anchor.getBoundingClientRect()
+      : { left: 8, right: 100, top: 8, bottom: 100 };
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - 344));
+    const below = rect.bottom + 7;
+    // 右栏靠底的法令卡改往上弹，避免说明被视口裁掉。
+    const top = below + 190 <= viewportHeight ? below : Math.max(8, rect.top - 197);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  }
+
+  function hideTip(): void {
+    tip.style.display = 'none';
+  }
+
+  function weaponNotes(type: number): string[] {
+    const c1 = slotStarCount(world.weapons, type, 1);
+    const c2 = slotStarCount(world.weapons, type, 2);
+    const c3 = slotStarCount(world.weapons, type, 3);
+    const mergeResult = mergeResultOf(type);
+    const notes: string[] = [];
+    if (c1 + c2 + c3 > 0) {
+      const parts: string[] = [];
+      if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
+      if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
+      if (c1 > 0) parts.push(`★ ×${c1}`);
+      notes.push(`已有 ${parts.join(' ')}`);
+    } else {
+      notes.push('入手 ★');
+    }
+    const empty = firstEmptySlot();
+    notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
+    if (c1 === 2) {
+      if (c2 === 2) {
+        notes.push(
+          mergeResult >= 0
+            ? `买下连合 ${'★'.repeat(3)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`
+            : `买下连合 ${'★'.repeat(3)}`,
+        );
+      } else {
+        notes.push(`买下合成 ${'★'.repeat(2)}`);
+      }
+    } else if (mergeResult >= 0 && c2 === 2) {
+      notes.push(`再合一把 ${'★'.repeat(2)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
+    }
+    return notes;
+  }
+
+  function showWeaponTip(index: number, anchor: HTMLElement): void {
+    if (!shown) return;
+    const type = world.shopWeapons[index];
+    if (type === undefined || type < 0) return hideTip();
+    const lines = weaponHover(type);
+    lines[0] = `${lines[0] ?? (TOWERS[type]?.name ?? '未知武器')} · ${priceText(
+      world.shopDiscountIndex === DOCK_EDICT_COUNT + index,
+      DOCK_WEAPON_PRICE,
+    )}`;
+    lines.push(weaponNotes(type).join(' · '));
+    tip.textContent = lines.join('\n');
+    tip.style.display = 'block';
+    placeTip(anchor);
+  }
+
+  function showEdictTip(index: number, anchor: HTMLElement): void {
+    if (!shown) return;
+    const type = world.dockEdictOffers[index];
+    if (type === undefined || type < 0) return hideTip();
+    const name = EDICTS[type]?.name ?? `未知法令(${type})`;
+    tip.textContent = [
+      `${name} · ${priceText(world.shopDiscountIndex === index, DOCK_EDICT_PRICE)}`,
+      ...edictHover(type),
+    ].join('\n');
+    tip.style.display = 'block';
+    placeTip(anchor);
   }
 
   /** 按钮置灰三件套(disabled / 透明度 / 光标):各货架共用一份写法 */
@@ -449,19 +574,19 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
    * 过期,真正的裁决始终以 world 的返回码为准。
    */
   function syncPanel(): void {
+    hideTip();
     // 星币余额不在店里印(商店优化):左上统计版(HUD 左列)的 ★ 星币常驻显示,与商店同款金色
 
-    // 武器卡:替换态时整排让位,只露提示与退路(选槽在左边那张船图上)
+    // 武器卡:替换态时整排让位,只露提示与退路(选槽在中间舰船背包上)
     const pickerOpen = pendingBuy !== null;
     cards.style.display = pickerOpen ? 'none' : 'grid';
     picker.style.display = pickerOpen ? 'flex' : 'none';
     if (pendingBuy) {
       const name = TOWERS[pendingBuy.type]?.name ?? '这把武器';
-      pickerHint.textContent = `在左侧舰船上点一个武器槽，把它换成「${name}」；取消不扣星币`;
+      pickerHint.textContent = `在中间舰船背包上点一个武器槽，把它换成「${name}」；取消不扣星币`;
     }
     setGrey(refreshBtn, pickerOpen);
     refreshBtn.textContent = `刷新 ${DOCK_SHOP_REFRESH_PRICE} ★`;
-    const empty = firstEmptySlot();
     for (let i = 0; i < weaponCards.length; i++) {
       const card = weaponCards[i]!;
       const type = world.shopWeapons[i];
@@ -469,49 +594,19 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       setGrey(card, sold || pickerOpen);
       if (sold) {
         card.innerHTML =
-          `<span style="color:${MUTED_COLOR};font-size:12px">` +
-          `${type === undefined ? '本轮无货' : '已售出'}</span>`;
+          `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;` +
+          `color:${MUTED_COLOR};font-size:24px">—</span>` +
+          `<span style="${ITEM_NAME_CSS}color:${MUTED_COLOR}">${type === undefined ? '本轮无货' : '已售出'}</span>`;
         continue;
       }
       const def = TOWERS[type];
-      // 数值行:与舰船图上那一格印的是同一套读数(系名 · 射界 · 射程 · 1★ 持续 DPS),
-      // 于是"货架上这把"与"船上那把"能直接对着比 —— 这正是要不要花 30 星币的全部依据
-      const stats = def
-        ? `${throttleName(def.throttle)} · ${Math.round(towerArcDeg(def, 1))}° · ` +
-          `射程 ${Math.round(towerRange(def, 1))} · ${Math.round(previewSustainedDps(world, type, 1))}/s`
-        : '数值表里没有这一型';
-      // 同型同星的实际把数:三合一升星按它说话,同型买下也照常落槽(空槽 / 替换)
-      const c1 = slotStarCount(world.weapons, type, 1);
-      const c2 = slotStarCount(world.weapons, type, 2);
-      const c3 = slotStarCount(world.weapons, type, 3);
-      const mergeResult = mergeResultOf(type);
-      const notes: string[] = [];
-      if (c1 + c2 + c3 > 0) {
-        const parts: string[] = [];
-        if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
-        if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
-        if (c1 > 0) parts.push(`★ ×${c1}`);
-        notes.push(`已有 ${parts.join(' ')}`);
-      } else {
-        notes.push('入手 ★');
-      }
-      notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
-      // 买下 = 一把 ★。两种"当场触发"提前说;合到 ★★★ 的变身名字也只在这里亮出来
-      if (c1 === 2) {
-        if (c2 === 2) {
-          notes.push(mergeResult >= 0 ? `买下连合 ${'★'.repeat(3)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」` : `买下连合 ${'★'.repeat(3)}`);
-        } else {
-          notes.push(`买下合成 ${'★'.repeat(2)}`);
-        }
-      } else if (mergeResult >= 0 && c2 === 2) {
-        notes.push(`再合一把 ${'★'.repeat(2)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
-      }
       card.innerHTML =
-        `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
-        `<span><span style="color:${towerTintCss(type)}">${towerGlyph(type)}</span> ${def?.name ?? `未知武器(${type})`}</span>` +
-        `<span>${priceHtml(world.shopDiscountIndex === DOCK_EDICT_COUNT + i, DOCK_WEAPON_PRICE)}</span></span>` +
-        `<span style="display:block;color:${TEXT_COLOR};font-size:11px">${stats}</span>` +
-        `<span style="display:block;color:${MUTED_COLOR};font-size:11px">${notes.join(' · ')}</span>`;
+        itemArtHtml(towerArt(type), '?') +
+        `<span style="${ITEM_NAME_CSS}">${def?.name ?? `未知武器(${type})`}</span>` +
+        `<span style="${ITEM_PRICE_CSS}">${priceHtml(
+          world.shopDiscountIndex === DOCK_EDICT_COUNT + i,
+          DOCK_WEAPON_PRICE,
+        )}</span>`;
     }
 
     // 法令卡
@@ -522,21 +617,24 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       setGrey(row, sold);
       if (sold) {
         row.innerHTML =
-          `<span style="color:${MUTED_COLOR};font-size:12px">` +
-          `${type === undefined ? '本轮无货' : '已售出'}</span>`;
+          `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;` +
+          `color:${MUTED_COLOR};font-size:24px">—</span>` +
+          `<span style="${ITEM_NAME_CSS}color:${MUTED_COLOR}">${type === undefined ? '本轮无货' : '已售出'}</span>`;
       } else {
         row.innerHTML =
-          `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
-          `<span>${EDICTS[type]?.name ?? `未知法令(${type})`}</span>` +
-          `<span>${priceHtml(world.shopDiscountIndex === i, DOCK_EDICT_PRICE)}</span></span>` +
-          `<span style="color:${MUTED_COLOR};font-size:11px">${dockEdictEffect(type)}</span>`;
+          itemArtHtml(edictArt(type), '◆') +
+          `<span style="${ITEM_NAME_CSS}">${EDICTS[type]?.name ?? `未知法令(${type})`}</span>` +
+          `<span style="${ITEM_PRICE_CSS}">${priceHtml(
+            world.shopDiscountIndex === i,
+            DOCK_EDICT_PRICE,
+          )}</span>`;
       }
     }
 
     // 付费修复:满血置灰
     setGrey(repairBtn, world.ship.hp >= world.ship.maxHp);
 
-    // 舰船图:与货架同一次重画。买完一把武器、修完一次船,左边那张图当帧就跟上 ——
+    // 舰船背包:与货架同一次重画。买完一把武器、修完一次船,中间的图当帧就跟上 ——
     // 两块面板要是各刷各的,玩家就得靠"关了再开"去确认自己刚买的东西真的装上了
     shipDiagram.paint(world, diagramState());
   }
@@ -568,7 +666,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
 
   /**
    * 买第 index 张武器卡。槽有空位 → 世界当场落位;槽满 → ACQUIRE_REPLACE_NEEDED
-   * (不扣星币、货架不动),转入替换态(选槽在左侧舰船图上);其余失败码照 refitDenyMessage 说人话。
+   * (不扣星币、货架不动),转入替换态(选槽在中间舰船背包上);其余失败码照 refitDenyMessage 说人话。
    */
   function buyWeapon(index: number): void {
     if (!shown || pendingBuy) return;
@@ -693,6 +791,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     shown = false;
     pendingBuy = null;
     hoverCard = -1; // 悬停是纯表现,但留着的话下次开面板会莫名其妙先亮着一格幽灵
+    hideTip();
     root.style.display = 'none';
     ui.style.zIndex = '';
     // 提示条**不清**:那行回执(已购入/已换装)要留到战斗恢复之后才读得到
