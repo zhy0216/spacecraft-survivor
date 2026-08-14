@@ -13,7 +13,7 @@ import {
 } from '../data/economy';
 import { SIM_DT } from '../core/loop';
 import { EDICT_AMMO } from '../data/edicts';
-import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
+import { TOWER_AUTOCANNON, TOWER_LASER, TOWER_STORM_CANNON } from '../data/towers';
 import { ACQUIRE_REPLACE_NEEDED, SHOP_NO_STARCOINS, World } from './world';
 
 describe('槽位制整备与船坞商店', () => {
@@ -180,5 +180,72 @@ describe('槽位制整备与船坞商店', () => {
     expect(world.weapons[3]!.type).toBe(TOWER_LASER); // 新武器落在替换槽上
     expect(world.weapons[3]!.stars).toBe(1);
     expect(world.shopWeapons[0]).toBe(-1);
+  });
+
+  it('槽满但同型已凑两把 ★:买下直接吸收合成(3 把合 1 把),不要求替换位、扣费下架', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.starCoins = DOCK_WEAPON_PRICE;
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    for (let i = 2; i < 8; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    expect(world.buyShopWeapon(0)).toBe(0); // 吸收合成当场成功,不进替换态
+    expect(world.starCoins).toBe(0);
+    expect(world.shopWeapons[0]).toBe(-1);
+    // 幸存槽 = 下标最小的槽 0 → ★★;槽 1 清空;激光原封不动
+    expect(world.weapons[0]!.type).toBe(TOWER_AUTOCANNON);
+    expect(world.weapons[0]!.stars).toBe(2);
+    expect(world.weapons[1]!.type).toBe(-1);
+    expect(world.weapons.filter((s) => s.type === TOWER_LASER)).toHaveLength(6);
+  });
+
+  it('吸收合成接链条:两把 ★ + 两把 ★★ 槽满买下 ★,当场合 ★★★ 变身(机炮→风暴机炮)', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.starCoins = DOCK_WEAPON_PRICE;
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    world.weapons[2]!.type = TOWER_AUTOCANNON;
+    world.weapons[2]!.stars = 2;
+    world.weapons[3]!.type = TOWER_AUTOCANNON;
+    world.weapons[3]!.stars = 2;
+    for (let i = 4; i < 8; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    expect(world.buyShopWeapon(0)).toBe(0);
+    // 1★ 合 ★★(幸存槽 0)→ 与槽 2/3 的 ★★ 连合 ★★★ → 机炮有配方,当场变身风暴机炮
+    expect(world.weapons[0]!.type).toBe(TOWER_STORM_CANNON);
+    expect(world.weapons[0]!.stars).toBe(3);
+    expect(world.weapons[1]!.type).toBe(-1);
+    expect(world.weapons[2]!.type).toBe(-1);
+    expect(world.weapons[3]!.type).toBe(-1);
+    // 腾出 3 个空槽:1× 风暴机炮 + 4× 激光 = 5 门
+    expect(world.weapons.filter((s) => s.type >= 0)).toHaveLength(5);
+  });
+
+  it('吸收合成不满足条件(同型只凑一把 ★)时仍回 ACQUIRE_REPLACE_NEEDED,不扣费', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.starCoins = 999;
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    for (let i = 1; i < 8; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    expect(world.buyShopWeapon(0)).toBe(ACQUIRE_REPLACE_NEEDED);
+    expect(world.starCoins).toBe(999);
+    expect(world.shopWeapons[0]).toBe(TOWER_AUTOCANNON);
   });
 });

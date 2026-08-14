@@ -21,7 +21,8 @@
  * 是买之前看得见的事,而不是买完才知道。
  *
  * —— 替换(武器槽满时)——
- * buyShopWeapon(index) 在槽满且没给替换位时返回 ACQUIRE_REPLACE_NEEDED —— **不扣星币、
+ * buyShopWeapon(index) 在槽满且没给替换位时,同型已有两把 1★ 会**吸收合成**
+ * (3 把合 1 把、不占槽、当场成功);否则返回 ACQUIRE_REPLACE_NEEDED —— **不扣星币、
  * 货架不动**(world.ts 的 doc 原文),于是"选槽失败/取消"天然一分钱不扣。
  * 面板转入 pick 态:**玩家在中间舰船背包上点一个槽** → 带着 slotIndex 重买一次
  * (buyShopWeapon(index, slotIndex) 内部完成换装/扣费/下架/查三合一)。
@@ -473,7 +474,12 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       notes.push('入手 ★');
     }
     const empty = firstEmptySlot();
-    notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
+    if (empty >= 0) {
+      notes.push(`装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽`);
+    } else {
+      // 槽满但同型已凑两把 ★:买下走吸收合成(3 把合 1 把,不占槽),不需要替换
+      notes.push(c1 === 2 ? '槽已满 · 与两把 ★ 三合一,无需替换' : '槽已满 · 需替换一把');
+    }
     if (c1 === 2) {
       if (c2 === 2) {
         notes.push(
@@ -665,8 +671,9 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
-   * 买第 index 张武器卡。槽有空位 → 世界当场落位;槽满 → ACQUIRE_REPLACE_NEEDED
-   * (不扣星币、货架不动),转入替换态(选槽在中间舰船背包上);其余失败码照 refitDenyMessage 说人话。
+   * 买第 index 张武器卡。槽有空位 → 世界当场落位;槽满且同型已凑两把 ★ → 吸收合成当场成功;
+   * 其余槽满 → ACQUIRE_REPLACE_NEEDED(不扣星币、货架不动),转入替换态(选槽在中间舰船背包上);
+   * 其他失败码照 refitDenyMessage 说人话。
    */
   function buyWeapon(index: number): void {
     if (!shown || pendingBuy) return;

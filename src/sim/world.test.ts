@@ -118,7 +118,7 @@ describe('World 槽位制核心接线', () => {
     expect(world.weapons.filter((slot) => slot.type === TOWER_MISSILE_NEST)).toHaveLength(2);
   });
 
-  it('槽满挡住一切获得(同型也不例外):未拥有与已拥有都回 REPLACE_NEEDED', () => {
+  it('槽满挡住不满足吸收条件的获得(同型只凑一把时也不例外):回 REPLACE_NEEDED', () => {
     const world = new World(2);
     const types = [0, 1, 2, 3, 4, 5, TOWER_MISSILE_NEST, TOWER_STORM_CANNON];
     for (let i = 0; i < 8; i++) {
@@ -126,11 +126,29 @@ describe('World 槽位制核心接线', () => {
       world.weapons[i]!.stars = 1;
     }
     expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBeLessThan(0); // 未拥有 + 槽满
-    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBeLessThan(0); // 已拥有(槽 0)+ 槽满也一样
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBeLessThan(0); // 已拥有(槽 0 仅一把)+ 槽满也一样
     // 替换通道照常:换下槽 0,新机炮落位 1★(同型只有一把,无合成)
     expect(world.replaceWeapon(0, TOWER_AUTOCANNON)).toBe(0);
     expect(world.weapons[0]!.type).toBe(TOWER_AUTOCANNON);
     expect(world.weapons[0]!.stars).toBe(1);
+  });
+
+  it('槽满吸收合成:同型已有两把 1★ 时再获得一把,不占槽当场合 ★★ 并腾出空槽', () => {
+    const world = new World(2);
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    for (let i = 2; i < 8; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    expect(world.acquireWeapon(TOWER_AUTOCANNON)).toBe(0); // 吸收第三把,不需要替换位
+    // 幸存槽 = 下标最小的槽 0 → ★★;槽 1 清空;激光原封不动
+    expect(world.weapons[0]!.type).toBe(TOWER_AUTOCANNON);
+    expect(world.weapons[0]!.stars).toBe(2);
+    expect(world.weapons[1]!.type).toBe(-1);
+    expect(world.weapons.filter((s) => s.type === TOWER_LASER)).toHaveLength(6);
   });
 
   it('替换也参与三合一:换入的一把凑满三把 1★,当场合一;换下 2★ 换成 1★ 是玩家的自由', () => {

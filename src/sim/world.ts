@@ -107,6 +107,7 @@ import { SPAWN_RADIUS, SPAWN_RADIUS_BAND, WAVE_MAX_ALIVE } from '../data/waves';
 import {
   createWeaponSlots,
   slotMaxStars,
+  slotStarCount,
   swapWeaponSlots,
   type WeaponSlot,
   WEAPON_HARDPOINTS,
@@ -326,7 +327,10 @@ export const DOCK_HP_FULL = -42;
  */
 /** 获得武器成功(已入槽;若同型同星凑满三把,三合一升星已在内部完成)。 */
 export const ACQUIRE_OK = 0;
-/** 武器槽已满、且本次获得不触发合成(没有空槽可落):调用方先让玩家选一个替换槽,再走 replaceWeapon */
+/**
+ * 武器槽已满、且本次获得不触发合成(没有空槽可落,同型 1★ 也没凑够两把可吸收):
+ * 调用方先让玩家选一个替换槽,再走 replaceWeapon
+ */
 export const ACQUIRE_REPLACE_NEEDED = -50;
 /** 武器型越界(数值表写坏):TOWERS[type] 取不到。 */
 export const ACQUIRE_INVALID_TYPE = -51;
@@ -1763,6 +1767,8 @@ export class World {
    * @param slotIndex 武器槽已满时的替换位(缺省 -1 = 不替换):OFFER_NEW_WEAPON 遇到
    *   ACQUIRE_REPLACE_NEEDED 且给定了合法槽位时,当场走 replaceWeapon 完成这一张卡 ——
    *   UI 的流程是"点卡 → 弹替换选择 → 再点同一张卡(slotIndex 带上)"。
+   *   槽满但同型已有两把 1★ 时 acquireWeapon 直接吸收合成(见 absorbIncoming),
+   *   一次点击成功、不经过替换层。
    * @returns 成功 = 0(ACQUIRE_OK / REPLACE_OK / EDICT_OK 共用);负数 = 理由码
    *   (UPGRADE_NO_OFFER / ACQUIRE_REPLACE_NEEDED / EDICT_MAXED / 各 INVALID_*)。
    */
@@ -1787,10 +1793,11 @@ export class World {
   /**
    * 获得一把武器(星级版):每一次获得都落一个空槽、1★ 起步(同型也是一把新武器 ——
    * 三合一升星合成在落位后当场检查:同型同星凑满 3 把合一,见 fuseTriplesOf)。
+   * 槽满时同型已有两把 1★ 会走吸收合成(不占槽、不需要替换,见 absorbIncoming)。
    * @param type TOWER_*(合成结果塔也可经此直接获得 —— 卡池/商店已把 isMergeResult 挡在外面,
    *   这里只做表级兜底,不重复裁决)
-   * @returns ACQUIRE_OK(0)= 已入槽 1★(可能已当场三合一升星/变身);
-   *   ACQUIRE_REPLACE_NEEDED = 槽满(同型也照满),调用方先选替换槽再走 replaceWeapon;
+   * @returns ACQUIRE_OK(0)= 已入槽 1★ 或已吸收合成(可能已当场三合一升星/变身);
+   *   ACQUIRE_REPLACE_NEEDED = 槽满且不满足吸收条件,调用方先选替换槽再走 replaceWeapon;
    *   ACQUIRE_INVALID_TYPE = 型越界。
    * 零 rng:获得与合成都不掷随机,同 seed 同操作序列逐位可复现。
    */
@@ -1881,8 +1888,10 @@ export class World {
    * 获得一把武器(星级系统的唯一裁决处,acquireWeapon / replaceWeapon / buyShopWeapon 都走它):
    * 每一次获得都落一个槽(1★ 起步,同型也不例外 —— 再没有"吸收进旧武器"这条路),
    * 落位后跑三合一检查(fuseTriplesOf)。
-   * @returns ACQUIRE_OK(0)= 已入槽 1★(可能已当场三合一升星/变身);
-   *   ACQUIRE_REPLACE_NEEDED = 槽满,调用方先让玩家选替换槽再走 replaceWeapon;
+   * 槽满时有一条例外:**同型已有两把 1★** 时,正要获得的这把直接参与三合一(吸收合成,
+   * 见 absorbIncoming)—— 3 把合 1 把、新枪不占槽,合成完必然腾出空位,不需要替换。
+   * @returns ACQUIRE_OK(0)= 已入槽 1★ 或已吸收合成(可能已当场三合一升星/变身);
+   *   ACQUIRE_REPLACE_NEEDED = 槽满且不满足吸收条件,调用方先让玩家选替换槽再走 replaceWeapon;
    *   ACQUIRE_INVALID_TYPE = 型越界。
    * 零 rng。
    */
@@ -1899,7 +1908,14 @@ export class World {
         }
       }
     }
-    if (slot < 0) return ACQUIRE_REPLACE_NEEDED;
+    if (slot < 0) {
+      // 槽满:同型已有两把 1★ → 吸收合成(第三把不占槽);否则才轮到换槽
+      if (slotStarCount(this.weapons, type, 1) >= 2) {
+        this.absorbIncoming(type);
+        return ACQUIRE_OK;
+      }
+      return ACQUIRE_REPLACE_NEEDED;
+    }
     this.installWeapon(slot, type, 1);
     this.fuseTriplesOf(type);
     return ACQUIRE_OK;
@@ -1925,7 +1941,39 @@ export class World {
    * 满 3★ 到顶,链止步(上限是两次合一,零 rng、零分配)。
    */
   private fuseTriplesOf(type: number): void {
-    for (let star = 1; star < STAR_MAX; star++) {
+    this.fuseTriplesFrom(type, 1);
+  }
+
+  /**
+   * 吸收合成(槽满时的三合一,改版 24 号优化):正要获得的这把 1★ **不落槽**,
+   * 直接当第三把与槽里已有的两把同型 1★ 合一。槽静止态同型同星最多两把
+   * (第三把早在获得那一刻就合掉了),故调用前提 = 1★ 恰两把;
+   * 幸存槽 = 下标最小那把(与 fuseTriplesOf 同一口径),其余清空;
+   * 吸出的 2★ 可能凑满已有的两把 2★,照同一条链从 2★ 起继续查。
+   * 合成后必然腾出 ≥1 个空槽(3 把合 1 把、新枪没占槽),所以这是槽满时
+   * 唯一一条不用换槽的购买/获得通道。零 rng。
+   */
+  private absorbIncoming(type: number): void {
+    const members: number[] = [];
+    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
+      const s = this.weapons[i]!;
+      if (s.type === type && s.stars === 1) members.push(i);
+    }
+    const keep = members[0]!;
+    for (let m = 1; m < members.length; m++) this.clearSlot(members[m]!);
+    this.weapons[keep]!.stars = 2; // 升星不清节流状态(同 fuseTriplesOf 的 1★→2★ 口径)
+    this.emitStarUpgrade(keep, type, 2);
+    this.fuseTriplesFrom(type, 2);
+  }
+
+  /**
+   * 从 startStar 起沿三合一链向上查(type 别的星的槽数没动)。吸收合成从 2★ 接链 ——
+   * 它吸出的那一把 2★ 可能凑满槽里已有的两把 2★,其余口径与 fuseTriplesOf 逐字相同:
+   * 同型同星的槽凑满 3 把 → 当场合为 1 把同型星 +1;幸存槽 = 三把里下标最小的那把
+   * (最早入手,平级取最早槽的同一口径),其余两把清成空槽;满 3★ 到顶,链止步。
+   */
+  private fuseTriplesFrom(type: number, startStar: number): void {
+    for (let star = startStar; star < STAR_MAX; star++) {
       const members: number[] = [];
       for (let i = 0; i < WEAPON_SLOT_COUNT && members.length < 3; i++) {
         const s = this.weapons[i]!;
@@ -2150,8 +2198,8 @@ export class World {
    * **一次 rng 都不掷**(货架是跨段掷定的,买不买不扰动随机序列)、失败一个字段都不动。
    * 获得与 upgrade 卡同一条路(mergeOrInstall):每次购买都落一个空槽、1★ 起步(同型也不例外),
    * 落位后三合一升星合成照常检查;槽满且给了合法替换位(slotIndex)就当场换下旧的;
-    * 槽满又没给替换位 → ACQUIRE_REPLACE_NEEDED(**不扣星币、货架不动**,
-    * UI 先让玩家选槽再带着 slotIndex 回来买)。
+   * 槽满又没给替换位 → 同型已有两把 1★ 时吸收合成(3 把合 1 把、不占槽),
+   * 否则 ACQUIRE_REPLACE_NEEDED(**不扣星币、货架不动**,UI 先让玩家选槽再带着 slotIndex 回来买)。
     * 成功后:扣费(本格是特价位就按 shopDiscountPrice 的特价扣,否则原价)→ 货架当场下架
     * (一卡一售)→ 落位/合成已在 mergeOrInstall 内完成。
    *
@@ -2166,7 +2214,8 @@ export class World {
     const price = this.shopDiscountIndex === DOCK_EDICT_COUNT + index ? shopDiscountPrice(DOCK_WEAPON_PRICE) : DOCK_WEAPON_PRICE;
     if (this.starCoins < price) return SHOP_NO_STARCOINS;
     // 优先空槽;槽满时用调用方给的替换位(目标槽必须非空 = 才是"替换");
-    // 都没有 = 换槽请求被拒,不扣星币、货架不动
+    // 都没有 = 交给 mergeOrInstall:同型已有两把 1★ 时走吸收合成(3 把合 1 把、不占槽),
+    // 否则退回 ACQUIRE_REPLACE_NEEDED(不扣星币、货架不动)
     let slot = -1;
     for (let k = 0; k < WEAPON_SLOT_COUNT; k++) {
       if (this.weapons[k]!.type < 0) {
@@ -2177,13 +2226,17 @@ export class World {
     if (slot < 0 && slotIndex >= 0 && this.weapons[slotIndex] !== undefined && this.weapons[slotIndex]!.type >= 0) {
       slot = slotIndex;
     }
-    if (slot < 0) return ACQUIRE_REPLACE_NEEDED;
-    // 替换位(槽满时):照 replaceWeapon 的同一手先把旧武器清空,mergeOrInstall 才会落位
-    // (它的契约是"调用方已把 preferredSlot 清成空槽" —— 不清的话它会把占着的槽当作
-    // 非法落位、转去找空槽,槽满时当场退回 ACQUIRE_REPLACE_NEEDED,换装永远买不成)。
-    if (this.weapons[slot]!.type >= 0) this.clearSlot(slot);
-    const code = this.mergeOrInstall(type, slot);
-    if (code < 0) return code;
+    if (slot < 0) {
+      const code = this.mergeOrInstall(type, -1); // 吸收合成或 ACQUIRE_REPLACE_NEEDED
+      if (code < 0) return code;
+    } else {
+      // 替换位(槽满时):照 replaceWeapon 的同一手先把旧武器清空,mergeOrInstall 才会落位
+      // (它的契约是"调用方已把 preferredSlot 清成空槽" —— 不清的话它会把占着的槽当作
+      // 非法落位、转去找空槽,槽满时当场退回 ACQUIRE_REPLACE_NEEDED,换装永远买不成)。
+      if (this.weapons[slot]!.type >= 0) this.clearSlot(slot);
+      const code = this.mergeOrInstall(type, slot);
+      if (code < 0) return code;
+    }
     this.starCoins -= price;
     this.shopWeapons[index] = -1; // 一卡一售:当场下架,本轮不再出现
     return ACQUIRE_OK;
