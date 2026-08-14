@@ -200,6 +200,7 @@ async function boot(): Promise<void> {
     world,
     onResolved: () => {
       refitFlow.hide();
+      refitOpen = false; // 商店关掉,下一帧起 HUD 恢复随 run.paused 淡出
       run.paused = false;
     },
   });
@@ -292,6 +293,14 @@ async function boot(): Promise<void> {
    * startRun 置真,局终与回标题置假。
    */
   let runActive = false;
+
+  /**
+   * 商店面板(整备)此刻是否开着。**HUD 淡出按它豁免**:商店优化后星币余额从店头挪回
+   * 左上统计版(HUD 左列的 ★ 星币),店开着的这段时间 HUD 不许被 run.paused 淡成 0.06 ——
+   * 否则那行余额在买东西的时候正好看不见。商店自己的淡幕(半透明渐变)已经压着战场,
+   * HUD 保持全亮既给余额让路,又不与商店抢焦点(它 pointer-events:none,叠放在下层)。
+   */
+  let refitOpen = false;
 
   let lastChecksumTick = -SIM_HZ;
   // 残骸拾取音的增量检测基准:跟上一次读到的 scrap 比,值爬升的那一帧响一声叮(见 ticker)
@@ -392,6 +401,7 @@ async function boot(): Promise<void> {
       loop.halt();
       upgradeFlow.hide();
       refitFlow.hide();
+      refitOpen = false; // 商店收掉:HUD 恢复随 run.paused 淡出(局终整层照旧隐去)
       armoryPanel.hide();
       // 局终 = 删半局存档。留着它的话下次进标题那颗「继续」通向一场**已经结束**的战斗
       // (读进去 result 早已落定,settleOutcome 的结论永不再变,当场又弹一次结算)。
@@ -489,6 +499,7 @@ async function boot(): Promise<void> {
     world.onRefitOffer = (segmentIndex) => {
       run.paused = true;
       loop.halt();
+      refitOpen = true; // 商店开着:HUD 保持全亮,左上统计版的 ★ 星币才看得见(见 refitOpen 注释)
       refitFlow.show(segmentIndex);
       // 自动存档点之二(理由同 onUpgradeOffer)。航段整备是这一局最像"关卡边界"的地方,
       // 每两分钟一次 —— 玩家心里的"存档点"多半就是这里
@@ -500,6 +511,7 @@ async function boot(): Promise<void> {
     renderer.setWorld(world);
     upgradeFlow.setWorld(world);
     refitFlow.setWorld(world);
+    refitOpen = false; // 商店随 setWorld 收掉:HUD 恢复随 run.paused 淡出(读档分支随后会再开)
     armoryPanel.setWorld(world);
     armoryPanel.hide(); // 上一局那张还开着的布局面板一并收掉(与 setWorld 同一条理由)
     hud.setWorld(world);
@@ -564,12 +576,13 @@ async function boot(): Promise<void> {
     if (restored) {
       if (world.refitPending) {
         run.paused = true;
+        refitOpen = true; // 读档落回店里:HUD 同样保持全亮(理由见 refitOpen 注释)
         refitFlow.show(world.wave.segment);
       } else if (world.offer.length > 0) {
         run.paused = true;
         upgradeFlow.show();
       }
-      hud.setPaused(run.paused);
+      hud.setPaused(run.paused && !refitOpen);
     }
 
     // 开发用全局句柄:浏览器控制台里可直接 __game.run.paused = true / __game.world.checksum()
@@ -637,6 +650,7 @@ async function boot(): Promise<void> {
     gameOver.hide();
     upgradeFlow.hide();
     refitFlow.hide();
+    refitOpen = false; // 商店收掉:HUD 恢复随 run.paused 淡出
     armoryPanel.hide();
     titleScreen.show(titleDigest());
   }
@@ -771,7 +785,9 @@ async function boot(): Promise<void> {
     renderer.sync(loop.alpha);
     // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
     // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。
-    hud.setPaused(run.paused);
+    // **商店整备期间豁免淡出**(refitOpen):星币余额已从店头挪回左上统计版,店开着时
+    // 那行读数必须亮着 —— 商店自己的半透明淡幕压在它上面,亮度仍够读(见 refitOpen 注释)
+    hud.setPaused(run.paused && !refitOpen);
     hud.sync();
 
     // 帧率读数(只喂 ?debug 面板,不进 checksum、不参与确定性)。喂进去的是 ticker.elapsedMS ——

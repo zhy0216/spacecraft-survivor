@@ -58,9 +58,12 @@ import { RESULT_RUNNING, World } from './world';
  * v6(随机开局):删除 loadout 字段 —— 起手配置系统随选择界面一并删除,开局改为由
  *   world.rng 派生的随机装配(applyRandomStart),不再有独立的开跑前配置输入;
  *   槽位与 rng 游标本就存着,读档不需要这个字段。
+ * v7(商店优化:特价折扣):快照新增 shopDiscount 标量(本轮货架的特价位)——
+ *   它与两张货架同一条"消耗了 rng、决定玩家这轮花多少钱"的定性,进 checksum,必须存;
+ *   漏了它,读档后特价消失,这一局从读档帧起与"没存过档"的局分叉。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 6;
+export const RUN_SAVE_VERSION = 7;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -135,6 +138,12 @@ export interface RunSnapshot {
   dockEdicts: number[];
   /** 本轮商店武器货架(已售出的格子是 -1) */
   shopWeapons: number[];
+  /**
+   * 本轮货架的**特价位**(商店优化:打折机制,v7 新增):-1 = 没有特价;
+   * 0..DOCK_EDICT_COUNT-1 = 法令货架第几格,DOCK_EDICT_COUNT+..= 武器货架第几格。
+   * 与两张货架同一条定性(消耗了 rng、决定玩家这轮花多少钱),进 checksum,必须存。
+   */
+  shopDiscount: number;
   /** Boss:phase, summonN, summonCooldown, killedAt */
   boss: number[];
   /**
@@ -282,6 +291,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     offer,
     dockEdicts: world.dockEdictOffers.slice(),
     shopWeapons: world.shopWeapons.slice(),
+    shopDiscount: world.shopDiscountIndex,
     boss: [world.bossPhase, world.bossSummonN, world.bossSummonCooldown, world.bossKilledAt],
     tally: [world.kills, world.eliteKills, world.peakDps],
     damageByType: Array.from(world.runDamageByType),
@@ -356,6 +366,7 @@ export function restoreRun(snap: RunSnapshot): World {
   for (const t of snap.dockEdicts) world.dockEdictOffers.push(t);
   world.shopWeapons.length = 0;
   for (const t of snap.shopWeapons) world.shopWeapons.push(t);
+  world.shopDiscountIndex = snap.shopDiscount;
 
   world.bossPhase = snap.boss[0]!;
   world.bossSummonN = snap.boss[1]!;
@@ -503,12 +514,14 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   const rng = scalar('rng');
   const tick = scalar('tick');
   const magnetSurgeTime = scalar('magnetSurgeTime');
+  const shopDiscount = scalar('shopDiscount');
   if (
     seed === null ||
     unlockMask === null ||
     rng === null ||
     tick === null ||
-    magnetSurgeTime === null
+    magnetSurgeTime === null ||
+    shopDiscount === null
   ) {
     return null;
   }
@@ -559,6 +572,7 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
     rng: rng >>> 0,
     tick: Math.max(0, Math.floor(tick)),
     magnetSurgeTime: Math.max(0, magnetSurgeTime),
+    shopDiscount: Math.max(-1, Math.floor(shopDiscount)),
     ship,
     weapons,
     edicts,

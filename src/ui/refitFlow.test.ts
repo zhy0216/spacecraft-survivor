@@ -7,6 +7,7 @@ import {
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
+  shopDiscountPrice,
 } from '../data/economy';
 import {
   createEdictLevels,
@@ -156,6 +157,7 @@ interface StubWorld {
   ship: { hp: number; maxHp: number };
   shopWeapons: number[];
   dockEdictOffers: number[];
+  shopDiscountIndex: number;
   weapons: WeaponSlot[];
   edictLevels: number[];
   buffs: EdictBuffs;
@@ -184,6 +186,7 @@ function createStubWorld(): StubWorld {
     ship: { hp: 60, maxHp: 100 },
     shopWeapons: [TOWER_AUTOCANNON, -1],
     dockEdictOffers: [EDICT_AMMO, EDICT_GYRO],
+    shopDiscountIndex: -1,
     weapons: createWeaponSlots(),
     edictLevels: createEdictLevels(),
     buffs: createEdictBuffs(),
@@ -237,6 +240,8 @@ function worldAsWorld(world: StubWorld): World {
 
 const rootOf = (dom: StubDom): StubEl => dom.ui.children[0] as StubEl;
 const toastOf = (dom: StubDom): StubEl => dom.ui.children[1] as StubEl;
+/** 商店的星币金(refitFlow 的 STAR_COLOR):特价文案按它上色,HUD 星币读数同款 */
+const STAR_GOLD = '#ffd86e';
 const shopOf = (dom: StubDom): StubEl => rootOf(dom).children[0] as StubEl;
 const shopHeadOf = (dom: StubDom): StubEl => shopOf(dom).children[0] as StubEl;
 const segmentOf = (dom: StubDom): StubEl => shopOf(dom).children[1] as StubEl;
@@ -282,12 +287,42 @@ describe('createRefitFlow 纯商店流程', () => {
 
   afterEach(() => dom.restore());
 
-  it('show 显示航段、星币余额和固定数量武器卡', () => {
+  it('show 显示航段与固定数量武器卡;店头不再印星币余额(余额在左上统计版,HUD 那侧)', () => {
     setup();
     expect(segmentOf(dom).textContent).toContain('航段 2');
-    expect((shopHeadOf(dom).children[1] as StubEl).children[0]?.textContent).toBe('★ 100');
-    expect((shopHeadOf(dom).children[1] as StubEl).children[1]?.textContent).toBe('星币');
+    // 店头只剩标题一格:余额读数搬去 HUD 左列,商店里不印(商店优化)
+    expect(shopHeadOf(dom).children.length).toBe(1);
+    expect((shopHeadOf(dom).children[0] as StubEl).children[0]?.textContent).toBe('DOCK SUPPLY');
+    expect((shopHeadOf(dom).children[0] as StubEl).children[1]?.textContent).toBe('舰装商店');
     expect(cardsOf(dom).children.length).toBe(DOCK_WEAPON_COUNT);
+  });
+
+  it('特价武器卡:原价划线、特价亮金,标"特价";非特价格照旧原价', () => {
+    world.shopDiscountIndex = DOCK_EDICT_COUNT + 0; // 武器货架第 0 格打特价
+    setup();
+    const card = cardsOf(dom).children[0] as StubEl;
+    expect(card.innerHTML).toContain('特价');
+    expect(card.innerHTML).toContain('<s'); // 原价划线
+    expect(card.innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
+    expect(card.innerHTML).toContain(`${shopDiscountPrice(DOCK_WEAPON_PRICE)} ★`);
+    expect(card.innerHTML).toContain(STAR_GOLD); // 特价与星币同款金色
+    // 第 1 格不是特价:照旧印原价、不划线
+    world.shopWeapons[1] = TOWER_LASER;
+    fire(refreshOf(dom), 'click');
+    const full = cardsOf(dom).children[1] as StubEl;
+    expect(full.innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
+    expect(full.innerHTML).not.toContain('<s>');
+  });
+
+  it('特价法令行:原价划线、特价亮金', () => {
+    world.shopDiscountIndex = 0; // 法令货架第 0 格打特价
+    setup();
+    const row = edictOf(dom, 0);
+    expect(row.innerHTML).toContain('特价');
+    expect(row.innerHTML).toContain('<s');
+    expect(row.innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
+    expect(row.innerHTML).toContain(`${shopDiscountPrice(DOCK_EDICT_PRICE)} ★`);
+    expect(row.innerHTML).toContain(STAR_GOLD);
   });
 
   it('武器卡来自 shopWeapons，显示名称与 30 星币价格，售出卡置灰', () => {
@@ -321,10 +356,10 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(world.weaponCalls).toEqual([[0, undefined]]);
     expect(cardsOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
-    // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 ★3)
+    // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 ★★★)
     expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
     expect(chipOf(dom, 2).innerHTML).toContain('正右');
-    expect(chipOf(dom, 2).innerHTML).toContain('★3');
+    expect(chipOf(dom, 2).innerHTML).toContain('★★★');
     fire(chipOf(dom, 2), 'click');
     expect(world.weaponCalls).toEqual([[0, undefined], [0, 2]]);
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
@@ -391,7 +426,7 @@ describe('createRefitFlow 纯商店流程', () => {
     setup();
     expect(chipOf(dom, 0).innerHTML).toContain('正前');
     expect(chipOf(dom, 0).innerHTML).toContain(TOWERS[TOWER_LASER]?.name);
-    expect(chipOf(dom, 0).innerHTML).toContain('★2');
+    expect(chipOf(dom, 0).innerHTML).toContain('★★');
     expect(chipOf(dom, 0).innerHTML).toContain('过热系'); // 舰船图上的武器格也标系
     expect(chipOf(dom, 1).innerHTML).toContain('右前');
     expect(chipOf(dom, 1).innerHTML).toContain('空槽');
@@ -459,18 +494,18 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(card.innerHTML).toContain('射程');
     expect(card.innerHTML).toContain('/s');
     expect(card.innerHTML).toContain('弹药系'); // 商店武器卡标好所属系
-    // 2× 1★ 同型:报同星把数、照报落位方向(同型也占槽),并预说买下当场合 ★2
-    expect(card.innerHTML).toContain('已有 ★1 ×2');
-    expect(card.innerHTML).toContain('买下合成 ★2');
+    // 2× ★ 同型:报同星把数、照报落位方向(同型也占槽),并预说买下当场合 ★★
+    expect(card.innerHTML).toContain('已有 ★ ×2');
+    expect(card.innerHTML).toContain('买下合成 ★★');
     expect(card.innerHTML).toContain('装到');
-    // 未拥有那一档:清空同型后重画,报「入手 ★1」+ 落位方向
+    // 未拥有那一档:清空同型后重画,报「入手 ★」+ 落位方向
     world.weapons[0]!.type = -1;
     world.weapons[0]!.stars = 0;
     world.weapons[1]!.type = -1;
     world.weapons[1]!.stars = 0;
     fire(refreshOf(dom), 'click');
     const fresh = cardsOf(dom).children[0] as StubEl;
-    expect(fresh.innerHTML).toContain('入手 ★1');
+    expect(fresh.innerHTML).toContain('入手 ★');
     expect(fresh.innerHTML).toContain('装到「正前」'); // 全空，第一个空槽是槽 0
   });
 

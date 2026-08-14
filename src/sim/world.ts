@@ -75,6 +75,7 @@ import {
   SHOP_BEACON_MAX_DIST,
   SHOP_BEACON_MIN_DIST,
   SHOP_BEACON_RADIUS,
+  shopDiscountPrice,
   skipRefundFor,
   STARTING_STAR_COINS,
   upgradeCost as economyUpgradeCost,
@@ -624,8 +625,9 @@ export class World {
    *
    * 与残骸同口径的只是"逐帧演化出来的账目"这一面;**它不进 checksum**(与 maxHp 同一条
    * "不进"的先例,理由见下):星币只影响 UI 读数与消费,不参与任何 sim 判定 ——
-   * 消费点消耗的 rng 本身都在随机序列里(重摇每次恰 2×UPGRADE_CHOICE_COUNT 次、船坞货架
-   * 每轮恰 DOCK_EDICT_COUNT 次、商店货架每轮恰 DOCK_WEAPON_COUNT 次;**购买本身一次都不掷**),
+    * 消费点消耗的 rng 本身都在随机序列里(重摇每次恰 2×UPGRADE_CHOICE_COUNT 次、船坞货架
+    * 每轮恰 DOCK_EDICT_COUNT 次、商店货架每轮恰 DOCK_WEAPON_COUNT 次、特价每轮恰 1 次;
+    * **购买本身一次都不掷**),
    * 余额只是那条序列的**读数**:同一局扣过费没有,序列照样逐位可复现。
    * "星币 ≥ X 触发行为就要进 checksum"指的是 sim **自己**按余额做决定(如余额够了自动弹商店);
    * 玩家主动点击的购买是 step() 之外的外部输入 —— 失败的尝试一个字段都不动,
@@ -730,6 +732,21 @@ export class World {
   readonly shopWeapons: number[] = [];
   /** 商店货架掷定的可选池暂存(铁律 3:整局复用、不新建数组) */
   private readonly shopPool: number[] = [];
+
+  /**
+   * 本轮货架的**特价位**(打折机制:每次上架恰选一件商品打折):
+   *   -1 = 本轮没有特价(货架全空);
+   *   0..DOCK_EDICT_COUNT-1 = 法令货架的第几格打特价;
+   *   DOCK_EDICT_COUNT..DOCK_EDICT_COUNT+DOCK_WEAPON_COUNT-1 = 武器货架的第几格打特价。
+   * 只在**还没售出的格**之间挑(特价落在已售出上是废格)。与两张货架同一条生命周期:
+   * 跨段那一帧 rollShopDiscount 掷定(排在信标 → 法令 → 武器之后)、completeRefit 与
+   * 信标到期双双清空;refreshShop 重掷武器货架后**跟着重掷**(新货架配新特价)。
+   * 它消耗了 rng、决定玩家这一轮花多少钱,故进 checksum(与两张货架同一条理由;
+   * 恒掷 1 次、池空也掷,消耗次数与货架内容无关 —— 同 seed 同操作序列逐位可复现)。
+   */
+  shopDiscountIndex = -1;
+  /** 特价掷定的可选池暂存(铁律 3:整局复用、不新建数组) */
+  private readonly discountPool: number[] = [];
 
   /**
    * 开火/命中的可视化事件(05 号 issue):渲染层遍历 world.fx.items 逐个画,按 life 淡出。
@@ -1102,11 +1119,12 @@ export class World {
         );
         openedRefit = true;
       } else if (this.shopBeaconTtl <= 0) {
-        // 没赶到:信标熄灭,两张货架一起作废 —— 留着的话下一轮会拿到过期货
+        // 没赶到:信标熄灭,两张货架与特价一起作废 —— 留着的话下一轮会拿到过期货
         this.shopBeaconTtl = 0;
         this.shopBeaconActive = false;
         this.dockEdictOffers.length = 0;
         this.shopWeapons.length = 0;
+        this.shopDiscountIndex = -1;
       }
     }
 
@@ -1126,7 +1144,7 @@ export class World {
       // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
       stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
       if (this.wave.segment !== segmentBefore && !this.wave.done) {
-        // 跨段那一帧一次掷定三样,**顺序定死**(信标位置 → 法令货架 → 武器货架):
+        // 跨段那一帧一次掷定四样,**顺序定死**(信标位置 → 法令货架 → 武器货架 → 特价):
         // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
         // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
         // 货架在**信标生成时**就掷定而不是接上时才掷:接不接得上取决于玩家操作,
@@ -1134,6 +1152,7 @@ export class World {
         this.spawnShopBeacon();
         this.rollDockEdicts();
         this.rollShopWeapons();
+        this.rollShopDiscount();
         this.onShopBeacon?.(this.wave.segment);
       }
     }
@@ -1981,10 +2000,11 @@ export class World {
   completeRefit(): boolean {
     if (!this.refitPending) return false;
     this.refitPending = false;
-    // 两张货架随整备结束清空:下一轮跨段时 rollDockEdicts / rollShopWeapons 重掷
+    // 两张货架与特价随整备结束清空:下一轮跨段时 rollDockEdicts / rollShopWeapons / rollShopDiscount 重掷
     //(与 offer 结算清空的同一条生命周期)
     this.dockEdictOffers.length = 0;
     this.shopWeapons.length = 0;
+    this.shopDiscountIndex = -1;
     // 免费回血**不在这里** —— 它挂在"接上信标"那一刻(见 step 里的接触分支):
     // 关面板才回血的话,玩家在店里没法判断那 25 星币的付费修复还要不要买。
     this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
@@ -2050,9 +2070,10 @@ export class World {
    * 与 rerollOffer 同一条"step() 之外的外部输入"路径:
    *   **一次 rng 都不掷** —— 购买只动账(星币 / 法令掩码 / 货架),随机序列原地不动,
    *   于是"买没买"反过来扰动不到出怪序列(同 seed 同操作序列逐位可复现);
-   *   校验顺序定死(整备闸门 → 货架有货 → 星币够),失败原样返回、一个字段都不动。
-   * 成功后:扣费 → 货架当场下架(一卡一售)→ 置位掩码 → 同步船体上限(照旧口径:
-   * 结构加固的 +20 是派生量,现算现夹,hp 只夹不涨)。
+    *   校验顺序定死(整备闸门 → 货架有货 → 星币够),失败原样返回、一个字段都不动。
+    * 成功后:扣费(本格是特价位就按 shopDiscountPrice 的特价扣,否则原价)→ 货架当场下架
+    * (一卡一售)→ 置位掩码 → 同步船体上限(照旧口径:
+    * 结构加固的 +20 是派生量,现算现夹,hp 只夹不涨)。
    *
    * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / DOCK_EDICT_SOLD / DOCK_NO_STARCOINS)。
    */
@@ -2060,8 +2081,10 @@ export class World {
     if (!this.refitPending) return REFIT_NOT_ACTIVE;
     const type = this.dockEdictOffers[index];
     if (type === undefined || type < 0) return DOCK_EDICT_SOLD;
-    if (this.starCoins < DOCK_EDICT_PRICE) return DOCK_NO_STARCOINS;
-    this.starCoins -= DOCK_EDICT_PRICE;
+    // 特价:本格恰是 rollShopDiscount 掷中的那格就按 shopDiscountPrice 扣,否则原价
+    const price = this.shopDiscountIndex === index ? shopDiscountPrice(DOCK_EDICT_PRICE) : DOCK_EDICT_PRICE;
+    if (this.starCoins < price) return DOCK_NO_STARCOINS;
+    this.starCoins -= price;
     this.dockEdictOffers[index] = -1; // 一卡一售:当场下架,本轮不再出现
     this.grantEdict(type); // 唯一授予入口(层数 +1 + 当帧同步 HP 上限)
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
@@ -2128,13 +2151,39 @@ export class World {
   }
 
   /**
+   * 掷定本轮货架的**特价位**(打折机制:每次上架恰选一件商品打 SHOP_DISCOUNT_FRACTION 折)。
+   * 跨段那一帧排在 rollShopWeapons 之后调用(顺序定死:信标 → 法令 → 武器 → 特价);
+   * refreshShop 重掷武器货架后也调一次(新货架配新特价)。
+   *
+   * rng 消耗口径(定死,与两张货架同一条):**恰好 1 次**,池空也照样掷 —— 消耗次数与
+   * 货架内容、售出状态全无关,于是"又卖掉一件商品"这种事移动不了整条随机序列。
+   * 可选池 = 本轮**还没售出**的货架位(法令 0..len-1、武器 DOCK_EDICT_COUNT+下标):
+   * 特价落在已售出上是废格,玩家读着"打折"却买不了。武器下标偏置 DOCK_EDICT_COUNT
+   * 而不是 dockEdictOffers.length —— 偏置随长度浮动的话,同一格武器在不同局的编号会漂。
+   */
+  rollShopDiscount(): void {
+    const pool = this.discountPool;
+    pool.length = 0;
+    for (let i = 0; i < this.dockEdictOffers.length; i++) {
+      if (this.dockEdictOffers[i]! >= 0) pool.push(i);
+    }
+    for (let i = 0; i < this.shopWeapons.length; i++) {
+      if (this.shopWeapons[i]! >= 0) pool.push(DOCK_EDICT_COUNT + i);
+    }
+    const roll = this.rng.next();
+    this.shopDiscountIndex =
+      pool.length === 0 ? -1 : pool[Math.min(pool.length - 1, Math.floor(roll * pool.length))]!;
+  }
+
+  /**
    * 船坞商店(改版 21 号):买下第 index 张武器卡。与 buyDockEdict 同一条外部输入口径:
    * **一次 rng 都不掷**(货架是跨段掷定的,买不买不扰动随机序列)、失败一个字段都不动。
    * 获得与 upgrade 卡同一条路(mergeOrInstall):每次购买都落一个空槽、1★ 起步(同型也不例外),
    * 落位后三合一升星合成照常检查;槽满且给了合法替换位(slotIndex)就当场换下旧的;
-   * 槽满又没给替换位 → ACQUIRE_REPLACE_NEEDED(**不扣星币、货架不动**,
-   * UI 先让玩家选槽再带着 slotIndex 回来买)。
-   * 成功后:扣费 → 货架当场下架(一卡一售)→ 落位/合成已在 mergeOrInstall 内完成。
+    * 槽满又没给替换位 → ACQUIRE_REPLACE_NEEDED(**不扣星币、货架不动**,
+    * UI 先让玩家选槽再带着 slotIndex 回来买)。
+    * 成功后:扣费(本格是特价位就按 shopDiscountPrice 的特价扣,否则原价)→ 货架当场下架
+    * (一卡一售)→ 落位/合成已在 mergeOrInstall 内完成。
    *
    * @returns 0 = 成功(ACQUIRE_OK);负数 = 理由码(REFIT_NOT_ACTIVE / SHOP_WEAPON_SOLD /
    *   SHOP_NO_STARCOINS / ACQUIRE_REPLACE_NEEDED / REPLACE_BAD_SLOT / ACQUIRE_INVALID_TYPE)。
@@ -2143,7 +2192,9 @@ export class World {
     if (!this.refitPending) return REFIT_NOT_ACTIVE;
     const type = this.shopWeapons[index];
     if (type === undefined || type < 0) return SHOP_WEAPON_SOLD;
-    if (this.starCoins < DOCK_WEAPON_PRICE) return SHOP_NO_STARCOINS;
+    // 特价:本格恰是 rollShopDiscount 掷中的那格就按 shopDiscountPrice 扣,否则原价
+    const price = this.shopDiscountIndex === DOCK_EDICT_COUNT + index ? shopDiscountPrice(DOCK_WEAPON_PRICE) : DOCK_WEAPON_PRICE;
+    if (this.starCoins < price) return SHOP_NO_STARCOINS;
     // 优先空槽;槽满时用调用方给的替换位(目标槽必须非空 = 才是"替换");
     // 都没有 = 换槽请求被拒,不扣星币、货架不动
     let slot = -1;
@@ -2157,9 +2208,13 @@ export class World {
       slot = slotIndex;
     }
     if (slot < 0) return ACQUIRE_REPLACE_NEEDED;
+    // 替换位(槽满时):照 replaceWeapon 的同一手先把旧武器清空,mergeOrInstall 才会落位
+    // (它的契约是"调用方已把 preferredSlot 清成空槽" —— 不清的话它会把占着的槽当作
+    // 非法落位、转去找空槽,槽满时当场退回 ACQUIRE_REPLACE_NEEDED,换装永远买不成)。
+    if (this.weapons[slot]!.type >= 0) this.clearSlot(slot);
     const code = this.mergeOrInstall(type, slot);
     if (code < 0) return code;
-    this.starCoins -= DOCK_WEAPON_PRICE;
+    this.starCoins -= price;
     this.shopWeapons[index] = -1; // 一卡一售:当场下架,本轮不再出现
     return ACQUIRE_OK;
   }
@@ -2168,6 +2223,8 @@ export class World {
    * 船坞商店(改版 21 号):刷新武器货架。与 rerollOffer 同一条"玩家主动操作消费 rng"的
    * 外部输入口径 —— 刷新消耗的 rng 在随机序列里,同 seed 同操作序列逐位可复现。
    * 校验顺序定死(整备闸门 → 星币够),失败原样返回、一个字段都不动。
+   * 成功后重掷武器货架(DOCK_WEAPON_COUNT 次 rng)**并跟着重掷特价**(恰 1 次 rng,
+   * 新货架配新特价 —— 打折机制:每次上架选一件商品打折)。
    *
    * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / SHOP_NO_REFRESH_STARCOINS)。
    */
@@ -2176,6 +2233,7 @@ export class World {
     if (this.starCoins < DOCK_SHOP_REFRESH_PRICE) return SHOP_NO_REFRESH_STARCOINS;
     this.starCoins -= DOCK_SHOP_REFRESH_PRICE;
     this.rollShopWeapons();
+    this.rollShopDiscount();
     return 0;
   }
 
@@ -2607,6 +2665,9 @@ export class World {
     // 商店武器货架(改版 21 号)紧跟法令货架:同一条"消耗了 rng、决定玩家这轮能买什么"的理由,
     // 逐项进哈希;已售出的格子哈成 -1,售出与否同样在哈希里
     for (const t of this.shopWeapons) acc(t);
+    // 特价位(打折机制)紧跟武器货架:与两张货架同一条"消耗了 rng、决定玩家这轮花多少钱"的
+    // 理由,漏了它,"同 seed 一边打五折一边原价"的分叉在余额(不进 checksum)上永远看不见
+    acc(this.shopDiscountIndex);
     // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
     // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。
     // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何 sim 判定;重摇与船坞

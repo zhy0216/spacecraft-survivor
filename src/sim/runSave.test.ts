@@ -33,6 +33,7 @@ import {
   tryRestoreRun,
 } from './runSave';
 import { EDICT_KIND_COUNT } from '../data/edicts';
+import { DOCK_EDICT_COUNT } from '../data/economy';
 import { WEAPON_SLOT_COUNT } from './armory';
 import type { ShipCommand } from './ship';
 import { RESULT_RUNNING, World } from './world';
@@ -128,10 +129,29 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v5 旧档判废(随机开局升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v6 旧档判废(商店优化升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v5json = serializeRunSnapshot(snap).replace('"v":6', '"v":5');
-    expect(parseRunSnapshot(v5json)).toBeNull();
+    const v6json = serializeRunSnapshot(snap).replace('"v":7', '"v":6');
+    expect(parseRunSnapshot(v6json)).toBeNull();
+  });
+
+  it('特价位(打折机制)随档保存:读档后特价不丢,checksum 一致', () => {
+    const world = freshRun(600);
+    // 模拟"整备中、特价指到武器第 1 格"的那一刻存档:rollShopDiscount 的结果必须原样回来
+    world.shopDiscountIndex = DOCK_EDICT_COUNT + 1;
+    const snap = captureRun(world, META);
+    expect(snap.shopDiscount).toBe(DOCK_EDICT_COUNT + 1);
+    const restored = restoreRun(snap);
+    expect(restored.shopDiscountIndex).toBe(DOCK_EDICT_COUNT + 1);
+    expect(restored.checksum()).toBe(world.checksum());
+    // JSON 往返同样带着这个数,读回来一字不差
+    const back = parseRunSnapshot(serializeRunSnapshot(snap));
+    expect(back).not.toBeNull();
+    expect(back!.shopDiscount).toBe(DOCK_EDICT_COUNT + 1);
+    expect(restoreRun(back!).checksum()).toBe(world.checksum());
+    // 漏了特价字段的旧结构直接判废(字段表对不齐 = 半个世界)
+    const without = serializeRunSnapshot(snap).replace(/,"shopDiscount":[^,}]+/, '');
+    expect(parseRunSnapshot(without)).toBeNull();
   });
 
   it('局内的账(击杀/精英/武器战报)读档后不被抹掉', () => {

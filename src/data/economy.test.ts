@@ -26,6 +26,8 @@ import {
   OFFER_WEIGHT_NEW_WEAPON,
   REFIT_HEAL_FRACTION,
   REROLL_PRICE,
+  SHOP_DISCOUNT_FRACTION,
+  shopDiscountPrice,
   skipRefundFor,
   UPGRADE_CHOICE_COUNT,
   UPGRADE_COST_BASE,
@@ -170,15 +172,13 @@ describe('三选一与跳过', () => {
 });
 
 describe('船坞商店(21 号)', () => {
-  it('武器货架固定 2 把、单价 30、刷新价 10', () => {
-    expect(DOCK_WEAPON_COUNT).toBe(2);
+  it('武器货架固定 3 把(商店优化:2 → 3)、单价 30、刷新价 10', () => {
+    expect(DOCK_WEAPON_COUNT).toBe(3);
     expect(DOCK_WEAPON_PRICE).toBe(30);
     expect(DOCK_SHOP_REFRESH_PRICE).toBe(10);
   });
-  it('法令货架张数是小正整数:2 张配 300–430px 的侧栏不挤,货架摆得下也读得完', () => {
-    expect(Number.isInteger(DOCK_EDICT_COUNT)).toBe(true);
-    expect(DOCK_EDICT_COUNT).toBeGreaterThan(0);
-    expect(DOCK_EDICT_COUNT).toBeLessThanOrEqual(3);
+  it('法令货架 3 张(商店优化:2 → 3):货架摆得下也读得完', () => {
+    expect(DOCK_EDICT_COUNT).toBe(3);
   });
 
   it('法令卡是正整数星币,且贵于一次重摇(10):它是攒出来的大项,不是顺手的小费', () => {
@@ -196,6 +196,26 @@ describe('船坞商店(21 号)', () => {
     expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(0);
     expect(DOCK_REPAIR_FRACTION).toBeLessThan(1);
     expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(REFIT_HEAL_FRACTION);
+  });
+
+  it('特价折扣(商店优化)是 (0,1) 的折扣率:打的是折不是涨价', () => {
+    expect(SHOP_DISCOUNT_FRACTION).toBeGreaterThan(0);
+    expect(SHOP_DISCOUNT_FRACTION).toBeLessThan(1);
+  });
+
+  it('特价后的扣费是正整数且严格低于原价,取整不印小数', () => {
+    const weapon = shopDiscountPrice(DOCK_WEAPON_PRICE); // 30 → 15
+    const edict = shopDiscountPrice(DOCK_EDICT_PRICE); // 25 → 13
+    expect(Number.isInteger(weapon)).toBe(true);
+    expect(Number.isInteger(edict)).toBe(true);
+    expect(weapon).toBeGreaterThan(0);
+    expect(weapon).toBeLessThan(DOCK_WEAPON_PRICE);
+    expect(edict).toBeGreaterThan(0);
+    expect(edict).toBeLessThan(DOCK_EDICT_PRICE);
+    // 坏输入夹回 1:扣费绝不许扣出 0 或负数
+    expect(shopDiscountPrice(0)).toBe(1);
+    expect(shopDiscountPrice(-10)).toBe(1);
+    expect(shopDiscountPrice(Number.NaN)).toBe(1);
   });
 });
 

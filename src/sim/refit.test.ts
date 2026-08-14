@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
@@ -8,10 +9,12 @@ import {
   SHOP_BEACON_LIFETIME,
   SHOP_BEACON_MAX_DIST,
   SHOP_BEACON_MIN_DIST,
+  shopDiscountPrice,
 } from '../data/economy';
 import { SIM_DT } from '../core/loop';
-import { TOWER_AUTOCANNON } from '../data/towers';
-import { World } from './world';
+import { EDICT_AMMO } from '../data/edicts';
+import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
+import { ACQUIRE_REPLACE_NEEDED, SHOP_NO_STARCOINS, World } from './world';
 
 describe('槽位制整备与船坞商店', () => {
   it('completeRefit 只在整备中生效,且**不回血**(回血挂在接上信标那一刻)', () => {
@@ -84,6 +87,8 @@ describe('槽位制整备与船坞商店', () => {
     // 让它决定 rng 时点等于把随机序列交给玩家手速
     expect(world.dockEdictOffers.length).toBeGreaterThan(0);
     expect(world.shopWeapons.length).toBeGreaterThan(0);
+    // 特价(打折机制)与货架同帧掷定:有货就必有一件打折
+    expect(world.shopDiscountIndex).toBeGreaterThanOrEqual(0);
   });
 
   it('船坞购买接口在非整备中拒绝', () => {
@@ -102,6 +107,78 @@ describe('槽位制整备与船坞商店', () => {
     world.ship.hp = 1;
     expect(world.buyDockRepair()).toBe(0);
     expect(world.buyShopWeapon(0)).toBe(0);
+    expect(world.shopWeapons[0]).toBe(-1);
+  });
+
+  it('特价折扣:掷定的特价位落在还没售出的货架上,扣费按特价算(法令与武器两条路)', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.dockEdictOffers.push(EDICT_AMMO);
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    // 特价指到法令第 0 格:原价 25 只扣特价
+    world.shopDiscountIndex = 0;
+    world.starCoins = shopDiscountPrice(DOCK_EDICT_PRICE);
+    expect(world.buyDockEdict(0)).toBe(0);
+    expect(world.starCoins).toBe(0);
+    // 特价指到武器第 0 格(偏置 DOCK_EDICT_COUNT):原价 30 只扣特价
+    world.shopDiscountIndex = DOCK_EDICT_COUNT;
+    world.starCoins = shopDiscountPrice(DOCK_WEAPON_PRICE);
+    expect(world.buyShopWeapon(0)).toBe(0);
+    expect(world.starCoins).toBe(0);
+  });
+
+  it('特价不足原价:差 1 星币也买不了特价,但非特价格照原价拒绝', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.shopDiscountIndex = DOCK_EDICT_COUNT; // 第 0 格武器打特价
+    world.starCoins = shopDiscountPrice(DOCK_WEAPON_PRICE) - 1;
+    expect(world.buyShopWeapon(0)).toBe(SHOP_NO_STARCOINS); // 一分钱都不能少
+    expect(world.shopWeapons[0]).toBe(TOWER_AUTOCANNON); // 失败一个字段都不动
+  });
+
+  it('rollShopDiscount:只在没售出的格之间挑,货架全空时掷定 -1(恒掷 1 次 rng)', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.dockEdictOffers.push(EDICT_AMMO, EDICT_AMMO, EDICT_AMMO);
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.dockEdictOffers[0] = -1; // 售出一格:特价不许落在这里
+    const rngBefore = world.rng.state;
+    world.rollShopDiscount();
+    expect(world.rng.state).not.toBe(rngBefore); // 恰掷 1 次,游标确实动过
+    expect(world.shopDiscountIndex).not.toBe(0);
+    // 全空货架:照掷 1 次,结果 -1 = 没有特价
+    world.dockEdictOffers.length = 0;
+    world.shopWeapons.length = 0;
+    world.rollShopDiscount();
+    expect(world.shopDiscountIndex).toBe(-1);
+  });
+
+  it('refreshShop 重掷货架后跟着重掷特价(新货架配新特价)', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.dockEdictOffers.push(EDICT_AMMO);
+    world.shopWeapons.push(TOWER_AUTOCANNON);
+    world.shopDiscountIndex = -1;
+    world.starCoins = DOCK_SHOP_REFRESH_PRICE + 100;
+    expect(world.refreshShop()).toBe(0);
+    expect(world.shopDiscountIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  it('槽满时带着替换位购买:旧武器被换下、新武器落位、货架下架(特价机制之外顺手修的换装通道)', () => {
+    const world = new World(4);
+    world.refitPending = true;
+    world.shopWeapons.push(TOWER_LASER);
+    world.starCoins = 999;
+    for (const slot of world.weapons) {
+      slot.type = TOWER_AUTOCANNON;
+      slot.stars = 1;
+    }
+    expect(world.buyShopWeapon(0)).toBe(ACQUIRE_REPLACE_NEEDED); // 没给替换位:先选槽
+    expect(world.starCoins).toBe(999); // 失败不扣费、货架不动
+    expect(world.buyShopWeapon(0, 3)).toBe(0);
+    expect(world.weapons[3]!.type).toBe(TOWER_LASER); // 新武器落在替换槽上
+    expect(world.weapons[3]!.stars).toBe(1);
     expect(world.shopWeapons[0]).toBe(-1);
   });
 });

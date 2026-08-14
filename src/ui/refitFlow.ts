@@ -2,10 +2,16 @@
  * 航段整备流程 —— 纯商店(改版:甲板网格删除后的落点)。
  * 旧版的「左甲板工作区 + 三阶段(选拼块/焊接/重排)+ 空间进化」随甲板一起删除,
  * 本流程剩两块:**左侧舰船一览**(ui/shipDiagram)+ **右侧一栏商店** ——
- * 武器商店(30 ★/把,不满 10 ★ 刷新,槽满转到舰船上点一格替换)、
+ * 武器商店(30 ★/把,各 3 张货架,不满 10 ★ 刷新,槽满转到舰船上点一格替换)、
  * 法令卡(25 ★ 即时生效、无占槽)、付费修复(25 ★ 回 40% HP,满血置灰)、完成整备
  * (completeRefit → hide + onResolved,恢复战斗在 main.ts)。与普通升级彻底分开:
  * 不消费残骸、不生成三选一、没有战斗中可调用的入口;购买全部零 rng,ui 只照返回码说人话。
+ *
+ * —— 商店优化(打折机制 + 余额搬家)——
+ * 每次上架(跨段掷定 / 刷新货架)恰有一件商品打 SHOP_DISCOUNT_FRACTION 折:特价位的卡片
+ * 原价划线、特价亮金(与星币同款金色)。店头**不再印星币余额** —— 左上统计版(HUD 左列)
+ * 的 ★ 星币常驻显示且与商店同款金色,店里的钱袋读数整个挪过去,店头只留标题。
+ * 特价数走 data/economy 的 shopDiscountPrice:与 World 扣费共用同一份算法,印多少扣多少。
  *
  * —— 为什么商店里要画船(用户反馈)——
  * 商店搬上地图后,买东西这一刻玩家已经离开了战斗视角:货架上写着"磁轨炮 30 ★",
@@ -38,6 +44,7 @@ import {
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
   DOCK_WEAPON_PRICE,
+  shopDiscountPrice,
 } from '../data/economy';
 import { edictDesc, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
@@ -90,15 +97,7 @@ const SHOP_HEAD_CSS =
   'display:flex;align-items:center;justify-content:space-between;gap:12px;';
 const EYEBROW_CSS = `color:${MUTED_COLOR};font-size:10px;letter-spacing:.22em;text-transform:uppercase;`;
 const SHOP_TITLE_CSS = `color:${OK_COLOR};font-size:18px;letter-spacing:.12em;`;
-// 星币余额:店头主视觉 —— 金色大数 + 光晕,货架价格全按它算,它必须一眼就位
-const STAR_BALANCE_CSS =
-  `padding:7px 14px;border-radius:8px;border:1px solid #8a6d2f;` +
-  'background:rgba(34,26,8,.62);box-shadow:0 0 16px rgba(255,216,110,.16),inset 0 1px 0 rgba(255,255,255,.06);' +
-  'text-align:right;white-space:nowrap;';
-const STAR_VALUE_CSS =
-  `font-size:17px;font-weight:700;color:${STAR_COLOR};line-height:1.25;letter-spacing:.04em;`;
-const STAR_CAP_CSS =
-  `font-size:9px;color:${MUTED_COLOR};letter-spacing:.24em;text-transform:uppercase;margin-top:2px;`;
+// 店头不再印星币余额(商店优化:余额看左上统计版那一行 ★ 星币,与商店同款金色)——
 const SEGMENT_CSS =
   `padding:10px;border:1px solid ${LINE_COLOR};border-radius:7px;color:${TEXT_COLOR};` +
   'background:rgba(21,34,52,.42);';
@@ -242,7 +241,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shop.style.cssText = SHOP_CSS;
   shop.className = 'starwreck-refit-shop';
 
-  // —— 店头:标题 + 星币余额 ——
+  // —— 店头:标题(余额不在店里印,左上统计版的 ★ 星币常驻显示,与商店同款金色)——
   const shopHead = document.createElement('div');
   shopHead.style.cssText = SHOP_HEAD_CSS;
   shopHead.className = 'starwreck-refit-shop-head';
@@ -259,15 +258,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shopTitle.style.cssText = SHOP_TITLE_CSS;
   shopTitle.textContent = '舰装商店';
   shopTitleBox.append(shopEyebrow, shopTitle);
-  const starBalance = document.createElement('div');
-  starBalance.style.cssText = STAR_BALANCE_CSS;
-  const starValue = document.createElement('div');
-  starValue.style.cssText = STAR_VALUE_CSS;
-  const starCap = document.createElement('div');
-  starCap.style.cssText = STAR_CAP_CSS;
-  starCap.textContent = '星币';
-  starBalance.append(starValue, starCap);
-  shopHead.append(shopTitleBox, starBalance);
+  shopHead.appendChild(shopTitleBox);
 
   // —— 航段行(旧版威胁摘要删掉后留下的简版:下一波是第几段) ——
   const segment = document.createElement('div');
@@ -440,12 +431,25 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
+   * 货架价格的 HTML(打折机制):原价恒印;本格是特价位(shopDiscountIndex)时原价划线、
+   * 特价亮金(与星币同款金色),一眼就是"这件打折"。特价数走 shopDiscountPrice ——
+   * 与 World 扣费共用同一份算法,印 15 就扣 15,绝不各说各话。
+   */
+  function priceHtml(discounted: boolean, base: number): string {
+    if (!discounted) return `${base} ★`;
+    return (
+      `<span style="color:${STAR_COLOR}">特价 <s style="color:${MUTED_COLOR}">${base} ★</s>` +
+      ` ${shopDiscountPrice(base)} ★</span>`
+    );
+  }
+
+  /**
    * 全店唯一的刷新点:任何购买/刷新/换局后当场重刷。置灰只认"已售出/满血"两样 UI 读数;
    * **星币不足不置灰**,那是点击时的 deny 反馈 —— 余额随时可能被另一张卡花掉,置灰态会
    * 过期,真正的裁决始终以 world 的返回码为准。
    */
   function syncPanel(): void {
-    starValue.textContent = `★ ${world.starCoins}`;
+    // 星币余额不在店里印(商店优化):左上统计版(HUD 左列)的 ★ 星币常驻显示,与商店同款金色
 
     // 武器卡:替换态时整排让位,只露提示与退路(选槽在左边那张船图上)
     const pickerOpen = pendingBuy !== null;
@@ -484,28 +488,28 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       const notes: string[] = [];
       if (c1 + c2 + c3 > 0) {
         const parts: string[] = [];
-        if (c3 > 0) parts.push(`★3 ×${c3}`);
-        if (c2 > 0) parts.push(`★2 ×${c2}`);
-        if (c1 > 0) parts.push(`★1 ×${c1}`);
+        if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
+        if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
+        if (c1 > 0) parts.push(`★ ×${c1}`);
         notes.push(`已有 ${parts.join(' ')}`);
       } else {
-        notes.push('入手 ★1');
+        notes.push('入手 ★');
       }
       notes.push(empty >= 0 ? `装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽` : '槽已满 · 需替换一把');
-      // 买下 = 一把 ★1。两种"当场触发"提前说;合到 ★3 的变身名字也只在这里亮出来
+      // 买下 = 一把 ★。两种"当场触发"提前说;合到 ★★★ 的变身名字也只在这里亮出来
       if (c1 === 2) {
         if (c2 === 2) {
-          notes.push(mergeResult >= 0 ? `买下连合 ★3 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」` : '买下连合 ★3');
+          notes.push(mergeResult >= 0 ? `买下连合 ${'★'.repeat(3)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」` : `买下连合 ${'★'.repeat(3)}`);
         } else {
-          notes.push('买下合成 ★2');
+          notes.push(`买下合成 ${'★'.repeat(2)}`);
         }
       } else if (mergeResult >= 0 && c2 === 2) {
-        notes.push(`再合一把 ★2 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
+        notes.push(`再合一把 ${'★'.repeat(2)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
       }
       card.innerHTML =
         `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
         `<span><span style="color:${towerTintCss(type)}">${towerGlyph(type)}</span> ${def?.name ?? `未知武器(${type})`}</span>` +
-        `<span>${DOCK_WEAPON_PRICE} ★</span></span>` +
+        `<span>${priceHtml(world.shopDiscountIndex === DOCK_EDICT_COUNT + i, DOCK_WEAPON_PRICE)}</span></span>` +
         `<span style="display:block;color:${TEXT_COLOR};font-size:11px">${stats}</span>` +
         `<span style="display:block;color:${MUTED_COLOR};font-size:11px">${notes.join(' · ')}</span>`;
     }
@@ -523,7 +527,8 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       } else {
         row.innerHTML =
           `<span style="display:flex;justify-content:space-between;gap:8px;color:${OK_COLOR};font-size:13px;margin-bottom:3px">` +
-          `<span>${EDICTS[type]?.name ?? `未知法令(${type})`}</span><span>${DOCK_EDICT_PRICE} ★</span></span>` +
+          `<span>${EDICTS[type]?.name ?? `未知法令(${type})`}</span>` +
+          `<span>${priceHtml(world.shopDiscountIndex === i, DOCK_EDICT_PRICE)}</span></span>` +
           `<span style="color:${MUTED_COLOR};font-size:11px">${dockEdictEffect(type)}</span>`;
       }
     }
@@ -548,16 +553,16 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     };
   }
 
-  /** 买成之后的回执:三合一当场升星 / ★3 变身时,回执把结果说出来而不是干巴巴的"已购入" */
+  /** 买成之后的回执:三合一当场升星 / ★★★ 变身时,回执把结果说出来而不是干巴巴的"已购入" */
   function weaponReceipt(type: number, before: { max: number; result: number }): string {
     const name = TOWERS[type]?.name ?? '未知武器';
     const result = mergeResultOf(type);
     const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
     if (afterResult > before.result) {
-      return `已购入：${name} 合 ★3 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+      return `已购入：${name} 合 ${'★'.repeat(3)} 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
     }
     const afterMax = slotMaxStars(world.weapons, type);
-    if (afterMax > before.max) return `已购入：${name} 合到 ★${afterMax}`;
+    if (afterMax > before.max) return `已购入：${name} 合到 ${'★'.repeat(afterMax)}`;
     return `已购入：${name}`;
   }
 
@@ -599,7 +604,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const oldSlot = world.weapons[slotIndex];
     const oldName =
       oldSlot && oldSlot.type >= 0
-        ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} ★${oldSlot.stars}`
+        ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} ${'★'.repeat(oldSlot.stars)}`
         : null;
     const before = weaponBefore(pending.type);
     const code = world.buyShopWeapon(pending.index, slotIndex);
@@ -615,10 +620,10 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    // 换装的回执:换下的旧武器照报,三合一升星/★3 变身照 weaponReceipt 的口径补一句
+    // 换装的回执:换下的旧武器照报,三合一升星/★★★ 变身照 weaponReceipt 的口径补一句
     const receipt = weaponReceipt(pending.type, before);
     const name = TOWERS[pending.type]?.name ?? '未知武器';
-    const fusion = receipt.slice(`已购入：${name}`.length); // '' / ' 合到 ★2' / ' 合 ★3 变身「…」'
+    const fusion = receipt.slice(`已购入：${name}`.length); // '' / ' 合到 ★★' / ' 合 ★★★ 变身「…」'
     flash(oldName ? `已换装：${name}${fusion} → ${oldName}` : receipt, OK_COLOR);
     audioBus.playPlace();
     syncPanel();
