@@ -26,7 +26,7 @@
 import { CORRIDOR_BAND, GATE_TTK_TARGET } from '../data/balance';
 import { BOSS, ENEMIES } from '../data/enemies';
 import { isMergeResult } from '../data/merges';
-import { FX_MORTAR, STAR_MAX, TOWERS, TOWER_AUTOCANNON, type TowerDef } from '../data/towers';
+import { FX_MORTAR, GROWTH_DAMAGE_MIN, STAR_MAX, TOWERS, TOWER_AUTOCANNON, type TowerDef } from '../data/towers';
 import { WAVE_TOTAL_TIME } from '../data/waves';
 import {
   bossHpMulForGate,
@@ -113,9 +113,10 @@ export function pinDamage(def: TowerDef, stars: number): number {
 /**
  * growth.damage 的二分求解(未圆整):让端到端步进 P₃/P₁ 追平锚线的端到端步进
  * (= corridorAnchorP(3)/corridorAnchorP(1),现算不硬编码 —— 机炮的双管/曳光弹跳变都在里面)。
- * 探针用浅克隆,不污染实时表;g 下界钳 1.0(towers.test 断言成长档不许衰减,g < 1 会打红);
- * 上界自适应倍增(3→6→12→24→48→96),仍够不到 = 形状自带跳变超过锚线目标 → 返回 1.0
- * (最小合法成长,由带内判据收尾)。60 轮二分,每轮区间减半,终止宽 < 1e-9。
+ * 探针用浅克隆,不污染实时表;g 下界钳 GROWTH_DAMAGE_MIN(用户设计会:每星伤害 ≥ 3×,
+ * data/towers 的同一份常数 —— 求解不许把成长解回 3×/星 之下),上界自适应倍增
+ * (3→6→12→24→48→96),仍够不到 = 形状自带跳变超过锚线目标 → 返回下界(最小合法成长,
+ * 由带内判据收尾)。60 轮二分,每轮区间减半,终止宽 < 1e-9。
  */
 export function solveGrowth(def: TowerDef): number {
   const target = corridorAnchorP(3) / corridorAnchorP(1);
@@ -124,12 +125,12 @@ export function solveGrowth(def: TowerDef): number {
     const probe = { ...def, growth: { ...def.growth, damage: g } };
     return corridorPower(slotFor(def.type, 3), probe, neutralBuffs()) / p1 - target;
   };
-  let lo = 1.0;
-  if (f(lo) >= 0) return 1.0; // 最小成长已追平(形状自带跳变):回到下界,交给带内判据
+  let lo = GROWTH_DAMAGE_MIN;
+  if (f(lo) >= 0) return lo; // 最小成长已追平(形状自带跳变):回到下界,交给带内判据
   let hi = 3.0;
   while (f(hi) < 0) {
     hi *= 2;
-    if (hi > 96) return 1.0; // 扩界仍够不到 = 不可解:回到下界(与上一支同一条收尾)
+    if (hi > 96) return lo; // 扩界仍够不到 = 不可解:回到下界(与上一支同一条收尾)
   }
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;

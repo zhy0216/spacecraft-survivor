@@ -302,14 +302,14 @@ function starLine(def: TowerDef, stars: number): string {
   const range = Math.round(towerRange(def, stars));
   if (def.throttle === THR_CHARGE) {
     return (
-      `${stars}★ ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
+      `${'★'.repeat(stars)} ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
       `射程 ${range} · 充能 ${formatMul(towerChargeTime(def, stars))}s`
     );
   }
   const interval = towerFireInterval(def, stars);
   const rate = interval > 0 ? formatMul(1 / interval) : '—';
   return (
-    `${stars}★ ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
+    `${'★'.repeat(stars)} ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
     `射程 ${range} · 射速 ${rate}/s`
   );
 }
@@ -321,7 +321,7 @@ function weaponHover(type: number): string[] {
   let head = `${def.name} · ${throttleName(def.throttle)}`;
   for (const r of MERGES) {
     if (r.result === type) {
-      head = `${def.name} · 由${TOWERS[r.base]?.name ?? '?'}合3★变身 · ${throttleName(def.throttle)}`;
+      head = `${def.name} · 由${TOWERS[r.base]?.name ?? '?'}合${'★'.repeat(3)}变身 · ${throttleName(def.throttle)}`;
     }
   }
   return [head, starLine(def, 1), starLine(def, 2), starLine(def, 3)];

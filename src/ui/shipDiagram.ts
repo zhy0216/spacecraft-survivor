@@ -356,18 +356,18 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
           // 换装预览:旧的划掉、新的顶上 —— 玩家点下去之前就看得到自己拿什么换什么
           lines.push(
             `<div style="${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through">` +
-              `${def.name} ★${equipped.stars}</div>`,
+              `${def.name} ${'★'.repeat(equipped.stars)}</div>`,
           );
         }
         lines.push(
-          `<div style="${NAME_CSS}color:${SEL_COLOR}">▸ ${gname} ★${ghost.stars}</div>`,
+          `<div style="${NAME_CSS}color:${SEL_COLOR}">▸ ${gname} ${'★'.repeat(ghost.stars)}</div>`,
         );
         if (!equipped) lines.push(`<div style="${META_CSS}">${ghostMeta(world, ghost)}</div>`);
       } else if (equipped && def) {
         const dps = world ? slotSustainedDps(equipped, def, world.buffs) : 0;
         lines.push(
           `<div style="${NAME_CSS}"><span style="color:${towerTintCss(equipped.type)}">` +
-            `${towerGlyph(equipped.type)}</span> ${def.name} ★${equipped.stars}</div>`,
+            `${towerGlyph(equipped.type)}</span> ${def.name} ${'★'.repeat(equipped.stars)}</div>`,
           `<div style="${META_CSS}">${throttleName(def.throttle)} · ` +
             `${Math.round(towerArcDeg(def, equipped.stars))}° · ${Math.round(dps)}/s</div>`,
         );

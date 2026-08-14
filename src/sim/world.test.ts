@@ -166,8 +166,8 @@ describe('World 槽位制核心接线', () => {
       for (let i = 0; i < charts; i++) w.grantEdict(EDICT_STARCHART);
       return w;
     };
-    const a = mk(0); // 基础 3%(二轮审查重锚)
-    const b = mk(EDICT_MAX_LEVEL); // 3% + 5×2% = 13%
+    const a = mk(0); // 基础 23%(用户设计会:+20 个百分点)
+    const b = mk(EDICT_MAX_LEVEL); // 23% + 5×2% = 33%
     for (let i = 0; i < 200; i++) {
       for (const w of [a, b]) {
         const e = w.enemies.spawn();
@@ -180,20 +180,21 @@ describe('World 槽位制核心接线', () => {
     // 概率不同、掷的次数相同:同 seed 同操作序列,两条随机流必须停在同一格
     // (少了"每杀恒掷一次"这条,拿一层星图协议就会把整局的出怪序列整体挪位)
     expect(a.rng.next()).toBe(b.rng.next());
-    // 概率真的起作用了:5 层星图协议的收入应当明显高于基础档(200 杀,期望 6 vs 26)。
+    // 概率真的起作用了:5 层星图协议的收入高于基础档(200 杀,期望 ≈ 45 vs 64,比值 33/23 ≈ 1.43;
+    // 掉率抬到 23% 后"押满翻五倍"的旧锚作废,压的是"法令确实加了点、且不是乘法走样"的下限)。
     // 钉的是**这一局挣到的**,不是余额 —— 开局白送的 STARTING_STAR_COINS 两边一样多,
-    // 留在读数里只会把两档的倍数差冲淡(25 + 6 与 25 + 26 的比值远小于真实的 4 倍)
+    // 留在读数里只会把两档的倍数差冲淡
     const earned = (w: World): number => w.starCoins - STARTING_STAR_COINS;
     expect(earned(a)).toBeGreaterThan(0);
-    expect(earned(b)).toBeGreaterThan(earned(a) * 2);
+    expect(earned(b)).toBeGreaterThan(earned(a) * 1.2);
   });
 
   it('开局白送 STARTING_STAR_COINS:一分没杀就有余额,且不因 seed 而变', () => {
     // 与出怪/掉落无关的常数:换 seed 不该换到第二个数(它不掷 rng,也不进 checksum)
     expect(new World(1).starCoins).toBe(STARTING_STAR_COINS);
     expect(new World(999).starCoins).toBe(STARTING_STAR_COINS);
-    // 白送的口径是"配第一段收入(≈5 枚)恰好买一样":够一件法令/修复,武器仍差一档 ——
-    // 白送不是一整套起手装备(二轮审查重锚:15 → 25)
+    // 白送的口径曾是"配第一段收入(≈5 枚)恰好买一样";掉率抬到 23% 后段1 期望 ≈ 37 枚,
+    // 白送与价的比例留待下一次重锚 —— 它不因 seed 而变、且不足一把武器的价这两条不变
     expect(STARTING_STAR_COINS).toBeLessThan(DOCK_WEAPON_PRICE);
   });
 

@@ -69,13 +69,13 @@ function starExpected(def: typeof TOWERS[number], stars: number, mortar: boolean
   const range = Math.round(towerRange(def, stars));
   if (def.throttle === THR_CHARGE) {
     return (
-      `${stars}★ ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
+      `${'★'.repeat(stars)} ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
       `充能 ${formatMul(towerChargeTime(def, stars))}s`
     );
   }
   const interval = towerFireInterval(def, stars);
   return (
-    `${stars}★ ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
+    `${'★'.repeat(stars)} ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
     `射速 ${formatMul(1 / interval)}/s`
   );
 }
@@ -183,8 +183,8 @@ describe('codexRows', () => {
     expect(auto.hover[1]).toBe(starExpected(def, 1, false));
     expect(auto.hover[2]).toBe(starExpected(def, 2, false));
     expect(auto.hover[3]).toBe(starExpected(def, 3, false));
-    // 成长曲线确实在涨:2★/3★ 的伤害与 1★ 不同(这正是旧版图鉴漏印的两行)
-    expect(auto.hover[2]).not.toContain(`2★ 伤害 ${formatMul(def.damage)}`);
+    // 成长曲线确实在涨:★★/★★★ 的伤害与 ★ 不同(这正是旧版图鉴漏印的两行)
+    expect(auto.hover[2]).not.toContain(`★★ 伤害 ${formatMul(def.damage)}`);
   });
 
   it('迫击炮类:落点伤害 + 充能节奏(直击伤害恒 0,不印误导性的 0)', () => {
@@ -200,8 +200,8 @@ describe('codexRows', () => {
   it('合成武器经 MERGES 反查底座名与底座贴图(数据表改名图鉴跟着走)', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     const aurora = weapons.find((r) => r.name === '极光阵列')!;
-    expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合3★变身 · 过热系');
-    // 合成塔没有独立贴图,配图回退底座塔的图 —— 与悬停里的"底座合3★"两相印证
+    expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合★★★变身 · 过热系');
+    // 合成塔没有独立贴图,配图回退底座塔的图 —— 与悬停里的"底座合★★★"两相印证
     expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
   });
 
@@ -241,8 +241,11 @@ describe('codexRows', () => {
         `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)}`,
       `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
     ]);
-    // 读数锚点(现表:hpMul 52、contactDamageMul 2):40×52=2080、18×2=36
-    expect(boss.hover[1]).toContain('HP 2080 · 接触 36');
+    // 读数锚点:按现表 hpMul × 底座 HP 现算(重锚 hpMul 后跟着走,不钉平衡值)
+    expect(boss.hover[1]).toContain(
+      `HP ${Math.round(beetle.hp * BOSS.hpMul)} · 接触 ` +
+        `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)}`,
+    );
     expect(boss.art).toEqual({ kind: 'img', urls: [BOSS_ART_URL] });
   });
 
@@ -495,7 +498,7 @@ describe('createCodexUi', () => {
     expect(findEl(root(dom), (el) => el.textContent === '弹药协议')).toBeDefined();
   });
 
-  it('悬停 tooltip:进卡弹出(含 1★/2★/3★ 星级读数),出卡收起', () => {
+  it('悬停 tooltip:进卡弹出(含 ★/★★/★★★ 星级读数),出卡收起', () => {
     const ui = make();
     ui.show();
     const nameEl = findEl(root(dom), (el) => el.textContent === '自动机炮')!;
@@ -504,9 +507,9 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.cssText).toContain('display:none');
     cell.listeners.get('mouseenter')?.({});
     expect(tip(dom).style.display).toBe('block');
-    expect(tip(dom).textContent).toContain('1★ 伤害');
-    expect(tip(dom).textContent).toContain('2★ 伤害');
-    expect(tip(dom).textContent).toContain('3★ 伤害');
+    expect(tip(dom).textContent).toContain('★ 伤害');
+    expect(tip(dom).textContent).toContain('★★ 伤害');
+    expect(tip(dom).textContent).toContain('★★★ 伤害');
     expect(tip(dom).style.top).toBe('126px'); // 卡下方 6px
     cell.listeners.get('mouseleave')?.({});
     expect(tip(dom).style.display).toBe('none');

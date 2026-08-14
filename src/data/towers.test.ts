@@ -36,6 +36,7 @@ import {
   towerPierce,
   towerRange,
   TOWERS,
+  GROWTH_DAMAGE_MIN,
 } from './towers';
 
 const STARS = [1, 2, 3];
@@ -133,6 +134,19 @@ describe('武器塔数值表', () => {
     // 2★/3★ 的数值档位恰好命中旧 Lv3/Lv5:按成长表现算一遍(不改表、只钉换算口径)
     expect(towerDamage(gun, 2)).toBe(gun.damage * Math.pow(gun.growth.damage, 2));
     expect(towerDamage(gun, 3)).toBe(gun.damage * Math.pow(gun.growth.damage, 4));
+  });
+
+  it('每星伤害至少 3 倍(用户设计会:2★ ≥ 3×1★、3★ ≥ 3×2★),growth.damage 守 √3 下界', () => {
+    for (const def of TOWERS) {
+      // 迫击炮系直击恒 0,伤害全在落点档 —— 同一条不变式落在 towerAoeDamage 上
+      const d = (stars: number) => (def.fx === FX_MORTAR ? towerAoeDamage(def, stars) : towerDamage(def, stars));
+      expect(d(1), def.name).toBeGreaterThan(0);
+      expect(d(2), def.name).toBeGreaterThanOrEqual(3 * d(1));
+      expect(d(3), def.name).toBeGreaterThanOrEqual(3 * d(2));
+      // 每星 = 两档旧级(starLevel 指数 0/2/4),g ≥ √3 是「每星 ×3」的等价写法 ——
+      // 数值表与自动平衡求解器(sim/autobalance 的 solveGrowth 下界)共用 GROWTH_DAMAGE_MIN 一份
+      expect(def.growth.damage, def.name).toBeGreaterThanOrEqual(GROWTH_DAMAGE_MIN);
+    }
   });
 
   it('光束与特效存续时间保持正序', () => {

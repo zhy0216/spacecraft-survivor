@@ -98,17 +98,17 @@ describe('升级卡片纯文案', () => {
     expect(desc).toContain(String(Math.round(towerRange(def, 1))));
     expect(desc).toContain(String(Math.round(towerDps(def, 1) * 100) / 100));
     expect(desc).toContain('弹药系'); // 武器卡标好所属系
-    // 未拥有:从 1★ 起步
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('新武器 · 获得后从 ★1 起步');
-    // 1× 1★:报把数 + 三合一规则
+    // 未拥有:从 ★ 起步
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('新武器 · 获得后从 ★ 起步');
+    // 1× ★:报把数 + 三合一规则
     world.weapons[0]!.type = TOWER_AUTOCANNON;
     world.weapons[0]!.stars = 1;
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★1 ×1 · 三把同星合一');
-    // 2× 1★:下一张卡当场合 ★2
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★ ×1 · 三把同星合一');
+    // 2× ★:下一张卡当场合 ★★
     world.weapons[1]!.type = TOWER_AUTOCANNON;
     world.weapons[1]!.stars = 1;
-    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★1 ×2 · 再来一把合成 ★2');
-    // 2× 1★ + 2× 2★:下一张卡 ★1 合一、★2 满三把连锁合到 ★3(有配方 = 当场合成)
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('已有 ★ ×2 · 再来一把合成 ★★');
+    // 2× ★ + 2× ★★:下一张卡 ★ 合一、★★ 满三把连锁合到 ★★★(有配方 = 当场合成)
     world.weapons[0]!.stars = 2;
     world.weapons[1]!.stars = 2;
     world.weapons[2]!.type = TOWER_AUTOCANNON;
@@ -116,7 +116,7 @@ describe('升级卡片纯文案', () => {
     world.weapons[3]!.type = TOWER_AUTOCANNON;
     world.weapons[3]!.stars = 1;
     expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe(
-      '已有 ★2 ×2 ★1 ×2 · 再来一把连合到 ★3 合成',
+      '已有 ★★ ×2 ★ ×2 · 再来一把连合到 ★★★ 合成',
     );
     // 无配方塔(导弹巢):同样连锁,但没有"合成"尾巴
     const nest = createStubWorld([newWeaponOpt(TOWER_MISSILE_NEST)]);
@@ -130,7 +130,7 @@ describe('升级卡片纯文案', () => {
     nest.weapons[3]!.type = TOWER_MISSILE_NEST;
     nest.weapons[3]!.stars = 1;
     expect(cardLevelText(newWeaponOpt(TOWER_MISSILE_NEST), nestWorld)).toBe(
-      '已有 ★2 ×2 ★1 ×2 · 再来一把连合到 ★3',
+      '已有 ★★ ×2 ★ ×2 · 再来一把连合到 ★★★',
     );
   });
 
@@ -422,7 +422,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
     expect(world.takeCalls).toEqual([[0, undefined]]);
     expect(panelOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
-    expect((pickerSlotsOf(dom).children[1] as StubEl).textContent).toContain('★2');
+    expect((pickerSlotsOf(dom).children[1] as StubEl).textContent).toContain('★★');
     fire(pickerSlotsOf(dom).children[1] as StubEl, 'click');
     expect(world.takeCalls).toEqual([[0, undefined], [0, 1]]);
     expect(resolved).toBe(1);

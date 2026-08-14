@@ -279,10 +279,11 @@ export const EDICTS: EdictDef[] = [
   {
     type: EDICT_STARCHART,
     name: '星图协议',
-    // 用户设计会:星币改成**每次击杀 10% 概率**掉落(data/economy 的 STARCOIN_DROP_CHANCE),
+    // 用户设计会:星币改成**每次击杀按概率掉落**(data/economy 的 STARCOIN_DROP_CHANCE),
     // 这条是唯一能抬那个概率的东西。二轮审查重锚:基础概率降到 3% 后,本层的加点同步
-    // 从 +8 收到 +2 ⇒ 5 层 = 12.5% ≈ 基础的 4.2 倍,"押满这条轴 = 收入翻五倍"的整档
-    // 与原设计同锚;概率的上夹在 sim/edictBuffs.ts(总概率恒落在 [0,1])
+    // 从 +8 收到 +2 ⇒ 5 层 = 12.5% ≈ 基础的 4.2 倍;用户设计会再抬基础 +20 个百分点 → 23%,
+    // 本层加点暂不动(5 层 = 33%,相对增量只剩约 +43%,占位待调);概率的上夹在 sim/edictBuffs.ts
+    // (总概率恒落在 [0,1])
     throttle: EDICT_THR_NONE,
     fireRateMul: 1,
     reloadMul: 1,
@@ -295,7 +296,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
-    starCoinChanceAdd: 0.02, // 星币掉落概率 +2 个百分点(重锚后占位待调)
+    starCoinChanceAdd: 0.02, // 星币掉落概率 +2 个百分点(基础抬到 23% 后占位待调)
     tint: 0xb8d8f0, // 占位待调(最浅的一档冷白蓝:与"星"的语感对上)
   },
   {

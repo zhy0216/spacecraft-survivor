@@ -230,20 +230,20 @@ export function cardLevelText(opt: UpgradeOption, world?: World): string {
     const c3 = weapons ? slotStarCount(weapons, opt.type, 3) : 0;
     if (c1 + c2 + c3 === 0) {
       // 没给 world(纯函数兜底)时用卡面自带的 opt.level 说话,数字只会更保守
-      return opt.level > 0 ? `已有 ★${opt.level} · 三把同星合一` : '新武器 · 获得后从 ★1 起步';
+      return opt.level > 0 ? `已有 ${'★'.repeat(opt.level)} · 三把同星合一` : '新武器 · 获得后从 ★ 起步';
     }
     const parts: string[] = [];
-    if (c3 > 0) parts.push(`★3 ×${c3}`);
-    if (c2 > 0) parts.push(`★2 ×${c2}`);
-    if (c1 > 0) parts.push(`★1 ×${c1}`);
+    if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
+    if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
+    if (c1 > 0) parts.push(`★ ×${c1}`);
     const holdings = parts.join(' ');
     const mergeable = mergeResultOf(opt.type) >= 0;
-    // 下一张卡 = 一把 ★1。两种"当场触发"要提前说:
-    //   凑满三把 ★1 合一;若这一合让 ★2 也凑满三把,连锁合到 ★3(有配方 = 当场变身合成武器)
+    // 下一张卡 = 一把 ★。两种"当场触发"要提前说:
+    //   凑满三把 ★ 合一;若这一合让 ★★ 也凑满三把,连锁合到 ★★★(有配方 = 当场变身合成武器)
     if (c1 === 2 && c2 === 2) {
-      return `已有 ${holdings} · 再来一把连合到 ★3${mergeable ? ' 合成' : ''}`;
+      return `已有 ${holdings} · 再来一把连合到 ${'★'.repeat(3)}${mergeable ? ' 合成' : ''}`;
     }
-    if (c1 === 2) return `已有 ${holdings} · 再来一把合成 ★2`;
+    if (c1 === 2) return `已有 ${holdings} · 再来一把合成 ${'★'.repeat(2)}`;
     return `已有 ${holdings} · 三把同星合一`;
   }
   // 法令:当前层 → 下一层。满层那一档正常不会出现在候选里(卡池已剔),留一句兜底文案
@@ -486,7 +486,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       : comparison.beforeStars > 0 && comparison.afterStars > comparison.beforeStars;
     if (!isStarUpgrade) return;
     const label = opt.kind === OFFER_NEW_WEAPON
-      ? `✦ 升星 · ${cardTitle(opt)} · ★${comparison.afterStars}`
+      ? `✦ 升星 · ${cardTitle(opt)} · ${'★'.repeat(comparison.afterStars)}`
       : `✦ 法令叠层 · ${cardTitle(opt)} · ×${comparison.afterStars}`;
     transition.textContent = label;
     transition.style.display = 'flex';
@@ -569,8 +569,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   /**
    * 取用成功后的回执文案,按两类各说各的话。**在 takeUpgrade 之后调用**,星级/层数
    * 一律现读 World —— 卡片承诺的是"点下去之后",回执说的就是"点下去之后"。
-   * 新武器卡按"点前 → 点后"的差说话:落了新 ★1(获得)/ 三合一升星(合到 ★N)/
-   * 合到 ★3 变身(名字直取合成结果)。beforeMax/beforeResult 是点卡前的快照。
+   * 新武器卡按"点前 → 点后"的差说话:落了新 ★(获得)/ 三合一升星(合到 ★★/★★★)/
+   * 合到 ★★★ 变身(名字直取合成结果)。beforeMax/beforeResult 是点卡前的快照。
    */
   function successToast(opt: UpgradeOption, beforeMax: number, beforeResult: number): string {
     const label = optionLabel(opt);
@@ -578,11 +578,11 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const result = mergeResultOf(opt.type);
       const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
       if (afterResult > beforeResult) {
-        return `${label} 合 ★3 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+        return `${label} 合 ${'★'.repeat(3)} 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
       }
       const afterMax = slotMaxStars(world.weapons, opt.type);
-      if (afterMax > beforeMax) return `${label} 合到 ★${afterMax}`;
-      return `获得:${label} ★1`;
+      if (afterMax > beforeMax) return `${label} 合到 ${'★'.repeat(afterMax)}`;
+      return `获得:${label} ★`;
     }
     // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
     const lv = edictLevel(world.edictLevels, opt.type);
@@ -651,7 +651,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const def = TOWERS[slot.type];
       btn.disabled = false;
       btn.style.opacity = '1';
-      btn.textContent = `槽 ${i} · ${def?.name ?? `未知塔型(${slot.type})`} ★${slot.stars}`;
+      btn.textContent = `槽 ${i} · ${def?.name ?? `未知塔型(${slot.type})`} ${'★'.repeat(slot.stars)}`;
     }
     phase = PHASE_REPLACE;
     clearFlash();

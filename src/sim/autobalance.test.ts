@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BOSS } from '../data/enemies';
 import {
   FX_MORTAR,
+  GROWTH_DAMAGE_MIN,
   STAR_MAX,
   TOWERS,
   TOWER_AUTOCANNON,
@@ -18,7 +19,7 @@ import {
   TOWER_KIND_COUNT,
   type TowerDef,
 } from '../data/towers';
-import { bossHpMulForGate, corridorAnchorP, corridorOk, corridorPower, corridorRatio, neutralBuffs, slotFor, towerStars } from './balance';
+import { bossHpMulForGate, corridorAnchorP, corridorOk, corridorPower, corridorRatio, neutralBuffs, refGateDps, slotFor, towerStars } from './balance';
 import {
   applyEdits,
   applyEditsToTable,
@@ -72,10 +73,11 @@ describe('自动平衡求解器', () => {
     for (const s of towerStars(TOWERS[TOWER_LASER]!)) expect(corridorOk(TOWERS[TOWER_LASER]!, s)).toBe(true);
   });
 
-  it('临时改坏成长档:solveGrowth 二分收敛回手调值附近,应用后 2★/3★ 全部回带(激光 1.8 → 1.4)', () => {
+  it('临时改坏成长档:solveGrowth 二分收敛回锚线步进,且不低于每星 3× 伤害的下界(激光 2.5 → 1.4)', () => {
     tweak(TOWER_LASER, 'growth', 1.4);
     const g = solveGrowth(TOWERS[TOWER_LASER]!);
-    expect(g).toBeCloseTo(1.81, 2); // 手调 1.8,端到端精确解 1.81
+    // 求解下界 = GROWTH_DAMAGE_MIN(每星伤害 ≥ 3× 的设计口径,data/towers);激光无跳变,全靠伤害档追平锚线形状
+    expect(g).toBeGreaterThanOrEqual(GROWTH_DAMAGE_MIN);
     tweak(TOWER_LASER, 'growth', g);
     const target = corridorAnchorP(3) / corridorAnchorP(1);
     const probe = { ...TOWERS[TOWER_LASER]!, growth: { ...TOWERS[TOWER_LASER]!.growth, damage: g } };
@@ -147,11 +149,13 @@ describe('自动平衡求解器', () => {
     expect(toSig2(0.096)).toBe(0.096); // 恰好 2 位有效数字:不圆整
   });
 
-  it('hpMul 推导:现表一致不出编辑;塔表改坏后编辑跟着走(proposed = round(推导))', () => {
+  it('hpMul 推导:现表一致不出编辑;改坏闸门配装里的塔后编辑跟着走(proposed = round(推导))', () => {
     expect(makeBossEdit()).toBeNull();
-    tweak(TOWER_LASER, 'damage', TOWERS[TOWER_LASER]!.damage * 0.5);
-    const edits = solveTowerEdits();
-    applyEditsToTable(edits);
+    // 点防 1★ 是闸门最弱合法配装的一员(易塔锚线低,永远是配装里最便宜的那几座)——
+    // 改坏它 refGateDps 必动;表再重锚若换人,下面这条前提断言会先打红,改前提而不是放宽结论。
+    const refBefore = refGateDps();
+    tweak(TOWER_PD, 'damage', TOWERS[TOWER_PD]!.damage * 0.5);
+    expect(refGateDps()).toBeLessThan(refBefore);
     const bossEdit = makeBossEdit();
     expect(bossEdit).not.toBeNull();
     expect(bossEdit!.proposed).toBe(Math.round(bossHpMulForGate()));

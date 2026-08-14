@@ -163,7 +163,7 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
       const dps = world ? slotSustainedDps(s, def, world.buffs) : 0;
       cell.innerHTML =
         `<div style="${FACING_CSS}">${facing}</div>` +
-        `<div style="${NAME_CSS}">${def.name} ★${s.stars} ${throttleName(def.throttle)}</div>` +
+        `<div style="${NAME_CSS}">${def.name} ${'★'.repeat(s.stars)} ${throttleName(def.throttle)}</div>` +
         `<div style="${META_CSS}">${Math.round(towerArcDeg(def, s.stars))}° · ` +
         `${Math.round(towerRange(def, s.stars))} · ${Math.round(dps)}/s</div>`;
     }
@@ -255,5 +255,5 @@ export function slotSummary(world: World, slot: number): string {
   if (!s || s.type < 0) return `${facing} · 空`;
   const def = TOWERS[s.type];
   if (!def) return `${facing} · 未知塔型(${s.type})`;
-  return `${facing} · ${def.name} ★${s.stars} · ${throttleName(def.throttle)}`;
+  return `${facing} · ${def.name} ${'★'.repeat(s.stars)} · ${throttleName(def.throttle)}`;
 }
