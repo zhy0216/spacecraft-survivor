@@ -1296,7 +1296,7 @@ export class World {
       // Boss 的 state 恒 ≠ ST_APPROACH,走不到这里 —— 巨型个体不被虫群推挤。
       if (sep > 0 && e.state === ST_APPROACH) {
         const def = ENEMIES[e.kind]!;
-        const speed = def.speed * speedScale;
+        const speed = def.speed * speedScale * e.speedMul;
         this.grid.query(e.x, e.y, sep, this.scratch);
         for (let j = 0; j < this.scratch.length; j++) {
           const n = this.scratch[j]!;

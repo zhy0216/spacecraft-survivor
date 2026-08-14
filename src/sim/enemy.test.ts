@@ -48,7 +48,13 @@ import { createShip, DEG2RAD, type Ship, type Vec2, wrapAngle } from './ship';
 
 // 与 ship.test.ts 同口径:参数在文件顶部显式写死,免得 M0 反复调平衡时把机制断言带崩。
 // 0.09 是 GDD §14 的口径(数据表里那份由 data/enemies.test.ts 钉),这里钉的是公式形状。
-const BASE = { enemySpeedScale: 1, enemyHpScalePerMinute: 0.09 };
+// 差分旋钮在模块加载时抄一份当前默认值,有用例临时归零后由 afterEach 原样还回去。
+const BASE = {
+  enemySpeedScale: 1,
+  enemyHpScalePerMinute: 0.09,
+  enemySpeedJitter: tuning.enemySpeedJitter,
+  enemyAngleJitterDeg: tuning.enemyAngleJitterDeg,
+};
 Object.assign(tuning, BASE);
 /** 有用例要临时改前摇时长(证明"时长可配"),跑完必须还原,否则污染同文件后续用例 */
 const BASE_WINDUP = ENEMIES[KIND_BEETLE]!.chargeWindup;
@@ -432,6 +438,7 @@ describe('冲撞甲虫:前摇(BH_SEEK_CHARGE)', () => {
 
 describe('冲刺:方向在进前摇那一刻锁死', () => {
   it('中途把船挪走也不改道 —— 玩家来得及转向躲避的唯一机制来源', () => {
+    tuning.enemyAngleJitterDeg = 0; // 本用例钉的是"锁定方向逐位不变":关掉角偏,接近才严格沿轴
     const def = ENEMIES[KIND_BEETLE]!;
     const ship = shipAt(0, 0);
     const e = spawn(KIND_BEETLE, 500, 0);
@@ -604,10 +611,13 @@ describe('全局敌速倍率', () => {
     const out = v();
 
     stepEnemyBehavior(swarm, ship, SIM_DT, out);
-    expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_SWARM]!.speed, 9);
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_SWARM]!.speed * swarm.speedMul, 9);
     tuning.enemySpeedScale = 0.5;
     stepEnemyBehavior(swarm, ship, SIM_DT, out);
-    expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_SWARM]!.speed * 0.5, 9);
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(
+      ENEMIES[KIND_SWARM]!.speed * swarm.speedMul * 0.5,
+      9,
+    );
 
     // 冲刺段同样现读:压测时想把虫潮放慢看清行为,冲锋不跟着慢就白搭
     tuning.enemySpeedScale = 1;
@@ -616,6 +626,105 @@ describe('全局敌速倍率', () => {
     tuning.enemySpeedScale = 0.5;
     stepEnemyBehavior(beetle, ship, SIM_DT, out);
     expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_BEETLE]!.chargeSpeed * 0.5, 9);
+  });
+});
+
+describe('个体差分(同型怪不再同速同角挤成一条流)', () => {
+  it('speedMul ∈ [1 ± jitter] 且随出生点分散:两百个出生点折出多种速度,不全是同一个数', () => {
+    const jitter = tuning.enemySpeedJitter;
+    const muls = new Set<number>();
+    for (let i = 0; i < 200; i++) {
+      const e = createEnemy();
+      initEnemy(e, KIND_SWARM, i * 13, i * 7 + 3, 0, new Rng(1));
+      expect(e.speedMul).toBeGreaterThanOrEqual(1 - jitter - 1e-9);
+      expect(e.speedMul).toBeLessThanOrEqual(1 + jitter + 1e-9);
+      muls.add(e.speedMul);
+    }
+    expect(muls.size).toBeGreaterThan(150); // 全场一个速度 = 差分没生效
+  });
+
+  it('角偏:偏左偏右都有、|bias| ≤ jitterDeg、cos/sin 合成单位向量', () => {
+    const maxBias = tuning.enemyAngleJitterDeg * DEG2RAD;
+    let pos = 0;
+    let neg = 0;
+    for (let i = 0; i < 200; i++) {
+      const e = createEnemy();
+      initEnemy(e, KIND_SWARM, i * 13, i * 7 + 3, 0, new Rng(1));
+      expect(e.biasCos * e.biasCos + e.biasSin * e.biasSin).toBeCloseTo(1, 12);
+      const ang = Math.atan2(e.biasSin, e.biasCos);
+      expect(ang).toBeGreaterThanOrEqual(-maxBias - 1e-12);
+      expect(ang).toBeLessThanOrEqual(maxBias + 1e-12);
+      if (e.biasSin > 0) pos++;
+      if (e.biasSin < 0) neg++;
+    }
+    expect(pos).toBeGreaterThan(0);
+    expect(neg).toBeGreaterThan(0); // 只有单边偏 = 全虫潮一起绕圈,而不是扇形散开
+  });
+
+  it('差分由出生位置推出、零 rng:同位置差分逐位一致,出怪随机序列一步不挪', () => {
+    const a = createEnemy();
+    const b = createEnemy();
+    initEnemy(a, KIND_SWARM, 12, 34, 0, new Rng(1));
+    initEnemy(b, KIND_SWARM, 12, 34, 0, new Rng(2)); // rng 不同也不影响差分
+    expect(a.speedMul).toBe(b.speedMul);
+    expect(a.biasCos).toBe(b.biasCos);
+    expect(a.biasSin).toBe(b.biasSin);
+
+    const rng = new Rng(7);
+    const probe = new Rng(7);
+    initEnemy(createEnemy(), KIND_SWARM, 1, 2, 0, rng);
+    probe.next(); // 仍只消耗 side 那一次
+    expect(rng.next()).toBe(probe.next());
+  });
+
+  it('差分旋钮归零 = 个体差异关闭:速度回到数据表定值、角偏恒等(热路径整段跳过)', () => {
+    tuning.enemySpeedJitter = 0;
+    tuning.enemyAngleJitterDeg = 0;
+    const ship = shipAt(0, 0);
+    const out = v();
+    for (let i = 0; i < 50; i++) {
+      const e = createEnemy();
+      initEnemy(e, KIND_SWARM, 100 + i * 7, 0, 0, new Rng(1));
+      expect(e.speedMul).toBe(1);
+      expect(e.biasCos).toBe(1);
+      expect(e.biasSin).toBe(0);
+      stepEnemyBehavior(e, ship, SIM_DT, out);
+      expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_SWARM]!.speed, 9);
+      expect(out.y).toBe(0); // 敌在 +X、船在原点:无角偏就该直指 -X
+    }
+  });
+
+  it('接近段方向按角偏旋转:偏右的怪期望速度朝左侧偏(扇形包抄的几何来源)', () => {
+    const ship = shipAt(0, 0);
+    const out = v();
+    const e = createEnemy();
+    initEnemy(e, KIND_SWARM, 300, 0, 0, new Rng(1));
+    stepEnemyBehavior(e, ship, SIM_DT, out);
+    // 敌在 +X、船在原点:直指方向 = (-1, 0),旋 bias 后 y 分量 = -speed·sin(bias)
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_SWARM]!.speed * e.speedMul, 9);
+    expect(Math.abs(out.y) / Math.hypot(out.x, out.y)).toBeCloseTo(Math.abs(e.biasSin), 9);
+    if (e.biasSin !== 0) expect(Math.sign(out.y)).toBe(-Math.sign(e.biasSin));
+  });
+
+  it('只作用在接近段:冲刺速度仍是数据表定值(预警线不因差分撒谎)', () => {
+    tuning.enemySpeedJitter = 0.3; // 把差分调到极限,冲刺也不该跟着变
+    const ship = shipAt(0, 0);
+    const e = spawn(KIND_BEETLE, 500, 0);
+    expect(e.speedMul).not.toBe(1); // 差分确实存在(否则这条用例空过)
+    driveTo(e, ship, ST_DASH);
+    const out = v();
+    stepEnemyBehavior(e, ship, SIM_DT, out);
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(ENEMIES[KIND_BEETLE]!.chargeSpeed, 9);
+  });
+
+  it('分裂体继承父体的差分(同一位点出生,不该换一个速度)', () => {
+    const parent = createEnemy();
+    initEnemy(parent, KIND_STRAFER, 100, 50, 0, new Rng(1));
+    const s = createEnemy();
+    initSplit(s, parent, 0);
+    expect(s.speedMul).toBe(parent.speedMul);
+    expect(s.biasCos).toBe(parent.biasCos);
+    expect(s.biasSin).toBe(parent.biasSin);
   });
 });
 

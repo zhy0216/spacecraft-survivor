@@ -129,10 +129,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v6 旧档判废(商店优化升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v7 旧档判废(个体差分升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v6json = serializeRunSnapshot(snap).replace('"v":7', '"v":6');
-    expect(parseRunSnapshot(v6json)).toBeNull();
+    const v7json = serializeRunSnapshot(snap).replace('"v":8', '"v":7');
+    expect(parseRunSnapshot(v7json)).toBeNull();
   });
 
   it('特价位(打折机制)随档保存:读档后特价不丢,checksum 一致', () => {
@@ -274,7 +274,7 @@ describe('局内存档:stride 与结构对表', () => {
    * 数字对不上时的正确修法**不是**把数字改到相等,而是:先在 runSave.ts 的字段表里
    * 给新字段定性、该存的存进去,再把这里的"不存字段数"改成新的值并写明理由。
    */
-  it('Enemy:15 存 + 6 不存(px/py/hitFlash/lastHit/dead/sporeFire 见 EN_STRIDE 注释)', () => {
+  it('Enemy:18 存 + 6 不存(px/py/hitFlash/lastHit/dead/sporeFire 见 EN_STRIDE 注释)', () => {
     // 那 6 个的定性各不相同(插值基准 / 纯表现 / 派生量 / 同帧闩),逐条理由在 EN_STRIDE 注释里;
     // animSeed 反过来:它虽是表现字段却**要存** —— 由出生位置 hash 而来,读档时无从重算
     expect(Object.keys(createEnemy()).length).toBe(EN_STRIDE + 6);

@@ -61,9 +61,12 @@ import { RESULT_RUNNING, World } from './world';
  * v7(商店优化:特价折扣):快照新增 shopDiscount 标量(本轮货架的特价位)——
  *   它与两张货架同一条"消耗了 rng、决定玩家这轮花多少钱"的定性,进 checksum,必须存;
  *   漏了它,读档后特价消失,这一局从读档帧起与"没存过档"的局分叉。
+ * v8(个体差分):敌人新增 speedMul / biasCos / biasSin 三个字段(EN_STRIDE 15→18)。
+ *   它们是出生时从 animSeed × 当时 tuning 差分旋钮折出的定值 —— 读档时不可重算
+ *   (调过旋钮再读档,重算会把整场怪的速度/角偏偷偷洗成新档位),必须随实体存。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 7;
+export const RUN_SAVE_VERSION = 8;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -73,7 +76,8 @@ export const RUN_SAVE_VERSION = 7;
 
 /**
  * 一只敌人占几个格子。字段顺序:
- * x, y, vx, vy, kind, affixes, hp, maxHp, state, timer, lockX, lockY, side, animSeed, hitCd
+ * x, y, vx, vy, kind, affixes, hp, maxHp, state, timer, lockX, lockY, side, animSeed, hitCd,
+ * speedMul, biasCos, biasSin
  *
  * **不存**(与 Enemy 结构的其余 5 个字段一一对应,理由见文件头三类):
  * px/py = 插值基准(读档时对齐成 x/y);hitFlash = 闪白纯表现;
@@ -81,8 +85,10 @@ export const RUN_SAVE_VERSION = 7;
  * animSeed **要存**:它决定视野回收的落点(world.ts 的 ENEMY_RECYCLE_RADIUS 那段)与
  * 呼吸相位,且是由出生位置 hash 出来的定值 —— 读档时无从重算(出生位置早已不可考),
  * 不存的话读档后的回收落点会整片跑偏、全场虫子的相位也会在那一刻齐刷刷对齐。
+ * speedMul/biasCos/biasSin **要存**:出生时由 animSeed × 当时的 tuning 差分旋钮折出,
+ * 读档时重算会因旋钮变化(或版本演进)把整场怪的个体差分洗成另一个档位。
  */
-export const EN_STRIDE = 15;
+export const EN_STRIDE = 18;
 /** 一颗我方子弹占几个格子:x, y, vx, vy, kind, damage, life, pierce, radius, aoeRadius, aoeDamage, towerType, throttle, intercept(0/1)。不存 px/py */
 export const BU_STRIDE = 14;
 /** 一颗敌方弹丸占几个格子:x, y, vx, vy, kind, damage, life, radius。不存 px/py */
@@ -229,6 +235,9 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       e.side,
       e.animSeed,
       e.hitCd,
+      e.speedMul,
+      e.biasCos,
+      e.biasSin,
     );
   }
   const bullets: number[] = [];
@@ -397,6 +406,9 @@ export function restoreRun(snap: RunSnapshot): World {
     e.side = snap.enemies[o + 12]!;
     e.animSeed = snap.enemies[o + 13]!;
     e.hitCd = snap.enemies[o + 14]!;
+    e.speedMul = snap.enemies[o + 15]!;
+    e.biasCos = snap.enemies[o + 16]!;
+    e.biasSin = snap.enemies[o + 17]!;
   }
   for (let o = 0; o + BU_STRIDE <= snap.bullets.length; o += BU_STRIDE) {
     const b = world.bullets.spawn();

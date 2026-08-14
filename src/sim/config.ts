@@ -69,6 +69,11 @@ export const tuning = {
   // —— 敌人(GDD §14 / todos/07)——各型基础数值在 src/data/enemies.ts,这里只放全局量。
   // 与 stepShip 同口径:敌人状态机每逻辑帧现读,面板拖动即时生效,不缓存进局部常量。
   enemySpeedScale: 1, // 全局敌速倍率:压测想让虫潮慢下来看清行为时拖它,不去动数值表
+  // 个体差分(畅玩性:同型怪不再同速同角挤成一条流)。**出生时读一次**(见 sim/enemy 的
+  // initEnemy),与 enemyHpScalePerMinute 同口径:面板拖动只影响之后新生的怪。
+  // **只作用在接近段** —— 冲刺速度与前摇预警线仍是数据表定值,差分会让预警线撒谎。
+  enemySpeedJitter: 0.12, // 个体接近段速度差分 ±12%:虫潮不再以同一速度挤成单列纵队
+  enemyAngleJitterDeg: 10, // 个体接近角偏 ±10°(只对直线追船型):蜂群散成扇形包抄
   enemyHpScalePerMinute: 0.09, // GDD §14:敌方 HP ×(1 + 0.09·t分钟),单地图星区乘数固定 ×1
   // 出怪占比(轮盘赌权重,不必凑成 100)。**仅 stressSpawn = true 时生效** ——
   // 正式出怪器的型号由 src/data/waves.ts 的波次脚本逐条流给死,不掷随机(08 号 issue)。

@@ -105,6 +105,21 @@ export interface Enemy {
    */
   animSeed: number;
   /**
+   * 个体速度差分倍率(畅玩性:同型怪不再同速挤成一条流)。出生时从 animSeed 折出,
+   * ∈ [1 - tuning.enemySpeedJitter, 1 + tuning.enemySpeedJitter],只乘在接近段速度上 ——
+   * 冲刺仍是数据表定值(前摇预警线按 chargeSpeed 画,差分会让它撒谎)。
+   * **零 rng**:与 animSeed 同一条"出生位置哈希"口径,同 seed 两局差分序列逐位一致。
+   */
+  speedMul: number;
+  /**
+   * 个体接近角偏的 cos/sin(畅玩性)。± tuning.enemyAngleJitterDeg,出生时从 animSeed 的
+   * 另一个分数折出,与 speedMul 解耦(同一套 ×137 取小数的折法)。只对直线追船型
+   * (BH_SEEK / BH_SEEK_CHARGE)的接近段生效:蜂群散成扇形包抄而不是单列纵队;
+   * |角偏| < 90° → 径向分量仍为正,包抄到脸只是迟早。存 cos/sin 免热循环三角。
+   */
+  biasCos: number;
+  biasSin: number;
+  /**
    * 距下次可以再咬船一口的剩余秒(09 号 issue 的无敌帧)。
    * **每只敌人各自一份**,不是全船一个冷却:后者在蜂群贴脸时只有最先判到的那一只咬得动,
    * "一百只压上来"与"一只压上来"的掉血速率会一模一样,GDD §4.6 的挫败曲线当场作废。
@@ -158,6 +173,9 @@ export function createEnemy(): Enemy {
     lockY: 0,
     side: 1,
     animSeed: 0,
+    speedMul: 1,
+    biasCos: 1,
+    biasSin: 0,
     hitCd: 0,
     dead: false,
     hitFlash: 0,
@@ -189,6 +207,9 @@ export function resetEnemy(e: Enemy): void {
   e.lockY = 0;
   e.side = 1;
   e.animSeed = 0;
+  e.speedMul = 1;
+  e.biasCos = 1;
+  e.biasSin = 0;
   e.hitCd = 0;
   e.dead = false;
   e.hitFlash = 0; // 漏清:上一命受击的闪白会原样带给新出生的怪,无端闪一下
@@ -246,6 +267,16 @@ export function initEnemy(
   e.lockY = 0;
   e.side = rng.next() < 0.5 ? -1 : 1;
   e.animSeed = enemyAnimSeed(x, y);
+  // 个体差分(畅玩性):从 animSeed 再折两个分数(×137 / ×271 取小数,与回收落点的 s2
+  // 同一套手法),一只怪的"快慢"与"往哪边偏"解耦开。出生时读一次 tuning —— 面板拖
+  // jitter 只影响之后新生的怪,与 hpScaleAt 出生时读一次的口径一致。
+  // 零 rng:同 seed 两局的差分序列逐位一致,出怪随机序列一步不挪。
+  const s2 = (e.animSeed * 137) % 1;
+  const s3 = (e.animSeed * 271) % 1;
+  e.speedMul = 1 + (s2 * 2 - 1) * tuning.enemySpeedJitter;
+  const bias = (s3 * 2 - 1) * tuning.enemyAngleJitterDeg * DEG2RAD || 0;
+  e.biasCos = Math.cos(bias);
+  e.biasSin = Math.sin(bias);
   // 起手 0 = 一出生就能咬:出生点在船外一千多 px 的出怪环上(见 World.spawnFromWave),
   // 给它一个初始冷却只会让"生在船脸上"这类将来的出怪规则悄悄免掉第一口伤害
   e.hitCd = 0;
@@ -278,6 +309,10 @@ export function initSplit(e: Enemy, parent: Enemy, elapsedSec: number): void {
   e.lockY = 0;
   e.side = parent.side;
   e.animSeed = enemyAnimSeed(parent.x, parent.y);
+  // 分裂体与父体同一位点出生:个体差分继承父体(重算也是同一个数,继承省一次折分)
+  e.speedMul = parent.speedMul;
+  e.biasCos = parent.biasCos;
+  e.biasSin = parent.biasSin;
   e.hitCd = 0;
   e.dead = false;
   e.hitFlash = 0; // 分裂体与父体同一帧出生,不带父体的闪白
@@ -486,7 +521,7 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
       out.y = 0;
       return Math.min(1, def.accel * dt * 2);
     default: {
-      const speed = def.speed * tuning.enemySpeedScale;
+      const speed = def.speed * tuning.enemySpeedScale * e.speedMul;
       if (isSpore) {
         sporeSeek(e, ship, def, speed, out);
       } else if (def.behavior === BH_STRAFE || def.behavior === BH_STRAFE_CHARGE) {
@@ -495,6 +530,15 @@ export function stepEnemyBehavior(e: Enemy, ship: Ship, dt: number, out: Vec2): 
         strafe(e.x, e.y, ship.x, ship.y, ship.heading, offsetRad, def.strafeRadius, speed, out);
       } else {
         seek(e.x, e.y, ship.x, ship.y, speed, out);
+        // 个体角偏(只对直线追船型):把期望方向旋 bias 角 —— 蜂群散成扇形包抄,
+        // 不挤单列纵队。只旋方向不碰大小(速度倍率仍是 speedMul 那份);
+        // 角偏旋钮归零时 biasSin 恒 0,整段跳过,热路径不白付两次乘加。
+        if (e.biasSin !== 0) {
+          const ox = out.x * e.biasCos - out.y * e.biasSin;
+          const oy = out.x * e.biasSin + out.y * e.biasCos;
+          out.x = ox;
+          out.y = oy;
+        }
       }
       return Math.min(1, def.accel * dt);
     }
