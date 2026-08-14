@@ -32,7 +32,7 @@
 import { FrameMeter } from './core/frameMeter';
 import { Input } from './core/input';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
-import { COND_NONE, unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
+import { unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
 import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
@@ -399,8 +399,6 @@ async function boot(): Promise<void> {
       // 在此刻就已经是事实,删档不该等演出
       runActive = false;
       clearRunSnapshot();
-      // 剪影在渲染层只截一次,元进度与结算界面共用同一张(渲染层抓不到就是 null,此时不入图鉴)
-      const silhouette = renderer.captureShipSilhouette();
       // 19 号:一局结束 → 结算进元进度。**条件达成即记,不看胜负**:失败局照常入档
       // (progress.ts 口径),wins 是否 +1 由 evaluateRun 自己判,这里只摘 runStats 读数。
       // 失败局同样保存 —— "下一把的新理由"不因这一把输了就欠着
@@ -408,9 +406,8 @@ async function boot(): Promise<void> {
         result,
         kills: world.kills,
         eliteKills: world.eliteKills,
-        silhouette,
       });
-      // 单调合并:掩码取并、计数取最大、剪影去重 —— 两份进度只会向前,不会把哪边拉回去
+      // 单调合并:掩码取并、计数取最大 —— 两份进度只会向前,不会把哪边拉回去
       progress = mergeProgress(progress, evalResult.progress);
       saveProgress(progress);
       // 增量掩码 → UNLOCKS 下标数组:结算界面"解锁 XX"提示与将来图鉴任务读的都是它
@@ -439,9 +436,6 @@ async function boot(): Promise<void> {
         // Boss 击杀时刻(15 号):world.bossKilledAt = 击杀那一帧的 elapsed 秒,未击杀保持 0;
         // 只有胜利局会印它(见 gameOver.summaryText),但照常传 —— 口径与 kills 同一处
         bossKilledAtSec: world.bossKilledAt,
-        // 剪影是**可选项**:抓不到就是 null,结算界面照常弹(见 renderer.captureShipSilhouette)。
-        // 在这里截而不是在渲染层自己判断时机:一局只截一次,而"哪一刻算一局的最终船形"是流程的事
-        silhouette,
         // 19 号:newUnlocks = 本次新开锁的 UNLOCKS 下标(增量),结算界面「解锁 XX」提示;
         // progressStats = 结算后的元进度,图鉴读它 —— 两字段定义在 ui/gameOver.ts 的 RunSummary
         newUnlocks: newUnlockIdx,
@@ -817,7 +811,7 @@ async function boot(): Promise<void> {
     stats.kills = world.kills;
     // 局内解锁提示(19 号):每渲染帧对照 UNLOCKS 查"已达成但还没入档"的条件。
     // 局内可达的只有单局击杀(COND_KILLS)与累计精英击杀(COND_ELITE_KILLS,跨局累计 +
-    // 本局 world.eliteKills);首胜与收藏在结算入档,局内不存在"达成瞬间",不在这里弹。
+    // 本局 world.eliteKills);首胜在结算入档,局内不存在"达成瞬间",不在这里弹。
     // unlockMet 是单调的(条件不会回退),所以跨过阈值就弹一次、announcedMask 挡住重复。
     // 时停/结算期间不查:那些帧世界不动,阈值不可能跨过,也免得在结算界面底下弹 toast。
     if (!run.paused) {
@@ -830,7 +824,6 @@ async function boot(): Promise<void> {
         if ((progress.unlockMask & (1 << i)) !== 0) continue; // 已解锁不重复判
         if ((announcedMask & (1 << i)) !== 0) continue; // 本局已提示过
         const entry = UNLOCKS[i]!;
-        if (entry.condition.kind === COND_NONE) continue; // 收藏类无"达成瞬间",结算时自然入档
         if (!unlockMet(entry, live)) continue;
         announcedMask |= 1 << i;
         hud.toast(`解锁:${entry.name}`);

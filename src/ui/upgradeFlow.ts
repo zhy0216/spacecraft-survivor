@@ -43,9 +43,10 @@ const PANEL_CSS =
   'position:fixed;inset:0;display:none;z-index:20;' +
   'flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:28px;' +
   'background:radial-gradient(ellipse at center,rgba(13,37,58,.72) 0%,rgba(4,8,14,.88) 72%);' +
-  'font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;';
+  'font:13px/1.62 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;' +
+  'box-sizing:border-box;overflow:auto;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;';
 const HEAD_CSS = `color:${IDLE_COLOR};letter-spacing:.08em;`;
-const CARDS_CSS = 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap;';
+const CARDS_CSS = 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap;max-width:100%;';
 // 一张卡。button 而不是 div:键盘能聚焦、回车能按,而"点了没反应"在时停里最难查
 const CARD_CSS =
   'width:196px;padding:12px 14px;border-radius:8px;cursor:pointer;text-align:left;font:inherit;' +
@@ -58,7 +59,7 @@ const CARD_DESC_CSS = 'min-height:3.2em;'; // 描述行留常驻高度:三张卡
 const CARD_LEVEL_CSS = `color:${IDLE_COLOR};margin-top:6px;`;
 const CARD_COMPARE_CSS = `display:block;color:${VALUE_COLOR};font-size:11px;line-height:1.5;margin-top:4px;`;
 const BTN_CSS =
-  'padding:7px 18px;border-radius:6px;cursor:pointer;font:inherit;' +
+  'min-height:40px;padding:7px 18px;border-radius:6px;cursor:pointer;font:inherit;' +
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.1em;`;
 // 换槽选择层(武器槽全满时的替换子阶段):居中列出当前 4 槽 + 返回按钮,盖在卡片面板上方
 const PICKER_CSS =
@@ -82,7 +83,32 @@ const TRANSITION_CSS =
   `color:${OK_COLOR};font:700 20px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;` +
   'letter-spacing:.14em;text-shadow:0 0 12px rgba(154,220,255,.9),0 0 34px rgba(154,220,255,.5);';
 const TRANSITION_STYLE =
-  '@keyframes starwreck-upgrade-spotlight{0%{opacity:0;transform:scale(.72)}18%{opacity:1;transform:scale(1)}72%{opacity:1;transform:scale(1.04)}100%{opacity:0;transform:scale(1.18)}}';
+  '@keyframes starwreck-upgrade-spotlight{0%{opacity:0;transform:scale(.72)}18%{opacity:1;transform:scale(1)}72%{opacity:1;transform:scale(1.04)}100%{opacity:0;transform:scale(1.18)}}' +
+  '.starwreck-upgrade-card,.starwreck-upgrade-action,.starwreck-upgrade-slot{touch-action:manipulation;}' +
+  '.starwreck-upgrade-card:focus-visible,.starwreck-upgrade-action:focus-visible,.starwreck-upgrade-slot:focus-visible{' +
+  'outline:2px solid #dff2ff;outline-offset:3px;box-shadow:0 0 0 4px rgba(154,220,255,.18);}' +
+  '@media (max-width:720px){' +
+  '.starwreck-upgrade-panel{justify-content:flex-start!important;gap:10px!important;' +
+  'padding:max(16px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) ' +
+  'max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))!important;}' +
+  '.starwreck-upgrade-head{width:min(100%,430px);font-size:12px;text-align:center;}' +
+  '.starwreck-upgrade-cards{width:min(100%,430px);flex-direction:column!important;flex-wrap:nowrap!important;gap:9px!important;}' +
+  '.starwreck-upgrade-card{width:100%!important;min-height:0;padding:13px 14px!important;box-sizing:border-box;}' +
+  '.starwreck-upgrade-actions{width:min(100%,430px);display:grid!important;grid-template-columns:1fr;gap:8px!important;}' +
+  '.starwreck-upgrade-action{width:100%;min-height:44px;}' +
+  '.starwreck-upgrade-picker{width:calc(100% - 28px);max-width:430px;max-height:calc(100% - 28px);' +
+  'box-sizing:border-box;overflow:auto;padding:16px!important;}' +
+  '.starwreck-upgrade-slots,.starwreck-upgrade-slot{width:100%!important;box-sizing:border-box;}' +
+  '}' +
+  '@media (max-height:620px){' +
+  '.starwreck-upgrade-panel{justify-content:flex-start!important;gap:8px!important;padding-top:12px!important;}' +
+  '.starwreck-upgrade-card{padding-top:9px!important;padding-bottom:9px!important;}' +
+  '.starwreck-upgrade-icon{font-size:20px!important;margin-bottom:4px!important;padding:5px 0!important;}' +
+  '}' +
+  '@media (min-resolution:2dppx){' +
+  '.starwreck-upgrade-panel,.starwreck-upgrade-picker{font-size:13.5px!important;line-height:1.65!important;}' +
+  '.starwreck-upgrade-card,.starwreck-upgrade-action,.starwreck-upgrade-slot{border-color:#3d6288!important;}' +
+  '}';
 
 /**
  * 玩家模式不印残骸/花费(残骸数由 HUD 管);与 main.ts 同一条 ?debug 判定。
@@ -368,18 +394,27 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
 
   // —— DOM:卡片面板 + 换槽选择层 + 提示条 + 升星过场,append 进 #ui,行内 style ——
   const headEl = makeDiv(HEAD_CSS);
+  headEl.className = 'starwreck-upgrade-head';
   const cardsEl = makeDiv(CARDS_CSS);
+  cardsEl.className = 'starwreck-upgrade-cards';
   const rerollBtn = makeBtn(BTN_CSS, `重摇(${REROLL_PRICE} 星币)`);
   const skipBtn = makeBtn(BTN_CSS, '');
   const btnRow = makeDiv('display:flex;gap:10px;');
+  rerollBtn.className = 'starwreck-upgrade-action';
+  skipBtn.className = 'starwreck-upgrade-action';
+  btnRow.className = 'starwreck-upgrade-actions';
   btnRow.append(rerollBtn, skipBtn);
   const panel = makeDiv(PANEL_CSS);
+  panel.className = 'starwreck-upgrade-panel';
   panel.append(headEl, cardsEl, btnRow);
 
   const pickerTitle = makeDiv(HEAD_CSS);
   const pickerSlots = makeDiv('display:flex;flex-direction:column;gap:8px;');
   const pickerBack = makeBtn(BTN_CSS, '返回重选(Esc / 右键)');
   const picker = makeDiv(PICKER_CSS);
+  picker.className = 'starwreck-upgrade-picker';
+  pickerSlots.className = 'starwreck-upgrade-slots';
+  pickerBack.className = 'starwreck-upgrade-action';
   picker.append(pickerTitle, pickerSlots, pickerBack);
 
   const toast = makeDiv(TOAST_CSS);
@@ -398,6 +433,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   const slotBtns: HTMLButtonElement[] = [];
   for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
     const btn = makeBtn(SLOT_CSS, '');
+    btn.className = 'starwreck-upgrade-slot';
     const index = i;
     btn.addEventListener('click', () => confirmReplace(index));
     pickerSlots.appendChild(btn);
@@ -412,6 +448,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   function createCard(index: number): CardEls {
     const root = makeBtn(CARD_CSS, '');
     const icon = makeDiv(CARD_ICON_CSS);
+    root.className = 'starwreck-upgrade-card';
+    icon.className = 'starwreck-upgrade-icon';
     const title = makeDiv(CARD_TITLE_CSS);
     const desc = makeDiv(CARD_DESC_CSS);
     const level = makeDiv(CARD_LEVEL_CSS);

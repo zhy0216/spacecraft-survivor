@@ -31,7 +31,6 @@ import {
   COND_ELITE_KILLS,
   COND_FIRST_WIN,
   COND_KILLS,
-  COND_NONE,
   UNLOCKS,
   type UnlockEntry,
 } from '../data/unlocks';
@@ -82,12 +81,11 @@ function starExpected(def: typeof TOWERS[number], stars: number, mortar: boolean
 }
 
 describe('unlockConditionText', () => {
-  it('四种条件各有文案;COND_NONE 印无条件(将来新增条件漏配也能读出一句)', () => {
+  it('三种条件各有文案(将来新增条件漏配也能读出一句)', () => {
     const cases: Array<[number, string]> = [
       [COND_FIRST_WIN, '首次胜利'],
       [COND_KILLS, '单局击杀 300'],
       [COND_ELITE_KILLS, '累计精英击杀 14'],
-      [COND_NONE, '无条件'],
     ];
     for (const [kind, text] of cases) {
       const entry: UnlockEntry = {
@@ -161,7 +159,7 @@ describe('codexStatsText / codexUnlockStats', () => {
     );
   });
 
-  it('内容解锁计数剔掉船形收藏(无条件,不占分子分母):空进度 0/3,全解锁 3/3', () => {
+  it('内容解锁计数:空进度 0/3,全解锁 3/3', () => {
     expect(codexUnlockStats(progress(0))).toEqual({ unlocked: 0, total: 3 });
     expect(codexUnlockStats(progress(FULL_MASK))).toEqual({ unlocked: 3, total: 3 });
   });
@@ -478,8 +476,6 @@ describe('createCodexUi', () => {
     // 锁定卡:名称 div 的父格子带 opacity 灰显
     const lockedName = findEl(root(dom), (el) => el.textContent === '导弹巢')!;
     expect(parentOf(root(dom), lockedName)!.style.cssText).toContain('opacity:.45');
-    // 无剪影给占位,不空着这一栏
-    expect(findEl(root(dom), (el) => el.textContent.includes('暂无收藏剪影'))).toBeDefined();
   });
 
   it('过滤器:切到法令只剩法令卡,切回全部恢复', () => {
@@ -514,18 +510,6 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.top).toBe('126px'); // 卡下方 6px
     cell.listeners.get('mouseleave')?.({});
     expect(tip(dom).style.display).toBe('none');
-  });
-
-  it('剪影:progress.silhouettes 全量摆成 img(按 alt 与卡片配图区分),空时不摆', () => {
-    const ui = createCodexUi({
-      getProgress: () => progress(0, { silhouettes: ['data:a', 'data:b'] }),
-      onClose: () => {},
-    });
-    ui.show();
-    const shots = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '历史船形');
-    expect(shots.length).toBe(2);
-    expect(shots[0]!.src).toBe('data:a');
-    expect(shots[1]!.src).toBe('data:b');
   });
 
   it('卡片配图:PNG 直摆、无贴图条目走 SVG data URI(导弹巢/法令)', () => {

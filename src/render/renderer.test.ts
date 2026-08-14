@@ -5,6 +5,8 @@ import type { ElitePeek } from '../sim/waves';
 import {
   bossSummonWarnActive,
   bossSummonWarnFraction,
+  BOSS_ENTRANCE_FX_TIME,
+  bossEntranceStrength,
   bossWarnOnEnter,
   dmgNumberColor,
   dmgNumberText,
@@ -93,6 +95,16 @@ describe('bossWarnOnEnter(出场音帧判定)', () => {
     expect(bossWarnOnEnter(1, 1)).toBe(false);
     expect(bossWarnOnEnter(1, 2)).toBe(false);
     expect(bossWarnOnEnter(-1, 0)).toBe(false);
+  });
+});
+
+describe('bossEntranceStrength(出场色相/震动包络)', () => {
+  it('触发时满强度,窗口中过渡,结束与坏值都归零', () => {
+    expect(bossEntranceStrength(BOSS_ENTRANCE_FX_TIME)).toBe(1);
+    expect(bossEntranceStrength(BOSS_ENTRANCE_FX_TIME / 2)).toBeCloseTo(0.5, 12);
+    expect(bossEntranceStrength(0)).toBe(0);
+    expect(bossEntranceStrength(-1)).toBe(0);
+    expect(bossEntranceStrength(Number.NaN)).toBe(0);
   });
 });
 

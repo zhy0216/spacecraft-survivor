@@ -1,7 +1,7 @@
 /**
  * 条件式解锁表(19 号 issue T1)的表级不变量。
  * 与 data/edicts.test.ts / data/waves.test.ts 同口径:钉的不是存档读写(那在 sim/progress.ts,
- * 后续 issue),而是**数据表本身的口径** —— 条目齐全且 id 唯一、四类内容各自引用合法型号、
+ * 后续 issue),而是**数据表本身的口径** —— 条目齐全且 id 唯一、三类内容各自引用合法型号、
  * 条件字段合法、判定函数与表逐条对得上、解锁引用与 waves.ts 的槽位互相咬合。
  *
  * 调解锁条件时随便改阈值是被鼓励的(那正是本表存在的理由),但改坏这几条就是改坏了机制本身:
@@ -16,8 +16,6 @@ import {
   COND_ELITE_KILLS,
   COND_FIRST_WIN,
   COND_KILLS,
-  COND_NONE,
-  UNLOCK_COLLECT,
   UNLOCK_COUNT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
@@ -29,9 +27,9 @@ import {
 } from './unlocks';
 import { WAVE_LOCKED_ELITES } from './waves';
 
-/** 四类条件的合法编号集合:未知编号在 unlockMet 里会落进 default(无条件放行),测试钉住 */
-const COND_KINDS = [COND_FIRST_WIN, COND_KILLS, COND_ELITE_KILLS, COND_NONE];
-const UNLOCK_KINDS = [UNLOCK_TOWER, UNLOCK_EDICT, UNLOCK_ELITE, UNLOCK_COLLECT];
+/** 三类条件的合法编号集合:未知编号在 unlockMet 里会落进 default,测试钉住 */
+const COND_KINDS = [COND_FIRST_WIN, COND_KILLS, COND_ELITE_KILLS];
+const UNLOCK_KINDS = [UNLOCK_TOWER, UNLOCK_EDICT, UNLOCK_ELITE];
 
 describe('条件式解锁表', () => {
   it('条目齐全,id 唯一且非空', () => {
@@ -43,7 +41,7 @@ describe('条件式解锁表', () => {
     for (const u of UNLOCKS) expect(u.name.length).toBeGreaterThan(0);
   });
 
-  it('四类解锁项各自引用合法型号:塔/法令落在表内,精英落在槽位内,收藏无内容', () => {
+  it('三类解锁项各自引用合法型号:塔/法令落在表内,精英落在槽位内', () => {
     for (const u of UNLOCKS) {
       expect(UNLOCK_KINDS).toContain(u.kind);
       if (u.kind === UNLOCK_TOWER) {
@@ -55,14 +53,12 @@ describe('条件式解锁表', () => {
         expect(u.type).toBeGreaterThanOrEqual(0);
         expect(u.type).toBeLessThan(EDICT_KIND_COUNT);
         expect(EDICTS[u.type], `法令 ${u.type} 没有条目`).toBeDefined();
-      } else if (u.kind === UNLOCK_ELITE) {
-        // 精英引用 = WAVE_LOCKED_ELITES 下标,且槽位的 unlockId 与条目 id 同串(waves.test 反向钉过)
+      } else {
+        // UNLOCK_ELITE:引用 = WAVE_LOCKED_ELITES 下标,且槽位的 unlockId 与条目 id 同串(waves.test 反向钉过)
         expect(Number.isInteger(u.type)).toBe(true);
         expect(u.type).toBeGreaterThanOrEqual(0);
         expect(u.type).toBeLessThan(WAVE_LOCKED_ELITES.length);
         expect(WAVE_LOCKED_ELITES[u.type]!.unlockId).toBe(u.id);
-      } else {
-        expect(u.type).toBe(0); // 收藏类没有内容下标
       }
     }
   });
@@ -79,7 +75,7 @@ describe('条件式解锁表', () => {
   it('条件字段合法:编号都在表内,阈值类型的 target > 0,非阈值类型恒 0', () => {
     for (const u of UNLOCKS) {
       expect(COND_KINDS, `${u.id} 的条件编号非法`).toContain(u.condition.kind);
-      if (u.condition.kind === COND_FIRST_WIN || u.condition.kind === COND_NONE) {
+      if (u.condition.kind === COND_FIRST_WIN) {
         expect(u.condition.target, `${u.id} 的非阈值条件不该有 target`).toBe(0);
       } else {
         expect(Number.isInteger(u.condition.target)).toBe(true);
@@ -91,9 +87,8 @@ describe('条件式解锁表', () => {
   it('unlockMet 逐条与表对得上:阈值不到恒不开,到了才开', () => {
     const zero: UnlockProgress = { wins: 0, kills: 0, eliteKills: 0 };
     for (const u of UNLOCKS) {
-      // 全零进度:只有无条件条目(收藏)开着 —— 首次胜利锁、击杀锁、精英锁全都关着
-      const expectOpenAtZero = u.condition.kind === COND_NONE;
-      expect(unlockMet(u, zero), `${u.id} 全零进度`).toBe(expectOpenAtZero);
+      // 全零进度:首次胜利锁、击杀锁、精英锁全都关着
+      expect(unlockMet(u, zero), `${u.id} 全零进度`).toBe(false);
     }
 
     // 逐条喂到刚达标:恰好等于阈值的那一格必须开(条件达成即记,不差一格)
@@ -123,12 +118,8 @@ describe('条件式解锁表', () => {
         below.eliteKills = t - 1;
         below.wins = 100;
         below.kills = 1e6;
-      } else {
-        below.wins = 100; // COND_NONE:恒开,不参与"差一格"的判定
       }
-      expect(unlockMet(u, below), `${u.id} 差一格 + 别的进度拉满`).toBe(
-        u.condition.kind === COND_NONE,
-      );
+      expect(unlockMet(u, below), `${u.id} 差一格 + 别的进度拉满`).toBe(false);
 
       // 达标后再加:已经开的必须保持开(单调,不因别的进度变化关回去)
       const met: UnlockProgress = { wins: 0, kills: 0, eliteKills: 0 };
@@ -143,8 +134,8 @@ describe('条件式解锁表', () => {
     }
   });
 
-  it('未知条件编号被当成无条件放行是危险行为:default 只认 COND_NONE,新条件必须先加表', () => {
-    // unlockMet 的 default 分支 = 无条件。写错条件编号会静默解锁 ——
+  it('未知条件编号落进 default:表内不许出现,判定侧对伪造条目不崩溃', () => {
+    // unlockMet 的 default 分支放行未知编号。写错条件编号会静默解锁 ——
     // 这条用例在"新增条件类型但忘了改判定"时当场报警
     const fake: UnlockEntry = {
       id: 'fake',

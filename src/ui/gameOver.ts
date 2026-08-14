@@ -3,15 +3,12 @@
  * 世界里的东西走 Pixi,菜单/卡片/面板走 #ui)。
  *
  * 它只做五件事:把一局的结果念出来(胜/负 + 存活时间 + 击杀数 + 航段进度)、
- * 摆一张可选的船形剪影、报一次「解锁 XX」(19 号)、铺一张元进度图鉴(19 号:
- * 塔/敌人/法令的解锁状态 + 最近几张船形剪影,未解锁灰显)、给一个「再来一局」。
+ * 报一次「解锁 XX」(19 号)、铺一张元进度图鉴(19 号:
+ * 塔/敌人/法令的解锁状态,未解锁灰显)、给一个「再来一局」。
  * **一个字都不认识 World**:
  * 摘数据、停 sim、换 World 全在 main.ts 那条重开流程里,这里收的是一份纯数据 RunSummary ——
  * 于是"结算显示什么"能脱开渲染与 sim 单测(下面那几个纯函数就是拦网),
  * 而 10 号 issue 把结算并进正式流程时,换掉的只是这一层的皮。
- *
- * 剪影同理只收一个 dataURL(渲染层的 captureShipSilhouette 给,抓不到就是 null):
- * ui 层不认识 pixi,也就不该知道那张图是怎么截出来的。
  *
  * 配色按 GDD §12 的敌我色域分离:整块面板一律冷色(我方废铁的青蓝),
  * **暖红只许出现在失败标题那几个字上**,不铺成色块 —— 铺开就成了敌方色域,
@@ -21,7 +18,6 @@ import { EDICTS } from '../data/edicts';
 import { ENEMIES } from '../data/enemies';
 import { TOWERS } from '../data/towers';
 import {
-  UNLOCK_COLLECT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
   UNLOCK_TOWER,
@@ -61,12 +57,6 @@ const TITLE_CSS = 'font-size:22px;letter-spacing:.18em;margin-bottom:6px;';
 const NOTE_CSS = `color:${IDLE_COLOR};margin-bottom:14px;`;
 
 /**
- * 剪影。默认 display:none —— 截图失败(渲染上下文丢了、离屏 canvas 不给 toDataURL)时
- * 结算界面照常弹,只是少一张图:一张锦上添花的图绝不许把胜负结算这条主流程带崩。
- */
-const SHOT_CSS = 'display:none;max-width:60%;height:auto;margin:0 auto 14px;';
-
-/**
  * 读数区。white-space:pre + 等宽字体 + 左对齐(卡片本身居中):三行的标签都是 4 个汉字,
  * 于是数值天然对成一列,不必为三行读数摆一套 grid。写法与 ui/upgradeFlow.ts 的提示条同源。
  */
@@ -86,11 +76,6 @@ const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;ma
 /** 图鉴条目:已解锁 = 读数同色;未解锁 = 灰字 + 降透明度(灰显,见 renderCollection) */
 const ITEM_CSS = `color:${VALUE_COLOR};`;
 const ITEM_LOCKED_CSS = `color:${IDLE_COLOR};opacity:.45;`;
-/** 历史船形缩略图;dataURL 原样显示,object-fit 兜住剪影的透明边 */
-const SHOT_THUMB_CSS =
-  `width:52px;height:52px;object-fit:contain;background:rgba(5,7,13,.6);` +
-  `border:1px solid ${LINE_COLOR};border-radius:4px;margin:4px 6px 0 0;`;
-const SHOT_PLACEHOLDER_CSS = `color:${IDLE_COLOR};margin-top:4px;`;
 
 /** 武器战报块:读数区之下、「解锁 XX」之上;行 = 名字 + 占比条 + 伤害数(冷色域,GDD §12) */
 const REPORT_CSS = 'text-align:left;margin-bottom:16px;';
@@ -118,11 +103,9 @@ export interface RunSummary {
   segmentCount: number;
   /** Boss 被击杀的时刻(elapsed 秒)= world.bossKilledAt;未击杀 = 0。只有胜利局会印它 */
   bossKilledAtSec: number;
-  /** 船形剪影 dataURL;渲染层抓不到就是 null,此时那一格整个不显示 */
-  silhouette: string | null;
   /** 本次结算新开锁的 UNLOCKS 下标(增量);空数组 = 没有新解锁,「解锁 XX」区块整个不显示 */
   newUnlocks: number[];
-  /** 结算后的元进度(sim/progress.ts):解锁掩码 + 计数器 + 剪影集合,图鉴读它 */
+  /** 结算后的元进度(sim/progress.ts):解锁掩码 + 计数器,图鉴读它 */
   progressStats: Progress;
   /**
    * 武器战报(本局逐塔型累计实际伤害,main.ts 从 world.runDamageByType 摘好、
@@ -215,12 +198,6 @@ export function summaryText(s: RunSummary): string {
   return lines.join('\n');
 }
 
-/**
- * 图鉴一次展示的剪影张数:从 progressStats.silhouettes 取**最近 N 张**
- * (存档侧本来就限量存最近 10 张,这里只摆一小排,免得结算卡拖一堆 100KB 级 dataURL)。
- */
-export const COLLECTION_SILHOUETTE_MAX = 3;
-
 export interface WeaponReportRow {
   /** 塔名(数据表即真相;型越界印 #type,与 resultTitle 的未知码同一条"不许静默兜底"口径) */
   name: string;
@@ -259,8 +236,6 @@ export function collectionCategoryName(kind: number): string {
       return '敌人';
     case UNLOCK_EDICT:
       return '法令';
-    case UNLOCK_COLLECT:
-      return '船形剪影';
     default:
       return `分类 ${kind}`;
   }
@@ -323,9 +298,6 @@ export function createGameOverUi(opts: {
   titleEl.style.cssText = TITLE_CSS;
   const noteEl = document.createElement('div');
   noteEl.style.cssText = NOTE_CSS;
-  const shotEl = document.createElement('img');
-  shotEl.style.cssText = SHOT_CSS;
-  shotEl.alt = '本局最终船形';
   const statsEl = document.createElement('div');
   statsEl.style.cssText = STATS_CSS;
   // 武器战报:一炮没开的局(weaponReport 空)整块隐藏,由 renderWeaponReport 决定露不露脸
@@ -358,7 +330,7 @@ export function createGameOverUi(opts: {
   const titleBtn = document.createElement('button');
   titleBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
   titleBtn.textContent = '返回标题';
-  card.append(titleEl, noteEl, shotEl, statsEl, reportEl, unlockEl, collectionEl, btn);
+  card.append(titleEl, noteEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   if (opts.onTitle) card.appendChild(titleBtn);
   root.appendChild(card);
@@ -443,12 +415,11 @@ export function createGameOverUi(opts: {
     unlockEl.style.display = 'block';
   }
 
-  /** 刷新图鉴:塔 → 敌人 → 法令三栏列内容解锁项(已解锁彩色、未解锁灰显 + 标注),末尾挂最近几张船形剪影 */
+  /** 刷新图鉴:塔 → 敌人 → 法令三栏列内容解锁项(已解锁彩色、未解锁灰显 + 标注) */
   function renderCollection(s: RunSummary): void {
     const mask = s.progressStats.unlockMask;
     const content: Array<{ index: number; entry: UnlockEntry }> = [];
     for (let i = 0; i < UNLOCKS.length; i++) {
-      if (UNLOCKS[i]!.kind === UNLOCK_COLLECT) continue; // 船形收藏无条件,不占"内容解锁"的分子分母
       content.push({ index: i, entry: UNLOCKS[i]! });
     }
     let unlocked = 0;
@@ -470,26 +441,6 @@ export function createGameOverUi(opts: {
           ? `${collectionItemName(entry)}(未解锁)`
           : collectionItemName(entry);
         collectionItemsEl.appendChild(item);
-      }
-    }
-    // 船形剪影收尾:最近 N 张缩略图;一张都没有给占位(别让这一栏空着)
-    const label = document.createElement('div');
-    label.style.cssText = CATEGORY_CSS;
-    label.textContent = collectionCategoryName(UNLOCK_COLLECT);
-    collectionItemsEl.appendChild(label);
-    const shots = s.progressStats.silhouettes.slice(-COLLECTION_SILHOUETTE_MAX);
-    if (shots.length === 0) {
-      const ph = document.createElement('div');
-      ph.style.cssText = SHOT_PLACEHOLDER_CSS;
-      ph.textContent = '暂无收藏剪影 —— 每局结算自动收录';
-      collectionItemsEl.appendChild(ph);
-    } else {
-      for (const url of shots) {
-        const thumb = document.createElement('img');
-        thumb.style.cssText = SHOT_THUMB_CSS;
-        thumb.src = url;
-        thumb.alt = '历史船形';
-        collectionItemsEl.appendChild(thumb);
       }
     }
   }
@@ -525,14 +476,6 @@ export function createGameOverUi(opts: {
       renderWeaponReport(s);
       renderUnlocks(s);
       renderCollection(s);
-      // 抓不到剪影就整个不显示,**且不去动 src** —— 置空 src 在部分浏览器上会重新请求当前页面,
-      // 而这里唯一想表达的只是"这一局没截到图"
-      if (s.silhouette !== null) {
-        shotEl.src = s.silhouette;
-        shotEl.style.display = 'block';
-      } else {
-        shotEl.style.display = 'none';
-      }
       visible = true;
       root.style.display = 'flex';
     },

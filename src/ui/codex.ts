@@ -49,7 +49,6 @@ import {
   COND_ELITE_KILLS,
   COND_FIRST_WIN,
   COND_KILLS,
-  UNLOCK_COLLECT,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
   UNLOCK_TOWER,
@@ -199,12 +198,11 @@ export function codexStatsText(p: Progress): string {
   return `胜场 ${p.wins} · 总击杀 ${p.kills} · 精英击杀 ${p.eliteKills}`;
 }
 
-/** 内容解锁计数(与结算图鉴同口径:UNLOCKS 剔掉船形收藏,数掩码置位) */
+/** 内容解锁计数(与结算图鉴同口径:数掩码置位) */
 export function codexUnlockStats(progress: Progress): { unlocked: number; total: number } {
   let total = 0;
   let unlocked = 0;
   for (let i = 0; i < UNLOCKS.length; i++) {
-    if (UNLOCKS[i]!.kind === UNLOCK_COLLECT) continue; // 船形收藏无条件,不占分子分母
     total++;
     if ((progress.unlockMask & (1 << i)) !== 0) unlocked++;
   }
@@ -391,7 +389,7 @@ function rowForLocked(
 }
 
 /**
- * 全量目录:武器 → 敌人 → 法令(船形剪影是图片,DOM 层直接摆 progress.silhouettes)。
+ * 全量目录:武器 → 敌人 → 法令。
  * 分区标题「武器/敌人」取目录语义,与结算图鉴块的「塔/敌人」分类名并立 ——
  * 那里是解锁项的窄块,这里是通读目录,读法不同(若需统一再并一处)。
  */
@@ -595,31 +593,6 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       for (const row of section.rows) appendCell(grid, row);
       scrollEl.appendChild(grid);
     }
-    // 船形剪影收尾:全量展示(存档侧本来就限量 10 张);一张都没有给占位,别让这一栏空着。
-    // 不属于任何过滤器档 —— 它是收藏不是目录
-    const label = document.createElement('div');
-    label.style.cssText = CATEGORY_CSS;
-    label.textContent = '船形剪影';
-    scrollEl.appendChild(label);
-    const shotRow = document.createElement('div');
-    shotRow.style.cssText = 'display:flex;flex-wrap:wrap;';
-    if (p.silhouettes.length === 0) {
-      const ph = document.createElement('div');
-      ph.style.cssText = `color:${IDLE_COLOR};`;
-      ph.textContent = '暂无收藏剪影 —— 每局结算自动收录';
-      shotRow.appendChild(ph);
-    } else {
-      for (const url of p.silhouettes) {
-        const thumb = document.createElement('img');
-        thumb.style.cssText =
-          'width:52px;height:52px;object-fit:contain;background:rgba(5,7,13,.6);' +
-          `border:1px solid ${LINE_COLOR};border-radius:4px;margin:0 6px 6px 0;`;
-        thumb.src = url;
-        thumb.alt = '历史船形';
-        shotRow.appendChild(thumb);
-      }
-    }
-    scrollEl.appendChild(shotRow);
   }
 
   function close(): void {

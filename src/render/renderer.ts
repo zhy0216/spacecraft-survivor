@@ -135,6 +135,16 @@ const DROP_TINT = 0xb9cfe0;
 const DROP_FILL = 0x8f959c;
 const DROP_EDGE = 0xffffff;
 const DROP_EDGE_WIDTH = 1.2;
+// —— 07 polish:统一星尘材质语言 ——
+// 三种语境共用同一组“亮核 + 轨道微粒 + 四向闪芒”语法:
+//   掉落物把它烤进粒子纹理(零逐帧开销);击杀与商店信标在已有 Graphics 上逐帧画。
+// 色相仍服从各自职责(残骸钢蓝 / 宝物金 / 击杀敌色 / 信标冷青),统一的是材质的高光与碎屑形态,
+// 因而不会为了“看起来同款”破坏 GDD §12 的敌我色域分离。
+const STARDUST_CORE_COLOR = 0xf4fbff;
+const STARDUST_WARM_COLOR = 0xffdfa0;
+const STARDUST_ANGLES = [0.12, 1.08, 2.26, 3.24, 4.35, 5.46] as const;
+const STARDUST_ORBITS = [1, 0.74, 1.12, 0.84, 1.04, 0.7] as const;
+const STARDUST_SIZES = [1, 0.62, 0.82, 0.55, 0.74, 0.5] as const;
 /**
  * 菱形的外接半径(世界 px)。**刻意不取拾取半径**:拾取判定是围着**船心**量的
  * (sim/drop 的 dropCollectRadius),不是围着这一颗残骸 —— 照那个数画出去,
@@ -304,6 +314,8 @@ const FX_KILL_EXPAND = 2.5;
 const FX_KILL_RAY = 1.4;
 const FX_KILL_RAY_WIDTH = 1.6;
 const FX_KILL_DIRS = [1, 0, 0, 1, -1, 0, 0, -1];
+/** 击杀时星尘比爆环再飞远一档:暖色尸爆外面留一圈冷白/金色碎屑,成为“可拾荒”的句号。 */
+const FX_KILL_STARDUST_EXPAND = 3.2;
 
 // —— 齐射共振(24 号,v1 纯演出,不加伤害)——短窗内相邻三槽齐射的那一下,沿这面舷
 // 铺一道冷色弧光:半径取船体受击圆(damage.shipRadius 全仓唯一口径,贴船壳外缘),
@@ -478,6 +490,12 @@ const ELITE_WARN_KEY_STRIDE = 1 << 20;
  * 靠节奏与 Boss 专属色(底座 tint)分得开,不另造第四种预警形状
  */
 const BOSS_WARN_BLINK_HZ = 2;
+/** Boss 出场的纯表现窗口:一记强镜头低频震动 + 背景紫红色相脉冲,不改任何 sim 状态。 */
+export const BOSS_ENTRANCE_FX_TIME = 1.35;
+const BOSS_ENTRANCE_SHAKE_PIXELS = 8.5;
+const BOSS_ENTRANCE_BG_COLOR = 0x5c173f;
+const BOSS_ENTRANCE_BG_TINT = 0xff9fc8;
+const BOSS_ENTRANCE_BG_ALPHA = 0.24;
 
 // —— 环阵 burst 预警(25 号)——屏幕空间,挂在 stage 上,不进 worldLayer ——
 /**
@@ -771,6 +789,43 @@ function buildSporeBulletShape(): Graphics {
 }
 
 /**
+ * 统一星尘晕:六颗定相位轨道微粒,奇数位是四向闪芒、偶数位是圆尘。
+ * 不掷随机:击杀回放、信标呼吸与截图在同一时间点必然长得一样;调用方只给 phase 让整圈缓慢转动。
+ * `radius` 是轨道基准而不是判定半径,所以同一语法可缩到 5px 掉落纹理、也可放到 46px 信标。
+ */
+function drawStardustHalo(
+  g: Graphics,
+  cx: number,
+  cy: number,
+  radius: number,
+  phase: number,
+  alpha: number,
+  primary = STARDUST_CORE_COLOR,
+  accent = STARDUST_WARM_COLOR,
+): void {
+  const baseSize = Math.max(0.65, radius * 0.075);
+  let glints = 0;
+  for (let i = 0; i < STARDUST_ANGLES.length; i++) {
+    const a = STARDUST_ANGLES[i]! + phase;
+    const orbit = radius * STARDUST_ORBITS[i]!;
+    const x = cx + Math.cos(a) * orbit;
+    const y = cy + Math.sin(a) * orbit;
+    const size = baseSize * STARDUST_SIZES[i]!;
+    const color = i % 3 === 1 ? accent : primary;
+    if ((i & 1) === 0) {
+      g.circle(x, y, size).fill({ color, alpha: alpha * (0.58 + STARDUST_SIZES[i]! * 0.32) });
+      continue;
+    }
+    g.moveTo(x - size * 1.7, y).lineTo(x + size * 1.7, y);
+    g.moveTo(x, y - size * 1.7).lineTo(x, y + size * 1.7);
+    glints++;
+  }
+  if (glints > 0) {
+    g.stroke({ width: Math.max(0.65, baseSize * 0.42), color: primary, alpha: alpha * 0.82 });
+  }
+}
+
+/**
  * 残骸掉落物的剪影(10 号 issue T4)。一律**菱形**,且全场只有这一种形状 ——
  * 圆 / 飞镖 / 胶囊 / 六边被四型敌人占满,实心点与空心环被两类子弹占满,菱形是唯一还空着的一档:
  * 于是"地上那颗是残骸"不必靠颜色也认得出(色盲安全,与敌人分型同一条口径)。
@@ -779,10 +834,13 @@ function buildSporeBulletShape(): Graphics {
  */
 function buildDropShape(): Graphics {
   const r = DROP_RADIUS;
-  return new Graphics()
+  const g = new Graphics()
     .poly([r, 0, 0, r, -r, 0, 0, -r])
     .fill(DROP_FILL)
     .stroke({ width: DROP_EDGE_WIDTH, color: DROP_EDGE });
+  // 星尘烤进纹理:ParticleContainer 仍只上传 position,不为满屏掉落物新增逐帧几何。
+  drawStardustHalo(g, 0, 0, r * 1.65, 0, 0.9, DROP_EDGE, DROP_EDGE);
+  return g;
 }
 
 /**
@@ -799,10 +857,14 @@ function buildMagnetOrbShape(): Graphics {
     const a = -Math.PI / 2 + (i * Math.PI) / 3;
     pts.push(Math.cos(a) * r, Math.sin(a) * r);
   }
-  return new Graphics()
+  const g = new Graphics()
     .poly(pts)
     .fill(DROP_FILL)
     .stroke({ width: DROP_EDGE_WIDTH * 1.4, color: DROP_EDGE });
+  drawStardustHalo(g, 0, 0, r * 1.55, Math.PI / 6, 1, DROP_EDGE, DROP_EDGE);
+  // 宝物多一枚亮核,与普通残骸的空心菱形拉开层级;最终颜色仍由 MAGNET_ORB_TINT 相乘。
+  g.circle(0, 0, r * 0.22).fill(DROP_EDGE);
+  return g;
 }
 
 /**
@@ -823,6 +885,12 @@ function fxFade(life: number, full: number): number {
 function clamp01(t: number): number {
   if (!(t > 0)) return 0;
   return t > 1 ? 1 : t;
+}
+
+/** Boss 出场色相/低频震动的平滑包络:刚触发为 1,在 BOSS_ENTRANCE_FX_TIME 内平滑退到 0。 */
+export function bossEntranceStrength(left: number): number {
+  const t = clamp01(left / BOSS_ENTRANCE_FX_TIME);
+  return t * t * (3 - 2 * t);
 }
 
 // —— 震屏(纯表现,渲染层自持:受击/击杀事件入账为 trauma,按指数衰减)——
@@ -1003,6 +1071,10 @@ export class Renderer {
   private throttleDrawn = false;
   /** 程序化星野(无限地图的方位参照)。变换由 sync 与镜头同步 */
   private readonly starfield = new Starfield();
+  /** Boss 出场的屏幕空间背景色相层:压在星野/世界之下,只改背景,绝不把敌我轮廓一起染色。 */
+  private readonly bossEntranceG = new Graphics();
+  /** Boss 出场演出剩余秒;阶段沿触发后由渲染帧 dt 自持,不进 checksum。 */
+  private bossEntranceLeft = 0;
   /** 震屏(纯表现,渲染层自持):trauma 衰减 + 相位推进,结果直接加进镜头位置 */
   private shakeTrauma = 0;
   private shakePhase = 0;
@@ -1048,11 +1120,12 @@ export class Renderer {
    * 全环脉冲是 HUD 级读数(方向箭头对环阵无意义:没有来向),不被镜头缩放/平移带着走。
    * 每帧 clear 后按需重画,整局一层复用。
    */
-  private readonly burstRingG = new Graphics();  /**
-   * 出场音的去重锁:Boss 阶段(0/1/2)的上次可见值。只在 bossPhase 从别的值翻进 1 的
-   * 那一帧响 playBossWarn() 一次 —— 渲染帧与逻辑帧不同步(120Hz 屏上同一逻辑帧会被采样
+  private readonly burstRingG = new Graphics();
+  /**
+   * Boss 出场演出的去重锁:阶段(0/1/2)的上次可见值。只在 bossPhase 从别的值翻进 1 的
+   * 那一帧启动音频 / 震屏 / 背景色相 —— 渲染帧与逻辑帧不同步(120Hz 屏上同一逻辑帧会被采样
    * 两次),不锁存就会把一次出场当成两次。初值 -1:重开换世界后第一帧必与 0 不同,
-   * 但 bossWarnOnEnter(-1, 0) 为 false,不会误响。
+   * 但 bossWarnOnEnter(-1, 0) 为 false,不会误触发。
    */
   private bossPhaseSeen = -1;
 
@@ -1330,10 +1403,17 @@ export class Renderer {
     }
     this.deathLayer.visible = false;
 
-    // 星野压在静态远景之上、世界层之下:它是世界锚定的方位参照(接替旧边界圈),
-    // 但终究是背景 —— 不许盖住任何实体
+    // Boss 色相层压在静态远景之上、星野之下:它只给“宇宙底色”换一拍紫红,
+    // 星野与战场实体仍保留自己的冷/暖色域,不被整屏滤镜糊成一色。
     if (this.backgroundSprite) app.stage.addChild(this.backgroundSprite);
-    app.stage.addChild(...this.starfield.views, this.worldLayer, this.eliteWarnG, this.bossWarnG, this.burstRingG);
+    app.stage.addChild(
+      this.bossEntranceG,
+      ...this.starfield.views,
+      this.worldLayer,
+      this.eliteWarnG,
+      this.bossWarnG,
+      this.burstRingG,
+    );
   }
 
   /**
@@ -1350,7 +1430,12 @@ export class Renderer {
     // 朝向必须沿最短弧插值:线性插值一旦跨过 ±π 边界,船头会反向甩一整圈
     const sh = lerpAngle(ship.pheading, ship.heading, alpha);
 
+    // dt 取渲染帧的实际间隔(不是 SIM_DT):震屏/飘字/爆炸演出都在渲染层自持,与逻辑帧率无关
+    const dt = Math.min(this.app.ticker.deltaMS / 1000, MAX_RENDER_DT);
+    // Boss 阶段沿要在背景与镜头之前消费:触发这一帧立刻换色、立刻给震屏入账,不晚一帧。
+    this.stepBossEntrance(dt);
     this.syncBackground(screen.width, screen.height, sx, sy);
+    this.syncBossEntranceBackground(screen.width, screen.height);
 
     // 镜头(GDD §3.3):战斗态缩放由"船占屏高比例"反推,固定不变 ——
     // 随速度变焦会让"船身长度"这个唯一的距离参照失效,射界判断也就没了标尺。
@@ -1362,8 +1447,6 @@ export class Renderer {
     const pivotY = sy + Math.sin(sh) * ((screen.height * tuning.cameraLookAhead) / scale);
     this.worldLayer.pivot.set(pivotX, pivotY);
 
-    // dt 取渲染帧的实际间隔(不是 SIM_DT):震屏/飘字/爆炸演出都在渲染层自持,与逻辑帧率无关
-    const dt = Math.min(this.app.ticker.deltaMS / 1000, MAX_RENDER_DT);
     // 程序化动画时钟与缓动同一份 dt:掉帧时一次多走一段,总节奏不变
     this.animClock += dt;
     // 震屏 / 飘字 / 爆炸演出都是渲染层自持的计时(同一份 dt):
@@ -1611,6 +1694,12 @@ export class Renderer {
     this.muzzleFxG.clear();
     this.eliteWarnKey = -1;
     this.bossPhaseSeen = -1;
+    this.bossEntranceLeft = 0;
+    this.bossEntranceG.clear();
+    if (this.backgroundSprite) this.backgroundSprite.tint = 0xffffff;
+    this.shakeTrauma = 0;
+    this.shakeX = 0;
+    this.shakeY = 0;
     // 飘字与爆炸演出是**上一局**的表现,换世界当场清空
     for (let i = 0; i < this.dmgSlots.length; i++) {
       const s = this.dmgSlots[i]!;
@@ -1627,46 +1716,6 @@ export class Renderer {
     this.boostFlameG.clear();
     this.boostTrailG.clear();
     for (let i = 0; i < this.boostTrail.length; i++) this.boostTrail[i]!.life = 0;
-  }
-
-  /**
-   * 截一张当前船形剪影的 dataURL,抓不到返回 null(08 号 T3 可选项:结算界面的"最终船形",
-   * P3 传播素材的最小雏形)。
-   *
-   * 抓 **shipG** 而不是整块画布:玩家要留下的是"我这一局把船拼成了什么样",
-   * 而画布上那一千只虫子只会把它糊掉。extract 走的是 target 的 **local bounds**,
-   * 于是容器自己的位姿(镜头缩放、船此刻的朝向)一概不进图 —— 出来的永远是船头朝 +X 的正像,
-   * 而不是玩家沉船那一瞬刚好歪着的那个角度。
-   *
-   * 逐帧读数临时藏起来:射界扇形 / 炮口线 / 节流读数画的都是"此刻的操作状态",
-   * 不是这艘船本身,留在图里就成了一张糊着蓝框的截图。藏与还原走 try/finally ——
-   * extract 抛了(上下文丢失、离屏 canvas 不给 toDataURL)也绝不能把这几层永久关掉,
-   * 那会让重开后的船缺三层读数。整体再 try/catch 兜底:剪影是锦上添花,
-   * 抓不到就交 null(ui 侧 RunSummary.silhouette 收的就是 string | null),结算界面照常弹 ——
-   * 一张图绝不许把胜负结算这条主流程带崩。
-   *
-   * 一局只调一次(结算那一下),故这里的临时数组与分辨率都不必心疼(铁律 3 管的是热路径)。
-   */
-  captureShipSilhouette(): string | null {
-    const hidden = [this.arcG, this.muzzleG, this.throttleG];
-    try {
-      for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = false;
-      // 4x + 抗锯齿:船缩到 48×36 世界 px 后,shipG 的 local bounds 只有 ~60×48 ——
-      // 4x 出 ~240px。这里不取 8x:剪影要进 localStorage 限量集合(19 号口径"降采样或限量",
-      // sim/progress.ts 已做最近 10 张 + 500KB 预算,渲染侧负责压单张体积;PNG dataURL 按
-      // 面积走,8x 比 4x 大 ~4 倍),240px 对图鉴缩略图足够,结算卡片则用 CSS 封顶缩放
-      const canvas = this.app.renderer.extract.canvas({
-        target: this.shipG,
-        resolution: 4,
-        antialias: true,
-      });
-      // toDataURL 在 ICanvas 上是**可选**方法(某些离屏 canvas 实现没有它):没有就当作抓不到
-      return canvas.toDataURL?.('image/png') ?? null;
-    } catch {
-      return null;
-    } finally {
-      for (let i = 0; i < hidden.length; i++) hidden[i]!.visible = true;
-    }
   }
 
   /**
@@ -1771,6 +1820,19 @@ export class Renderer {
       .lineTo(bx - r * 0.38 * pulse, by)
       .closePath()
       .fill({ color: BEACON_COLOR, alpha: 0.5 });
+    // 与掉落物/击杀同一组轨道微粒 + 四向闪芒。慢速反转避免它读成敌方前摇的收缩环。
+    drawStardustHalo(
+      g,
+      bx,
+      by,
+      r * (0.72 + pulse * 0.12),
+      -this.animClock * 0.42,
+      0.52 + pulse * 0.32,
+      STARDUST_CORE_COLOR,
+      STARDUST_WARM_COLOR,
+    );
+    // 信标亮核与磁吸宝物同语法:玩家余光先读到“星尘聚成一处”,再靠冷青色判断它是补给点。
+    g.circle(bx, by, 2.2 + pulse * 1.4).fill({ color: STARDUST_CORE_COLOR, alpha: 0.9 });
     // 接触环 = 真判定半径(与 sim 那句 SHOP_BEACON_RADIUS + shipRadius 的前半段同源):
     // 画得比判定大或小都会让"明明碰到了却没进店"变成一个查不出的抱怨
     g.circle(bx, by, r).stroke({ width: 2, color: BEACON_COLOR, alpha: 0.55 * pulse });
@@ -2331,6 +2393,16 @@ export class Renderer {
             g.moveTo(sx, sy).lineTo(sx + FX_KILL_DIRS[k]! * len, sy + FX_KILL_DIRS[k + 1]! * len);
           }
           g.stroke({ width: FX_KILL_RAY_WIDTH, color: tint, alpha: t * 0.7 });
+          // 暖色尸爆外再散一圈冷白/金色星尘:与地上的掉落物、地图信标共用材质语法,
+          // 把“击杀 → 掉出可拾荒物 → 去补给点消费”串成一条视觉链。
+          drawStardustHalo(
+            g,
+            e.x0,
+            e.y0,
+            e.radius * FX_KILL_STARDUST_EXPAND * (0.68 + (1 - t) * 0.42),
+            (1 - t) * 0.9 + e.x0 * 0.0013 + e.y0 * 0.0007,
+            t,
+          );
           break;
         }
         case FXV_MUZZLE: {
@@ -2596,6 +2668,29 @@ export class Renderer {
   }
 
   /**
+   * Boss 阶段沿的唯一消费者:0/读档哨兵 → 1 时启动一次出场演出并发一次专属音。
+   * 检测放在帧首,于是同一帧的背景与镜头都能吃到满强度;持续时间只由渲染 dt 推进,
+   * 暂停/高刷屏不会多触发,也绝不反写 world.bossPhase。
+   */
+  private stepBossEntrance(dt: number): void {
+    const phase = this.world.bossPhase;
+    if (phase !== this.bossPhaseSeen) {
+      const enter = bossWarnOnEnter(this.bossPhaseSeen, phase);
+      this.bossPhaseSeen = phase;
+      if (enter) {
+        this.bossEntranceLeft = BOSS_ENTRANCE_FX_TIME;
+        this.shakeTrauma = Math.max(this.shakeTrauma, SHAKE_MAX_TRAUMA);
+        // 相位也踢开一档:避免恰好落在 sin/cos 过零点时“满 trauma 却第一帧看似没动”。
+        this.shakePhase += Math.PI * 0.37;
+        audioBus.playBossWarn();
+      }
+    }
+    if (this.bossEntranceLeft > 0) {
+      this.bossEntranceLeft = Math.max(0, this.bossEntranceLeft - Math.max(0, dt));
+    }
+  }
+
+  /**
    * 震屏(畅玩性):受击/击杀事件入账为 trauma,按指数衰减;相位按秒推进 ——
    * 于是无论 30fps 还是 144fps,抖动都走完同一段时长,观感不随帧率漂移。
    * 渲染层自持计时(与 stepDmgNumbers 同一份 dt):时停/结算期间照走。
@@ -2620,9 +2715,29 @@ export class Renderer {
     // 玩家的震屏强度只乘在**振幅**上,不碰 trauma 的累积与衰减:
     // 乘进 trauma 的话,关掉再打开会因为衰减常数被改写而留下一段"半强度"的过渡,
     // 而振幅是每帧现算的纯输出 —— 拨到 0 当帧就绝对静止,拨回来当帧就恢复原样
-    const amplitude = this.shakeTrauma * this.shakeTrauma * SHAKE_PIXEL_SCALE * this.shakeScale;
+    // Boss 入场多一条慢衰减低频量:普通受击的 trauma 约 0.1s 就退完,不足以托住“巨物进场”这一拍。
+    // 两者相加后统一乘玩家设置,震屏关到 0 时 Boss 也绝对静止。
+    const bossEntranceShake = bossEntranceStrength(this.bossEntranceLeft) * BOSS_ENTRANCE_SHAKE_PIXELS;
+    const amplitude =
+      (this.shakeTrauma * this.shakeTrauma * SHAKE_PIXEL_SCALE + bossEntranceShake) * this.shakeScale;
     this.shakeX = Math.sin(this.shakePhase * 1.7) * amplitude;
     this.shakeY = Math.cos(this.shakePhase * 1.3) * amplitude;
+  }
+
+  /** 背景色相脉冲:一层暗紫红铺底 + 远景贴图轻微玫红 tint,星野与战场实体不染色。 */
+  private syncBossEntranceBackground(width: number, height: number): void {
+    const strength = bossEntranceStrength(this.bossEntranceLeft);
+    const g = this.bossEntranceG;
+    g.clear();
+    if (strength > 0) {
+      g.rect(0, 0, width, height).fill({
+        color: BOSS_ENTRANCE_BG_COLOR,
+        alpha: BOSS_ENTRANCE_BG_ALPHA * strength,
+      });
+    }
+    if (this.backgroundSprite) {
+      this.backgroundSprite.tint = lerpColor(0xffffff, BOSS_ENTRANCE_BG_TINT, strength);
+    }
   }
 
   /**
@@ -2760,8 +2875,7 @@ export class Renderer {
   /**
    * Boss 战提示(15 号):出场音 + 召唤预告,都在屏幕空间一层(bossWarnG)上做。
    *
-   * 出场音:bossPhase 从别的值翻进 1 的那一帧响一次 —— 去重靠 bossPhaseSeen 锁存
-   * 上次见过的阶段位(0/1/2 单调演化,同局只可能进战一次;换世界由 setWorld 复位)。
+   * 出场音/震屏/背景换色由帧首 stepBossEntrance 统一消费阶段沿;本函数只画战中召唤预告。
    *
    * 召唤预告:bossSummonCooldown ≤ BOSS.summonWarnTime 时,在 Boss 身上画一圈
    * 随剩余时间收弧的倒计时环 + 屏边一支指向 Boss 的箭头(仅 Boss 在屏外时)——
@@ -2774,12 +2888,6 @@ export class Renderer {
     const g = this.bossWarnG;
     g.clear();
     const w = this.world;
-    // 出场音:只在 bossPhase 翻进 1 的那一帧响一次(去重键 = 阶段位,见 bossPhaseSeen)
-    if (w.bossPhase !== this.bossPhaseSeen) {
-      const enter = bossWarnOnEnter(this.bossPhaseSeen, w.bossPhase);
-      this.bossPhaseSeen = w.bossPhase;
-      if (enter) audioBus.playBossWarn(); // 专属低频鸣响(13 号音频联动):Boss 登场
-    }
     const boss = this.bossBucket[0];
     if (!boss) return;
     // 召唤预告窗口:战斗中且距下次召唤 ≤ 预警窗(bossSummonWarnActive 的判据与

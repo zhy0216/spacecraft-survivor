@@ -69,11 +69,13 @@ const DENY_COLOR = '#ff7a6b';
 const TEXT_COLOR = '#c8dcf0';
 const MUTED_COLOR = '#6f89a5';
 const LINE_COLOR = '#2b4a6e';
+const STAR_COLOR = '#ffd86e';
 const ROOT_CSS =
   'position:fixed;inset:0;z-index:20;display:none;pointer-events:none!important;' +
   // 淡幕:整备是时停时刻,压暗背后那一屏虫潮才读得清货架与舰船图(仍透出地图,信标位置不丢)
   'background:radial-gradient(120% 100% at 30% 50%,rgba(4,8,14,.42) 0%,rgba(3,6,11,.68) 100%);' +
-  `color:${TEXT_COLOR};font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;`;
+  `color:${TEXT_COLOR};font:13px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;` +
+  '-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;';
 /** 舰船图的容器:占满商店左边那一半,内容居中;屏太矮时让它自己滚,而不是把图裁掉 */
 const BOARD_WRAP_CSS =
   'position:absolute;left:0;top:0;bottom:0;right:340px;display:flex;align-items:center;' +
@@ -84,13 +86,19 @@ const SHOP_CSS =
   `border-left:1px solid ${LINE_COLOR};background:linear-gradient(180deg,#080e18 0%,#060b13 100%);` +
   'box-shadow:-20px 0 48px rgba(0,0,0,.34);';
 const SHOP_HEAD_CSS =
-  `padding-bottom:14px;border-bottom:1px solid ${LINE_COLOR};display:flex;align-items:flex-end;` +
-  'justify-content:space-between;gap:12px;';
+  `position:sticky;top:0;z-index:2;padding-bottom:14px;border-bottom:1px solid ${LINE_COLOR};` +
+  'display:flex;align-items:center;justify-content:space-between;gap:12px;';
 const EYEBROW_CSS = `color:${MUTED_COLOR};font-size:10px;letter-spacing:.22em;text-transform:uppercase;`;
 const SHOP_TITLE_CSS = `color:${OK_COLOR};font-size:18px;letter-spacing:.12em;`;
-const QUOTA_CSS =
-  `padding:4px 8px;border-radius:999px;border:1px solid ${LINE_COLOR};color:${MUTED_COLOR};` +
-  'font-size:10px;white-space:nowrap;';
+// 星币余额:店头主视觉 —— 金色大数 + 光晕,货架价格全按它算,它必须一眼就位
+const STAR_BALANCE_CSS =
+  `padding:7px 14px;border-radius:8px;border:1px solid #8a6d2f;` +
+  'background:rgba(34,26,8,.62);box-shadow:0 0 16px rgba(255,216,110,.16),inset 0 1px 0 rgba(255,255,255,.06);' +
+  'text-align:right;white-space:nowrap;';
+const STAR_VALUE_CSS =
+  `font-size:17px;font-weight:700;color:${STAR_COLOR};line-height:1.25;letter-spacing:.04em;`;
+const STAR_CAP_CSS =
+  `font-size:9px;color:${MUTED_COLOR};letter-spacing:.24em;text-transform:uppercase;margin-top:2px;`;
 const SEGMENT_CSS =
   `padding:10px;border:1px solid ${LINE_COLOR};border-radius:7px;color:${TEXT_COLOR};` +
   'background:rgba(21,34,52,.42);';
@@ -109,7 +117,8 @@ const CARDS_CSS = 'display:grid;grid-template-columns:1fr;gap:8px;';
 const CARD_CSS =
   `min-height:72px;padding:11px;border:1px solid ${LINE_COLOR};border-radius:8px;` +
   'background:rgba(18,29,45,.72);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);' +
-  `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;transition:border-color 100ms,background 100ms,opacity 100ms;`;
+  `color:${TEXT_COLOR};font:inherit;text-align:left;cursor:pointer;box-sizing:border-box;` +
+  'transition:border-color 100ms,background 100ms,opacity 100ms;';
 const ROW_CSS =
   `width:100%;padding:8px 10px;border:1px solid ${LINE_COLOR};border-radius:6px;` +
   'background:rgba(18,29,45,.72);' +
@@ -127,6 +136,37 @@ const TOAST_CSS =
 const FLASH_MS = 1500;
 const SHOP_ART_URL = new URL('../../assets/game/ui/shop-bay-nanobanana.png', import.meta.url).href;
 const EDICT_ART_URL = new URL('../../assets/game/ui/edict-seal.svg', import.meta.url).href;
+const REFIT_STYLE =
+  '.starwreck-refit-card,.starwreck-refit-button,.starwreck-refit-row{touch-action:manipulation;}' +
+  '.starwreck-refit-card:focus-visible,.starwreck-refit-button:focus-visible,.starwreck-refit-row:focus-visible{' +
+  'outline:2px solid #dff2ff;outline-offset:2px;box-shadow:0 0 0 4px rgba(154,220,255,.16);}' +
+  '@media (max-width:760px){' +
+  '.starwreck-refit-board{left:0!important;right:0!important;top:0!important;bottom:auto!important;' +
+  'height:44vh!important;padding:max(10px,env(safe-area-inset-top)) 10px 10px!important;' +
+  'border-bottom:1px solid #2b4a6e;background:rgba(4,8,14,.82);overflow:auto!important;}' +
+  '.starwreck-refit-shop{left:0!important;right:0!important;top:44vh!important;width:100%!important;' +
+  'height:56vh!important;padding:16px max(14px,env(safe-area-inset-right)) ' +
+  'max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))!important;' +
+  'gap:10px!important;border-left:0!important;border-top:1px solid #2b4a6e;box-shadow:0 -16px 38px rgba(0,0,0,.32);}' +
+  '.starwreck-refit-card,.starwreck-refit-row{min-height:76px!important;padding:12px!important;}' +
+  '.starwreck-refit-button{min-height:44px!important;}' +
+  '.starwreck-refit-toast{left:max(10px,env(safe-area-inset-left))!important;right:max(10px,env(safe-area-inset-right))!important;' +
+  'bottom:max(10px,env(safe-area-inset-bottom))!important;white-space:normal!important;}' +
+  '}' +
+  '@media (max-width:420px){' +
+  '.starwreck-refit-board{height:40vh!important;}' +
+  '.starwreck-refit-shop{top:40vh!important;height:60vh!important;}' +
+  '.starwreck-refit-shop-head{align-items:flex-start!important;}' +
+  '.starwreck-refit-section-head{align-items:flex-start!important;}' +
+  '}' +
+  '@media (max-height:560px) and (max-width:760px){' +
+  '.starwreck-refit-board{height:36vh!important;}' +
+  '.starwreck-refit-shop{top:36vh!important;height:64vh!important;}' +
+  '}' +
+  '@media (min-resolution:2dppx){' +
+  '.starwreck-refit-root{font-size:13.5px!important;line-height:1.62!important;}' +
+  '.starwreck-refit-card,.starwreck-refit-button,.starwreck-refit-row{border-color:#3d6288!important;}' +
+  '}';
 
 export interface RefitFlowUi {
   /** 换掉整局的 World(重开流程)。同时收面板、清提示:旧局的面板状态不能带到新船上去 */
@@ -196,14 +236,17 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'starwreck-refit-root';
 
   const shop = document.createElement('div');
   shop.style.cssText = SHOP_CSS;
+  shop.className = 'starwreck-refit-shop';
 
   // —— 店头:标题 + 星币余额 ——
   const shopHead = document.createElement('div');
   shopHead.style.cssText = SHOP_HEAD_CSS;
-  shopHead.style.backgroundImage = `linear-gradient(90deg,rgba(8,14,24,.96) 0%,rgba(8,14,24,.72) 58%,rgba(8,14,24,.2) 100%),url("${SHOP_ART_URL}")`;
+  shopHead.className = 'starwreck-refit-shop-head';
+  shopHead.style.backgroundImage = `linear-gradient(90deg,rgba(8,14,24,.97) 0%,rgba(8,14,24,.9) 58%,rgba(8,14,24,.78) 100%),url("${SHOP_ART_URL}")`;
   shopHead.style.backgroundSize = 'cover';
   shopHead.style.backgroundPosition = 'center';
   shopHead.style.borderRadius = '8px';
@@ -217,7 +260,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   shopTitle.textContent = '舰装商店';
   shopTitleBox.append(shopEyebrow, shopTitle);
   const starBalance = document.createElement('div');
-  starBalance.style.cssText = QUOTA_CSS;
+  starBalance.style.cssText = STAR_BALANCE_CSS;
+  const starValue = document.createElement('div');
+  starValue.style.cssText = STAR_VALUE_CSS;
+  const starCap = document.createElement('div');
+  starCap.style.cssText = STAR_CAP_CSS;
+  starCap.textContent = '星币';
+  starBalance.append(starValue, starCap);
   shopHead.append(shopTitleBox, starBalance);
 
   // —— 航段行(旧版威胁摘要删掉后留下的简版:下一波是第几段) ——
@@ -229,11 +278,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   weaponSection.style.cssText = SECTION_CSS;
   const weaponHead = document.createElement('div');
   weaponHead.style.cssText = SECTION_HEAD_CSS;
+  weaponHead.className = 'starwreck-refit-section-head';
   const weaponTitle = document.createElement('div');
   weaponTitle.style.cssText = SECTION_TITLE_CSS;
   weaponTitle.textContent = '武器商店';
   const refreshBtn = document.createElement('button');
   refreshBtn.style.cssText = REFRESH_BTN_CSS;
+  refreshBtn.className = 'starwreck-refit-button';
   refreshBtn.addEventListener('click', refreshShop);
   weaponHead.append(weaponTitle, refreshBtn);
   const cards = document.createElement('div');
@@ -253,6 +304,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   pickerHint.style.cssText = `color:${MUTED_COLOR};font-size:11px;`;
   const pickerCancel = document.createElement('button');
   pickerCancel.style.cssText = BTN_CSS;
+  pickerCancel.className = 'starwreck-refit-button';
   pickerCancel.textContent = '取消购买';
   pickerCancel.addEventListener('click', cancelPicker);
   picker.append(pickerTitle, pickerHint, pickerCancel);
@@ -269,6 +321,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
     const row = document.createElement('button');
     row.style.cssText = ROW_CSS;
+    row.className = 'starwreck-refit-row';
     row.style.backgroundImage = `linear-gradient(90deg,rgba(18,29,45,.94),rgba(18,29,45,.7)),url("${EDICT_ART_URL}")`;
     row.style.backgroundRepeat = 'no-repeat';
     row.style.backgroundPosition = 'right center';
@@ -279,12 +332,14 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
   const repairBtn = document.createElement('button');
   repairBtn.style.cssText = BTN_CSS;
+  repairBtn.className = 'starwreck-refit-button';
   repairBtn.textContent = `修复船体 +${Math.round(DOCK_REPAIR_FRACTION * 100)}% HP · ${DOCK_REPAIR_PRICE} ★`;
   repairBtn.addEventListener('click', buyRepair);
   starSection.appendChild(repairBtn);
 
   const finish = document.createElement('button');
   finish.style.cssText = PRIMARY_BTN_CSS;
+  finish.className = 'starwreck-refit-button';
   finish.style.marginTop = 'auto';
   finish.textContent = '完成整备 · 开始下一波';
   finish.addEventListener('click', resolve);
@@ -295,13 +350,18 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   // —— 左半屏:舰船一览(shop 之后挂,故 root.children[0] 仍是 shop) ——
   const boardWrap = document.createElement('div');
   boardWrap.style.cssText = BOARD_WRAP_CSS;
+  boardWrap.className = 'starwreck-refit-board';
   const shipDiagram: ShipDiagramUi = createShipDiagram({ onSlotClick: pickReplacement });
   boardWrap.appendChild(shipDiagram.root);
   root.appendChild(boardWrap);
 
   const toast = document.createElement('div');
   toast.style.cssText = TOAST_CSS;
+  toast.className = 'starwreck-refit-toast';
   const ui = document.getElementById('ui')!;
+  const styleEl = document.createElement('style');
+  styleEl.textContent = REFIT_STYLE;
+  document.head?.appendChild(styleEl);
   ui.append(root, toast);
 
   // 武器货架卡:与法令行同一条"只建一次、整局复用"的生命周期,syncPanel 只改文案与置灰
@@ -309,6 +369,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   for (let i = 0; i < DOCK_WEAPON_COUNT; i++) {
     const card = document.createElement('button');
     card.style.cssText = CARD_CSS;
+    card.className = 'starwreck-refit-card';
     card.addEventListener('click', () => buyWeapon(i));
     // 悬停 = 在左边那张船图上虚装一把给你看(见文件头"为什么商店里要画船")
     card.addEventListener('mouseenter', () => hoverCardChanged(i));
@@ -384,7 +445,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
    * 过期,真正的裁决始终以 world 的返回码为准。
    */
   function syncPanel(): void {
-    starBalance.textContent = `★ ${world.starCoins}`;
+    starValue.textContent = `★ ${world.starCoins}`;
 
     // 武器卡:替换态时整排让位,只露提示与退路(选槽在左边那张船图上)
     const pickerOpen = pendingBuy !== null;

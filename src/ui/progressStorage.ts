@@ -5,7 +5,7 @@
  *
  * 兜底口径:损坏 / 缺失 / 隐私模式 / 配额耗尽,一律静默兜底成空进度或静默失败,
  * 绝不把异常扔回结算流程 —— 存档是"下一把的新理由",不是这一局的收尾闸门
- * (剪影是锦上添花,存不下就丢,不能因为配额把 game over 流程炸掉)。
+ * (存不下就丢,不能因为配额把 game over 流程炸掉)。
  * 本文件在 Node 里没有 localStorage,故不可单测,测试只覆盖 sim/progress.ts 的纯函数。
  */
 import { createProgress, parseProgress, serializeProgress, type Progress } from '../sim/progress';

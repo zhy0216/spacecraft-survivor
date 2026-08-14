@@ -39,7 +39,7 @@ export function loadRunSnapshot(): RunSnapshot | null {
 
 /**
  * 写一份局内存档。@returns 真的写进去了没有 —— 配额耗尽 / 隐私模式时是 false。
- * 存档体积大,配额耗尽是真会发生的事(尤其元进度那边还攒着剪影),故失败要说出来。
+ * 存档体积大,配额耗尽不是不可能,故失败要说出来。
  */
 export function saveRunSnapshot(snap: RunSnapshot): boolean {
   try {

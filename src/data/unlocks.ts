@@ -28,17 +28,15 @@ import { TOWER_MISSILE_NEST } from './towers';
 export const UNLOCK_TOWER = 0; // 解锁塔入池(三选一候选)
 export const UNLOCK_EDICT = 1; // 解锁法令(18 号,三选一候选)
 export const UNLOCK_ELITE = 2; // 解锁精英事件(词缀更高的脚本事件,waves.ts 的 WAVE_LOCKED_ELITES)
-export const UNLOCK_COLLECT = 3; // 图鉴收藏(每局结算自动存船形剪影,无条件,见 COND_NONE)
 
 export const COND_FIRST_WIN = 0; // 首次胜利(wins ≥ 1)
 export const COND_KILLS = 1; // 单局击杀数阈值(单局内累计)
 export const COND_ELITE_KILLS = 2; // 累计精英击杀计数(跨局累计,14 号精英计数的读数)
-export const COND_NONE = 3; // 无条件(收藏类:从第一局起就生效)
 
 export interface UnlockCondition {
   /** COND_* */
   kind: number;
-  /** 阈值;COND_FIRST_WIN / COND_NONE 恒 0(那两种条件的判据不是数字阈值) */
+  /** 阈值;COND_FIRST_WIN 恒 0(那种条件的判据不是数字阈值) */
   target: number;
 }
 
@@ -49,7 +47,7 @@ export interface UnlockEntry {
   name: string;
   /** UNLOCK_* */
   kind: number;
-  /** 目标内容:按 kind 解释为 TOWERS / EDICTS / WAVE_LOCKED_ELITES 的下标;UNLOCK_COLLECT 恒 0 */
+  /** 目标内容:按 kind 解释为 TOWERS / EDICTS / WAVE_LOCKED_ELITES 的下标 */
   type: number;
   condition: UnlockCondition;
 }
@@ -69,12 +67,11 @@ export interface UnlockProgress {
 }
 
 /**
- * 首批四条解锁(19 号任务清单):
+ * 首批三条解锁(19 号任务清单;船形收藏条已随剪影功能一并删除):
  *   1. 首次胜利 → 进阶塔"导弹巢"入池(towers.ts 第 12 号);
  *   2. 单局击杀 300 达标 → 新法令"急速协议"(edicts.ts 第 6 号,与 18 号联动);
  *   3. 累计击杀 14 只精英(≈ 两三局的量,占位待调)→ 三重词缀精英事件"虫群母巢"
- *      (waves.ts 的 WAVE_LOCKED_ELITES,词缀数 > 既有段的上限 2);
- *   4. 船形收藏:无条件,每局结算自动存剪影快照(底座已有,19 号只管存储)。
+ *      (waves.ts 的 WAVE_LOCKED_ELITES,词缀数 > 既有段的上限 2)。
  */
 export const UNLOCKS: UnlockEntry[] = [
   {
@@ -101,13 +98,6 @@ export const UNLOCKS: UnlockEntry[] = [
     type: 0, // WAVE_LOCKED_ELITES 的下标;unlocks.test 钉:该条的 unlockId === 本条 id
     condition: { kind: COND_ELITE_KILLS, target: 14 }, // 累计 14 只精英 ≈ 两三局,占位待调
   },
-  {
-    id: 'collection-ship',
-    name: '船形收藏',
-    kind: UNLOCK_COLLECT,
-    type: 0, // 收藏类没有内容下标,恒 0
-    condition: { kind: COND_NONE, target: 0 }, // 无条件:第一局起就生效
-  },
 ];
 
 export const UNLOCK_COUNT = UNLOCKS.length;
@@ -125,6 +115,6 @@ export function unlockMet(entry: UnlockEntry, progress: UnlockProgress): boolean
     case COND_ELITE_KILLS:
       return progress.eliteKills >= entry.condition.target;
     default:
-      return true; // COND_NONE(及未来任何无条件条目):恒开
+      return true; // 未知条件编号:表内条目由 unlocks.test 钉住编号合法,这里对伪造条目不崩溃
   }
 }

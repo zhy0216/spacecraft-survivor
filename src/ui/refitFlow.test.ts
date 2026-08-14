@@ -285,7 +285,8 @@ describe('createRefitFlow 纯商店流程', () => {
   it('show 显示航段、星币余额和固定数量武器卡', () => {
     setup();
     expect(segmentOf(dom).textContent).toContain('航段 2');
-    expect(shopHeadOf(dom).children[1]?.textContent).toBe('★ 100');
+    expect((shopHeadOf(dom).children[1] as StubEl).children[0]?.textContent).toBe('★ 100');
+    expect((shopHeadOf(dom).children[1] as StubEl).children[1]?.textContent).toBe('星币');
     expect(cardsOf(dom).children.length).toBe(DOCK_WEAPON_COUNT);
   });
 
