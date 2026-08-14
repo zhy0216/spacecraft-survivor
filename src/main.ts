@@ -31,6 +31,7 @@
  */
 import { FrameMeter } from './core/frameMeter';
 import { Input } from './core/input';
+import { isTyping } from './core/isTyping';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
@@ -81,6 +82,9 @@ const BANNER_SECONDS = 3;
 
 /** I 键首局提示的时间窗(28 号):战斗开始后 20s 内飘一次,过了窗就不打扰 */
 const I_HINT_WINDOW_SECONDS = 20;
+
+/** 连按三次 ~ 呼出调参面板的计数窗口(ms):窗内凑齐三下才算,慢了从头数 */
+const TILDE_WINDOW_MS = 1200;
 
 async function boot(): Promise<void> {
   const input = new Input();
@@ -224,14 +228,17 @@ async function boot(): Promise<void> {
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
   // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)。
-  // 开发模式(?debug)挂 Tweakpane;玩家模式挂 Esc 暂停菜单 —— 战斗中的暂停/换局入口
+  // 开发模式(?debug)挂 Tweakpane 且常驻可见;玩家模式挂 Esc 暂停菜单 —— 战斗中的暂停/换局入口
   // 在玩家模式下只能从这里进,调试面板的暂停勾选与两个重开按钮玩家看不到(畅玩性)。
+  // 调参面板现在**两种形态都建**:玩家形态下初始隐藏,连按三次 ~ 呼出/收起(见下面的监听),
+  // 调参工具不必再靠 ?debug 这一个入口。暂停菜单仍只在玩家形态建 —— 开发形态的
+  // 暂停/换局入口在 Tweakpane 里,叠一个 Esc 菜单只会抢键。
   // 暂停菜单的句柄:设置页关掉后要弹回它(战斗中开的设置该回暂停,不该回标题)。
   // 开发模式下没有暂停菜单(那边是 Tweakpane),故可空 —— settingsMenu 里用 `?.` 兜住
   let pauseMenu: PauseMenuUi | null = null;
-  if (DEBUG) {
-    createDebugPanel(stats, run, { restart, retry });
-  } else {
+  const debugPanel = createDebugPanel(stats, run, { restart, retry });
+  if (!DEBUG) {
+    debugPanel.hide();
     pauseMenu = createPauseMenu({
       muted: mutedHooks,
       canPause: () => !run.paused,
@@ -269,6 +276,25 @@ async function boot(): Promise<void> {
       },
     });
   }
+
+  // 连按三次 ~ (Backquote)呼出/收起调参面板(畅玩性):玩家形态下它是面板唯一的入口,
+  // 平时不占界面,想调参时也不用去改 URL。计数只看时间窗 —— 1.2s 内连按三次才算,
+  // 中途按几下 WASD 不打断计数(否则移动中根本凑不齐三下);重复键(repeat)不算,
+  // 按住不松不会靠自动重复凑数。isTyping 守卫:焦点在 Tweakpane 文本框里时那一记是打字。
+  let tildeCount = 0;
+  let tildeLastAt = 0;
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat || isTyping()) return;
+    if (e.code !== 'Backquote') return;
+    const now = performance.now();
+    if (now - tildeLastAt > TILDE_WINDOW_MS) tildeCount = 0;
+    tildeLastAt = now;
+    tildeCount++;
+    if (tildeCount >= 3) {
+      tildeCount = 0;
+      debugPanel.toggle();
+    }
+  });
 
   /**
    * 武器布局面板(按 I)。与暂停菜单同一条时停口径:面板自己不动 loop,

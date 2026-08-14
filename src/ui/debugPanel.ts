@@ -4,6 +4,9 @@
  *
  * 08 号 issue 起还多服务一件:波次脚本的**量化读数**(航段 / 主压方向 / 强度)。
  * 11 号已有常驻 HUD 与威胁罗盘；这里仍保留精确数值，供调参与核对实际出怪统计。
+ *
+ * 畅玩性起它不再是 ?debug 独占:玩家形态下也建,只是初始隐藏,连按三次 ~ 呼出/收起
+ * (监听在 main.ts)。故函数返回一个带 show/hide/toggle 的小句柄而不是 void。
  */
 import { Pane } from 'tweakpane';
 import { WAVE_SEGMENTS } from '../data/waves';
@@ -76,6 +79,14 @@ export interface RunState {
   timeScale: number;
 }
 
+/** 面板的显隐句柄:main.ts 的连按三次 ~ 用它呼出/收起(玩家形态初始隐藏) */
+export interface DebugPanelUi {
+  show(): void;
+  hide(): void;
+  toggle(): void;
+  visible(): boolean;
+}
+
 /**
  * 面板要触发的流程动作。**面板不认识 World、不动 loop**:重开那一整套
  * (新 World + 新 loop + renderer.setWorld + upgradeFlow.setWorld + UI 复位)只在 main.ts 一处,
@@ -87,7 +98,7 @@ export interface RunHooks {
   retry?(): void;
 }
 
-export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): void {
+export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
   const pane = new Pane({ title: 'STARWRECK · 灰盒调参' });
 
   const perf = pane.addFolder({ title: '性能 / 确定性' });
@@ -272,4 +283,17 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });
   camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.03, max: 0.3, step: 0.002 });
   camera.addBinding(tuning, 'cameraLookAhead', { label: '前视偏移', min: 0, max: 0.4, step: 0.01 });
+
+  return {
+    show: () => {
+      pane.hidden = false;
+    },
+    hide: () => {
+      pane.hidden = true;
+    },
+    toggle: () => {
+      pane.hidden = !pane.hidden;
+    },
+    visible: () => !pane.hidden,
+  };
 }
