@@ -96,6 +96,8 @@ export interface RunHooks {
   restart(): void;
   /** 同 seed 重试(可选,见 main.ts 的 retry):面板终于能一键验"同 seed 可复现" */
   retry?(): void;
+  /** 调试入口(可选):立即投放商店信标并掷定货架,见 World.debugSpawnShop */
+  spawnShop?(): void;
 }
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
@@ -134,6 +136,13 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   if (hooks.retry) {
     const retry = hooks.retry.bind(hooks);
     runF.addButton({ title: '重试本局(同种子)' }).on('click', retry);
+  }
+  // 调试入口:不必等两分钟的跨段边界,当场投一枚商店信标并掷定货架(World.debugSpawnShop)。
+  // 正式出怪器每跨一段自动投放;压测路旁路波次脚本、永不跨段,没有它永远开不了商店 ——
+  // 想在那条路上验商店(货架 / 购买 / 付费修复)就按它,再看 HUD 的信标倒计时读数。
+  if (hooks.spawnShop) {
+    const spawnShop = hooks.spawnShop.bind(hooks);
+    runF.addButton({ title: '投放商店(信标 + 掷货架)' }).on('click', spawnShop);
   }
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏

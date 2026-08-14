@@ -236,7 +236,12 @@ async function boot(): Promise<void> {
   // 暂停菜单的句柄:设置页关掉后要弹回它(战斗中开的设置该回暂停,不该回标题)。
   // 开发模式下没有暂停菜单(那边是 Tweakpane),故可空 —— settingsMenu 里用 `?.` 兜住
   let pauseMenu: PauseMenuUi | null = null;
-  const debugPanel = createDebugPanel(stats, run, { restart, retry });
+  const debugPanel = createDebugPanel(stats, run, {
+    restart,
+    retry,
+    // 面板不认识 World:投放商店走这个闭包,引用的是外层 let world(每局 startRun 都换成新的)
+    spawnShop: () => world.debugSpawnShop(),
+  });
   if (!DEBUG) {
     debugPanel.hide();
     pauseMenu = createPauseMenu({
@@ -528,7 +533,9 @@ async function boot(): Promise<void> {
       audioBus.playEliteWarn();
       // 段落收束横幅(26 号):segment 是跨段后**新航段**的下标(0-based),跨进 index N
       // 即"航段 N 刚肃清" —— 与 HUD 航段读数的 1-based 显示一字对齐(segmentReadout 印 index+1)。
-      // 第 4 段走完 wave.done,信标不生成、此回调不响,收束由 Boss 战那条横幅接棒(见 ticker)
+      // 最后一跨(第 4 段走完,wave.done)信标照常投放,横幅由 Boss 战那条**合并播报**
+      // (见 ticker 的「封锁线接敌 · 补给信标已投放」),这里不重复抢横幅。
+      if (world.wave.done) return;
       hud.showBanner(`航段 ${segment} 肃清 · 补给信标已投放`, BANNER_SECONDS);
     };
 
@@ -906,10 +913,15 @@ async function boot(): Promise<void> {
       hud.toast('磁吸风暴:残骸自动飞向你 2 秒');
     }
     // Boss 战横幅(26 号):bossPhase 翻进 1 的那一帧弹「封锁线接敌」,与出场音同一套
-    // bossWarnOnEnter 判据;基准在 startRun 按新世界现值对齐
+    // bossWarnOnEnter 判据;基准在 startRun 按新世界现值对齐。
+    // 商店信标(设计会:每两分钟一次)在最后一跨与 Boss 同帧投放 —— 两条横幅并一条,
+    // 免得同帧互相覆盖、把"补给来了"盖掉。
     if (world.bossPhase !== bossPhaseSeen) {
       if (bossWarnOnEnter(bossPhaseSeen, world.bossPhase)) {
-        hud.showBanner('封锁线接敌', BANNER_SECONDS);
+        hud.showBanner(
+          world.shopBeaconActive ? '封锁线接敌 · 补给信标已投放' : '封锁线接敌',
+          BANNER_SECONDS,
+        );
       }
       bossPhaseSeen = world.bossPhase;
     }

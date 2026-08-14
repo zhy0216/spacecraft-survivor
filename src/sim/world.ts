@@ -665,7 +665,8 @@ export class World {
   shopBeaconY = 0;
   /** 剩余存活秒数(≤ 0 = 本轮作废)。active = false 时恒 0 */
   shopBeaconTtl = 0;
-  /** 开出这个信标的航段下标(接上时喂给 onRefitOffer,面板标题读它) */
+  /** 开出这个信标的航段下标(接上时喂给 onRefitOffer,面板标题读它)。
+   * 最后一跨 = WAVE_SEGMENTS.length(越界哨兵,与 Boss 同帧那一跨),UI 侧对哨兵值另拟标题。 */
   shopBeaconSegment = 0;
   /** 信标生成那一帧的一次性出口(HUD 弹"商店已开启"提示 / 播音效)。参数 = 航段下标 */
   onShopBeacon: ((segment: number) => void) | null = null;
@@ -1106,12 +1107,15 @@ export class World {
       // 商店搬上地图之后**段边界不再停顿**(stopAtSegmentBoundary = false):虫潮连续流动,
       // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
       stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
-      if (this.wave.segment !== segmentBefore && !this.wave.done) {
+      if (this.wave.segment !== segmentBefore) {
         // 跨段那一帧一次掷定四样,**顺序定死**(信标位置 → 法令货架 → 武器货架 → 特价):
         // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
         // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
         // 货架在**信标生成时**就掷定而不是接上时才掷:接不接得上取决于玩家操作,
         // 让它决定 rng 时点等于把随机序列交给玩家手速 —— 同 seed 同操作序列的回放当场作废。
+        // **最后一跨也照常掷定**(设计会:商店每两分钟一次,第 8 分钟也不例外):第 4 段走完
+        // (segment 翻到 WAVE_SEGMENTS.length、wave.done 置位)与 Boss 登场同帧 —— 信标只活
+        // 30 秒,决战开局要不要先跑一趟补给,玩家自己选。
         this.spawnShopBeacon();
         this.rollDockEdicts();
         this.rollShopWeapons();
@@ -2032,6 +2036,8 @@ export class World {
   /**
    * 掷定本轮**商店信标**的落点(用户设计会)。只在 step 里跨段那一帧调用,排在两张货架之前 ——
    * 三者的顺序定死(信标 → 法令货架 → 武器货架),同 seed 逐位可复现。
+   * 调参面板的「投放商店」走 debugSpawnShop 同一条顺序进这里(见它自己的注释)。
+   * **最后一跨(脚本走完、Boss 登场那一帧)同样调用**:商店按"每两分钟一次"兑现到第 8 分钟。
    *
    * rng 消耗口径(定死):**恰好 2 次**(方位角 + 距离),与"这一轮玩家去没去"无关。
    * 极坐标而不是矩形抖动:方位均匀 = 信标不会偏爱某个象限;距离夹在
@@ -2048,6 +2054,20 @@ export class World {
     this.shopBeaconTtl = SHOP_BEACON_LIFETIME;
     this.shopBeaconActive = true;
     this.shopBeaconSegment = this.wave.segment;
+  }
+
+  /**
+   * 调试入口:立即投放一枚商店信标并掷定货架(信标 → 法令 → 武器 → 特价,与跨段那一帧同一条顺序)。
+   * 只服务调参面板的「投放商店」按钮 —— 不必等两分钟的跨段边界;压测路旁路波次脚本、永不跨段,
+   * 没有它那条路上永远开不了商店。与 refreshShop 同一条"外部输入消费 rng"的口径:消耗次数
+   * 进随机序列,同 seed 同操作序列逐位可复现。**不触发 onShopBeacon**:跨段横幅写的是
+   * "航段肃清",调试投放没有肃清可言;反馈交给 HUD 的信标倒计时读数(投放当帧即出现)。
+   */
+  debugSpawnShop(): void {
+    this.spawnShopBeacon();
+    this.rollDockEdicts();
+    this.rollShopWeapons();
+    this.rollShopDiscount();
   }
 
   /**

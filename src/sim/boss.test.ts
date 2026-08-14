@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { SIM_DT, SIM_HZ } from '../core/loop';
-import { STARTING_STAR_COINS } from '../data/economy';
+import { STARTING_STAR_COINS, SHOP_BEACON_LIFETIME, SHOP_BEACON_MAX_DIST, SHOP_BEACON_MIN_DIST } from '../data/economy';
 import {
   BOSS,
   ENEMIES,
@@ -215,6 +215,21 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(d).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
     expect(boss.y).toBeCloseTo(w.ship.y, 6);
     expect(boss.x).toBeGreaterThan(w.ship.x);
+  });
+
+  it('最后一跨与 Boss 同帧投放商店信标:段下标 = 越界哨兵,两张货架照常掷定(每两分钟一次)', () => {
+    const w = bossWorld(9);
+    expect(w.wave.done).toBe(true);
+    expect(w.bossPhase).toBe(1);
+    expect(w.shopBeaconActive).toBe(true); // 设计会:第 8 分钟不例外,与 Boss 同帧
+    expect(w.shopBeaconSegment).toBe(WAVE_SEGMENTS.length); // 越界哨兵:UI 侧另拟标题
+    expect(w.shopBeaconTtl).toBeCloseTo(SHOP_BEACON_LIFETIME, 6);
+    const dist = Math.hypot(w.shopBeaconX - w.ship.x, w.shopBeaconY - w.ship.y);
+    expect(dist).toBeGreaterThanOrEqual(SHOP_BEACON_MIN_DIST - 1);
+    expect(dist).toBeLessThanOrEqual(SHOP_BEACON_MAX_DIST + 1);
+    expect(w.dockEdictOffers.length).toBeGreaterThan(0);
+    expect(w.shopWeapons.length).toBeGreaterThan(0);
+    expect(w.shopDiscountIndex).toBeGreaterThanOrEqual(0);
   });
 
   it('召唤:每 summonInterval 秒一批,型号/数量直给、出生在 Boss 身边一圈、侧掠者左右交替', () => {

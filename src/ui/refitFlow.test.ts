@@ -28,6 +28,7 @@ import {
 } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
+import { WAVE_SEGMENTS } from '../data/waves';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -304,6 +305,13 @@ describe('createRefitFlow 纯商店流程', () => {
     expect((shopHeadOf(dom).children[0] as StubEl).children[0]?.textContent).toBe('DOCK SUPPLY');
     expect((shopHeadOf(dom).children[0] as StubEl).children[1]?.textContent).toBe('舰装商店');
     expect(cardsOf(dom).children.length).toBe(DOCK_WEAPON_COUNT);
+  });
+
+  it('最后一跨(Boss 登场那一跨)的越界段下标:标题不印"航段 5",改拟决战字样', () => {
+    const flow = createRefitFlow({ world: worldAsWorld(world), onResolved: () => {} });
+    flow.show(WAVE_SEGMENTS.length); // 越界哨兵:脚本走完那一跨的信标
+    expect(segmentOf(dom).textContent).toContain('决战在即');
+    expect(segmentOf(dom).textContent).not.toContain(`航段 ${WAVE_SEGMENTS.length + 1}`);
   });
 
   it('特价武器卡:原价划线、特价亮金,标"特价";非特价格照旧原价', () => {

@@ -50,6 +50,7 @@ import {
 import { edictDesc, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { TOWERS } from '../data/towers';
+import { WAVE_SEGMENTS } from '../data/waves';
 import {
   ACQUIRE_REPLACE_NEEDED,
   DOCK_EDICT_SOLD,
@@ -817,7 +818,10 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       pendingBuy = null;
       hoverCard = -1;
       clearFlash();
-      segment.textContent = `整备 · 航段 ${segmentIndex + 1}`;
+      segment.textContent =
+        segmentIndex >= WAVE_SEGMENTS.length
+          ? '整备 · 决战在即'
+          : `整备 · 航段 ${segmentIndex + 1}`;
       // Tweakpane 是运行时追加到 body 的后置兄弟;临时抬高 #ui 的堆叠层,确保固定商店盖住它
       ui.style.zIndex = '10';
       root.style.display = 'block';
