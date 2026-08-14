@@ -11,7 +11,7 @@
  * 换到的是每只怪从"一张会飘的贴纸"变成"会爬会甩的活物"。
  */
 import { Particle, ParticleContainer, type Rectangle, type Texture } from 'pixi.js';
-import { poseRig, RIG_STRIDE, type RigDef, rigBufferLength } from './enemyRig';
+import { poseRig, RIG_STRIDE, type RigDef, type RigRootPose, rigBufferLength } from './enemyRig';
 
 /** 屏外停车位:多出来的粒子丢到这里,与单件贴图那条路同一个常量口径 */
 const OFFSCREEN = 1e6;
@@ -45,8 +45,17 @@ export interface RigDrive {
  * RigLayer 因此不认识 ST_* 状态码,也不认识生成图的正面偏移 —— 那些都是渲染层的口径。
  */
 export interface RigDriver {
-  /** 根角(rad):朝向与生成图正面偏移的合成;自转型(蜂群蛭)在这里返回时钟角 */
-  bodyAngle(e: RigEntity, animClock: number, rig: RigDef): number;
+  /** 根姿态:朝向角 + 左右镜像;targetX/Y 是本帧插值后的飞船位置 */
+  rootPose(
+    e: RigEntity,
+    bodyX: number,
+    bodyY: number,
+    animClock: number,
+    rig: RigDef,
+    targetX: number,
+    targetY: number,
+    out: RigRootPose,
+  ): void;
   /** 按状态机写 out 的两个倍率 */
   drive(e: RigEntity, out: RigDrive): void;
   /** 逐只怪的 tint(受击闪白) */
@@ -67,6 +76,8 @@ export class RigLayer {
   private readonly pose: Float32Array;
   /** 驱动读数 scratch:同上 */
   private readonly driveScratch: RigDrive = { freqMul: 1, swingMul: 1 };
+  /** 根姿态 scratch:侧掠者每帧会据飞船位置改左右与倾角,同样禁止逐只分配 */
+  private readonly rootScratch: RigRootPose = { angle: 0, flipX: 1 };
   /** instanceCount[t] = 每只怪在 t 号容器里占几个粒子 */
   private readonly instanceCount: number[] = [];
   /** partSlot[i] = 第 i 个槽位在它那张纹理内部的实例序号 */
@@ -110,11 +121,19 @@ export class RigLayer {
    * @param alpha     渲染插值系数(与单件贴图那条路同一口径:60Hz 逻辑帧在高刷屏上不插值就是顿挫)
    * @param animClock 渲染层的动画时钟(秒)
    */
-  sync(bucket: readonly RigEntity[], alpha: number, animClock: number, driver: RigDriver): void {
+  sync(
+    bucket: readonly RigEntity[],
+    alpha: number,
+    animClock: number,
+    targetX: number,
+    targetY: number,
+    driver: RigDriver,
+  ): void {
     const rig = this.rig;
     const parts = rig.parts;
     const pose = this.pose;
     const drive = this.driveScratch;
+    const root = this.rootScratch;
 
     // 扩容:纹理是静态属性,增粒子后需 update() 重传;锚点在建粒子时按槽位一次写死
     for (let t = 0; t < rig.textureCount; t++) {
@@ -146,8 +165,9 @@ export class RigLayer {
       const x = e.px + (e.x - e.px) * alpha;
       const y = e.py + (e.y - e.py) * alpha;
       driver.drive(e, drive);
+      driver.rootPose(e, x, y, animClock, rig, targetX, targetY, root);
       const phase = animClock * rig.freq * drive.freqMul + e.animSeed * Math.PI * 2;
-      poseRig(rig, x, y, driver.bodyAngle(e, animClock, rig), this.baseScale, phase, drive.swingMul, pose);
+      poseRig(rig, x, y, root.angle, this.baseScale, phase, drive.swingMul, pose, root.flipX);
       const tint = driver.tint(e);
       for (let i = 0; i < parts.length; i++) {
         const t = parts[i]!.tex;

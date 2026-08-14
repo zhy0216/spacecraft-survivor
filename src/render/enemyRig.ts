@@ -14,8 +14,8 @@
  * 与 round-1 的 512px 候选图逐像素同一套坐标(静止位姿就是照着那张图校准出来的,
  * 见 assets/generated/fal/round-3/results/ledger.json 的 rest_pose_calibration)。
  * 它不是世界坐标也不是"船头朝 +X"的局部坐标:默认仍由渲染层把速度朝向与生成图的
- * 正面偏移合成根角。侧掠者是有意的例外 —— 它靠横向位移表达"侧掠",整只怪始终保持
- * 头在屏幕上方,避免绕行时把有明确头尾的剪影倒过来。
+ * 正面偏移合成根角。侧掠者是有意的例外 —— 它不追随自身速度,而是左右翻面朝向飞船,
+ * 再在水平方向上下各留 30° 倾转,让横向切入的头尾关系始终可读。
  */
 
 /** 位姿输出的每部件步长:x, y, rotation, scaleX, scaleY */
@@ -74,14 +74,33 @@ export interface RigDef {
   readonly freq: number;
   /**
    * 非 null = 根骨不跟随速度,始终使用这个世界角(rad)。
-   * 侧掠者用它保持头朝屏幕上方:移动方向由位移、爪足与尾鞭交代,不靠整只怪翻转。
+   * 当前两套骨架都不用；保留给真正需要世界系固定朝向的后续敌型。
    */
   readonly fixedRootAngle: number | null;
+  /**
+   * 非 null = 根骨左右翻面朝向目标,并把倾角限制在水平轴上下 maxTurn 内。
+   * forwardAngle 是静止骨架里“本体中心 → 头”的原始角,用于把分件图校准到水平朝向。
+   */
+  readonly targetFacing: RigTargetFacing | null;
   /**
    * 非 0 = 这一型不跟速度朝向,根角改用 time × spin(蜂群蛭:口器绕圈就是它的"活着")。
    * 与单件贴图年代 ENEMY_ANIM.spin 同一条口径,换骨架不改变这一型转不转。
    */
   readonly spin: number;
+}
+
+/** 左右翻面朝向目标时的骨架校准参数 */
+export interface RigTargetFacing {
+  /** 静止骨架内“本体中心 → 头”的原始角(rad) */
+  readonly forwardAngle: number;
+  /** 相对水平朝向允许的最大倾角(rad) */
+  readonly maxTurn: number;
+}
+
+/** 根骨最终姿态:rotation 配合 scaleX 的符号共同完成左右换向 */
+export interface RigRootPose {
+  angle: number;
+  flipX: 1 | -1;
 }
 
 /** 单个槽位的构造:把可选项塞上缺省,让部件表只写那一件真正在意的字段 */
@@ -134,6 +153,7 @@ export const RIG_SWARM: RigDef = {
   textureCount: 2, // 0 = lobe(在后), 1 = core(在前,压住 6 片瓣根的直边切口)
   freq: 2.0,
   fixedRootAngle: null,
+  targetFacing: null,
   spin: 0.9,
   parts: [
     // 0:核心口器盘 —— 骨架的根,只做整体呼吸
@@ -158,11 +178,34 @@ export const RIG_SWARM: RigDef = {
   ],
 };
 
+/** 静止骨架里“本体中心 → 头关节(149.9,-65.5)”的原始朝向 */
+export const STRAFER_FORWARD_ANGLE = Math.atan2(-65.5, 149.9);
+/** 侧掠者面向飞船时相对水平轴允许的最大倾角:上下各 30° */
+export const STRAFER_TARGET_TURN_LIMIT = 30 * D2R;
+
 /**
- * 把静止位姿的头关节(149.9,-65.5)转到根原点正上方所需的角度。
- * 取整到 -66° 是美术旋钮:头仍保留一点自然的右偏,但任何移动方向都不会再把它翻到下方。
+ * 解出“左右翻面 + 有限倾转”的根姿态,写进 out(热路径零分配)。
+ *
+ * 侧掠者的主体保持横向剪影:目标在右就用原图,目标在左就沿本地 Y 轴镜像整套骨架；
+ * 垂直分量只负责让头上下倾斜,并钳在 ±maxTurn,不会因为从船顶/船底掠过而整只倒立。
  */
-export const STRAFER_UPRIGHT_ANGLE = -66 * D2R;
+export function targetFacingRootPose(
+  bodyX: number,
+  bodyY: number,
+  targetX: number,
+  targetY: number,
+  facing: RigTargetFacing,
+  out: RigRootPose,
+): void {
+  const dx = targetX - bodyX;
+  const dy = targetY - bodyY;
+  const flipX: 1 | -1 = dx < 0 ? -1 : 1;
+  const rawTilt = Math.atan2(dy, Math.abs(dx)) * flipX;
+  const tilt = Math.max(-facing.maxTurn, Math.min(facing.maxTurn, rawTilt));
+  out.flipX = flipX;
+  // 镜像会把原始正面角 θ 变成 π-θ,所以左右两边的校准项符号相反。
+  out.angle = tilt - flipX * facing.forwardAngle;
+}
 
 /**
  * 侧掠者(KIND_STRAFER):头 + 胸 + 4 爪足 + 两节尾链。
@@ -179,7 +222,11 @@ export const STRAFER_UPRIGHT_ANGLE = -66 * D2R;
 export const RIG_STRAFER: RigDef = {
   textureCount: 5, // 画序:0 tail-b → 1 tail-a → 2 leg → 3 thorax → 4 head
   freq: 4.5,
-  fixedRootAngle: STRAFER_UPRIGHT_ANGLE,
+  fixedRootAngle: null,
+  targetFacing: {
+    forwardAngle: STRAFER_FORWARD_ANGLE,
+    maxTurn: STRAFER_TARGET_TURN_LIMIT,
+  },
   spin: 0,
   parts: [
     // 0:胸(根)。整只怪的位姿由它起算,自身只做极轻的横滚
@@ -243,6 +290,7 @@ export const ENEMY_RIGS: readonly (RigDef | null)[] = [
  * @param phase     本帧动画相位(rad):调用方按 animClock × freq + animSeed × 2π 算好,
  *                  相位而不是时间进来 —— 状态机要给某一型提频(前摇发抖)时不必改这里
  * @param swingMul  摆幅总倍率:1 = 常态,冲刺/前摇由调用方放大或压扁,0 = 完全静止(静止位姿)
+ * @param bodyFlipX 1 = 原向, -1 = 沿根骨本地 Y 轴镜像整套骨架(左右换向)
  */
 export function poseRig(
   rig: RigDef,
@@ -253,6 +301,7 @@ export function poseRig(
   phase: number,
   swingMul: number,
   out: Float32Array,
+  bodyFlipX: 1 | -1 = 1,
 ): void {
   const parts = rig.parts;
   for (let i = 0; i < parts.length; i++) {
@@ -274,12 +323,13 @@ export function poseRig(
     // 关节位移在**父的动画后朝向**里旋转 —— 用静止朝向的话,父一动子就脱节
     const ca = Math.cos(pa);
     const sa = Math.sin(pa);
-    out[o] = px + (p.dx * ca - p.dy * sa) * bodyScale;
-    out[o + 1] = py + (p.dx * sa + p.dy * ca) * bodyScale;
+    const localX = p.dx * bodyFlipX;
+    out[o] = px + (localX * ca - p.dy * sa) * bodyScale;
+    out[o + 1] = py + (localX * sa + p.dy * ca) * bodyScale;
     const w = Math.sin(phase + p.phase);
-    out[o + 2] = pa + p.rest + p.swing * swingMul * w;
+    out[o + 2] = pa + (p.rest + p.swing * swingMul * w) * bodyFlipX;
     const s = bodyScale * p.scale;
-    out[o + 3] = s * (1 + p.pumpX * swingMul * w);
+    out[o + 3] = s * bodyFlipX * (1 + p.pumpX * swingMul * w);
     out[o + 4] = s * (1 + p.pumpY * swingMul * w);
   }
 }

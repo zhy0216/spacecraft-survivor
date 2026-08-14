@@ -6,8 +6,10 @@ import {
   RIG_STRAFER,
   RIG_STRIDE,
   RIG_SWARM,
-  STRAFER_UPRIGHT_ANGLE,
+  STRAFER_TARGET_TURN_LIMIT,
+  targetFacingRootPose,
   type RigDef,
+  type RigRootPose,
   rigBufferLength,
   rigInstanceCount,
 } from './enemyRig';
@@ -34,6 +36,18 @@ function restPose(rig: RigDef): Float32Array {
   const out = new Float32Array(rigBufferLength(rig));
   poseRig(rig, 0, 0, 0, 1, 0, 0, out);
   return out;
+}
+
+/** 侧掠者在原点,按目标位置解根姿态后求一次静止骨架 */
+function straferFacingPose(targetX: number, targetY: number): {
+  root: RigRootPose;
+  pose: Float32Array;
+} {
+  const root: RigRootPose = { angle: 0, flipX: 1 };
+  targetFacingRootPose(0, 0, targetX, targetY, RIG_STRAFER.targetFacing!, root);
+  const pose = new Float32Array(rigBufferLength(RIG_STRAFER));
+  poseRig(RIG_STRAFER, 0, 0, root.angle, 1, 0, 0, pose, root.flipX);
+  return { root, pose };
 }
 
 describe('结构不变量', () => {
@@ -69,9 +83,11 @@ describe('结构不变量', () => {
     expect(ENEMY_RIGS[KIND_SPORE]).toBeNull();
   });
 
-  it('只有侧掠者钉死根角:它横向移动但头始终朝屏幕上方', () => {
+  it('侧掠者不再钉死根角:它朝飞船左右换向,倾角限制为 30°', () => {
     expect(RIG_SWARM.fixedRootAngle).toBeNull();
-    expect(RIG_STRAFER.fixedRootAngle).toBe(STRAFER_UPRIGHT_ANGLE);
+    expect(RIG_SWARM.targetFacing).toBeNull();
+    expect(RIG_STRAFER.fixedRootAngle).toBeNull();
+    expect(RIG_STRAFER.targetFacing?.maxTurn).toBeCloseTo(STRAFER_TARGET_TURN_LIMIT, 9);
     expect(RIG_STRAFER.spin).toBe(0);
   });
 
@@ -129,12 +145,38 @@ describe('静止位姿(swingMul=0):关节落在从 round-1 原图量出来的校
     expect(tailB.rot).toBeCloseTo(78 * D2R, 6);
   });
 
-  it('侧掠者直立根角把头关节钉在本体上方,不再随移动方向翻到下方', () => {
-    const out = new Float32Array(rigBufferLength(RIG_STRAFER));
-    poseRig(RIG_STRAFER, 0, 0, STRAFER_UPRIGHT_ANGLE, 1, 0, 0, out);
-    const head = slot(out, 1);
-    expect(Math.abs(head.x)).toBeLessThan(2);
-    expect(head.y).toBeLessThan(-160);
+  it('侧掠者会朝飞船左右换向,左向是整套骨架镜像而不是把头继续固定在上方', () => {
+    const right = straferFacingPose(100, 0);
+    const left = straferFacingPose(-100, 0);
+    expect(right.root.flipX).toBe(1);
+    expect(left.root.flipX).toBe(-1);
+
+    const rightHead = slot(right.pose, 1);
+    const leftHead = slot(left.pose, 1);
+    expect(rightHead.x).toBeGreaterThan(160);
+    expect(leftHead.x).toBeLessThan(-160);
+    expect(Math.abs(rightHead.y)).toBeLessThan(1);
+    expect(Math.abs(leftHead.y)).toBeLessThan(1);
+
+    // 左向位姿应是右向位姿沿屏幕 Y 轴的镜像；纹理也靠负 scaleX 真正翻面。
+    for (let i = 0; i < RIG_STRAFER.parts.length; i++) {
+      expect(slot(left.pose, i).x).toBeCloseTo(-slot(right.pose, i).x, 3);
+      expect(slot(left.pose, i).y).toBeCloseTo(slot(right.pose, i).y, 3);
+      expect(slot(right.pose, i).sx).toBeGreaterThan(0);
+      expect(slot(left.pose, i).sx).toBeLessThan(0);
+    }
+  });
+
+  it('飞船在斜上/斜下时只倾转,根朝向严格钳在水平轴上下 30°', () => {
+    const belowRight = slot(straferFacingPose(10, 1000).pose, 1);
+    const belowLeft = slot(straferFacingPose(-10, 1000).pose, 1);
+    const aboveRight = slot(straferFacingPose(10, -1000).pose, 1);
+    expect(Math.atan2(belowRight.y, belowRight.x)).toBeCloseTo(STRAFER_TARGET_TURN_LIMIT, 5);
+    expect(Math.atan2(belowLeft.y, belowLeft.x)).toBeCloseTo(
+      Math.PI - STRAFER_TARGET_TURN_LIMIT,
+      5,
+    );
+    expect(Math.atan2(aboveRight.y, aboveRight.x)).toBeCloseTo(-STRAFER_TARGET_TURN_LIMIT, 5);
   });
 
   it('swingMul=0 时缩放退化成纯静态倍率(不呼吸),爪足带着自己的 0.55', () => {

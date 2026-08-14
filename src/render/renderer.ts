@@ -56,6 +56,7 @@ import {
   ENEMIES,
   KIND_BOSS,
   KIND_SPORE,
+  KIND_STRAFER,
   type EnemyDef,
 } from '../data/enemies';
 import {
@@ -116,7 +117,15 @@ import { slotHeatMax, slotReload } from '../sim/tower';
 import { peekNextElite, type ElitePeek } from '../sim/waves';
 import type { Bullet, Enemy, EnemyBullet, World } from '../sim/world';
 import { audioBus } from './audio';
-import { ENEMY_RIGS, RIG_UNIT, type RigDef } from './enemyRig';
+import {
+  ENEMY_RIGS,
+  RIG_UNIT,
+  STRAFER_TARGET_TURN_LIMIT,
+  targetFacingRootPose,
+  type RigDef,
+  type RigRootPose,
+  type RigTargetFacing,
+} from './enemyRig';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
 import { RigLayer, type RigDrive, type RigDriver, type RigEntity } from './rigLayer';
@@ -186,6 +195,16 @@ const BOSS_TELEGRAPH_RING_GAP = 10;
 const BOSS_SUMMON_RING_GAP = 16;
 /** fal.ai 候选图的正面朝纹理上方(-Y),而船体局部 0 弧度朝船头(+X),两者相差 90°。 */
 const GENERATED_ART_FORWARD_OFFSET = Math.PI / 2;
+/** 单件生成图原始正面朝 -Y；骨架分件有自己的实测 forwardAngle,两条路径各自校准。 */
+const STRAFER_ART_TARGET_FACING: RigTargetFacing = {
+  forwardAngle: -Math.PI / 2,
+  maxTurn: STRAFER_TARGET_TURN_LIMIT,
+};
+/** 灰盒飞镖原始尖头朝 +X,无需正面偏移,但同样执行左右换向与 ±30° 倾转。 */
+const STRAFER_SHAPE_TARGET_FACING: RigTargetFacing = {
+  forwardAngle: 0,
+  maxTurn: STRAFER_TARGET_TURN_LIMIT,
+};
 
 // —— 炮位(改版:4 个固定硬点,不再有格子)——硬点坐标只来自 sim/armory 的 WEAPON_HARDPOINTS ——
 /** 炮位贴图/兜底色块的边长(× CELL)。留出硬点周围的炮口线与读数呼吸空间 */
@@ -670,6 +689,8 @@ const ENEMY_ANIM: readonly EnemyAnim[] = [
 
 /** 动画读数的模块级 scratch:syncParticles 热循环每帧重写,绝不 new(与 localPos 同一条零分配纪律) */
 const animFrameScratch = { scale: 0, spin: 0, wobble: 0 };
+/** 单件贴图回退路径的左右朝向 scratch:逐只重写,不在热循环分配对象 */
+const targetFacingScratch: RigRootPose = { angle: 0, flipX: 1 };
 
 /**
  * 骨架的"状态 → 动画"映射表(24 号 issue):下标 === ST_*(sim/enemy.ts 的状态码)。
@@ -698,12 +719,31 @@ const RIG_DRIVE_FALLBACK: RigDrive = { freqMul: 1, swingMul: 1 };
  * 每帧每只怪要调它三次,现造闭包等于每帧上千次堆分配 —— 故做成对象而不是传闭包进 RigLayer。
  */
 const rigDriver: RigDriver = {
-  bodyAngle(e: RigEntity, animClock: number, rig: RigDef): number {
+  rootPose(
+    e: RigEntity,
+    bodyX: number,
+    bodyY: number,
+    animClock: number,
+    rig: RigDef,
+    targetX: number,
+    targetY: number,
+    out: RigRootPose,
+  ): void {
+    out.flipX = 1;
     // 自转型(蜂群蛭):不跟速度朝向,口器绕圈就是它的"活着" —— 与单件贴图年代 ENEMY_ANIM.spin 同一条口径
-    if (rig.spin !== 0) return animClock * rig.spin + e.animSeed * Math.PI * 2;
-    // 固定直立型(侧掠者):它的动作语义是横向掠过,不是拿头去指速度方向。
-    // 根骨始终朝屏幕上方,位移、错相爪足与尾鞭已经足够交代向哪边移动。
-    if (rig.fixedRootAngle !== null) return rig.fixedRootAngle;
+    if (rig.spin !== 0) {
+      out.angle = animClock * rig.spin + e.animSeed * Math.PI * 2;
+      return;
+    }
+    // 侧掠者:不跟自身速度转整圈,而是朝飞船左右翻面,上下只倾转 30°。
+    if (rig.targetFacing !== null) {
+      targetFacingRootPose(bodyX, bodyY, targetX, targetY, rig.targetFacing, out);
+      return;
+    }
+    if (rig.fixedRootAngle !== null) {
+      out.angle = rig.fixedRootAngle;
+      return;
+    }
     let vx = e.vx;
     let vy = e.vy;
     // 冲锋前摇会刹停,但方向已锁死:用锁定向量,免得怪在预警环里停在上一方向
@@ -717,9 +757,12 @@ const rigDriver: RigDriver = {
       // 于是这里把它钉成纯函数 —— 同一状态永远解出同一位姿,不带帧间隐藏状态。
       vx = e.lockX;
       vy = e.lockY;
-      if (vx * vx + vy * vy <= 1e-6) return GENERATED_ART_FORWARD_OFFSET;
+      if (vx * vx + vy * vy <= 1e-6) {
+        out.angle = GENERATED_ART_FORWARD_OFFSET;
+        return;
+      }
     }
-    return Math.atan2(vy, vx) + GENERATED_ART_FORWARD_OFFSET;
+    out.angle = Math.atan2(vy, vx) + GENERATED_ART_FORWARD_OFFSET;
   },
   drive(e: RigEntity, out: RigDrive): void {
     const d = RIG_STATE_DRIVE[e.state] ?? RIG_DRIVE_FALLBACK;
@@ -1507,9 +1550,15 @@ export class Renderer {
       const eliteRigLayer = this.eliteRigLayers[k];
       if (rigLayer && eliteRigLayer) {
         // 骨架型:整型改走部件路径,上面那套单件容器一个粒子都不建(syncParticles 按需扩容,不调它就是空的)
-        rigLayer.sync(bucket, alpha, this.animClock, rigDriver);
-        eliteRigLayer.sync(eliteBucket, alpha, this.animClock, rigDriver);
+        rigLayer.sync(bucket, alpha, this.animClock, sx, sy, rigDriver);
+        eliteRigLayer.sync(eliteBucket, alpha, this.animClock, sx, sy, rigDriver);
       } else {
+        const targetFacing =
+          def.kind === KIND_STRAFER
+            ? this.enemyRotationOffsets[k] === 0
+              ? STRAFER_SHAPE_TARGET_FACING
+              : STRAFER_ART_TARGET_FACING
+            : undefined;
         this.syncParticles(this.enemyParticles[k]!, this.enemyPcs[k]!, bucket, {
           texture: this.enemyTextures[k]!,
           tint: this.enemyTextureTints[k]!,
@@ -1518,6 +1567,9 @@ export class Renderer {
           anim: ENEMY_ANIM[k]!,
           alpha,
           flashBase: this.enemyTextureTints[k]!,
+          targetFacing,
+          targetX: sx,
+          targetY: sy,
         });
         // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
         // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
@@ -1529,6 +1581,9 @@ export class Renderer {
           anim: ENEMY_ANIM[k]!,
           alpha,
           flashBase: this.enemyTextureTints[k]!,
+          targetFacing,
+          targetX: sx,
+          targetY: sy,
         });
       }
       // 前摇指示按型共享配额:精英与普通怪同型,合起来不能超过一型的预算
@@ -3079,6 +3134,10 @@ export class Renderer {
       alpha: number;
       scale?: number;
       rotationOffset?: number;
+      /** 侧掠者单贴图回退:朝目标左右翻面,并把倾角限制在水平轴附近 */
+      targetFacing?: RigTargetFacing;
+      targetX?: number;
+      targetY?: number;
       /** 程序化动画参数:只在敌人/精英/Boss 容器传入,子弹/残骸不付这个分支 */
       anim?: EnemyAnim;
       /**
@@ -3132,7 +3191,26 @@ export class Renderer {
             p.scaleY = frame.scale;
           }
         }
-        if (entity && (opts.rotationOffset !== undefined || anim)) {
+        if (
+          entity &&
+          opts.targetFacing !== undefined &&
+          opts.targetX !== undefined &&
+          opts.targetY !== undefined
+        ) {
+          targetFacingRootPose(
+            p.x,
+            p.y,
+            opts.targetX,
+            opts.targetY,
+            opts.targetFacing,
+            targetFacingScratch,
+          );
+          p.rotation = targetFacingScratch.angle;
+          // 左右换向靠 scaleX 符号；每帧从基准/呼吸读数重算,不拿上一帧的负缩放继续相乘。
+          const facingScale = frame?.scale ?? opts.scale ?? 1;
+          p.scaleX = facingScale * targetFacingScratch.flipX;
+          p.scaleY = facingScale;
+        } else if (entity && (opts.rotationOffset !== undefined || anim)) {
           let vx = entity.vx;
           let vy = entity.vy;
           // 冲锋前摇会刹停,但朝向已经锁死;用锁定向量,避免候选图在预警环里停在上一方向。
