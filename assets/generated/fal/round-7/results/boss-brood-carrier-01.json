@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro",
+  "request_id": "01a00125-5c67-7fa2-a3c6-809c127321fe",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa653b2/YH2XZASHQYcYk8knifyEN_tzFrBKpu.png",
+        "content_type": "image/png",
+        "file_name": "YH2XZASHQYcYk8knifyEN_tzFrBKpu.png",
+        "file_size": null,
+        "width": null,
+        "height": null
+      }
+    ],
+    "description": ""
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653b2/YH2XZASHQYcYk8knifyEN_tzFrBKpu.png",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/enemies/boss-brood-carrier-01-source.png",
+      "size_bytes": 4935836,
+      "json_path": "images[0]"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

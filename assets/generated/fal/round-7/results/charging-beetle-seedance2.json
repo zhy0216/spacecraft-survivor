@@ -1,0 +1,27 @@
+{
+  "status": "completed",
+  "endpoint_id": "bytedance/seedance-2.0/image-to-video",
+  "request_id": "01a00129-496a-70c2-ba41-9b29730797c8",
+  "result": {
+    "video": {
+      "url": "https://v3b.fal.media/files/b/0aa653dd/it6Ave9B-uN-uuOvG8joA_video.mp4",
+      "content_type": "video/mp4",
+      "file_name": "video.mp4",
+      "file_size": 792829
+    },
+    "seed": 997111869
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653dd/it6Ave9B-uN-uuOvG8joA_video.mp4",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/animation/charging-beetle-seedance2.mp4",
+      "size_bytes": 792829,
+      "json_path": "video"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

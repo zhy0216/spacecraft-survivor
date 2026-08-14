@@ -92,7 +92,7 @@ import { tuning } from '../sim/config';
 import { shipRadius } from '../sim/damage';
 import { DROP_KIND_MAGNET, type Drop } from '../sim/drop';
 import { ENEMY_HIT_FLASH, enemyRadius, ST_SPORE_WINDUP, ST_WINDUP } from '../sim/enemy';
-import { BOSS_WINDUP, bossRadius } from '../sim/boss';
+import { BOSS_CHASE, BOSS_DASH, BOSS_RECOVER, BOSS_WINDUP, bossRadius } from '../sim/boss';
 import {
   FX_LIFE_HULL_HIT,
   FX_LIFE_KILL,
@@ -118,6 +118,7 @@ import type { Bullet, Enemy, EnemyBullet, World } from '../sim/world';
 import { audioBus } from './audio';
 import {
   ENEMY_RIGS,
+  RIG_BOSS,
   RIG_UNIT,
   STRAFER_TARGET_TURN_LIMIT,
   targetFacingRootPose,
@@ -186,8 +187,12 @@ const SHIP_HULL_WIDTH_PAD = 0.45;
 /** 四型生成图都按战斗态飞船的视觉量级展示,并再放大一档;甲虫继续保留重甲型的体型读数。 */
 const ENEMY_VISUAL_SPAN = (tuning.shipLength + CELL * SHIP_HULL_LENGTH_PAD) * 1.15;
 const ENEMY_HEAVY_VISUAL_SCALE = 1.15;
-/** Boss 是收尾焦点:视觉比碰撞体额外放大,碰撞与预警判定仍走 bossRadius()。 */
-const BOSS_VISUAL_SCALE = 1.35;
+/** 精英在 sim 的 1.5× 判定体之外再多一档纯视觉放大,不改伤害/碰撞平衡。 */
+const ELITE_VISUAL_SCALE = 1.18;
+/** 金橙滤色 + 同色常驻光环:与普通怪的红紫本色分开,一眼就是高优先级目标。 */
+const ELITE_TINT = 0xffbd54;
+/** Boss 是收尾焦点:碰撞直径 16.8% 屏高,再乘 1.5 的纯视觉倍率 = 约 1/4 屏高。 */
+const BOSS_VISUAL_SCALE = 1.5;
 /** Boss 的预警环不贴着视觉边缘:留出一圈冷色负空间,避免高细节贴图把倒计时环吃掉。 */
 const BOSS_TELEGRAPH_RING_GAP = 10;
 /** 召唤倒计时环比本体再外扩一档,与 Boss 的视觉尺寸而不是碰撞圆对齐。 */
@@ -794,6 +799,46 @@ const rigDriver: RigDriver = {
   },
 };
 
+/** 精英与普通怪共用动作,但额外套金橙色；受击时才从金橙闪向白,比原色怪更清楚。 */
+const eliteRigDriver: RigDriver = {
+  rootPose: rigDriver.rootPose,
+  drive: rigDriver.drive,
+  tint(e: RigEntity): number {
+    return e.hitFlash > 0
+      ? lerpColor(ELITE_TINT, 0xffffff, hitFlashMix(e.hitFlash))
+      : ELITE_TINT;
+  },
+};
+
+/** Boss 的 10..13 状态码不占普通怪的 RIG_STATE_DRIVE 下标,单独映射巨物的慢重步态。 */
+const bossRigDriver: RigDriver = {
+  rootPose: rigDriver.rootPose,
+  drive(e: RigEntity, out: RigDrive): void {
+    switch (e.state) {
+      case BOSS_CHASE:
+        out.freqMul = 0.7;
+        out.swingMul = 1;
+        break;
+      case BOSS_WINDUP:
+        out.freqMul = 2.1;
+        out.swingMul = 0.55;
+        break;
+      case BOSS_DASH:
+        out.freqMul = 1.55;
+        out.swingMul = 1.4;
+        break;
+      case BOSS_RECOVER:
+        out.freqMul = 0.42;
+        out.swingMul = 0.65;
+        break;
+      default:
+        out.freqMul = 0.7;
+        out.swingMul = 1;
+    }
+  },
+  tint: rigDriver.tint,
+};
+
 /**
  * 单帧动画读数的纯计算:给同步循环一次算出缩放乘数 / 自转角 / 摆动角。
  * 拆出来就是为了 Node 单测 —— 热路径之外的三个 sin 换来的可测性值得(renderer.test.ts 钉边界)。
@@ -1014,8 +1059,8 @@ export class Renderer {
   /** 程序化动画时钟:渲染帧累加(与 stepShake 同一份 dt),时停期间照走 —— 虫子冻结不等于死物 */
   private animClock = 0;
   /**
-   * 精英(affixes ≠ 0)各型独立容器。与普通型**同一张纹理、同一个 tint**,只是静态缩放
-   * 乘 ELITE.scale:体型差就是"这只不一样"的第一眼读数,而色相通道已经被"哪一型"占满。
+   * 精英(affixes ≠ 0)各型独立容器。尺寸 = ELITE.scale × ELITE_VISUAL_SCALE,
+   * 再套金橙滤色与常驻光环；轮廓、尺寸、颜色三条通道同时回答“这只不一样”。
    */
   private elitePcs: ParticleContainer[] = [];
   private eliteParticles: Particle[][] = [];
@@ -1027,7 +1072,7 @@ export class Renderer {
    * null = 这一型没做骨架或部件图缺失,照旧走单件贴图 —— 逐型回退,做一型接一型。
    */
   private enemyRigLayers: (RigLayer | null)[] = [];
-  /** 精英骨架:与普通型同一套部件纹理,只是 baseScale 乘了 ELITE.scale(与单件贴图那条路同一个乘数) */
+  /** 精英骨架:与普通型同部件,baseScale 乘 ELITE.scale × ELITE_VISUAL_SCALE */
   private eliteRigLayers: (RigLayer | null)[] = [];
   /**
    * Boss(15 号)的专属容器:底座型(冲撞甲虫)的**同一张纹理、同一个 tint**,只是静态缩放
@@ -1037,7 +1082,9 @@ export class Renderer {
   private bossPc: ParticleContainer;
   private bossParticles: Particle[] = [];
   private bossBucket: Enemy[] = [];
-  /** Boss 的实际纹理与 tint(round-5 专属图,加载失败回退底座型;构造时定死,sync 只读) */
+  /** round-7 Boss 拆件齐全时走骨架；null 才回退上面的整图粒子。 */
+  private bossRigLayer: RigLayer | null = null;
+  /** Boss 的实际整图与 tint(round-7 专属图,骨架缺件时使用;构造时定死,sync 只读) */
   private bossTexture: Texture;
   private bossTextureTint = 0xffffff;
   private bossTextureScale = 1;
@@ -1314,14 +1361,16 @@ export class Renderer {
       if (rig && rigParts && rigParts.length === rig.textureCount) {
         const rigScale = generatedEnemySpan(def) / RIG_UNIT;
         this.enemyRigLayers.push(new RigLayer(rig, rigParts, bounds, rigScale));
-        this.eliteRigLayers.push(new RigLayer(rig, rigParts, bounds, rigScale * ELITE.scale));
+        this.eliteRigLayers.push(
+          new RigLayer(rig, rigParts, bounds, rigScale * ELITE.scale * ELITE_VISUAL_SCALE),
+        );
       } else {
         this.enemyRigLayers.push(null);
         this.eliteRigLayers.push(null);
       }
     }
 
-    // —— Boss(15 号):round-5 的专属贴图,加载失败回退底座型纹理放大 ——
+    // —— Boss(15 号):round-7 的母巢整图 + 拆件骨架,缺件时回退整图 ——
     // 静态缩放使剪影外接半径 = bossRadius()(sim/boss.ts 的唯一口径),
     // 判定体多大画多大 —— 与"灰盒阶段视觉 = 判定"同一条口径,换不换贴图都不动摇
     const bossGenerated = generatedArt.boss ?? null;
@@ -1338,6 +1387,11 @@ export class Renderer {
       boundsArea: bounds,
       texture: bossTex,
     });
+    const bossRigParts = generatedArt.bossRigParts;
+    if (bossRigParts && bossRigParts.length === RIG_BOSS.textureCount) {
+      const bossRigScale = (bossRadius() * 2 * BOSS_VISUAL_SCALE) / RIG_UNIT;
+      this.bossRigLayer = new RigLayer(RIG_BOSS, bossRigParts, bounds, bossRigScale);
+    }
 
     // —— 子弹同样按型分容器,理由与上面那段一字不差(tint/纹理是静态属性,分容器才免得每帧重传)——
     // 只为**真的会产生子弹**的塔型建:FX_BEAM/FX_CHAIN/FX_LANCE 是瞬时判定,画面上的东西全在 fxG,
@@ -1443,8 +1497,11 @@ export class Renderer {
       const rl = this.eliteRigLayers[k];
       if (rl) for (const pc of rl.containers) this.worldLayer.addChild(pc);
     }
-    // Boss 容器压在一切敌剪影之上:它是这一战最大的个体,任何虫群都不许啃它的边
+    // Boss 容器压在一切敌剪影之上:骨架齐全时整图容器保持空,部件容器按画序叠上来。
     this.worldLayer.addChild(this.bossPc);
+    if (this.bossRigLayer) {
+      for (const pc of this.bossRigLayer.containers) this.worldLayer.addChild(pc);
+    }
     this.worldLayer.addChild(this.dropPc);
     // 磁吸宝物(26 号改)紧跟经验残骸:同一层带,宝物压在上——"特别的那一颗"读得出来
     this.worldLayer.addChild(this.dropOrbPc);
@@ -1581,6 +1638,7 @@ export class Renderer {
     }
 
     this.telegraphG.clear();
+    this.drawEliteAuras(alpha);
     for (let k = 0; k < buckets.length; k++) {
       const def = ENEMIES[k]!;
       const bucket = buckets[k]!;
@@ -1590,7 +1648,7 @@ export class Renderer {
       if (rigLayer && eliteRigLayer) {
         // 骨架型:整型改走部件路径,上面那套单件容器一个粒子都不建(syncParticles 按需扩容,不调它就是空的)
         rigLayer.sync(bucket, alpha, this.animClock, sx, sy, rigDriver);
-        eliteRigLayer.sync(eliteBucket, alpha, this.animClock, sx, sy, rigDriver);
+        eliteRigLayer.sync(eliteBucket, alpha, this.animClock, sx, sy, eliteRigDriver);
       } else {
         const targetFacing =
           def.kind === KIND_STRAFER
@@ -1610,16 +1668,15 @@ export class Renderer {
           targetX: sx,
           targetY: sy,
         });
-        // 精英:同纹理同 tint,静态缩放乘 ELITE.scale —— 与 sim/enemy 的 enemyRadius 同一个乘数,
-        // 判定体放大多少剪影就放大多少,不会出现"挨打的圈比画出来的大/小"的错位
+        // 精英:sim 判定体放大之外再加纯视觉放大与金橙滤色,永久光环由 drawEliteAuras 画在底层。
         this.syncParticles(this.eliteParticles[k]!, this.elitePcs[k]!, eliteBucket, {
           texture: this.enemyTextures[k]!,
-          tint: this.enemyTextureTints[k]!,
-          scale: this.enemyTextureScales[k]! * ELITE.scale,
+          tint: ELITE_TINT,
+          scale: this.enemyTextureScales[k]! * ELITE.scale * ELITE_VISUAL_SCALE,
           rotationOffset: def.shape === 'circle' ? undefined : this.enemyRotationOffsets[k],
           anim: ENEMY_ANIM[k]!,
           alpha,
-          flashBase: this.enemyTextureTints[k]!,
+          flashBase: ELITE_TINT,
           targetFacing,
           targetX: sx,
           targetY: sy,
@@ -1634,17 +1691,20 @@ export class Renderer {
       budget = this.drawSporeTelegraph(bucket, def, alpha, budget);
       this.drawSporeTelegraph(eliteBucket, def, alpha, budget);
     }
-    // Boss:构造时定死的专属纹理与 tint(回退时才是底座型的),静态缩放使剪影外接半径 = bossRadius()——
-    // 与普通型分桶同一条 syncParticles 路径,判定体多大画多大
-    this.syncParticles(this.bossParticles, this.bossPc, this.bossBucket, {
-      texture: this.bossTexture,
-      tint: this.bossTextureTint,
-      scale: this.bossTextureScale,
-      rotationOffset: this.bossRotationOffset,
-      anim: ENEMY_ANIM[BOSS.baseKind]!,
-      alpha,
-      flashBase: this.bossTextureTint,
-    });
+    // Boss:优先走 round-7 母巢骨架；任一部件加载失败才整型回退到专属整图。
+    if (this.bossRigLayer) {
+      this.bossRigLayer.sync(this.bossBucket, alpha, this.animClock, sx, sy, bossRigDriver);
+    } else {
+      this.syncParticles(this.bossParticles, this.bossPc, this.bossBucket, {
+        texture: this.bossTexture,
+        tint: this.bossTextureTint,
+        scale: this.bossTextureScale,
+        rotationOffset: this.bossRotationOffset,
+        anim: ENEMY_ANIM[BOSS.baseKind]!,
+        alpha,
+        flashBase: this.bossTextureTint,
+      });
+    }
     this.drawBossTelegraph(alpha);
 
     // 子弹按 towerType 分桶,写法与上面的敌人分型一字不差(复用数组 + length = 0,零分配)。
@@ -3196,6 +3256,40 @@ export class Renderer {
       width / 2 - Math.sin(shipX * 0.0007) * width * 0.025,
       height / 2 - Math.sin(shipY * 0.0007) * height * 0.025,
     );
+  }
+
+  /**
+   * 精英常驻识别环:金橙双圈 + 四个短刻度,画在敌人下方。
+   * 半径跟随精英的真实判定体并补上 ELITE_VISUAL_SCALE,所以五种轮廓都能完整落在圈内；
+   * 相位只做 5% 呼吸,不会与“环合拢即冲刺/开火”的前摇语义混淆。
+   */
+  private drawEliteAuras(alpha: number): void {
+    const g = this.telegraphG;
+    let drawn = 0;
+    for (let k = 0; k < this.eliteBuckets.length; k++) {
+      const bucket = this.eliteBuckets[k]!;
+      for (let i = 0; i < bucket.length; i++) {
+        const e = bucket[i]!;
+        const x = e.px + (e.x - e.px) * alpha;
+        const y = e.py + (e.y - e.py) * alpha;
+        const pulse = 1 + Math.sin(this.animClock * 4 + e.animSeed * Math.PI * 2) * 0.05;
+        const r = enemyRadius(e) * ELITE_VISUAL_SCALE * pulse + 4;
+        g.circle(x, y, r).circle(x, y, r + 4);
+        for (let n = 0; n < 4; n++) {
+          const a = this.animClock * 0.7 + n * (Math.PI / 2);
+          const c = Math.cos(a);
+          const s = Math.sin(a);
+          g.moveTo(x + c * (r + 1), y + s * (r + 1)).lineTo(
+            x + c * (r + 7),
+            y + s * (r + 7),
+          );
+        }
+        drawn++;
+      }
+    }
+    if (drawn > 0) {
+      g.stroke({ width: 1.8, color: ELITE_TINT, alpha: 0.62 });
+    }
   }
 
   /**

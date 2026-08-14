@@ -88,8 +88,8 @@ export interface BossDef {
 /** Boss = 放大的冲撞甲虫(四型里唯一"直线蓄力冲锋"的,收尾高潮要的就是这一型的身位压力) */
 export const BOSS: BossDef = {
   baseKind: KIND_BEETLE,
-  name: '合围巨兽',
-  scale: 2.5, // 底座半径 14 → 35:比精英(14 × 1.5 = 21)还大一圈
+  name: '母巢巨兽',
+  scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
   hpMul: 47, // 闸门反推(自动求解):净 DPS × TTK 82.5s / 68.8 ≈ 47.5 → 取整 47;
   // Boss HP = 40 × 1.72 × 47 ≈ 3234。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
   dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦

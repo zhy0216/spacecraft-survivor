@@ -1,0 +1,17 @@
+{
+  "budget_usd": 50,
+  "successful_image_calls": 7,
+  "image_unit_price_usd": 0.15,
+  "image_subtotal_usd": 1.05,
+  "successful_video_calls": 4,
+  "video_duration_seconds_each": 4,
+  "video_unit_price_usd": 0.014,
+  "video_price_unit_label": "units",
+  "video_billed_units_returned_by_receipt": false,
+  "nominal_video_subtotal_if_one_second_is_one_unit_usd": 0.224,
+  "nominal_total_usd": 1.274,
+  "notes": [
+    "Two HTTP 422 validation failures are excluded because no successful generation receipt was returned.",
+    "The Seedance receipt exposes seed and output URL but not billed units, so the video subtotal is explicitly an estimate."
+  ]
+}

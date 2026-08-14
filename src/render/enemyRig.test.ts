@@ -3,9 +3,13 @@ import { KIND_BEETLE, KIND_SPORE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from 
 import {
   ENEMY_RIGS,
   poseRig,
+  RIG_BEETLE,
+  RIG_BOSS,
+  RIG_SPORE,
   RIG_STRAFER,
   RIG_STRIDE,
   RIG_SWARM,
+  RIG_TRAILER,
   STRAFER_TARGET_TURN_LIMIT,
   targetFacingRootPose,
   type RigDef,
@@ -54,6 +58,10 @@ describe('结构不变量', () => {
   const all: [string, RigDef][] = [
     ['蜂群蛭', RIG_SWARM],
     ['侧掠者', RIG_STRAFER],
+    ['尾随蛆', RIG_TRAILER],
+    ['冲撞甲虫', RIG_BEETLE],
+    ['孢子炮手', RIG_SPORE],
+    ['母巢巨兽', RIG_BOSS],
   ];
 
   it.each(all)('%s:父槽位下标严格小于自身 —— poseRig 单趟前向解完的前提', (_n, rig) => {
@@ -75,12 +83,13 @@ describe('结构不变量', () => {
     for (const p of rig.parts) expect(p.tex).toBeLessThan(rig.textureCount);
   });
 
-  it('逐型骨架表下标 === EnemyKind;未做骨架的型是 null(渲染层据此回退单件贴图)', () => {
+  it('逐型骨架表下标 === EnemyKind;除 Boss 独立层外五型全部有骨架', () => {
     expect(ENEMY_RIGS[KIND_SWARM]).toBe(RIG_SWARM);
     expect(ENEMY_RIGS[KIND_STRAFER]).toBe(RIG_STRAFER);
-    expect(ENEMY_RIGS[KIND_TRAILER]).toBeNull();
-    expect(ENEMY_RIGS[KIND_BEETLE]).toBeNull();
-    expect(ENEMY_RIGS[KIND_SPORE]).toBeNull();
+    expect(ENEMY_RIGS[KIND_TRAILER]).toBe(RIG_TRAILER);
+    expect(ENEMY_RIGS[KIND_BEETLE]).toBe(RIG_BEETLE);
+    expect(ENEMY_RIGS[KIND_SPORE]).toBe(RIG_SPORE);
+    expect(ENEMY_RIGS).not.toContain(RIG_BOSS);
   });
 
   it('侧掠者不再钉死根角:它朝飞船左右换向,倾角限制为 30°', () => {
@@ -185,6 +194,34 @@ describe('静止位姿(swingMul=0):关节落在从 round-1 原图量出来的校
     expect(slot(out, 2).sx).toBeCloseTo(0.55, 6);
     expect(slot(out, 2).sy).toBeCloseTo(0.55, 6);
     expect(slot(out, 7).sx).toBeCloseTo(0.7, 6);
+  });
+
+  it('尾随蛆:四块形成单链,尾尖位于头后方且摆幅逐段放大', () => {
+    const out = restPose(RIG_TRAILER);
+    expect(RIG_TRAILER.parts.map((p) => p.parent)).toEqual([-1, 0, 1, 2]);
+    expect(slot(out, 3).y).toBeGreaterThan(slot(out, 0).y);
+    expect(RIG_TRAILER.parts[3]!.swing).toBeGreaterThan(RIG_TRAILER.parts[2]!.swing);
+    expect(RIG_TRAILER.parts[2]!.swing).toBeGreaterThan(RIG_TRAILER.parts[1]!.swing);
+  });
+
+  it('冲撞甲虫:左右足反相,主甲与楔头各自占一张前层纹理', () => {
+    expect(RIG_BEETLE.textureCount).toBe(4);
+    expect(RIG_BEETLE.parts[2]!.phase - RIG_BEETLE.parts[3]!.phase).toBeCloseTo(-Math.PI, 6);
+    expect(RIG_BEETLE.parts[0]!.tex).toBe(2);
+    expect(RIG_BEETLE.parts[1]!.tex).toBe(3);
+  });
+
+  it('孢子炮手:四锚足 + 三孢囊 + 炮座/虹吸管,没有空纹理层', () => {
+    expect(rigInstanceCount(RIG_SPORE, 0)).toBe(4);
+    expect(rigInstanceCount(RIG_SPORE, 1)).toBe(3);
+    expect(rigInstanceCount(RIG_SPORE, 2)).toBe(1);
+    expect(rigInstanceCount(RIG_SPORE, 3)).toBe(1);
+  });
+
+  it('母巢巨兽:六足围住四孵化囊与中央虹膜', () => {
+    expect(rigInstanceCount(RIG_BOSS, 0) + rigInstanceCount(RIG_BOSS, 1)).toBe(6);
+    expect(rigInstanceCount(RIG_BOSS, 3)).toBe(4);
+    expect(rigInstanceCount(RIG_BOSS, 4)).toBe(1);
   });
 });
 

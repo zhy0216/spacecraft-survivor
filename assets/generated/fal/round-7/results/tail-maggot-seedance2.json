@@ -1,0 +1,27 @@
+{
+  "status": "completed",
+  "endpoint_id": "bytedance/seedance-2.0/image-to-video",
+  "request_id": "01a00129-4957-7fb3-854d-b05f5bee184b",
+  "result": {
+    "video": {
+      "url": "https://v3b.fal.media/files/b/0aa653f0/kk2ssMzYWGDTQ03dNBZlz_video.mp4",
+      "content_type": "video/mp4",
+      "file_name": "video.mp4",
+      "file_size": 880201
+    },
+    "seed": 28716830
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653f0/kk2ssMzYWGDTQ03dNBZlz_video.mp4",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/animation/tail-maggot-seedance2.mp4",
+      "size_bytes": 880201,
+      "json_path": "video"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

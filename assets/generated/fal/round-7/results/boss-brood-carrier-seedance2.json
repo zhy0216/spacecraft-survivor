@@ -1,0 +1,27 @@
+{
+  "status": "completed",
+  "endpoint_id": "bytedance/seedance-2.0/image-to-video",
+  "request_id": "01a00129-489c-7851-b2ac-8bf5eefd9a9e",
+  "result": {
+    "video": {
+      "url": "https://v3b.fal.media/files/b/0aa653ed/MOtV5xamdLiQGaJiFvf3P_video.mp4",
+      "content_type": "video/mp4",
+      "file_name": "video.mp4",
+      "file_size": 1024502
+    },
+    "seed": 16151772
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653ed/MOtV5xamdLiQGaJiFvf3P_video.mp4",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/animation/boss-brood-carrier-seedance2.mp4",
+      "size_bytes": 1024502,
+      "json_path": "video"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

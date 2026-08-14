@@ -1,0 +1,31 @@
+{
+  "status": "completed",
+  "endpoint_id": "fal-ai/nano-banana-pro/edit",
+  "request_id": "01a00127-4855-7823-9929-8fa27d445a1e",
+  "result": {
+    "images": [
+      {
+        "url": "https://v3b.fal.media/files/b/0aa653be/r4MPlwYbPRNzSdMX8V8VH_CWZZ6Veu.png",
+        "content_type": "image/png",
+        "file_name": "r4MPlwYbPRNzSdMX8V8VH_CWZZ6Veu.png",
+        "file_size": null,
+        "width": null,
+        "height": null
+      }
+    ],
+    "description": ""
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653be/r4MPlwYbPRNzSdMX8V8VH_CWZZ6Veu.png",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/enemies/charging-beetle-parts-01-source.png",
+      "size_bytes": 4141275,
+      "json_path": "images[0]"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

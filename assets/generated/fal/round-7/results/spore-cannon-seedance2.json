@@ -1,0 +1,27 @@
+{
+  "status": "completed",
+  "endpoint_id": "bytedance/seedance-2.0/image-to-video",
+  "request_id": "01a00129-4836-7301-a7fb-c46478ae1d6e",
+  "result": {
+    "video": {
+      "url": "https://v3b.fal.media/files/b/0aa653f1/B5n0yyz_1RrOWwV_ZZurs_video.mp4",
+      "content_type": "video/mp4",
+      "file_name": "video.mp4",
+      "file_size": 287480
+    },
+    "seed": 1096980091
+  },
+  "downloaded_files": [
+    {
+      "url": "https://v3b.fal.media/files/b/0aa653f1/B5n0yyz_1RrOWwV_ZZurs_video.mp4",
+      "path": "/Users/yang/workspace/survivor/assets/generated/fal/round-7/animation/spore-cannon-seedance2.mp4",
+      "size_bytes": 287480,
+      "json_path": "video"
+    }
+  ],
+  "gallery": {
+    "session_id": "08dde620dd18",
+    "path": "/Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html",
+    "url": "file:///Users/yang/.genmedia/gallery/sessions/08dde620dd18/index.html"
+  }
+}

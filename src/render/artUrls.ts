@@ -17,16 +17,16 @@ export const ENEMY_ART_URLS = [
 ] as const;
 
 /**
- * Boss 专属贴图(round-5):KIND_BOSS 不进 ENEMIES 表,故不占 ENEMY_ART_URLS 下标,单独一张。
- * 加载失败时 Renderer 回退到底座型(冲撞甲虫)的纹理放大 —— 与逐型回退同一条"坏一张不塌一局"的口径。
+ * Boss 专属整图(round-7 重做):母巢腹腔 / 四枚孵化囊 / 中央虹膜都落在暖红紫域。
+ * KIND_BOSS 不进 ENEMIES 表,故不占 ENEMY_ART_URLS 下标；骨架部件加载失败时用它作整图回退。
  */
 export const BOSS_ART_URL = new URL(
-  '../../assets/game/fal-round-5/enemies/boss-war-beetle.png',
+  '../../assets/game/fal-round-7/enemies/boss-brood-carrier.png',
   import.meta.url,
 ).href;
 
 /**
- * 骨架部件图(round-3,24 号 issue):外层下标 === EnemyKind,null = 这一型还没做骨架。
+ * 骨架部件图(round-3 首批、round-7 补齐):外层下标 === EnemyKind,null = 缺件时逐型回退。
  * **内层顺序 === RigDef.textureCount 的 tex 号,也就是画序**(小的在后面),
  * 与 render/enemyRig.ts 的 RIG_* 表严格对应 —— 两边错位不会报错,只会让部件叠错前后,
  * 故两处都把顺序写进注释,改一处必须改另一处。
@@ -45,10 +45,41 @@ export const ENEMY_RIG_PART_URLS: readonly (readonly string[] | null)[] = [
     new URL('../../assets/game/fal-round-3/enemies/side-raider/thorax.png', import.meta.url).href,
     new URL('../../assets/game/fal-round-3/enemies/side-raider/head.png', import.meta.url).href,
   ],
-  null, // KIND_TRAILER 尾随蛆
-  null, // KIND_BEETLE 冲撞甲虫
-  null, // KIND_SPORE 孢子炮手
+  // KIND_TRAILER 尾随蛆:尾 → 身 → 颈 → 头
+  [
+    new URL('../../assets/game/fal-round-7/enemies/tail-maggot/tail.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/tail-maggot/body.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/tail-maggot/neck.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/tail-maggot/head.png', import.meta.url).href,
+  ],
+  // KIND_BEETLE 冲撞甲虫:左足组 → 右足组 → 主甲壳 → 楔头
+  [
+    new URL('../../assets/game/fal-round-7/enemies/charging-beetle/leg-left.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/charging-beetle/leg-right.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/charging-beetle/body.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/charging-beetle/head.png', import.meta.url).href,
+  ],
+  // KIND_SPORE 孢子炮手:锚足 → 孢囊 → 炮座 → 虹吸管
+  [
+    new URL('../../assets/game/fal-round-7/enemies/spore-cannon/anchor.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/spore-cannon/pods.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/spore-cannon/body.png', import.meta.url).href,
+    new URL('../../assets/game/fal-round-7/enemies/spore-cannon/siphon.png', import.meta.url).href,
+  ],
 ];
+
+/**
+ * Boss 骨架画序(round-7):左足 → 右足 → 母巢腹腔 → 孵化囊 → 产卵虹膜 → 头甲。
+ * 左右足来自同一条生成足的镜像切件,关节方向因此在两侧都正确。
+ */
+export const BOSS_RIG_PART_URLS = [
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/leg.png', import.meta.url).href,
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/leg-mirrored.png', import.meta.url).href,
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/body.png', import.meta.url).href,
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/egg-sac.png', import.meta.url).href,
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/iris.png', import.meta.url).href,
+  new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/head.png', import.meta.url).href,
+] as const;
 
 /** 基础塔(0..5)的生成贴图;6..11 合成塔与 12 导弹巢没有独立贴图(见 ui/codex 的血统回退口径) */
 export const TOWER_ART_URLS = [

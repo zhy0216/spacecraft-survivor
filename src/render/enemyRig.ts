@@ -74,7 +74,7 @@ export interface RigDef {
   readonly freq: number;
   /**
    * 非 null = 根骨不跟随速度,始终使用这个世界角(rad)。
-   * 当前两套骨架都不用；保留给真正需要世界系固定朝向的后续敌型。
+   * 当前骨架都不用；保留给真正需要世界系固定朝向的后续敌型。
    */
   readonly fixedRootAngle: number | null;
   /**
@@ -266,16 +266,260 @@ export const RIG_STRAFER: RigDef = {
 };
 
 /**
- * 逐型骨架表。**下标 === EnemyKind**(与 data/enemies.ts 的 ENEMIES 同序),
- * null = 这一型还没做骨架,渲染层照旧走单件贴图那条路 —— 分型回退,做一型接一型,
- * 与"坏一张图不塌一局"同一条兜底口径。
+ * 尾随蛆(KIND_TRAILER):头 → 颈 → 身 → 尾的四段链。
+ *
+ * Seedance 2 的动作参考里,它不是整张贴图左右摇,而是弯曲波从头一路传到尾尖。
+ * 这里把后段摆幅逐级放大、相位逐级滞后:头只轻点,尾巴走最大弧,同时保持四块都挂在
+ * 同一条 FK 链上 —— 父动子跟,不会出现“身体转了、尾巴留在原地”的纸片穿帮。
+ */
+export const RIG_TRAILER: RigDef = {
+  textureCount: 4, // 画序:0 tail → 1 body → 2 neck → 3 head
+  freq: 3,
+  fixedRootAngle: null,
+  targetFacing: null,
+  spin: 0,
+  parts: [
+    // 0:头根。锚点取颈部接口,头壳向前(-Y)伸出。
+    part({
+      tex: 3,
+      parent: -1,
+      ax: 0.5,
+      ay: 0.8,
+      dy: -145,
+      scale: 0.34,
+      swing: 0.04,
+      pumpX: 0.025,
+      pumpY: 0.025,
+    }),
+    // 1:颈段从头壳下缘接出；分件图本身含三节甲片,故只需一根骨。
+    part({
+      tex: 2,
+      parent: 0,
+      ax: 0.5,
+      ay: 0.05,
+      scale: 0.33,
+      swing: 0.11,
+      phase: 0.45,
+      pumpX: -0.025,
+      pumpY: 0.035,
+    }),
+    // 2:腹段接在颈段末端,摆幅与相位继续递增,形成从头往后跑的 S 波。
+    part({
+      tex: 1,
+      parent: 1,
+      ax: 0.5,
+      ay: 0.05,
+      dy: 130,
+      scale: 0.34,
+      swing: 0.19,
+      phase: 1.05,
+      pumpX: -0.035,
+      pumpY: 0.045,
+    }),
+    // 3:弯月尾的粗端在纹理右下。挂到腹段末端后,原画弧线自然回卷到身体一侧。
+    part({
+      tex: 0,
+      parent: 2,
+      ax: 0.88,
+      ay: 0.84,
+      dy: 162,
+      rest: -8 * D2R,
+      scale: 0.39,
+      swing: 0.3,
+      phase: 1.7,
+      pumpX: 0.035,
+      pumpY: -0.02,
+    }),
+  ],
+};
+
+/**
+ * 冲撞甲虫(KIND_BEETLE):主甲壳 + 楔头 + 左右两组足。
+ * Seedance 2 的冲刺参考里,前摇由足组内收、甲壳压低交代；冲刺时两侧足反相蹬开。
+ * 左右足使用独立分件纹理,所以不靠整只怪镜像也能保持关节朝向正确。
+ */
+export const RIG_BEETLE: RigDef = {
+  textureCount: 4, // 画序:0 left legs → 1 right legs → 2 body → 3 head
+  freq: 6,
+  fixedRootAngle: null,
+  targetFacing: null,
+  spin: 0,
+  parts: [
+    part({
+      tex: 2,
+      parent: -1,
+      dy: 25,
+      scale: 0.48,
+      swing: 0.018,
+      pumpX: 0.025,
+      pumpY: -0.018,
+    }),
+    // 楔头压在主甲壳前端,锚点取后缘；轻微点头让“锁定/冲刺”不只靠预警线表达。
+    part({
+      tex: 3,
+      parent: 0,
+      ax: 0.5,
+      ay: 0.82,
+      dy: -105,
+      scale: 0.36,
+      swing: 0.045,
+      phase: Math.PI * 0.5,
+      pumpX: -0.02,
+      pumpY: 0.035,
+    }),
+    part({
+      tex: 0,
+      parent: 0,
+      ax: 0.82,
+      ay: 0.18,
+      dx: -82,
+      dy: -10,
+      scale: 0.34,
+      swing: 0.22,
+      phase: 0,
+    }),
+    part({
+      tex: 1,
+      parent: 0,
+      ax: 0.18,
+      ay: 0.18,
+      dx: 82,
+      dy: -10,
+      scale: 0.34,
+      swing: 0.22,
+      phase: Math.PI,
+    }),
+  ],
+};
+
+/** 孢子锚足源图里“关节 → 刃尖”的原始轴向(约 135°),rest 用它校准到各自的放射方向。 */
+const SPORE_ANCHOR_AXIS = 135 * D2R;
+
+/**
+ * 孢子炮手(KIND_SPORE):软体炮座 + 伸缩虹吸管 + 四根锚足 + 三簇发光孢囊。
+ * 锚定态降低频率,蓄力态提高频率并压小摆幅(RIG_STATE_DRIVE),虹吸管与孢囊再以挤压伸展
+ * 补上一条“正在充压”的颜色/体积读数；即使预警环被虫群遮住,玩家仍看得出它要开火。
+ */
+export const RIG_SPORE: RigDef = {
+  textureCount: 4, // 画序:0 anchor → 1 pods → 2 body → 3 siphon
+  freq: 2.4,
+  fixedRootAngle: null,
+  targetFacing: null,
+  spin: 0,
+  parts: [
+    part({
+      tex: 2,
+      parent: -1,
+      dy: 20,
+      scale: 0.55,
+      swing: 0.018,
+      pumpX: 0.035,
+      pumpY: 0.035,
+    }),
+    // 虹吸管锚在炮座正面,口朝 -Y；纵向鼓胀比横向更明显,像一段在蓄压的肌肉管。
+    part({
+      tex: 3,
+      parent: 0,
+      ax: 0.5,
+      ay: 0.96,
+      dy: -92,
+      scale: 0.34,
+      swing: 0.045,
+      phase: Math.PI * 0.5,
+      pumpX: -0.045,
+      pumpY: 0.1,
+    }),
+    // 四足的目标轴向依次为左上、右上、左下、右下；相位错开成落地的抓挠波。
+    ...[
+      { dx: -86, dy: -42, axis: -145, phase: 0 },
+      { dx: 86, dy: -42, axis: -35, phase: Math.PI },
+      { dx: -72, dy: 58, axis: 145, phase: Math.PI * 0.5 },
+      { dx: 72, dy: 58, axis: 35, phase: Math.PI * 1.5 },
+    ].map((p) =>
+      part({
+        tex: 0,
+        parent: 0,
+        ax: 0.88,
+        ay: 0.08,
+        dx: p.dx,
+        dy: p.dy,
+        rest: p.axis * D2R - SPORE_ANCHOR_AXIS,
+        scale: 0.32,
+        swing: 0.16,
+        phase: p.phase,
+      }),
+    ),
+    // 发光孢囊压在炮座后层,三簇错相呼吸,避免整只怪像一个同步缩放的气球。
+    ...[
+      { dx: -66, dy: 5, phase: 0 },
+      { dx: 66, dy: 5, phase: (Math.PI * 2) / 3 },
+      { dx: 0, dy: 82, phase: (Math.PI * 4) / 3 },
+    ].map((p) =>
+      part({
+        tex: 1,
+        parent: 0,
+        dx: p.dx,
+        dy: p.dy,
+        scale: 0.15,
+        phase: p.phase,
+        pumpX: 0.11,
+        pumpY: 0.11,
+      }),
+    ),
+  ],
+};
+
+/** Boss 足件的原始轴向:左足从根部指向左下约 125°,右足镜像后约 55°。 */
+const BOSS_LEFT_LEG_AXIS = 125;
+const BOSS_RIGHT_LEG_AXIS = 55;
+
+/**
+ * 合围巨兽(Boss):母巢腹腔 + 头甲 + 六足 + 四枚孵化囊 + 中央产卵虹膜。
+ *
+ * Boss 不塞进 ENEMY_RIGS —— KIND_BOSS 在 ENEMIES 表外,渲染层以独立骨架层加载它。
+ * 四枚囊和中央虹膜正是 Seedance 2 里“脉动 → 虹膜张开 → 小怪爬出”的关键帧读数；
+ * 召唤逻辑仍由 sim/world.ts 的 BOSS.summonCounts 驱动,骨架只负责把这件事提前画明白。
+ */
+export const RIG_BOSS: RigDef = {
+  textureCount: 6, // 0 left leg → 1 right leg → 2 body → 3 egg → 4 iris → 5 head
+  freq: 1.35,
+  fixedRootAngle: null,
+  targetFacing: null,
+  spin: 0,
+  parts: [
+    part({ tex: 2, parent: -1, dy: 18, scale: 0.44, swing: 0.012, pumpX: 0.018, pumpY: 0.018 }),
+    part({ tex: 5, parent: 0, ax: 0.5, ay: 0.82, dy: -112, scale: 0.34, swing: 0.028, phase: Math.PI * 0.5 }),
+    ...[
+      { dx: -112, dy: -62, axis: -155, phase: 0 },
+      { dx: -128, dy: 8, axis: 180, phase: (Math.PI * 2) / 3 },
+      { dx: -102, dy: 78, axis: 145, phase: (Math.PI * 4) / 3 },
+    ].map((p) => part({ tex: 0, parent: 0, ax: 0.9, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_LEFT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.13, phase: p.phase })),
+    ...[
+      { dx: 112, dy: -62, axis: -25, phase: Math.PI },
+      { dx: 128, dy: 8, axis: 0, phase: Math.PI / 3 },
+      { dx: 102, dy: 78, axis: 35, phase: (Math.PI * 5) / 3 },
+    ].map((p) => part({ tex: 1, parent: 0, ax: 0.1, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_RIGHT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.13, phase: p.phase })),
+    ...[
+      { dx: -72, dy: 5, phase: 0 },
+      { dx: 72, dy: 5, phase: Math.PI },
+      { dx: -62, dy: 78, phase: Math.PI * 0.5 },
+      { dx: 62, dy: 78, phase: Math.PI * 1.5 },
+    ].map((p) => part({ tex: 3, parent: 0, dx: p.dx, dy: p.dy, scale: 0.12, phase: p.phase, pumpX: 0.12, pumpY: 0.12 })),
+    // 虹膜盖在腹腔正中最前层；召唤前摇时由 Boss 专属 driver 提频放大,像一扇正在开的门。
+    part({ tex: 4, parent: 0, dx: 0, dy: 66, scale: 0.14, phase: Math.PI * 0.25, pumpX: 0.1, pumpY: 0.1 }),
+  ],
+};
+
+/**
+ * 逐型骨架表。**下标 === EnemyKind**(与 data/enemies.ts 的 ENEMIES 同序)。
+ * 当前五型都已接入；类型仍保留 null,以后某型缺件/临时撤回时渲染层可逐型回退单件贴图。
  */
 export const ENEMY_RIGS: readonly (RigDef | null)[] = [
   RIG_SWARM, // KIND_SWARM 蜂群蛭
   RIG_STRAFER, // KIND_STRAFER 侧掠者
-  null, // KIND_TRAILER 尾随蛆
-  null, // KIND_BEETLE 冲撞甲虫
-  null, // KIND_SPORE 孢子炮手
+  RIG_TRAILER, // KIND_TRAILER 尾随蛆
+  RIG_BEETLE, // KIND_BEETLE 冲撞甲虫
+  RIG_SPORE, // KIND_SPORE 孢子炮手
 ];
 
 /**
