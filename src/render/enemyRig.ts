@@ -13,9 +13,9 @@
  * 坐标系:部件表写在"单位空间"里 —— 边长 512、原点在生物中心、**+X 右 +Y 下**,
  * 与 round-1 的 512px 候选图逐像素同一套坐标(静止位姿就是照着那张图校准出来的,
  * 见 assets/generated/fal/round-3/results/ledger.json 的 rest_pose_calibration)。
- * 它不是世界坐标也不是"船头朝 +X"的局部坐标:单件贴图年代那条
- * GENERATED_ART_FORWARD_OFFSET(生成图正面朝 -Y)照旧由渲染层加在根角上,
- * 于是换成骨架之后这一型朝哪飞、剪影怎么摆,与换之前**一模一样** —— 一次只改一件事。
+ * 它不是世界坐标也不是"船头朝 +X"的局部坐标:默认仍由渲染层把速度朝向与生成图的
+ * 正面偏移合成根角。侧掠者是有意的例外 —— 它靠横向位移表达"侧掠",整只怪始终保持
+ * 头在屏幕上方,避免绕行时把有明确头尾的剪影倒过来。
  */
 
 /** 位姿输出的每部件步长:x, y, rotation, scaleX, scaleY */
@@ -73,6 +73,11 @@ export interface RigDef {
   /** 摆动角频率(rad/s) */
   readonly freq: number;
   /**
+   * 非 null = 根骨不跟随速度,始终使用这个世界角(rad)。
+   * 侧掠者用它保持头朝屏幕上方:移动方向由位移、爪足与尾鞭交代,不靠整只怪翻转。
+   */
+  readonly fixedRootAngle: number | null;
+  /**
    * 非 0 = 这一型不跟速度朝向,根角改用 time × spin(蜂群蛭:口器绕圈就是它的"活着")。
    * 与单件贴图年代 ENEMY_ANIM.spin 同一条口径,换骨架不改变这一型转不转。
    */
@@ -128,6 +133,7 @@ const LEECH_LOBE_PIVOT_Y = 0.5598;
 export const RIG_SWARM: RigDef = {
   textureCount: 2, // 0 = lobe(在后), 1 = core(在前,压住 6 片瓣根的直边切口)
   freq: 2.0,
+  fixedRootAngle: null,
   spin: 0.9,
   parts: [
     // 0:核心口器盘 —— 骨架的根,只做整体呼吸
@@ -153,6 +159,12 @@ export const RIG_SWARM: RigDef = {
 };
 
 /**
+ * 把静止位姿的头关节(149.9,-65.5)转到根原点正上方所需的角度。
+ * 取整到 -66° 是美术旋钮:头仍保留一点自然的右偏,但任何移动方向都不会再把它翻到下方。
+ */
+export const STRAFER_UPRIGHT_ANGLE = -66 * D2R;
+
+/**
  * 侧掠者(KIND_STRAFER):头 + 胸 + 4 爪足 + 两节尾链。
  *
  * 这一型验的是**链式甩鞭**:tail-b 挂在 tail-a 上(parent 指向 6),
@@ -167,6 +179,7 @@ export const RIG_SWARM: RigDef = {
 export const RIG_STRAFER: RigDef = {
   textureCount: 5, // 画序:0 tail-b → 1 tail-a → 2 leg → 3 thorax → 4 head
   freq: 4.5,
+  fixedRootAngle: STRAFER_UPRIGHT_ANGLE,
   spin: 0,
   parts: [
     // 0:胸(根)。整只怪的位姿由它起算,自身只做极轻的横滚

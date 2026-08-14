@@ -701,6 +701,9 @@ const rigDriver: RigDriver = {
   bodyAngle(e: RigEntity, animClock: number, rig: RigDef): number {
     // 自转型(蜂群蛭):不跟速度朝向,口器绕圈就是它的"活着" —— 与单件贴图年代 ENEMY_ANIM.spin 同一条口径
     if (rig.spin !== 0) return animClock * rig.spin + e.animSeed * Math.PI * 2;
+    // 固定直立型(侧掠者):它的动作语义是横向掠过,不是拿头去指速度方向。
+    // 根骨始终朝屏幕上方,位移、错相爪足与尾鞭已经足够交代向哪边移动。
+    if (rig.fixedRootAngle !== null) return rig.fixedRootAngle;
     let vx = e.vx;
     let vy = e.vy;
     // 冲锋前摇会刹停,但方向已锁死:用锁定向量,免得怪在预警环里停在上一方向

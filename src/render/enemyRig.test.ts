@@ -6,6 +6,7 @@ import {
   RIG_STRAFER,
   RIG_STRIDE,
   RIG_SWARM,
+  STRAFER_UPRIGHT_ANGLE,
   type RigDef,
   rigBufferLength,
   rigInstanceCount,
@@ -68,6 +69,12 @@ describe('结构不变量', () => {
     expect(ENEMY_RIGS[KIND_SPORE]).toBeNull();
   });
 
+  it('只有侧掠者钉死根角:它横向移动但头始终朝屏幕上方', () => {
+    expect(RIG_SWARM.fixedRootAngle).toBeNull();
+    expect(RIG_STRAFER.fixedRootAngle).toBe(STRAFER_UPRIGHT_ANGLE);
+    expect(RIG_STRAFER.spin).toBe(0);
+  });
+
   it('poseRig 只写 rigBufferLength 个 float,不越界写脏后面的怪', () => {
     const rig = RIG_STRAFER;
     const n = rigBufferLength(rig);
@@ -120,6 +127,14 @@ describe('静止位姿(swingMul=0):关节落在从 round-1 原图量出来的校
     expect(tailB.x).toBeCloseTo(-124, 0);
     expect(tailB.y).toBeCloseTo(146, 0);
     expect(tailB.rot).toBeCloseTo(78 * D2R, 6);
+  });
+
+  it('侧掠者直立根角把头关节钉在本体上方,不再随移动方向翻到下方', () => {
+    const out = new Float32Array(rigBufferLength(RIG_STRAFER));
+    poseRig(RIG_STRAFER, 0, 0, STRAFER_UPRIGHT_ANGLE, 1, 0, 0, out);
+    const head = slot(out, 1);
+    expect(Math.abs(head.x)).toBeLessThan(2);
+    expect(head.y).toBeLessThan(-160);
   });
 
   it('swingMul=0 时缩放退化成纯静态倍率(不呼吸),爪足带着自己的 0.55', () => {
