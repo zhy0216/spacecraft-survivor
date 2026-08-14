@@ -24,9 +24,8 @@
  * 画进 muzzleFxG(压在 shipG 之上)即可,渲染层不再回查槽位。
  *
  * 齐射共振(FXV_RESONANCE,24 号 v1 纯演出,不加伤害):短窗内相邻三槽齐射的那一下,
- * 沿那面舷画一道冷色弧光、播 broadside 和弦 —— towerType 借放三元组中心槽下标(见 sim/fx.ts),
- * 朝向 = WEAPON_SLOT_FACING[中心槽] + 插值 heading(铁律 2);音画的一次消费锁
- * (audioPlayed / juicePlayed)与其余事件同一条,时停/高刷屏下只响一声、只闪一次。
+ * 沿那面舷画一道冷色弧光 —— towerType 借放三元组中心槽下标(见 sim/fx.ts),
+ * 朝向 = WEAPON_SLOT_FACING[中心槽] + 插值 heading(铁律 2);juicePlayed 保证时停/高刷屏下只闪一次。
  *
  * 受击表现(改版 09 号):甲板四舷随网格删除后,受击只有"撞进船心圆 = 真掉血"一层
  * (sim/damage 的 shipRadius),旧的被撞舷闪红 / edgePenalty 整段删除;
@@ -2923,9 +2922,6 @@ export class Renderer {
           // 弧朝 WEAPON_SLOT_FACING[中心槽] + heading 铺开,角跨 = 相邻三槽张成的整面 90° 舷;
           // 槽位下标越界(数值表写坏)兜底成船头朝向,与 sim/armory 的 slotArcCenter 同一条口径。
           // 半径取船体受击圆:弧贴在船壳外缘;"沿舷侧"而不是从炮口射出去。
-          // 音频走 audioBus 既有 broadside 和弦档(素材 + C-E-G-C' 合成兜底,见 audio.ts),
-          // audioPlayed 一次消费锁已在上方统一消费:时停/高刷屏下这一声只响一次。
-          if (playAudio) audioBus.playBroadside();
           const t = fxFade(e.life, FX_LIFE_RESONANCE);
           const a = (WEAPON_SLOT_FACING[e.towerType] ?? 0) + heading;
           const r = shipRadius(tuning.shipLength);

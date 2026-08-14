@@ -13,7 +13,7 @@
  *   (WebAudio 规定一个源只能 start 一次,用完即弃) —— 但池子封顶 MAX_VOICES,超限直接丢,
  *   于是存活节点有硬上限、不随事件数增长,也没有逐帧分配(发声是事件驱动,天然不与帧率耦合)。
  * - 并发两道闸:同类型 16ms 级窗口限流(蜂群一帧十几个受击事件只出一声)+ voice 池并发上限。
- * - 音量分级:开火 < 击杀 < 拾取/放置 < 受击 < broadside 和弦;主音量走 masterVolume 概念,
+ * - 音量分级:开火 < 击杀 < 拾取/放置 < 受击;主音量走 masterVolume 概念,
  *   静音走总线 gain 归零(context 保留,便于再开)。
  * - 怪潮密度驱动背景音乐的音量与低通开度;旧白噪/55Hz 底噪只留给无解码能力的测试/旧环境。
  */
@@ -91,7 +91,6 @@ type SampleKey =
   | 'collect'
   | 'upgrade'
   | 'place'
-  | 'broadside'
   | 'elite-warn'
   | 'boss-warn'
   | 'boost'
@@ -109,7 +108,6 @@ const SAMPLE_URLS: Record<SampleKey, string> = {
   collect: new URL('../../assets/game/audio/sfx/collect.wav', import.meta.url).href,
   upgrade: new URL('../../assets/game/audio/sfx/upgrade.wav', import.meta.url).href,
   place: new URL('../../assets/game/audio/sfx/place.wav', import.meta.url).href,
-  broadside: new URL('../../assets/game/audio/sfx/broadside.wav', import.meta.url).href,
   'elite-warn': new URL('../../assets/game/audio/sfx/elite-warn.wav', import.meta.url).href,
   'boss-warn': new URL('../../assets/game/audio/sfx/boss-warn.wav', import.meta.url).href,
   boost: new URL('../../assets/game/audio/sfx/boost.wav', import.meta.url).href,
@@ -134,7 +132,6 @@ const MIN_INTERVAL: Record<string, number> = {
   place: 0.05,
   upgrade: 0.08,
   'upgrade-burst': 0.12,
-  broadside: 0.22,
   explosion: 0.8,
   'warn:elite': 0.5,
   'warn:boss': 0.8,
@@ -620,30 +617,6 @@ export function playPlace(): void {
 }
 
 /**
- * broadside 专属同步齐射素材(GDD §12 的签名时刻),总峰值远超单塔开火;
- * 无素材解码能力时才退回 C-E-G-C' 合成和弦。
- */
-export function playBroadside(): void {
-  if (!throttled('broadside')) return;
-  if (playSample('broadside', 0.42)) return;
-  if (deferSynthFallback()) return;
-  const base = 261.6;
-  const freqs = [base, base * 1.26, base * 1.5, base * 2];
-  for (let i = 0; i < freqs.length; i++) {
-    playVoice({
-      type: 'sawtooth',
-      freq: freqs[i]!,
-      freqEnd: freqs[i]! * 0.98,
-      attack: 0.004,
-      decay: 0.28,
-      peak: 0.11,
-      startAt: i * 0.012,
-    });
-  }
-  playVoice({ type: 'sine', freq: 65.4, attack: 0.004, decay: 0.32, peak: 0.22 });
-}
-
-/**
  * 加速技能触发:推进器点火 —— 低频冲击 + 加压泄气 + 上扫金属气流,尾部收成短促喷流。
  * 素材裁到 1.10s,与 tuning.boostDuration 同长:声音铺满加速窗,窗一关声音也正好收尾,
  * 于是"还在加速"这件事是听得见的,不必再看 HUD 冷却条。
@@ -712,7 +685,6 @@ export const audioBus = {
   playUpgradeBurst,
   playPlace,
   playBoost,
-  playBroadside,
   playEliteWarn,
   playBossWarn,
   playExplosion,

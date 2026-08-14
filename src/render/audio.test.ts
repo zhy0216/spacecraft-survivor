@@ -135,7 +135,6 @@ describe('audioBus(无素材解码能力时的合成兜底)', () => {
       'playUpgrade',
       'playUpgradeBurst',
       'playPlace',
-      'playBroadside',
       'playEliteWarn',
       'playBossWarn',
       'playExplosion',
@@ -197,13 +196,6 @@ describe('audioBus(无素材解码能力时的合成兜底)', () => {
       c();
       expect(started()).toBeGreaterThan(before);
     }
-  });
-
-  it('broadside 是齐射和弦,一次起 >=4 个源(远多于单塔开火的 1 个)', async () => {
-    await audioBus.resume();
-    const before = started();
-    audioBus.playBroadside();
-    expect(started() - before).toBeGreaterThanOrEqual(4);
   });
 
   it('setMuted 把总线增益归零;静音时不再新建任何节点,再开恢复', async () => {
