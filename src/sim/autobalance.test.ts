@@ -170,7 +170,7 @@ export const TOWER_B = 1;
 export const TOWERS: TowerDef[] = [
   {
     type: TOWER_A,
-    name: 'a',
+    devName: 'a',
     damage: 6, // 原注释甲
     aoeDamage: 0,
     growth: {
@@ -180,7 +180,7 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_B,
-    name: 'b',
+    devName: 'b',
     damage: 6, // 原注释乙
     growth: {
       damage: 1.2, // 成长乙
@@ -216,7 +216,7 @@ export const TOWERS: TowerDef[] = [
   it('enemies.ts:hpMul 值与推导注释整块重生成,dropMul 与续注之外的内容不动', () => {
     const text = `export const BOSS: BossDef = {
   baseKind: 3,
-  name: '合围巨兽',
+  devName: '合围巨兽',
   hpMul: 52, // 旧注释第一行
   // 旧续注一(手写数字 60.3 会陈)
   // 旧续注二(手写数字 43.5 会陈)

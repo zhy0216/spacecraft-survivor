@@ -15,7 +15,8 @@
  *
  * 本文件只回答两个问题,别的一概不管:
  *   **这一次能选什么**(rollUpgradeOffer:掷类别 → 掷型号,去重、按池过滤);
- *   某张卡是什么(optionContent / optionTowerType / optionLabel)。
+ *   某张卡是什么(optionContent / optionTowerType)。
+ * 卡面的显示名由 presenter(src/ui/presentation/upgradeText)负责 —— sim 不认 locale。
  * 扣费、时停、弹卡、取用本身都不在这里:费用与结算在 World.takeUpgrade / skipUpgrade,
  * 时停在 main.ts,卡片在 ui/upgradeFlow.ts。候选是否可取的唯一裁决在 World.takeUpgrade
  * (槽满 / 法令满层返回理由码)。
@@ -28,9 +29,9 @@
  */
 import type { Rng } from '../core/rng';
 import { OFFER_WEIGHT_EDICT, OFFER_WEIGHT_NEW_WEAPON, UPGRADE_CHOICE_COUNT } from '../data/economy';
-import { edictCanStack, edictLevel, EDICT_KIND_COUNT, EDICTS } from '../data/edicts';
+import { edictCanStack, edictLevel, EDICT_KIND_COUNT } from '../data/edicts';
 import { isMergeResult } from '../data/merges';
-import { STAR_MAX, TOWER_AUTOCANNON, TOWER_KIND_COUNT, TOWERS } from '../data/towers';
+import { STAR_MAX, TOWER_AUTOCANNON, TOWER_KIND_COUNT } from '../data/towers';
 import { UNLOCK_EDICT, UNLOCK_TOWER, UNLOCKS } from '../data/unlocks';
 import { slotMaxStars, type WeaponSlot } from './armory';
 
@@ -112,20 +113,6 @@ export function optionContent(opt: UpgradeOption): number {
  */
 export function optionTowerType(opt: UpgradeOption): number {
   return opt.kind === OFFER_NEW_WEAPON ? opt.type : TOWER_AUTOCANNON;
-}
-
-/**
- * 候选的名字 —— **一律取自数值表**(TOWERS/EDICTS 的 name),ui 不许抄第二份:
- * 抄一份就等于埋一处迟早与数据表走散的文案(加一座塔、改一个名字,卡片却还印着旧的)。
- * 型号越界**报回原始下标而不是兜底成第 0 种**(与 ui 的 placeLabel 同一条口径、同一句措辞):
- * 候选生成只挑表里存在的型,故正常玩不出来;真出来了,那是"生成走岔了",
- * 而静默换成另一座塔正是最难查的那种表现。
- */
-export function optionLabel(opt: UpgradeOption): string {
-  if (opt.kind === OFFER_NEW_WEAPON) {
-    return TOWERS[opt.type]?.name ?? `未知塔型(${opt.type})`;
-  }
-  return EDICTS[opt.type]?.name ?? `未知法令(${opt.type})`;
 }
 
 /** 本次已经抽中过这一型了吗(同 kind 同 type = 同一张卡)。三张一样的卡等于没得选 */

@@ -8,11 +8,12 @@
  * 操作仍只有一件事：点第一个槽选中，再点一个槽与它交换；点同一槽取消。
  * 换位裁决仍在 World.swapWeapons，面板只负责时停与表现。
  */
-import { throttleName, TOWERS } from '../data/towers';
+import { TOWERS } from '../data/towers';
 import { isTyping } from '../core/isTyping';
 import { audioBus } from '../render/audio';
 import type { World } from '../sim/world';
 import { createShipDiagram, SLOT_FACING_NAME, type ShipDiagramUi } from './shipDiagram';
+import { throttleFamilyName, towerName } from './presentation/contentText';
 
 const ROOT_CSS =
   'position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;' +
@@ -133,5 +134,5 @@ export function slotSummary(world: World, slot: number): string {
   if (!s || s.type < 0) return `${facing} · 空`;
   const def = TOWERS[s.type];
   if (!def) return `${facing} · 未知塔型(${s.type})`;
-  return `${facing} · ${def.name} ${'★'.repeat(s.stars)} · ${throttleName(def.throttle)}`;
+  return `${facing} · ${towerName(s.type)} ${'★'.repeat(s.stars)} · ${throttleFamilyName(def.throttle)}`;
 }

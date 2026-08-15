@@ -38,7 +38,7 @@ describe('条件式解锁表', () => {
     const ids = UNLOCKS.map((u) => u.id);
     for (const id of ids) expect(id.length).toBeGreaterThan(0);
     expect(new Set(ids).size).toBe(ids.length);
-    for (const u of UNLOCKS) expect(u.name.length).toBeGreaterThan(0);
+    for (const u of UNLOCKS) expect(u.devName.length).toBeGreaterThan(0);
   });
 
   it('三类解锁项各自引用合法型号:塔/法令落在表内,精英落在槽位内', () => {
@@ -139,7 +139,7 @@ describe('条件式解锁表', () => {
     // 这条用例在"新增条件类型但忘了改判定"时当场报警
     const fake: UnlockEntry = {
       id: 'fake',
-      name: '假条目',
+      devName: '假条目',
       kind: UNLOCK_TOWER,
       type: 0,
       condition: { kind: 99, target: 0 },

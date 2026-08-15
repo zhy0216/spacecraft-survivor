@@ -12,8 +12,7 @@
  *  HTMLElement),绝不发展成半个 jsdom —— 本仓 vitest 跑在 Node 环境里,不装 jsdom。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AFFIXES } from '../data/affixes';
-import { BOSS, ENEMIES, KIND_BEETLE } from '../data/enemies';
+import { BOSS, ENEMIES, KIND_BEETLE, KIND_SWARM } from '../data/enemies';
 import { EDICT_AMMO, EDICT_BOOST, EDICT_GYRO, EDICT_OVERDRIVE, EDICT_STARCHART, EDICTS } from '../data/edicts';
 import {
   THR_CHARGE,
@@ -36,22 +35,28 @@ import {
 } from '../data/unlocks';
 import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import { createProgress, type Progress } from '../sim/progress';
+import { initI18n } from '../i18n';
 import {
-  behaviorName,
   codexRows,
   codexStatsText,
   codexUnlockStats,
   createCodexUi,
-  edictSummaryText,
   formatMul,
   glyphBadgeSvg,
   tintHex,
-  unlockConditionText,
   type CodexArt,
 } from './codex';
+import { affixName, bossName, enemyName, towerName } from './presentation/contentText';
+import { behaviorName } from './presentation/behaviorText';
+import { edictSummaryText } from './presentation/edictText';
+import { unlockConditionText } from './presentation/unlockText';
 
 /** 全解锁掩码:位 0..UNLOCKS.length-1 全置 1(与 sim/progress.ts 的 FULL_MASK 同编码) */
 const FULL_MASK = (1 << UNLOCKS.length) - 1;
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 function progress(mask: number, over: Partial<Progress> = {}): Progress {
   return { ...createProgress(), unlockMask: mask, ...over };
@@ -90,7 +95,7 @@ describe('unlockConditionText', () => {
     for (const [kind, text] of cases) {
       const entry: UnlockEntry = {
         id: 'x',
-        name: 'x',
+        devName: 'x',
         kind: 0,
         type: 0,
         condition: { kind, target: kind === COND_KILLS ? 300 : kind === COND_ELITE_KILLS ? 14 : 0 },
@@ -101,7 +106,7 @@ describe('unlockConditionText', () => {
 });
 
 describe('behaviorName', () => {
-  it('五种行为各有一行短标签(文案与 enemies.ts 常量注释的短截一致)', () => {
+  it('五种行为各有一行短标签(文案与 content.behaviors 一致)', () => {
     expect(behaviorName(0)).toBe('直线追船');
     expect(behaviorName(1)).toBe('侧向驻留');
     expect(behaviorName(2)).toBe('侧向冲锋');
@@ -109,8 +114,8 @@ describe('behaviorName', () => {
     expect(behaviorName(4)).toBe('远程喷吐');
   });
 
-  it('未知行为码印出码本身,不静默兜底(与 resultTitle 的未知码同一口径)', () => {
-    expect(behaviorName(99)).toBe('行为 99');
+  it('未知行为码印本地化错误且带原始编号,不静默兜底(与 resultTitle 的未知码同一口径)', () => {
+    expect(behaviorName(99)).toBe('未知行为 #99');
   });
 });
 
@@ -121,15 +126,15 @@ describe('formatMul / edictSummaryText', () => {
     expect(formatMul(0.7)).toBe('0.7');
   });
 
-  it('系限定法令:前缀作用系,摘要只印非中性字段', () => {
+  it('系限定法令:前缀作用系,摘要只印非中性字段(短语与 edictDesc 同源)', () => {
     expect(edictSummaryText(EDICTS[EDICT_AMMO]!)).toBe('弹药系:射速 ×1.25 · 装填 ×0.7');
   });
 
   it('全船档:前缀「全船」;加法档印点数、概率档换算百分点', () => {
-    expect(edictSummaryText(EDICTS[EDICT_OVERDRIVE]!)).toBe('全船:伤害 ×1.15');
+    expect(edictSummaryText(EDICTS[EDICT_OVERDRIVE]!)).toBe('全船:全武器伤害 ×1.15');
     expect(edictSummaryText(EDICTS[EDICT_GYRO]!)).toBe('全船:转向 +10°/s');
-    expect(edictSummaryText(EDICTS[EDICT_STARCHART]!)).toBe('全船:星币 +2%');
-    expect(edictSummaryText(EDICTS[EDICT_BOOST]!)).toBe('全船:加速 -0.3s');
+    expect(edictSummaryText(EDICTS[EDICT_STARCHART]!)).toBe('全船:星币概率 +2%');
+    expect(edictSummaryText(EDICTS[EDICT_BOOST]!)).toBe('全船:加速冷却 -0.3s');
   });
 
   it('全中性字段(被改坏的条目)回落成破折号,不印空串', () => {
@@ -190,7 +195,7 @@ describe('codexRows', () => {
 
   it('迫击炮类:落点伤害 + 充能节奏(直击伤害恒 0,不印误导性的 0)', () => {
     const mortar = codexRows(progress(0))[0]!.rows.find(
-      (r) => r.name === TOWERS[TOWER_MORTAR]!.name,
+      (r) => r.name === towerName(TOWER_MORTAR),
     )!;
     expect(mortar.hover[1]).toBe(starExpected(TOWERS[TOWER_MORTAR]!, 1, true));
     expect(mortar.hover[1]).toContain('落点伤害');
@@ -208,13 +213,13 @@ describe('codexRows', () => {
 
   it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
     const locked = codexRows(progress(0))[0]!.rows.find(
-      (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
+      (r) => r.name === towerName(TOWER_MISSILE_NEST),
     )!;
     expect(locked.locked).toBe(true);
     expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
     expect(locked.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_MISSILE_NEST]] });
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
-      (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
+      (r) => r.name === towerName(TOWER_MISSILE_NEST),
     )!;
     expect(unlocked.locked).toBe(false);
     expect(unlocked.hover.some((l) => l.includes('未解锁'))).toBe(false);
@@ -224,17 +229,17 @@ describe('codexRows', () => {
     const enemies = codexRows(progress(0))[1]!.rows;
     expect(enemies.length).toBe(ENEMIES.length + 1 + 1);
     const larvaDef = ENEMIES[0]!;
-    const larva = enemies.find((r) => r.name === larvaDef.name)!;
+    const larva = enemies.find((r) => r.name === enemyName(KIND_SWARM))!;
     expect(larva.hover).toEqual([
-      `${larvaDef.name} · 直线追船`,
+      `${enemyName(KIND_SWARM)} · ${behaviorName(0)}`,
       `HP ${larvaDef.hp} · 接触 ${larvaDef.contactDamage}`,
       `残骸 ${larvaDef.scrap} · 星币 ${larvaDef.starCoins}`,
     ]);
     expect(larva.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[0]] });
     const beetle = ENEMIES[BOSS.baseKind]!;
-    const boss = enemies.find((r) => r.name === BOSS.name)!;
+    const boss = enemies.find((r) => r.name === bossName())!;
     expect(boss.hover).toEqual([
-      `${BOSS.name} · 巨型冲锋 · 召唤蜂群`,
+      `${bossName()} · 巨型冲锋 · 召唤蜂群`,
       `HP ${Math.round(beetle.hp * BOSS.hpMul)} · 接触 ` +
         `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)}`,
       `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
@@ -252,11 +257,11 @@ describe('codexRows', () => {
     expect(elite.locked).toBe(true);
     expect(elite.name).toContain('精英');
     expect(elite.hover[elite.hover.length - 1]).toBe('未解锁 · 累计精英击杀 14');
-    // 词缀名单读数据表(现表:[0,3,4] = 狂热光环/装甲/相位)
+    // 词缀名单走 presenter(现表:[0,3,4] = 狂热光环/装甲/相位)
     const affixes = elite.hover.find((l) => l.startsWith('词缀'))!;
-    expect(affixes).toContain(AFFIXES[0]!.name);
-    expect(affixes).toContain(AFFIXES[3]!.name);
-    expect(affixes).toContain(AFFIXES[4]!.name);
+    expect(affixes).toContain(affixName(0));
+    expect(affixes).toContain(affixName(3));
+    expect(affixes).toContain(affixName(4));
     // 精英 = 带词缀的底座(冲撞甲虫),图同一张
     expect(elite.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[KIND_BEETLE]] });
     const unlocked = codexRows(progress(FULL_MASK))[1]!.rows.find((r) =>

@@ -42,8 +42,16 @@ export const KIND_BOSS = ENEMY_KIND_COUNT;
 export interface BossDef {
   /** 底座敌型(Boss 是它的大号版):体型/HP/接触伤害/冲锋参数从它的数值乘倍率 */
   baseKind: EnemyKind;
-  /** 只给人看(结算界面/调试面板),逻辑不读 */
-  name: string;
+  /**
+   * slug:翻译/编辑器身份 —— 与表内 kind 错开的独立标识(见 enemies.test)。
+   * **数值 kind 才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 enemyName / bossName)。
+   */
+  devName: string;
   /** 体型放大倍率:碰撞半径 = 底座 radius × 它(bossRadius() 的唯一来源) */
   scale: number;
   /** Boss HP = 底座 hp × 它,再乘 GDD §14 的时间缩放(出生时一次)。
@@ -88,7 +96,8 @@ export interface BossDef {
 /** Boss = 放大的冲撞甲虫(四型里唯一"直线蓄力冲锋"的,收尾高潮要的就是这一型的身位压力) */
 export const BOSS: BossDef = {
   baseKind: KIND_BEETLE,
-  name: '母巢巨兽',
+  slug: 'hive_colossus',
+  devName: '母巢巨兽',
   scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
   hpMul: 47, // 闸门反推(自动求解):净 DPS × TTK 82.5s / 68.8 ≈ 47.5 → 取整 47;
   // Boss HP = 40 × 1.72 × 47 ≈ 3234。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
@@ -121,7 +130,16 @@ export type EnemyShape = 'circle' | 'arrow' | 'capsule' | 'hex' | 'spore';
 
 export interface EnemyDef {
   kind: EnemyKind;
-  name: string;
+  /**
+   * slug:翻译/编辑器身份 —— 全表唯一、小写下划线(见 enemies.test)。
+   * **数值 kind 才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 enemyName)。
+   */
+  devName: string;
   hp: number;
   contactDamage: number;
   /**
@@ -187,7 +205,8 @@ export interface EnemyDef {
 export const ENEMIES: EnemyDef[] = [
   {
     kind: KIND_SWARM,
-    name: '蜂群蛭',
+    slug: 'swarm_leech',
+    devName: '蜂群蛭',
     hp: 8, // GDD §14 锁定
     contactDamage: 5, // GDD §14 锁定
     // 占位待调,平衡口径见 data/economy.ts。1 = 最小面额:它是场上最多、最好打的口粮型,
@@ -221,7 +240,8 @@ export const ENEMIES: EnemyDef[] = [
   },
   {
     kind: KIND_STRAFER,
-    name: '侧掠者',
+    slug: 'side_raider',
+    devName: '侧掠者',
     hp: 20, // GDD §14 锁定
     contactDamage: 10, // GDD §14 锁定
     scrap: 2, // 占位待调,平衡口径见 data/economy.ts(血厚一倍多、还要抓它切进来的那一下,给两颗)
@@ -253,7 +273,8 @@ export const ENEMIES: EnemyDef[] = [
   },
   {
     kind: KIND_TRAILER,
-    name: '尾随蛆',
+    slug: 'tail_maggot',
+    devName: '尾随蛆',
     hp: 14, // 占位待调
     contactDamage: 6, // 占位待调
     // 占位待调,平衡口径见 data/economy.ts。与侧掠者同档:它血没那么厚,但赖在船尾死角上,
@@ -290,7 +311,8 @@ export const ENEMIES: EnemyDef[] = [
   },
   {
     kind: KIND_BEETLE,
-    name: '冲撞甲虫',
+    slug: 'ram_beetle',
+    devName: '冲撞甲虫',
     hp: 40, // 占位待调
     contactDamage: 18, // 占位待调
     scrap: 4, // 占位待调,平衡口径见 data/economy.ts(全场最硬、最疼的一型,打掉它该有一次看得见的进账)
@@ -324,7 +346,8 @@ export const ENEMIES: EnemyDef[] = [
   },
   {
     kind: KIND_SPORE,
-    name: '孢子炮手',
+    slug: 'spore_gunner',
+    devName: '孢子炮手',
     // GDD §6.2 的远程型:锚定喷吐弹幕,逼玩家脱离航线过去杀它 —— 点防阵列(TOWER_PD)
     // 存在的全部理由。HP 卡在尾随蛆与甲虫之间:它是"放着不管就会持续掉血"的威胁,
     // 但本身不该像甲虫那样要集火半天(玩家还得在炮火里飞过去打它)

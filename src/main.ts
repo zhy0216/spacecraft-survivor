@@ -73,6 +73,7 @@ import { createCodexUi } from './ui/codex';
 import { createTitleScreen } from './ui/titleScreen';
 import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 import { createVictoryEpilogue } from './ui/victoryEpilogue';
+import { unlockName } from './ui/presentation/unlockText';
 
 const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
 
@@ -997,7 +998,7 @@ async function boot(): Promise<void> {
         const entry = UNLOCKS[i]!;
         if (!unlockMet(entry, live)) continue;
         announcedMask |= 1 << i;
-        hud.toast(`解锁:${entry.name}`);
+        hud.toast(`解锁:${unlockName(entry)}`);
       }
       // I 键首局提示(28 号):战斗开始 20s 内,从未按过 I 且本局还没飘过 → 走解锁 toast
       // 通道飘一条「按 I 可调整武器朝向」。窗口按 world.elapsed 与开跑基准的差算

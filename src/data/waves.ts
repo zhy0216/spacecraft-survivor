@@ -124,8 +124,16 @@ export interface WaveElite {
 
 /** 一个航段 = 一段时长内的"方向 + 流 + 事件" */
 export interface WaveSegment {
-  /** 只给人看(调参面板与结算界面显示"第 n 段:碎石带"),逻辑不读 */
-  name: string;
+  /**
+   * slug:翻译/编辑器身份 —— 全表唯一、小写下划线(见 waves.test)。
+   * **数组下标才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 waveSegmentName)。
+   */
+  devName: string;
   /** 秒,90–180(todos/08 的单局结构口径) */
   duration: number;
   /** 主压方向起角(绝对角,度) */
@@ -171,7 +179,8 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
   {
     // 教学段:只有一条蜂群蛭的正压流,方向几乎不动(60° / 120s = 0.5°/s)。
     // 玩家有空把开局那几座塔摆上甲板,并认清"主压方向"这件事本身
-    name: '离港航道',
+    slug: 'departure_lane',
+    devName: '离港航道',
     duration: 120,
     dirStartDeg: 0,
     dirEndDeg: 60,
@@ -200,7 +209,8 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
   {
     // 主压方向开始真的走起来(140° / 120s ≈ 1.17°/s,全局最快的一段):
     // 摆好的舷会慢慢偏出去,第一次逼玩家意识到"得一直转"
-    name: '碎石带',
+    slug: 'debris_belt',
+    devName: '碎石带',
     duration: 120,
     dirStartDeg: 60,
     dirEndDeg: 200,
@@ -244,7 +254,8 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
     ],
   },
   {
-    name: '巡逻线',
+    slug: 'patrol_lane',
+    devName: '巡逻线',
     duration: 120,
     dirStartDeg: 200,
     dirEndDeg: 320,
@@ -283,7 +294,8 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
   {
     // 收尾段:四型齐全、密度最高。方向从 320° 转到 480°(= 120°),
     // 累积角写成 480 而不是折回 120,见 WaveSegment.dirEndDeg
-    name: '虫潮合围',
+    slug: 'swarm_siege',
+    devName: '虫潮合围',
     duration: 120,
     dirStartDeg: 320,
     dirEndDeg: 480,

@@ -4,6 +4,7 @@ import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { createEdictBuffs } from '../sim/edictBuffs';
 import type { World } from '../sim/world';
+import { initI18n } from '../i18n';
 import { createArmoryPanel } from './armoryPanel';
 
 interface StubEl {
@@ -90,7 +91,10 @@ function createWorld(): World {
 describe('舰船背包面板', () => {
   let dom: ReturnType<typeof installDom>;
 
-  beforeEach(() => { dom = installDom(); });
+  beforeEach(async () => {
+    await initI18n('zh-CN');
+    dom = installDom();
+  });
   afterEach(() => dom.restore());
 
   it('与商店共用完整舰船图，点两个真实朝向槽交换武器', () => {

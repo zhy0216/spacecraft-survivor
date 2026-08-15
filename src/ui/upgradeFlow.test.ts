@@ -18,7 +18,7 @@ import {
 import { isMergeResult } from '../data/merges';
 import { TOWER_AUTOCANNON, TOWER_MISSILE_NEST, TOWER_RAILGUN, TOWERS, towerRange } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
-import { OFFER_EDICT, OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_EDICT, OFFER_NEW_WEAPON, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import {
   ACQUIRE_INVALID_TYPE,
   ACQUIRE_REPLACE_NEEDED,
@@ -30,7 +30,13 @@ import {
   EDICT_INVALID_TYPE,
   type World,
 } from '../sim/world';
+import { initI18n } from '../i18n';
 import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps, upgradeComparison, upgradeComparisonText } from './upgradeFlow';
+import { optionLabel } from './presentation/upgradeText';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 function newWeaponOpt(type: number, level = 0): UpgradeOption {
   return { kind: OFFER_NEW_WEAPON, type, level };

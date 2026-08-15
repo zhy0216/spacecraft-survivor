@@ -9,7 +9,7 @@
 |---|---|---|---|
 | 01 | [i18n 基础设施](done/01-i18n-foundation.md) | — | 类型安全资源、fallback、格式化器、加载器 ✅ |
 | 02 | [语言设置与运行时切换](done/02-locale-settings-runtime.md) | 01 | 自动识别、持久化、切换后原地刷新 UI ✅ |
-| 03 | [内容 ID 与展示层边界](03-content-ids-presentation-boundary.md) | 01 | `data/`、`sim/` 不再持有玩家语言文案 |
+| 03 | [内容 ID 与展示层边界](done/03-content-ids-presentation-boundary.md) | 01 | `data/`、`sim/` 不再持有玩家语言文案 ✅ |
 | 04 | [标题与通用菜单](04-shell-and-common-ui.md) | 01、02 | 标题、设置、暂停、通用提示双语化 |
 | 05 | [HUD 与舰船背包](05-hud-and-armory.md) | 02、03 | 战斗常驻界面双语化 |
 | 06 | [升级流程](06-upgrade-flow.md) | 02、03 | 三选一、合成、拒绝原因双语化 |

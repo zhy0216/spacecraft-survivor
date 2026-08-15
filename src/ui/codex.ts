@@ -20,23 +20,16 @@
  * 都只是几行字符串拼接,却要等真人进一次图鉴才看得见。
  */
 import { isTyping } from '../core/isTyping';
-import { AFFIXES } from '../data/affixes';
 import {
-  BH_SEEK,
-  BH_SEEK_CHARGE,
-  BH_SPORE,
-  BH_STRAFE,
-  BH_STRAFE_CHARGE,
   BOSS,
   ENEMIES,
   type EnemyDef,
 } from '../data/enemies';
-import { EDICT_MAX_LEVEL, EDICTS, type EdictDef } from '../data/edicts';
+import { EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { MERGES } from '../data/merges';
 import {
   FX_MORTAR,
   THR_CHARGE,
-  throttleName,
   towerAoeDamage,
   towerChargeTime,
   towerDamage,
@@ -46,9 +39,6 @@ import {
   type TowerDef,
 } from '../data/towers';
 import {
-  COND_ELITE_KILLS,
-  COND_FIRST_WIN,
-  COND_KILLS,
   UNLOCK_EDICT,
   UNLOCK_ELITE,
   UNLOCK_TOWER,
@@ -60,6 +50,17 @@ import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls'
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
 import { EDICT_ICONS, TOWER_ICONS } from './upgradeFlow';
+import {
+  affixName,
+  bossName,
+  edictName,
+  enemyName,
+  throttleFamilyName,
+  towerName,
+} from './presentation/contentText';
+import { behaviorName } from './presentation/behaviorText';
+import { edictSummaryText } from './presentation/edictText';
+import { unlockConditionText } from './presentation/unlockText';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -129,69 +130,9 @@ const BACK_BTN_CSS =
 
 // —— 纯函数层:图鉴「显示了什么」(含悬停行),Node 里可测 ——
 
-/** 解锁条件文案(未解锁条目的悬停末条 —— 只说清"差什么",不说怎么玩) */
-export function unlockConditionText(entry: UnlockEntry): string {
-  switch (entry.condition.kind) {
-    case COND_FIRST_WIN:
-      return '首次胜利';
-    case COND_KILLS:
-      return `单局击杀 ${entry.condition.target}`;
-    case COND_ELITE_KILLS:
-      return `累计精英击杀 ${entry.condition.target}`;
-    default:
-      return '无条件';
-  }
-}
-
-/**
- * 敌型行为短标签。文案取自 enemies.ts 各 BH_* 常量注释的短截 ——
- * 图鉴只要"这一型怎么打"的一行直觉,不要状态机的全文。
- */
-export function behaviorName(bh: number): string {
-  switch (bh) {
-    case BH_SEEK:
-      return '直线追船';
-    case BH_STRAFE:
-      return '侧向驻留';
-    case BH_STRAFE_CHARGE:
-      return '侧向冲锋';
-    case BH_SEEK_CHARGE:
-      return '直线冲锋';
-    case BH_SPORE:
-      return '远程喷吐';
-    default:
-      return `行为 ${bh}`;
-  }
-}
-
 /** 数值印法:两位小数内舍入、尾零省掉(1.25 / 1.5 / 0.7,不印 1.250) */
 export function formatMul(v: number): string {
   return String(Math.round(v * 100) / 100);
-}
-
-/**
- * 法令效果摘要:前缀作用域(系限定 / 全船),再按固定顺序挑**非中性**字段拼一行。
- * 数据表口径"不用就填 1/0"(见 edicts.ts),故非中性即有效 —— 每个字段一行标签,
- * 加法档印 +N、概率档换算成百分点,读法与升级卡片同一套(× 倍率 / + 点数)。
- */
-export function edictSummaryText(def: EdictDef): string {
-  // throttleName 本身就带「系」字(THROTTLE_NAMES = 弹药系/过热系/充能系),别再叠一个
-  const scope = def.throttle >= 0 ? throttleName(def.throttle) : '全船';
-  const parts: string[] = [];
-  if (def.fireRateMul !== 1) parts.push(`射速 ×${formatMul(def.fireRateMul)}`);
-  if (def.reloadMul !== 1) parts.push(`装填 ×${formatMul(def.reloadMul)}`);
-  if (def.heatMaxMul !== 1) parts.push(`过热 ×${formatMul(def.heatMaxMul)}`);
-  if (def.chargeRateMul !== 1) parts.push(`充能 ×${formatMul(def.chargeRateMul)}`);
-  if (def.damageMul !== 1) parts.push(`伤害 ×${formatMul(def.damageMul)}`);
-  if (def.hullHpAdd !== 0) parts.push(`船体 +${def.hullHpAdd}`);
-  if (def.damageTakenMul !== 1) parts.push(`受击 ×${formatMul(def.damageTakenMul)}`);
-  if (def.xpMul !== 1) parts.push(`经验 ×${formatMul(def.xpMul)}`);
-  if (def.magnetRadiusMul !== 1) parts.push(`磁吸 ×${formatMul(def.magnetRadiusMul)}`);
-  if (def.turnRateAdd !== 0) parts.push(`转向 +${def.turnRateAdd}°/s`);
-  if (def.cruiseSpeedMul !== 1) parts.push(`巡航 ×${formatMul(def.cruiseSpeedMul)}`);
-  if (def.boostCooldownAdd !== 0) parts.push(`加速 ${def.boostCooldownAdd > 0 ? '+' : ''}${formatMul(def.boostCooldownAdd)}s`);
-  if (def.starCoinChanceAdd !== 0) parts.push(`星币 +${Math.round(def.starCoinChanceAdd * 100)}%`);
-  return `${scope}:${parts.length === 0 ? '—' : parts.join(' · ')}`;
 }
 
 /** 统计行:三个累计计数器,与结算界面的元进度读数同源 */
@@ -318,10 +259,10 @@ function starLine(def: TowerDef, stars: number): string {
 export function weaponHover(type: number): string[] {
   const def = TOWERS[type];
   if (def === undefined) return [`未知塔型 #${type}`];
-  let head = `${def.name} · ${throttleName(def.throttle)}`;
+  let head = `${towerName(type)} · ${throttleFamilyName(def.throttle)}`;
   for (const r of MERGES) {
     if (r.result === type) {
-      head = `${def.name} · 由${TOWERS[r.base]?.name ?? '?'}合${'★'.repeat(3)}变身 · ${throttleName(def.throttle)}`;
+      head = `${towerName(type)} · 由${towerName(r.base)}合${'★'.repeat(3)}变身 · ${throttleFamilyName(def.throttle)}`;
     }
   }
   return [head, starLine(def, 1), starLine(def, 2), starLine(def, 3)];
@@ -330,19 +271,19 @@ export function weaponHover(type: number): string[] {
 /** 敌型悬停行:标题 + 身板 + 掉落(残骸是升级资源、星币是商店货币,两样都报) */
 function enemyHover(e: EnemyDef): string[] {
   return [
-    `${e.name} · ${behaviorName(e.behavior)}`,
+    `${enemyName(e.kind)} · ${behaviorName(e.behavior)}`,
     `HP ${e.hp} · 接触 ${e.contactDamage}`,
     `残骸 ${e.scrap} · 星币 ${e.starCoins}`,
   ];
 }
 
-/** 精英悬停行:词缀名单读数据表(affixes 下标 → 名字),锁定追加条件 */
+/** 精英悬停行:词缀名单走 presenter(affixes 下标 → 名字),锁定追加条件 */
 function eliteHover(entry: UnlockEntry): string[] {
   const lines: string[] = [collectionItemName(entry)];
   const elite = WAVE_LOCKED_ELITES[entry.type];
   if (elite !== undefined) {
     const names: string[] = [];
-    for (const a of elite.affixes) names.push(AFFIXES[a]?.name ?? `#${a}`);
+    for (const a of elite.affixes) names.push(affixName(a));
     lines.push(`词缀 ${names.join(' · ')}`);
   }
   return lines;
@@ -400,7 +341,7 @@ export function codexRows(progress: Progress): CodexSection[] {
   const weapons: CodexRow[] = [];
   for (let type = 0; type < TOWERS.length; type++) {
     weapons.push(
-      rowForLocked(mask, UNLOCK_TOWER, type, TOWERS[type]!.name, weaponHover(type), towerArt(type)),
+      rowForLocked(mask, UNLOCK_TOWER, type, towerName(type), weaponHover(type), towerArt(type)),
     );
   }
   sections.push({ key: 'weapons', title: '武器', rows: weapons });
@@ -408,7 +349,7 @@ export function codexRows(progress: Progress): CodexSection[] {
   const enemies: CodexRow[] = [];
   for (const e of ENEMIES) {
     enemies.push({
-      name: e.name,
+      name: enemyName(e.kind),
       locked: false,
       art: imgArt(ENEMY_ART_URLS[e.kind]),
       hover: enemyHover(e),
@@ -417,11 +358,11 @@ export function codexRows(progress: Progress): CodexSection[] {
   // Boss = 放大的冲撞甲虫:HP/接触按底座 × 倍率现算(与 sim 的派生同一条公式)
   const base = ENEMIES[BOSS.baseKind]!;
   enemies.push({
-    name: BOSS.name,
+    name: bossName(),
     locked: false,
     art: imgArt(BOSS_ART_URL),
     hover: [
-      `${BOSS.name} · 巨型冲锋 · 召唤蜂群`,
+      `${bossName()} · 巨型冲锋 · 召唤蜂群`,
       `HP ${Math.round(base.hp * BOSS.hpMul)} · 接触 ` +
         `${Math.round(base.contactDamage * BOSS.contactDamageMul)}`,
       `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
@@ -449,7 +390,7 @@ export function codexRows(progress: Progress): CodexSection[] {
   const edicts: CodexRow[] = [];
   for (const d of EDICTS) {
     edicts.push(
-      rowForLocked(mask, UNLOCK_EDICT, d.type, d.name, edictHover(d.type), edictArt(d.type)),
+      rowForLocked(mask, UNLOCK_EDICT, d.type, edictName(d.type), edictHover(d.type), edictArt(d.type)),
     );
   }
   sections.push({ key: 'edicts', title: '法令', rows: edicts });

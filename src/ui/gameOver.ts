@@ -14,9 +14,6 @@
  * **暖红只许出现在失败标题那几个字上**,不铺成色块 —— 铺开就成了敌方色域,
  * 而失败界面里唯一属于敌人的只有"你被打沉了"这个事实本身。
  */
-import { EDICTS } from '../data/edicts';
-import { ENEMIES } from '../data/enemies';
-import { TOWERS } from '../data/towers';
 import {
   UNLOCK_EDICT,
   UNLOCK_ELITE,
@@ -28,6 +25,8 @@ import { WAVE_LOCKED_ELITES } from '../data/waves';
 import type { Progress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
 import { isTyping } from '../core/isTyping';
+import { edictName, enemyName, towerName } from './presentation/contentText';
+import { unlockName } from './presentation/unlockText';
 
 /** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
 const OK_COLOR = '#9adcff';
@@ -205,7 +204,7 @@ export function summaryText(s: RunSummary): string {
 }
 
 export interface WeaponReportRow {
-  /** 塔名(数据表即真相;型越界印 #type,与 resultTitle 的未知码同一条"不许静默兜底"口径) */
+  /** 塔名(presenter 的 towerName 查翻译;型越界 → 本地化错误,与 resultTitle 的未知码同一口径) */
   name: string;
   /** 累计伤害(取整 —— 战报是总账,小数位是噪音) */
   damage: number;
@@ -225,7 +224,7 @@ export function weaponReportRows(report: { type: number; damage: number }[]): We
   for (const r of report) {
     const dmg = r.damage > 0 && Number.isFinite(r.damage) ? r.damage : 0;
     rows.push({
-      name: TOWERS[r.type]?.name ?? `#${r.type}`,
+      name: towerName(r.type),
       damage: Math.round(dmg),
       ratio: total > 0 ? dmg / total : 0,
     });
@@ -247,30 +246,29 @@ export function collectionCategoryName(kind: number): string {
   }
 }
 
-/** 解锁精英的底敌型名(WAVE_LOCKED_ELITES[type] → ENEMIES[kind].name);查不到返回 null */
+/** 解锁精英的底敌型名(WAVE_LOCKED_ELITES[type] → enemyName);查不到返回 null */
 function eliteBaseName(entry: UnlockEntry): string | null {
   const elite = WAVE_LOCKED_ELITES[entry.type];
   if (elite === undefined) return null;
-  return ENEMIES[elite.kind]?.name ?? null;
+  return enemyName(elite.kind);
 }
 
 /**
- * 图鉴条目显示名:从内容表读(towers / edicts / waves),数据表改名图鉴跟着走 ——
- * 与 summaryText 的"段数由调用方传"相反:这里是静态展示,数据表即真相。
+ * 图鉴条目显示名:塔/法令走 presenter(towerName / edictName 查翻译)、解锁名走 unlockName;
  * 精英条目把底敌型名带进括号("虫群母巢(冲撞甲虫精英)"),未解锁时玩家也读得到"解锁的是什么"。
  */
 export function collectionItemName(entry: UnlockEntry): string {
   switch (entry.kind) {
     case UNLOCK_TOWER:
-      return TOWERS[entry.type]?.name ?? entry.name;
+      return towerName(entry.type);
     case UNLOCK_EDICT:
-      return EDICTS[entry.type]?.name ?? entry.name;
+      return edictName(entry.type);
     case UNLOCK_ELITE: {
       const base = eliteBaseName(entry);
-      return base === null ? entry.name : `${entry.name}(${base}精英)`;
+      return base === null ? unlockName(entry) : `${unlockName(entry)}(${base}精英)`;
     }
     default:
-      return entry.name;
+      return unlockName(entry);
   }
 }
 
@@ -461,8 +459,8 @@ export function createGameOverUi(opts: {
     }
     const lines: string[] = [];
     for (const i of s.newUnlocks) {
-      // 名字取 UNLOCKS 表 —— 与局内 toast 同源,结算页报的与局内弹的是同一句
-      lines.push(`解锁:${UNLOCKS[i]?.name ?? `#${i}`}`);
+      // 名字走 unlockName(查 content.unlocks 翻译) —— 与局内 toast 同源,结算页报的与局内弹的是同一句
+      lines.push(`解锁:${UNLOCKS[i] === undefined ? `#${i}` : unlockName(UNLOCKS[i]!)}`);
     }
     unlockEl.textContent = lines.join('\n');
     unlockEl.style.display = 'block';

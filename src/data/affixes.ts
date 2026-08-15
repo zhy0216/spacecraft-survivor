@@ -22,9 +22,21 @@ export type AffixId = 0 | 1 | 2 | 3 | 4;
 
 export interface AffixDef {
   id: AffixId;
-  name: string;
-  /** 一句话效果说明(GDD §6.4),给人核对用,逻辑不读 */
-  description: string;
+  /**
+   * slug:翻译/编辑器身份 —— 全表唯一、小写下划线(见 affixes.test)。
+   * **数值 id 才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 affixName)。
+   */
+  devName: string;
+  /**
+   * devDescription:开发/实现说明(读哪个字段、怎么挂修正)。玩家界面不得读它 ——
+   * 面向玩家的效果文案走 presenter 的 affixDescription(查 content.affixes.<slug>.description)。
+   */
+  devDescription: string;
   /** 狂热光环:生效半径(世界 px);其余词缀恒 0 */
   frenzyRadius: number;
   /** 狂热光环:半径内敌人的速度倍率(> 1 = 加速,蜂群加成);其余词缀恒 1 */
@@ -43,8 +55,9 @@ export interface AffixDef {
 export const AFFIXES: AffixDef[] = [
   {
     id: AFFIX_FRENZY,
-    name: '狂热光环',
-    description: '半径内敌人速度 ×1.6(蜂群加成)',
+    slug: 'frenzy',
+    devName: '狂热光环',
+    devDescription: '半径内敌人速度 ×1.6(蜂群加成)',
     frenzyRadius: 400, // 占位待调
     frenzySpeedMul: 1.6, // 占位待调
     splitCount: 0,
@@ -54,8 +67,9 @@ export const AFFIXES: AffixDef[] = [
   },
   {
     id: AFFIX_FISSION,
-    name: '裂变',
-    description: '死亡时分裂成 3 只(复用池)',
+    slug: 'fission',
+    devName: '裂变',
+    devDescription: '死亡时分裂成 3 只(复用池)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 3, // 占位待调
@@ -65,8 +79,9 @@ export const AFFIXES: AffixDef[] = [
   },
   {
     id: AFFIX_MAGNETIC,
-    name: '磁力干扰',
-    description: '玩家拾取半径 ×0.5(读 dropMagnetRadius 处挂修正)',
+    slug: 'magnetic',
+    devName: '磁力干扰',
+    devDescription: '玩家拾取半径 ×0.5(读 dropMagnetRadius 处挂修正)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 0,
@@ -76,8 +91,9 @@ export const AFFIXES: AffixDef[] = [
   },
   {
     id: AFFIX_ARMORED,
-    name: '装甲',
-    description: '弹药系伤害 ×0.5(与塔的 throttle=THR_AMMO 对齐)',
+    slug: 'armored',
+    devName: '装甲',
+    devDescription: '弹药系伤害 ×0.5(与塔的 throttle=THR_AMMO 对齐)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 0,
@@ -87,8 +103,9 @@ export const AFFIXES: AffixDef[] = [
   },
   {
     id: AFFIX_PHASED,
-    name: '相位',
-    description: '能量系伤害 ×0.5(过热/充能两系,与塔的 throttle 对齐)',
+    slug: 'phased',
+    devName: '相位',
+    devDescription: '能量系伤害 ×0.5(过热/充能两系,与塔的 throttle 对齐)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 0,

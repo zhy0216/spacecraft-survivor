@@ -37,10 +37,27 @@ describe('敌人数值表', () => {
   it('下标 === kind:状态机靠 ENEMIES[e.kind] 直取,错一位就全型串味', () => {
     expect(ENEMIES.length).toBe(ENEMY_KIND_COUNT);
     ENEMIES.forEach((def, i) => expect(def.kind).toBe(i));
-    expect(ENEMIES[KIND_SWARM]!.name).toBe('蜂群蛭');
-    expect(ENEMIES[KIND_STRAFER]!.name).toBe('侧掠者');
-    expect(ENEMIES[KIND_TRAILER]!.name).toBe('尾随蛆');
-    expect(ENEMIES[KIND_BEETLE]!.name).toBe('冲撞甲虫');
+    // 03 号:数据一致性测试断言稳定 ID(slug),中文显示名走 presenter 查翻译
+    expect(ENEMIES[KIND_SWARM]!.slug).toBe('swarm_leech');
+    expect(ENEMIES[KIND_STRAFER]!.slug).toBe('side_raider');
+    expect(ENEMIES[KIND_TRAILER]!.slug).toBe('tail_maggot');
+    expect(ENEMIES[KIND_BEETLE]!.slug).toBe('ram_beetle');
+  });
+
+  it('slug 稳定 ID:全表唯一、小写下划线,与 kind 一一对应;Boss 用独立标识(03 号)', () => {
+    // slug 是翻译/编辑器身份;数值 kind 才是存档与模拟身份 —— 顺序必须与 KIND_* 常量一致,
+    // 错一位 presenter 就会拿 A 型的 slug 去翻 B 型的名字
+    const SLUGS = ['swarm_leech', 'side_raider', 'tail_maggot', 'ram_beetle', 'spore_gunner'];
+    expect(ENEMIES.length).toBe(SLUGS.length);
+    ENEMIES.forEach((def, i) => {
+      expect(def.slug, `下标 ${i} 的 slug 必须与顺序表一致`).toBe(SLUGS[i]);
+      expect(def.slug, `下标 ${i} 的 slug 是小写下划线`).toMatch(/^[a-z][a-z0-9_]*$/);
+    });
+    expect(new Set(SLUGS).size).toBe(SLUGS.length);
+    // Boss 不进 ENEMIES 表(见 KIND_BOSS 注释),slug 用独立标识,且不与表内任何敌型撞车
+    expect(BOSS.slug).toBe('hive_colossus');
+    expect(BOSS.slug).toMatch(/^[a-z][a-z0-9_]*$/);
+    expect(SLUGS).not.toContain(BOSS.slug);
   });
 
   it('GDD §14 锁定值不会被"顺手调平衡"改掉', () => {
@@ -151,7 +168,7 @@ describe('敌人数值表', () => {
   it('孢子炮手:编号追加在末尾、下标 === kind,旧四型的 kind 一字没动', () => {
     expect(KIND_SPORE).toBe(ENEMY_KIND_COUNT - 1); // 追加位:表尾
     expect(ENEMIES[KIND_SPORE]!.kind).toBe(KIND_SPORE);
-    expect(ENEMIES[KIND_SPORE]!.name).toBe('孢子炮手');
+    expect(ENEMIES[KIND_SPORE]!.slug).toBe('spore_gunner');
     // 既有四型的下标与编号必须原样(其它 agent 的用例按 0-3 钉死)
     expect(ENEMIES[KIND_SWARM]!.kind).toBe(0);
     expect(ENEMIES[KIND_STRAFER]!.kind).toBe(1);

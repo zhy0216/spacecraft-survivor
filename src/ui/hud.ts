@@ -6,9 +6,9 @@
  * 布局只占屏幕上沿、屏下缘与威胁所在的边缘,中央战场完全留空。升级时停与结算期间由 setPaused
  * 把整层淡到几乎不可见,且根节点强制 pointer-events:none,不会与放大甲板或卡片抢焦点。
  */
-import { BOSS, KIND_BOSS } from '../data/enemies';
-import { edictDesc, edictLevel, edictScopeLabel, EDICTS } from '../data/edicts';
-import { throttleName, TOWERS } from '../data/towers';
+import { KIND_BOSS } from '../data/enemies';
+import { edictLevel, EDICTS } from '../data/edicts';
+import { TOWERS } from '../data/towers';
 import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import { audioBus } from '../render/audio';
@@ -27,6 +27,8 @@ import {
 } from '../sim/tower';
 import type { Enemy, World } from '../sim/world';
 import { formatDuration } from './gameOver';
+import { bossName, edictName, throttleFamilyName, towerName, waveSegmentName } from './presentation/contentText';
+import { edictDesc, edictScopeLabel } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
 const VALUE_COLOR = '#c8dcf0';
@@ -451,7 +453,7 @@ export function segmentReadout(segment: number, segTime: number): SegmentReadout
   const index = Number.isFinite(segment) && segment >= 0 ? Math.floor(segment) : 0;
   const seg = WAVE_SEGMENTS[index] ?? WAVE_SEGMENTS[0]!;
   return {
-    label: `${index + 1}/${count} ${seg.name}`,
+    label: `${index + 1}/${count} ${waveSegmentName(index)}`,
     ratio: hudRatio(segTime, seg.duration),
   };
 }
@@ -664,10 +666,10 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   elite.style.cssText = ELITE_CSS;
   const eliteBar = createBar(elite, '精英', THREAT_COLOR);
 
-  // Boss 血条:常驻版(15 号),叠在精英条正上方;标签直取 BOSS.name(改数值表跟着走)
+  // Boss 血条:常驻版(15 号),叠在精英条正上方;标签走 bossName presenter(查翻译,不读数据表)
   const boss = document.createElement('div');
   boss.style.cssText = BOSS_CSS;
-  const bossBar = createBar(boss, BOSS.name, BOSS_HP_COLOR);
+  const bossBar = createBar(boss, bossName(), BOSS_HP_COLOR);
 
   // 星币读数:残骸读数的同族姊妹 —— ★ 前缀的一行数字,无进度轨道;每帧 sync 直接写余额。
   // 同一行分两列:左列余额、右列场上怪物数(items 就是活跃池,length 即在场数)
@@ -891,8 +893,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     const r = edicts.getBoundingClientRect();
     edictTip.style.left = `${r.left}px`;
     edictTip.style.top = `${r.bottom + 6}px`;
-    // textContent 直拼 —— 内容全部来自数值表,绝不用 innerHTML
-    edictTip.textContent = `${def.name} ×${lv}\n${edictScopeLabel(def)}\n${edictDesc(def)}`;
+    // textContent 直拼 —— 内容全部来自 presenter(查翻译),绝不用 innerHTML
+    edictTip.textContent = `${edictName(def.type)} ×${lv}\n${edictScopeLabel(def)}\n${edictDesc(def)}`;
     edictTip.style.display = 'block';
   }
   function hideEdictTip(): void {
@@ -948,7 +950,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     for (let i = 0; i < EDICTS.length; i++) {
       const lv = edictLevel(world.edictLevels, i);
       if (lv <= 0) continue;
-      chipSig.push(lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : `${EDICTS[i]!.name}|${i}`);
+      chipSig.push(lv >= 2 ? `${edictName(i)}×${lv}` : `${edictName(i)}|${i}`);
     }
     const sig = chipSig.join("\u0001");
     if (sig !== lastEdictSig) {
@@ -960,7 +962,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
         const chip = document.createElement('span');
         // 与静音按钮同一手:整棵 HUD 是 pointer-events:none,只有可交互的这一小块要开回来
         chip.style.cssText = 'pointer-events:auto!important;cursor:help;white-space:nowrap;';
-        chip.textContent = lv >= 2 ? `${EDICTS[i]!.name}×${lv}` : EDICTS[i]!.name;
+        chip.textContent = lv >= 2 ? `${edictName(i)}×${lv}` : edictName(i);
         chip.addEventListener('mouseenter', () => showEdictTip(i, lv));
         chip.addEventListener('mouseleave', hideEdictTip);
         edictChips.appendChild(chip);
@@ -1034,11 +1036,11 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       }
       if (!firstSeen) continue;
       totalDps += dps;
-      const name = def?.name ?? '?';
+      const name = def === undefined ? '?' : towerName(slot.type);
       const b = weaponBoxes[boxCursor++]!;
       b.box.style.display = 'block';
       // 星级 + 所属系:同型合并成一格印 ×N,星级取同型最高那把(与 DPS 求和同一条合并口径)
-      const family = def ? throttleName(def.throttle) : '';
+      const family = def ? throttleFamilyName(def.throttle) : '';
       b.label.textContent =
         `${name} ${'★'.repeat(maxStars)}${family ? ` · ${family}` : ''}` +
         (count > 1 ? ` ×${count}` : '');

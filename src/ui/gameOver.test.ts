@@ -21,7 +21,8 @@ import {
 import { WAVE_SEGMENTS } from '../data/waves';
 import { createProgress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN } from '../sim/world';
-import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
+import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
+import { initI18n } from '../i18n';
 import {
   collectionCategoryName,
   collectionItemName,
@@ -34,6 +35,11 @@ import {
   summaryText,
   weaponReportRows,
 } from './gameOver';
+import { towerName } from './presentation/contentText';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 describe('formatDuration', () => {
   it('m:ss,秒数补零', () => {
@@ -114,19 +120,19 @@ function summary(over: Partial<RunSummary> = {}): RunSummary {
 }
 
 describe('weaponReportRows', () => {
-  it('名字取数据表,伤害取整,占比按全武器总伤害算(条加起来是一整局的 100%)', () => {
+  it('名字走 presenter(塔名查翻译),伤害取整,占比按全武器总伤害算(条加起来是一整局的 100%)', () => {
     const rows = weaponReportRows([
       { type: TOWER_AUTOCANNON, damage: 750.4 },
       { type: TOWER_LASER, damage: 250 },
     ]);
-    expect(rows[0]!.name).toBe(TOWERS[TOWER_AUTOCANNON]!.name);
+    expect(rows[0]!.name).toBe(towerName(TOWER_AUTOCANNON));
     expect(rows[0]!.damage).toBe(750);
     expect(rows[0]!.ratio).toBeCloseTo(0.7501, 3);
     expect(rows[1]!.ratio).toBeCloseTo(0.2499, 3);
   });
 
-  it('型越界印 #type(不许静默兜底),空表与坏数值不产出 NaN', () => {
-    expect(weaponReportRows([{ type: 999, damage: 10 }])[0]!.name).toBe('#999');
+  it('型越界走 presenter 的本地化错误(不许静默兜底),空表与坏数值不产出 NaN', () => {
+    expect(weaponReportRows([{ type: 999, damage: 10 }])[0]!.name).toBe('未知武器 #999');
     expect(weaponReportRows([])).toEqual([]);
     const rows = weaponReportRows([{ type: TOWER_AUTOCANNON, damage: Number.NaN }]);
     expect(rows[0]!.damage).toBe(0);
@@ -398,7 +404,7 @@ describe('createGameOverUi', () => {
     // 标题印峰值 DPS(取整);行数 = 标题 + 两把武器
     expect(report.children[0]!.textContent).toBe('武器战报 · 峰值 56 DPS');
     expect(report.children.length).toBe(3);
-    expect(findEl(report, (el) => el.textContent === TOWERS[TOWER_AUTOCANNON]!.name)).toBeDefined();
+    expect(findEl(report, (el) => el.textContent === towerName(TOWER_AUTOCANNON))).toBeDefined();
     expect(findEl(report, (el) => el.textContent === '900')).toBeDefined();
 
     // 换一局(一炮没开):整块收回,行也清空 —— 上一局的战报不许赖在下一局的结算卡里

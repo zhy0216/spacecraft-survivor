@@ -50,9 +50,33 @@ describe('法令表级不变量', () => {
     EDICTS.forEach((e, i) => {
       expect(e.type, `下标 ${i} 的 type 必须 === 下标`).toBe(i);
       expect(ids[i], `EDICT_* 常量顺序必须与表顺序一致`).toBe(i);
-      expect(e.name.length).toBeGreaterThan(0); // 卡片要印名字,不许空串
+      expect(e.devName.length).toBeGreaterThan(0); // 开发名只给调参/开发看,不许空串
     });
     expect(new Set(ids)).toEqual(new Set(EDICTS.map((e) => e.type))); // 无重复编号
+  });
+
+  it('slug 稳定 ID:全表唯一、小写下划线,与 type 一一对应(03 号)', () => {
+    // slug 是翻译/编辑器身份;数值 type 才是存档与模拟身份 —— 顺序必须与 EDICT_* 常量一致,
+    // 错一位 presenter 就会拿 A 法令的 slug 去翻 B 法令的名字
+    const SLUGS = [
+      'ammo_protocol',
+      'coolant_protocol',
+      'capacitor_protocol',
+      'armor_protocol',
+      'amp_protocol',
+      'magnet_protocol',
+      'gyro_calibration',
+      'cruise_calibration',
+      'starchart_protocol',
+      'overdrive_protocol',
+      'boost_calibration',
+    ];
+    expect(EDICTS.length).toBe(SLUGS.length);
+    EDICTS.forEach((e, i) => {
+      expect(e.slug, `下标 ${i} 的 slug 必须与顺序表一致`).toBe(SLUGS[i]);
+      expect(e.slug, `下标 ${i} 的 slug 是小写下划线`).toMatch(/^[a-z][a-z0-9_]*$/);
+    });
+    expect(new Set(SLUGS).size).toBe(SLUGS.length);
   });
 
   it('十一条的效果数值逐条到位(全部数值型,一条轴一条法令)', () => {
@@ -113,7 +137,7 @@ describe('法令表级不变量', () => {
         // 系限定档按"字段 + 作用系"算一条轴:弹药系射速与过热系射速是两条不同的轴
         const axis = e.throttle >= 0 ? `${k}@${e.throttle}` : k;
         const prev = owner.get(axis);
-        expect(prev, `轴 ${axis} 被 ${prev !== undefined ? EDICTS[prev]!.name : ''} 与 ${e.name} 同时占用`).toBe(
+        expect(prev, `轴 ${axis} 被 ${prev !== undefined ? EDICTS[prev]!.devName : ''} 与 ${e.devName} 同时占用`).toBe(
           undefined,
         );
         owner.set(axis, e.type);
@@ -129,14 +153,14 @@ describe('法令表级不变量', () => {
       expect([THR_AMMO, THR_HEAT, THR_CHARGE, EDICT_THR_NONE]).toContain(e.throttle);
       if (family) {
         // 系限定的法令:全船档必须整段中性(否则聚合的 throttle 路由会把它整条丢掉)
-        for (const k of GLOBAL_MUL) expect(e[k], `${e.name}.${k}`).toBe(1);
-        expect(e.hullHpAdd, `${e.name}.hullHpAdd`).toBe(0);
-        expect(e.turnRateAdd, `${e.name}.turnRateAdd`).toBe(0);
-        expect(e.boostCooldownAdd, `${e.name}.boostCooldownAdd`).toBe(0);
-        expect(e.starCoinChanceAdd, `${e.name}.starCoinChanceAdd`).toBe(0);
+        for (const k of GLOBAL_MUL) expect(e[k], `${e.devName}.${k}`).toBe(1);
+        expect(e.hullHpAdd, `${e.devName}.hullHpAdd`).toBe(0);
+        expect(e.turnRateAdd, `${e.devName}.turnRateAdd`).toBe(0);
+        expect(e.boostCooldownAdd, `${e.devName}.boostCooldownAdd`).toBe(0);
+        expect(e.starCoinChanceAdd, `${e.devName}.starCoinChanceAdd`).toBe(0);
       } else {
         // 全船的法令:四个族倍率必须整段中性(同上,路由不认它们)
-        for (const k of FAMILY_KEYS) expect(e[k], `${e.name}.${k}`).toBe(1);
+        for (const k of FAMILY_KEYS) expect(e[k], `${e.devName}.${k}`).toBe(1);
       }
     }
   });
@@ -144,25 +168,25 @@ describe('法令表级不变量', () => {
   it('不用的乘法档填 1、加法档填 0(与 towers.ts 的中性值分工同源)', () => {
     for (const e of EDICTS) {
       // 乘法档一律 > 0:0 作乘数是"归零",会把射速/半径直接抹成 0,与"这一档用不上"是两码事
-      expect(e.fireRateMul, e.name).toBeGreaterThan(0);
-      expect(e.reloadMul, e.name).toBeGreaterThan(0);
-      expect(e.heatMaxMul, e.name).toBeGreaterThan(0);
-      expect(e.chargeRateMul, e.name).toBeGreaterThan(0);
-      expect(e.damageMul, e.name).toBeGreaterThan(0);
-      expect(e.damageTakenMul, e.name).toBeGreaterThan(0);
-      expect(e.xpMul, e.name).toBeGreaterThan(0);
-      expect(e.magnetRadiusMul, e.name).toBeGreaterThan(0);
-      expect(e.cruiseSpeedMul, e.name).toBeGreaterThan(0);
+      expect(e.fireRateMul, e.devName).toBeGreaterThan(0);
+      expect(e.reloadMul, e.devName).toBeGreaterThan(0);
+      expect(e.heatMaxMul, e.devName).toBeGreaterThan(0);
+      expect(e.chargeRateMul, e.devName).toBeGreaterThan(0);
+      expect(e.damageMul, e.devName).toBeGreaterThan(0);
+      expect(e.damageTakenMul, e.devName).toBeGreaterThan(0);
+      expect(e.xpMul, e.devName).toBeGreaterThan(0);
+      expect(e.magnetRadiusMul, e.devName).toBeGreaterThan(0);
+      expect(e.cruiseSpeedMul, e.devName).toBeGreaterThan(0);
       // 加法档不许为负:法令是"更强",没有一条是拿了变弱的
-      expect(e.hullHpAdd, e.name).toBeGreaterThanOrEqual(0);
-      expect(e.turnRateAdd, e.name).toBeGreaterThanOrEqual(0);
-      expect(e.starCoinChanceAdd, e.name).toBeGreaterThanOrEqual(0);
+      expect(e.hullHpAdd, e.devName).toBeGreaterThanOrEqual(0);
+      expect(e.turnRateAdd, e.devName).toBeGreaterThanOrEqual(0);
+      expect(e.starCoinChanceAdd, e.devName).toBeGreaterThanOrEqual(0);
       // 冷却轴是唯一例外:"变强"的方向是减 —— 只许 <= 0,拿了只会更短不许更长
-      expect(e.boostCooldownAdd, e.name).toBeLessThanOrEqual(0);
+      expect(e.boostCooldownAdd, e.devName).toBeLessThanOrEqual(0);
       // 渲染色一律冷色(GDD §12:蓝分量必须压过红分量)
       const r = (e.tint >> 16) & 0xff;
       const b = e.tint & 0xff;
-      expect(b, `${e.name} 的 tint 必须是冷色`).toBeGreaterThan(r);
+      expect(b, `${e.devName} 的 tint 必须是冷色`).toBeGreaterThan(r);
     }
   });
 

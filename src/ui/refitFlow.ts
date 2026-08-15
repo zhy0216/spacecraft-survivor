@@ -47,7 +47,7 @@ import {
   DOCK_WEAPON_PRICE,
   shopDiscountPrice,
 } from '../data/economy';
-import { edictDesc, EDICTS } from '../data/edicts';
+import { EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { TOWERS } from '../data/towers';
 import { WAVE_SEGMENTS } from '../data/waves';
@@ -76,6 +76,8 @@ import {
   type ShipDiagramState,
   type ShipDiagramUi,
 } from './shipDiagram';
+import { edictName, towerName } from './presentation/contentText';
+import { edictDesc } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
 const DENY_COLOR = '#ff7a6b';
@@ -489,14 +491,14 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       if (c2 === 2) {
         notes.push(
           mergeResult >= 0
-            ? `买下连合 ${'★'.repeat(3)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`
+            ? `买下连合 ${'★'.repeat(3)} 变身「${towerName(mergeResult)}」`
             : `买下连合 ${'★'.repeat(3)}`,
         );
       } else {
         notes.push(`买下合成 ${'★'.repeat(2)}`);
       }
     } else if (mergeResult >= 0 && c2 === 2) {
-      notes.push(`再合一把 ${'★'.repeat(2)} 变身「${TOWERS[mergeResult]?.name ?? '合成武器'}」`);
+      notes.push(`再合一把 ${'★'.repeat(2)} 变身「${towerName(mergeResult)}」`);
     }
     return notes;
   }
@@ -506,7 +508,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const type = world.shopWeapons[index];
     if (type === undefined || type < 0) return hideTip();
     const lines = weaponHover(type);
-    lines[0] = `${lines[0] ?? (TOWERS[type]?.name ?? '未知武器')} · ${priceText(
+    lines[0] = `${lines[0] ?? towerName(type)} · ${priceText(
       world.shopDiscountIndex === DOCK_EDICT_COUNT + index,
       DOCK_WEAPON_PRICE,
     )}`;
@@ -520,7 +522,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     if (!shown) return;
     const type = world.dockEdictOffers[index];
     if (type === undefined || type < 0) return hideTip();
-    const name = EDICTS[type]?.name ?? `未知法令(${type})`;
+    const name = edictName(type);
     tip.textContent = [
       `${name} · ${priceText(world.shopDiscountIndex === index, DOCK_EDICT_PRICE)}`,
       ...edictHover(type),
@@ -593,7 +595,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     cards.style.display = pickerOpen ? 'none' : 'grid';
     picker.style.display = pickerOpen ? 'flex' : 'none';
     if (pendingBuy) {
-      const name = TOWERS[pendingBuy.type]?.name ?? '这把武器';
+      const name = towerName(pendingBuy.type);
       pickerHint.textContent = `在中间舰船背包上点一个武器槽，把它换成「${name}」；取消不扣星币`;
     }
     setGrey(refreshBtn, pickerOpen);
@@ -613,7 +615,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       const def = TOWERS[type];
       card.innerHTML =
         itemArtHtml(towerArt(type), '?') +
-        `<span style="${ITEM_NAME_CSS}">${def?.name ?? `未知武器(${type})`}</span>` +
+        `<span style="${ITEM_NAME_CSS}">${def === undefined ? `未知武器(${type})` : towerName(type)}</span>` +
         `<span style="${ITEM_PRICE_CSS}">${priceHtml(
           world.shopDiscountIndex === DOCK_EDICT_COUNT + i,
           DOCK_WEAPON_PRICE,
@@ -634,7 +636,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       } else {
         row.innerHTML =
           itemArtHtml(edictArt(type), '◆') +
-          `<span style="${ITEM_NAME_CSS}">${EDICTS[type]?.name ?? `未知法令(${type})`}</span>` +
+          `<span style="${ITEM_NAME_CSS}">${edictName(type)}</span>` +
           `<span style="${ITEM_PRICE_CSS}">${priceHtml(
             world.shopDiscountIndex === i,
             DOCK_EDICT_PRICE,
@@ -664,11 +666,11 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
 
   /** 买成之后的回执:三合一当场升星 / ★★★ 变身时,回执把结果说出来而不是干巴巴的"已购入" */
   function weaponReceipt(type: number, before: { max: number; result: number }): string {
-    const name = TOWERS[type]?.name ?? '未知武器';
+    const name = towerName(type);
     const result = mergeResultOf(type);
     const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
     if (afterResult > before.result) {
-      return `已购入：${name} 合 ${'★'.repeat(3)} 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+      return `已购入：${name} 合 ${'★'.repeat(3)} 变身「${towerName(result)}」`;
     }
     const afterMax = slotMaxStars(world.weapons, type);
     if (afterMax > before.max) return `已购入：${name} 合到 ${'★'.repeat(afterMax)}`;
@@ -714,7 +716,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const oldSlot = world.weapons[slotIndex];
     const oldName =
       oldSlot && oldSlot.type >= 0
-        ? `${TOWERS[oldSlot.type]?.name ?? '未知武器'} ${'★'.repeat(oldSlot.stars)}`
+        ? `${towerName(oldSlot.type)} ${'★'.repeat(oldSlot.stars)}`
         : null;
     const before = weaponBefore(pending.type);
     const code = world.buyShopWeapon(pending.index, slotIndex);
@@ -732,7 +734,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     }
     // 换装的回执:换下的旧武器照报,三合一升星/★★★ 变身照 weaponReceipt 的口径补一句
     const receipt = weaponReceipt(pending.type, before);
-    const name = TOWERS[pending.type]?.name ?? '未知武器';
+    const name = towerName(pending.type);
     const fusion = receipt.slice(`已购入：${name}`.length); // '' / ' 合到 ★★' / ' 合 ★★★ 变身「…」'
     flash(oldName ? `已换装：${name}${fusion} → ${oldName}` : receipt, OK_COLOR);
     audioBus.playPlace();
@@ -772,7 +774,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    const name = type !== undefined && type >= 0 ? (EDICTS[type]?.name ?? '法令') : '法令';
+    const name = type !== undefined && type >= 0 ? edictName(type) : '法令';
     flash(`已购入：${name}`, OK_COLOR);
     audioBus.playPlace();
     syncPanel();

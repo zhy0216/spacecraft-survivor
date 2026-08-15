@@ -15,7 +15,7 @@ describe('i18n:初始化与语言切换', () => {
     expect(currentLocale()).toBe('zh-CN');
     expect(t('common:confirm')).toBe('确认');
     expect(t('ui:menu.newRun')).toBe('开始航行');
-    expect(t('content:towers.autoCannon')).toBe('自动机炮');
+    expect(t('content:towers.autocannon.name')).toBe('自动机炮');
     expect(t('story:title.subtitle')).toBe('星 骸');
   });
 
@@ -24,7 +24,7 @@ describe('i18n:初始化与语言切换', () => {
     expect(currentLocale()).toBe('en');
     expect(t('common:confirm')).toBe('Confirm');
     expect(t('ui:menu.newRun')).toBe('Start Voyage');
-    expect(t('content:towers.autoCannon')).toBe('Auto Cannon');
+    expect(t('content:towers.autocannon.name')).toBe('Auto Cannon');
   });
 
   it('changeLocale 来回切换,currentLocale 跟着走', async () => {

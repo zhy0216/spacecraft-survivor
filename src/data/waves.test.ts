@@ -68,12 +68,24 @@ describe('波次脚本', () => {
   it('单局结构:4 段 × 120s,每两分钟一次敌群升级/玩家整备', () => {
     expect(WAVE_SEGMENTS.length).toBe(4);
     for (const seg of WAVE_SEGMENTS) {
-      expect(seg.duration, seg.name).toBe(120);
-      expect(seg.name.length, '段名给结算界面与调参面板显示,不许留空').toBeGreaterThan(0);
+      expect(seg.duration, seg.devName).toBe(120);
+      expect(seg.devName.length, '段名给结算界面与调参面板显示,不许留空').toBeGreaterThan(0);
     }
     // 四段共 8 分钟；整备发生在前三个段边界，最终段结束直接结算。
     expect(WAVE_TOTAL_TIME).toBe(WAVE_SEGMENTS.reduce((s, seg) => s + seg.duration, 0));
     expect(WAVE_TOTAL_TIME).toBe(480);
+  });
+
+  it('每个航段都有 slug:小写下划线、全表唯一、与下标一一对应(03 号)', () => {
+    // slug 是翻译/编辑器身份;数组下标才是存档与模拟身份 —— 顺序必须与段顺序一致,
+    // 错一位 presenter 就会拿 A 段的 slug 去翻 B 段的名字
+    const SLUGS = ['departure_lane', 'debris_belt', 'patrol_lane', 'swarm_siege'];
+    expect(WAVE_SEGMENTS.length).toBe(SLUGS.length);
+    WAVE_SEGMENTS.forEach((seg, i) => {
+      expect(seg.slug, `下标 ${i} 的 slug 必须与顺序表一致`).toBe(SLUGS[i]);
+      expect(seg.slug, `下标 ${i} 的 slug 是小写下划线`).toMatch(/^[a-z][a-z0-9_]*$/);
+    });
+    expect(new Set(SLUGS).size).toBe(SLUGS.length);
   });
 
   it('主压方向首尾相接、写累积角不折回,且每段都在缓慢转(GDD §6.3:最优舷持续漂移)', () => {
@@ -83,7 +95,7 @@ describe('波次脚本', () => {
       // mod 360:下一段写 120 还是写 480 都行(累积角),但方向必须接得上 ——
       // 接不上就是换段那一帧主压方向瞬移,罗盘(11 号)会突然指向别处
       const gap = (((next.dirStartDeg - cur.dirEndDeg) % 360) + 360) % 360;
-      expect(gap, `${cur.name} → ${next.name}`).toBe(0);
+      expect(gap, `${cur.devName} → ${next.devName}`).toBe(0);
     }
 
     let sweep = 0;
@@ -91,13 +103,13 @@ describe('波次脚本', () => {
       const turn = Math.abs(seg.dirEndDeg - seg.dirStartDeg);
       sweep += turn;
       // 一段内转过 360° 以上 = 写成了绕圈,插值出来的方向会快到没人跟得住
-      expect(turn, seg.name).toBeLessThanOrEqual(360);
+      expect(turn, seg.devName).toBeLessThanOrEqual(360);
       const speed = turn / seg.duration;
       // 0 = 这一段方向不动 → 玩家摆好一个舷就能挂机整段,本作最核心的那条压力就没了
-      expect(speed, seg.name).toBeGreaterThan(0);
+      expect(speed, seg.devName).toBeGreaterThan(0);
       // 上界 3°/s = 转一整圈至少 120s。快过它就不叫"缓慢旋转",
       // 而是逼玩家全程满舵追(船只有 tuning.shipTurnRate = 100°/s,追是追得上,但那一局就只剩转舵了)
-      expect(speed, seg.name).toBeLessThanOrEqual(3);
+      expect(speed, seg.devName).toBeLessThanOrEqual(3);
     }
     // 全局至少转满一整周:否则总存在一个"从头吃到尾"的航向,最优舷就不漂移了
     expect(sweep).toBeGreaterThanOrEqual(360);
@@ -105,7 +117,7 @@ describe('波次脚本', () => {
 
   it('主压怪流:种类落在敌人表内,速率为正,展宽还算得上一个"方向"', () => {
     for (const seg of WAVE_SEGMENTS) {
-      expect(seg.streams.length, `${seg.name} 没有主压流 = 整段只有零星侧压`).toBeGreaterThan(0);
+      expect(seg.streams.length, `${seg.devName} 没有主压流 = 整段只有零星侧压`).toBeGreaterThan(0);
       for (const s of seg.streams) {
         // 下标即 kind(data/enemies.ts 的口径),错一位就出成另一型
         expect(Number.isInteger(s.kind)).toBe(true);
@@ -113,8 +125,8 @@ describe('波次脚本', () => {
         expect(s.kind).toBeLessThan(ENEMY_KIND_COUNT);
         expect(ENEMIES[s.kind]!.kind).toBe(s.kind);
 
-        expect(s.rate0, `${seg.name}/${ENEMIES[s.kind]!.name}`).toBeGreaterThan(0);
-        expect(s.rate1, `${seg.name}/${ENEMIES[s.kind]!.name}`).toBeGreaterThan(0);
+        expect(s.rate0, `${seg.devName}/${ENEMIES[s.kind]!.devName}`).toBeGreaterThan(0);
+        expect(s.rate1, `${seg.devName}/${ENEMIES[s.kind]!.devName}`).toBeGreaterThan(0);
         // 半展宽 ≥ 90° 等于说"四面八方都来",主压方向也就不存在了;负数则会把出生角算反
         expect(s.spreadDeg).toBeGreaterThanOrEqual(0);
         expect(s.spreadDeg).toBeLessThan(90);
@@ -125,14 +137,14 @@ describe('波次脚本', () => {
   it('基线密度只涨不落,换段时也不掉压(节奏的起伏走 tides 潮汐,不动基线)', () => {
     for (const seg of WAVE_SEGMENTS) {
       for (const s of seg.streams) {
-        expect(s.rate1, `${seg.name}/${ENEMIES[s.kind]!.name}`).toBeGreaterThanOrEqual(s.rate0);
+        expect(s.rate1, `${seg.devName}/${ENEMIES[s.kind]!.devName}`).toBeGreaterThanOrEqual(s.rate0);
       }
     }
     for (let i = 0; i + 1 < WAVE_SEGMENTS.length; i++) {
       const cur = WAVE_SEGMENTS[i]!;
       const next = WAVE_SEGMENTS[i + 1]!;
       // 段尾总压强 ≤ 下一段段首:接缝处不许回落,九分钟才是一条曲线而不是四个小高潮
-      expect(intensity(next, 'rate0'), `${cur.name} → ${next.name}`).toBeGreaterThanOrEqual(
+      expect(intensity(next, 'rate0'), `${cur.devName} → ${next.devName}`).toBeGreaterThanOrEqual(
         intensity(cur, 'rate1'),
       );
     }
@@ -142,31 +154,31 @@ describe('波次脚本', () => {
     for (const seg of WAVE_SEGMENTS) {
       let prevAt = -1;
       for (const b of seg.bursts) {
-        expect(b.at, seg.name).toBeGreaterThanOrEqual(0);
+        expect(b.at, seg.devName).toBeGreaterThanOrEqual(0);
         // 运行器只往前扫、不回头找(热路径不排序):乱序写的事件会被整个跳过
-        expect(b.at, `${seg.name} 的事件必须按 at 升序`).toBeGreaterThan(prevAt);
+        expect(b.at, `${seg.devName} 的事件必须按 at 升序`).toBeGreaterThan(prevAt);
         // == duration 也不行:那一刻已经进了下一段,事件永远轮不到触发
-        expect(b.at, seg.name).toBeLessThan(seg.duration);
+        expect(b.at, seg.devName).toBeLessThan(seg.duration);
         prevAt = b.at;
 
         // 短一位就会静默漏掉一型(noUncheckedIndexedAccess 拦不住数据表写短)
-        expect(b.counts.length, seg.name).toBe(ENEMY_KIND_COUNT);
+        expect(b.counts.length, seg.devName).toBe(ENEMY_KIND_COUNT);
         for (const n of b.counts) {
           expect(Number.isInteger(n)).toBe(true);
           expect(n).toBeGreaterThanOrEqual(0);
         }
-        expect(burstTotal(b.counts), `${seg.name}@${b.at}s 是个不出怪的空事件`).toBeGreaterThan(0);
+        expect(burstTotal(b.counts), `${seg.devName}@${b.at}s 是个不出怪的空事件`).toBeGreaterThan(0);
 
         // 相对当时的主压方向:±90 侧压、180 背后。超出 ±180 只是同一个方向的另一种写法,
         // 但写在表里就没人一眼看得出它压的是哪边了
-        expect(b.offsetDeg, seg.name).toBeGreaterThanOrEqual(-180);
-        expect(b.offsetDeg, seg.name).toBeLessThanOrEqual(180);
+        expect(b.offsetDeg, seg.devName).toBeGreaterThanOrEqual(-180);
+        expect(b.offsetDeg, seg.devName).toBeLessThanOrEqual(180);
         expect(b.spreadDeg).toBeGreaterThanOrEqual(0);
         expect(b.spreadDeg).toBeLessThan(90);
 
         // pattern 必填 ∈ {方向流, 环阵}(25 号):运行器按 === BURST_PATTERN_RING 分派,
         // 写成别的数会被静默当方向流出 —— 表要一眼可查、不许有第三种没实现的排布
-        expect([BURST_PATTERN_DIRECTIONAL, BURST_PATTERN_RING], seg.name).toContain(b.pattern);
+        expect([BURST_PATTERN_DIRECTIONAL, BURST_PATTERN_RING], seg.devName).toContain(b.pattern);
       }
     }
   });
@@ -178,7 +190,7 @@ describe('波次脚本', () => {
       for (const b of WAVE_SEGMENTS[si]!.bursts) {
         if (b.pattern !== BURST_PATTERN_RING) continue;
         if (firstSeg < 0) firstSeg = si;
-        rings.push({ seg: WAVE_SEGMENTS[si]!.name, at: b.at, n: burstTotal(b.counts), spreadDeg: b.spreadDeg });
+        rings.push({ seg: WAVE_SEGMENTS[si]!.devName, at: b.at, n: burstTotal(b.counts), spreadDeg: b.spreadDeg });
       }
     }
     // 机制真的被用上:表里加了环阵却一条都不排 = 整件事等于没做
@@ -199,7 +211,7 @@ describe('波次脚本', () => {
         // 0(正面)与 ±180(背后)不分左右,不参与交替判定
         if (b.offsetDeg === 0 || Math.abs(b.offsetDeg) === 180) continue;
         const side = b.offsetDeg > 0 ? 1 : -1;
-        expect(side, `${seg.name}@${b.at}s 与上一次同舷`).not.toBe(prevSide);
+        expect(side, `${seg.devName}@${b.at}s 与上一次同舷`).not.toBe(prevSide);
         prevSide = side;
       }
     }
@@ -222,7 +234,7 @@ describe('波次脚本', () => {
     }
 
     for (let kind = 0; kind < ENEMY_KIND_COUNT; kind++) {
-      const name = ENEMIES[kind]!.name;
+      const name = ENEMIES[kind]!.devName;
       // 四型都得在脚本里真的出现过:设计了却一局都见不到的敌型等于没做
       expect(Math.min(firstStream[kind]!, firstBurst[kind]!), name).toBeLessThan(Infinity);
       if (kind === KIND_SWARM) continue; // 打底型,开局第一条流就是它
@@ -242,14 +254,14 @@ describe('波次脚本', () => {
     const all: { at: number; kind: number; count: number; affixes: number[] }[] = [];
     for (const seg of WAVE_SEGMENTS) {
       // 中后段给力:每段 1–2 个,塞满整段就没有"突发时刻"的节奏可言
-      expect(seg.elites.length, `${seg.name} 的精英数`).toBeLessThanOrEqual(2);
+      expect(seg.elites.length, `${seg.devName} 的精英数`).toBeLessThanOrEqual(2);
       let prevAt = -1;
       for (const el of seg.elites) {
-        expect(el.at, seg.name).toBeGreaterThanOrEqual(0);
+        expect(el.at, seg.devName).toBeGreaterThanOrEqual(0);
         // 与 bursts 同一条游标口径:运行器只往前扫、不回头找,乱序写的事件会被整个跳过
-        expect(el.at, `${seg.name} 的精英必须按 at 升序`).toBeGreaterThan(prevAt);
+        expect(el.at, `${seg.devName} 的精英必须按 at 升序`).toBeGreaterThan(prevAt);
         // == duration 也不行:那一刻已经进了下一段,事件永远轮不到触发
-        expect(el.at, seg.name).toBeLessThan(seg.duration);
+        expect(el.at, seg.devName).toBeLessThan(seg.duration);
         prevAt = el.at;
 
         // 精英是普通敌型的放大版:kind 必须落在敌人表内(错一位就出成另一型)
@@ -259,11 +271,11 @@ describe('波次脚本', () => {
         expect(ENEMIES[el.kind]!.kind).toBe(el.kind);
 
         expect(Number.isInteger(el.count)).toBe(true);
-        expect(el.count, seg.name).toBeGreaterThanOrEqual(1);
+        expect(el.count, seg.devName).toBeGreaterThanOrEqual(1);
 
         // 词缀 1–2 个(GDD §6.4);编号必须落在 data/affixes.ts 的合法区间内,
         // 出界的编号在运行器里会静默透传、效果永远挂不上
-        expect(el.affixes.length, `${seg.name}@${el.at}s 的词缀数`).toBeGreaterThanOrEqual(1);
+        expect(el.affixes.length, `${seg.devName}@${el.at}s 的词缀数`).toBeGreaterThanOrEqual(1);
         expect(el.affixes.length).toBeLessThanOrEqual(2);
         for (const a of el.affixes) {
           expect(Number.isInteger(a)).toBe(true);
@@ -275,7 +287,7 @@ describe('波次脚本', () => {
     }
     // 后三段每段至少一只:教学段白给,整局不能只有开头有惊喜
     for (let i = 1; i < WAVE_SEGMENTS.length; i++) {
-      expect(WAVE_SEGMENTS[i]!.elites.length, WAVE_SEGMENTS[i]!.name).toBeGreaterThanOrEqual(1);
+      expect(WAVE_SEGMENTS[i]!.elites.length, WAVE_SEGMENTS[i]!.devName).toBeGreaterThanOrEqual(1);
     }
     // 五种词缀整局至少各出场一次(14 号验收:每种效果都要被玩家撞见并验证)
     for (let a = 0; a < AFFIX_COUNT; a++) {
@@ -325,7 +337,8 @@ describe('波次脚本', () => {
     // T2 的运行器单测全靠这一手:真跑完整局是 480s ≈ 28800 逻辑帧,
     // 冻表会让"跑到胜利"这条验收无从下手(与 data/towers.test.ts 那条"表是可写的"同源)
     const short: WaveSegment = {
-      name: '短脚本',
+      slug: 'short_script',
+      devName: '短脚本',
       duration: 2,
       dirStartDeg: 0,
       dirEndDeg: 10,
@@ -352,28 +365,28 @@ describe('潮汐窗口(节奏改版)—— 基线上的涨落,重分配不砍量
     for (const seg of WAVE_SEGMENTS) {
       let prevEnd = -1;
       for (const t of seg.tides) {
-        expect(t.at, seg.name).toBeGreaterThanOrEqual(0);
+        expect(t.at, seg.devName).toBeGreaterThanOrEqual(0);
         // 运行器只往前扫、扫到"还没开始"的窗口就早退(tideMulAt):乱序/重叠会被静默读错
-        expect(t.at, `${seg.name} 的潮汐必须按 at 升序且互不重叠`).toBeGreaterThanOrEqual(prevEnd);
-        expect(t.duration, seg.name).toBeGreaterThan(0);
-        expect(t.at + t.duration, `${seg.name}@${t.at}s 的窗口不许跨段`).toBeLessThanOrEqual(
+        expect(t.at, `${seg.devName} 的潮汐必须按 at 升序且互不重叠`).toBeGreaterThanOrEqual(prevEnd);
+        expect(t.duration, seg.devName).toBeGreaterThan(0);
+        expect(t.at + t.duration, `${seg.devName}@${t.at}s 的窗口不许跨段`).toBeLessThanOrEqual(
           seg.duration,
         );
         prevEnd = t.at + t.duration;
         // 下界 0.2:退潮是"静一口气",不是把流关停(0 会让密度曲线与罗盘双双躺平);
         // 上界 1.5:再高就该改基线 rate 了,潮汐只负责起伏不负责总量
-        expect(t.mul, seg.name).toBeGreaterThanOrEqual(0.2);
-        expect(t.mul, seg.name).toBeLessThanOrEqual(1.5);
-        expect(t.mul, `${seg.name}@${t.at}s 恰为 1 的窗口是没意义的占位`).not.toBe(1);
+        expect(t.mul, seg.devName).toBeGreaterThanOrEqual(0.2);
+        expect(t.mul, seg.devName).toBeLessThanOrEqual(1.5);
+        expect(t.mul, `${seg.devName}@${t.at}s 恰为 1 的窗口是没意义的占位`).not.toBe(1);
       }
     }
   });
 
   it('每段都有潮汐编排,且涨落两个方向都有(只退不涨是变相砍量,只涨不退是变相加压)', () => {
     for (const seg of WAVE_SEGMENTS) {
-      expect(seg.tides.length, seg.name).toBeGreaterThan(0);
-      expect(seg.tides.some((t) => t.mul < 1), `${seg.name} 没有退潮`).toBe(true);
-      expect(seg.tides.some((t) => t.mul > 1), `${seg.name} 没有涨潮`).toBe(true);
+      expect(seg.tides.length, seg.devName).toBeGreaterThan(0);
+      expect(seg.tides.some((t) => t.mul < 1), `${seg.devName} 没有退潮`).toBe(true);
+      expect(seg.tides.some((t) => t.mul > 1), `${seg.devName} 没有涨潮`).toBe(true);
     }
   });
 
@@ -386,7 +399,7 @@ describe('潮汐窗口(节奏改版)—— 基线上的涨落,重分配不砍量
       for (const t of seg.tides) {
         if (t.mul >= 1) continue;
         const hit = events.some((at) => at >= t.at - 15 && at <= t.at + t.duration + 8);
-        expect(hit, `${seg.name}@${t.at}s 的退潮既不预告事件也不跟在恶战后`).toBe(true);
+        expect(hit, `${seg.devName}@${t.at}s 的退潮既不预告事件也不跟在恶战后`).toBe(true);
       }
     }
   });
@@ -398,8 +411,8 @@ describe('潮汐窗口(节奏改版)—— 基线上的涨落,重分配不砍量
       let delta = 0;
       for (const t of seg.tides) delta += (t.mul - 1) * t.duration;
       const avg = 1 + delta / seg.duration;
-      expect(avg, seg.name).toBeGreaterThanOrEqual(0.85);
-      expect(avg, seg.name).toBeLessThanOrEqual(1.15);
+      expect(avg, seg.devName).toBeGreaterThanOrEqual(0.85);
+      expect(avg, seg.devName).toBeLessThanOrEqual(1.15);
     }
   });
 });
@@ -412,9 +425,9 @@ describe('解锁精英事件(19 号)—— 独立槽位,不碰既有段脚本的
       expect(el.segmentIndex).toBeGreaterThanOrEqual(0);
       expect(el.segmentIndex).toBeLessThan(WAVE_SEGMENTS.length);
       const seg = WAVE_SEGMENTS[el.segmentIndex]!;
-      expect(el.at, `${seg.name}@${el.at}s`).toBeGreaterThanOrEqual(0);
+      expect(el.at, `${seg.devName}@${el.at}s`).toBeGreaterThanOrEqual(0);
       // 与 WaveElite 同一条口径:== duration 那一刻已经进了下一段,事件永远轮不到触发
-      expect(el.at, seg.name).toBeLessThan(seg.duration);
+      expect(el.at, seg.devName).toBeLessThan(seg.duration);
 
       // 精英是普通敌型的放大版:kind 必须落在敌人表内(错一位就出成另一型)
       expect(Number.isInteger(el.kind)).toBe(true);
@@ -448,7 +461,7 @@ describe('解锁精英事件(19 号)—— 独立槽位,不碰既有段脚本的
       const seg = WAVE_SEGMENTS[el.segmentIndex]!;
       // 与既有精英的触发时刻错开:同一段同几秒冒出两只"突发",玩家分不清谁是谁的
       for (const existing of seg.elites) {
-        expect(Math.abs(existing.at - el.at), `${seg.name}@${el.at}s 与既有精英 ${existing.at}s 撞车`).toBeGreaterThan(5);
+        expect(Math.abs(existing.at - el.at), `${seg.devName}@${el.at}s 与既有精英 ${existing.at}s 撞车`).toBeGreaterThan(5);
       }
     }
   });

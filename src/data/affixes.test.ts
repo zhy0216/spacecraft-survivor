@@ -29,18 +29,31 @@ describe('词缀表', () => {
     expect(AFFIXES.length).toBe(AFFIX_COUNT);
     expect(AFFIX_COUNT).toBe(5);
     AFFIXES.forEach((def, i) => expect(def.id).toBe(i));
-    expect(AFFIXES[AFFIX_FRENZY]!.name).toBe('狂热光环');
-    expect(AFFIXES[AFFIX_FISSION]!.name).toBe('裂变');
-    expect(AFFIXES[AFFIX_MAGNETIC]!.name).toBe('磁力干扰');
-    expect(AFFIXES[AFFIX_ARMORED]!.name).toBe('装甲');
-    expect(AFFIXES[AFFIX_PHASED]!.name).toBe('相位');
+    // 03 号:数据一致性测试断言稳定 ID(slug),中文显示名走 presenter 查翻译
+    expect(AFFIXES[AFFIX_FRENZY]!.slug).toBe('frenzy');
+    expect(AFFIXES[AFFIX_FISSION]!.slug).toBe('fission');
+    expect(AFFIXES[AFFIX_MAGNETIC]!.slug).toBe('magnetic');
+    expect(AFFIXES[AFFIX_ARMORED]!.slug).toBe('armored');
+    expect(AFFIXES[AFFIX_PHASED]!.slug).toBe('phased');
+  });
+
+  it('slug 稳定 ID:全表唯一、小写下划线,每个 AFFIX_* 都有对应 slug(03 号)', () => {
+    // slug 是翻译/编辑器身份;数值 id 才是存档与模拟身份 —— 顺序必须与 AFFIX_* 常量一致,
+    // 错一位 presenter 就会拿 A 词缀的 slug 去翻 B 词缀的名字
+    const SLUGS = ['frenzy', 'fission', 'magnetic', 'armored', 'phased'];
+    expect(AFFIXES.length).toBe(SLUGS.length);
+    AFFIXES.forEach((def, i) => {
+      expect(def.slug, `编号 ${i} 的 slug 必须与顺序表一致`).toBe(SLUGS[i]);
+      expect(def.slug, `编号 ${i} 的 slug 是小写下划线`).toMatch(/^[a-z][a-z0-9_]*$/);
+    });
+    expect(new Set(SLUGS).size).toBe(SLUGS.length);
   });
 
   it('效果字段齐全:名字与描述非空;各词缀自带参数生效,不作用的档是中性值(倍率 1 / 数量半径 0)', () => {
     // 与 enemies.ts"该冲的参数齐、不冲的一律 0"同一条口径:中性档填错,效果当场串味
     for (const def of AFFIXES) {
-      expect(def.name.length, `词缀 ${def.id} 的名字不许留空`).toBeGreaterThan(0);
-      expect(def.description.length, `词缀 ${def.id} 的描述不许留空`).toBeGreaterThan(0);
+      expect(def.devName.length, `词缀 ${def.id} 的名字不许留空`).toBeGreaterThan(0);
+      expect(def.devDescription.length, `词缀 ${def.id} 的描述不许留空`).toBeGreaterThan(0);
     }
 
     const frenzy = AFFIXES[AFFIX_FRENZY]!;

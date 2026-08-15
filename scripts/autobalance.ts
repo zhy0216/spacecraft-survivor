@@ -45,7 +45,7 @@ function formatReport(rows: CorridorRow[]): string {
   for (const r of rows) {
     const flag = Math.abs(r.ratio - 1) > CORRIDOR_BAND ? ' ← 越带' : '';
     lines.push(
-      `${pad(r.name, 8)} ${pad(String(r.stars), 4)} ${pad(r.difficulty.toFixed(2), 7)} ${pad(
+      `${pad(r.slug, 8)} ${pad(String(r.stars), 4)} ${pad(r.difficulty.toFixed(2), 7)} ${pad(
         r.power.toFixed(1),
         9,
       )} ${pad(r.line.toFixed(1), 9)} ${r.ratio.toFixed(2)}${flag}`,
@@ -67,7 +67,7 @@ if (towerEdits.length === 0) {
 } else {
   console.log('\n== 编辑清单 ==');
   for (const e of towerEdits) {
-    const name = TOWERS[e.anchor]?.name ?? `?${e.anchor}`;
+    const name = TOWERS[e.anchor]?.slug ?? `?${e.anchor}`;
     console.log(`  ${name}.${e.field}: ${e.current} → ${e.proposed}`);
   }
 }
@@ -84,7 +84,7 @@ const after = corridorReport();
 console.log(formatReport(after));
 const stragglers = outOfBand(after);
 if (stragglers.length > 0) {
-  console.error(`\n${stragglers.length} 处越带未解:${stragglers.map((r) => `${r.name}${r.stars}★`).join('、')}`);
+  console.error(`\n${stragglers.length} 处越带未解:${stragglers.map((r) => `${r.slug}${r.stars}★`).join('、')}`);
   if (dryRun) process.exit(1);
 }
 

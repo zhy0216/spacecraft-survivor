@@ -22,14 +22,17 @@
  * 同一条 URL 判定)才印 残骸/花费。
  */
 import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
-import { edictDesc, edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
+import { edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { THR_CHARGE, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
 import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
-import { OFFER_NEW_WEAPON, optionLabel, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
+import { OFFER_NEW_WEAPON, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 import { isTyping } from '../core/isTyping';
+import { towerName } from './presentation/contentText';
+import { edictDesc } from './presentation/edictText';
+import { optionLabel } from './presentation/upgradeText';
 
 // 提示文字配色:成功 = 冷青蓝、拒绝 = 暖红(与渲染层高亮同色;冷色是我方色域,GDD §12)
 const OK_COLOR = '#9adcff';
@@ -141,7 +144,7 @@ export function denyMessage(code: number): string {
   return DENY_MSGS[code] ?? `升级被拒绝(理由码 ${code})`;
 }
 
-/** 卡片标题 = 候选的名字,**一律走 sim/upgrade 的 optionLabel**(它读的是数值表),ui 不抄第二份 */
+/** 卡片标题 = 候选的名字,**一律走 presentation 的 optionLabel**(它委托 towerName/edictName 查翻译),ui 不抄第二份 */
 export function cardTitle(opt: UpgradeOption): string {
   return optionLabel(opt);
 }
@@ -171,8 +174,8 @@ function num(v: number): string {
   return String(Math.round(v * 100) / 100);
 }
 
-// 节流系的**手感一句话**(系名单一来源在 data/towers 的 THROTTLE_NAMES/throttleName;
-// 这里只多一句"为什么打不响",是武器卡独有的念法)
+// 节流系的**手感一句话**("为什么打不响"的武器卡专属念法,不是节流系名字 ——
+// 系名走 presenter 的 throttleFamilyName,这里只是给"系名 + 括号一句手感"这格卡面配的补充文案)
 const THROTTLE_DESCS = ['弹药系(打空要装填)', '过热系(贪连射会锁死)', '充能系(攒满才放)'];
 
 function throttleDesc(throttle: number): string {
@@ -203,7 +206,7 @@ function dpsText(def: TowerDef, stars: number): string {
 /**
  * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头)。武器卡报
  * "射界档 / 射程 / 表面 DPS(1★)/ 节流系(含系名)"四样;法令念数值表里非中性的字段
- * (edictDesc 已移入 data/edicts,系法令自带系名前缀、全船法令自带「全船」前缀)。
+ * (edictDesc 已移入 presentation/edictText,系法令自带系名前缀、全船法令自带「全船」前缀)。
  */
 export function cardDesc(opt: UpgradeOption, _world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
@@ -578,7 +581,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const result = mergeResultOf(opt.type);
       const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
       if (afterResult > beforeResult) {
-        return `${label} 合 ${'★'.repeat(3)} 变身「${TOWERS[result]?.name ?? '合成武器'}」`;
+        return `${label} 合 ${'★'.repeat(3)} 变身「${towerName(result)}」`;
       }
       const afterMax = slotMaxStars(world.weapons, opt.type);
       if (afterMax > beforeMax) return `${label} 合到 ${'★'.repeat(afterMax)}`;
@@ -651,7 +654,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const def = TOWERS[slot.type];
       btn.disabled = false;
       btn.style.opacity = '1';
-      btn.textContent = `槽 ${i} · ${def?.name ?? `未知塔型(${slot.type})`} ${'★'.repeat(slot.stars)}`;
+      btn.textContent = `槽 ${i} · ${def === undefined ? `未知塔型(${slot.type})` : towerName(slot.type)} ${'★'.repeat(slot.stars)}`;
     }
     phase = PHASE_REPLACE;
     clearFlash();

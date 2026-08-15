@@ -58,7 +58,8 @@ function burst(p: Partial<WaveBurst> = {}): WaveBurst {
 }
 function segment(p: Partial<WaveSegment> = {}): WaveSegment {
   return {
-    name: 'seg',
+    slug: 'seg',
+    devName: 'seg',
     duration: 10,
     dirStartDeg: 0,
     dirEndDeg: 0,
@@ -429,8 +430,8 @@ describe('出怪账(debt)', () => {
 describe('段推进', () => {
   it('带余数进位:一帧跨段时余数结转,总时长严格 = Σduration', () => {
     useScript(
-      segment({ name: 'a', duration: 1 }),
-      segment({ name: 'b', duration: 1 }),
+      segment({ devName: 'a', duration: 1 }),
+      segment({ devName: 'b', duration: 1 }),
     );
     const s = createWaveState();
     stepWaves(s, 1.5, new Rng(1), rec());
@@ -440,9 +441,9 @@ describe('段推进', () => {
 
   it('一帧跨两段也算得对(短脚本 / 大 dt)', () => {
     useScript(
-      segment({ name: 'a', duration: 0.5 }),
-      segment({ name: 'b', duration: 0.5 }),
-      segment({ name: 'c', duration: 4 }),
+      segment({ devName: 'a', duration: 0.5 }),
+      segment({ devName: 'b', duration: 0.5 }),
+      segment({ devName: 'c', duration: 4 }),
     );
     const s = createWaveState();
     stepWaves(s, 1.25, new Rng(1), rec());
@@ -455,9 +456,9 @@ describe('段推进', () => {
     // 三段就要 19 + 29 + 33 = 81 帧才走完 —— 真脚本 4 段同理会比表上的 480s 长出小半秒,
     // "跑完 = 胜利"这条口径也就跟数据表对不上了
     useScript(
-      segment({ name: 'a', duration: 0.31 }),
-      segment({ name: 'b', duration: 0.47 }),
-      segment({ name: 'c', duration: 0.55 }),
+      segment({ devName: 'a', duration: 0.31 }),
+      segment({ devName: 'b', duration: 0.47 }),
+      segment({ devName: 'c', duration: 0.55 }),
     );
     const total = WAVE_SEGMENTS.reduce((sum, seg) => sum + seg.duration, 0);
     const frames = Math.ceil(total / SIM_DT); // 80:带余数进位下走完脚本恰好要这么多帧
@@ -472,8 +473,8 @@ describe('段推进', () => {
   it('跨段接力:接缝那一帧起就按**新段**插值,方向接着往同一边转、不在接缝上顿一下', () => {
     useScript(
       // 首尾相接(真脚本的这条口径由 data/waves.test.ts 钉住):接得上,两段连起来就是一条匀速的转动
-      segment({ name: 'a', duration: 1, dirStartDeg: 0, dirEndDeg: 90 }),
-      segment({ name: 'b', duration: 1, dirStartDeg: 90, dirEndDeg: 180 }),
+      segment({ devName: 'a', duration: 1, dirStartDeg: 0, dirEndDeg: 90 }),
+      segment({ devName: 'b', duration: 1, dirStartDeg: 90, dirEndDeg: 180 }),
     );
     const s = createWaveState();
     // 1s 除不尽 0.06 → 接缝落在第 17 帧的**帧中**(余 0.02s):接力接不上的话这一帧当场露馅
@@ -494,10 +495,10 @@ describe('段推进', () => {
 
   it('接力棒交给的是**新段**:数据没接上时方向就在接缝上瞬移 —— 正是数据自检钉首尾相接的理由', () => {
     useScript(
-      segment({ name: 'a', duration: 1, dirStartDeg: 0, dirEndDeg: 90 }),
+      segment({ devName: 'a', duration: 1, dirStartDeg: 0, dirEndDeg: 90 }),
       // 故意写成接不上的 200°(真脚本不许这么写):运行器只认新段,一点都不替数据打圆场
       segment({
-        name: 'b',
+        devName: 'b',
         duration: 1,
         dirStartDeg: 200,
         dirEndDeg: 200,
@@ -522,12 +523,12 @@ describe('段推进', () => {
   it('换段清账:debt 归零、侧压游标归零(新段的事件从头再来)', () => {
     useScript(
       segment({
-        name: 'a',
+        devName: 'a',
         duration: 1,
         streams: [stream({ rate0: 0.5, rate1: 0.5 })],
         bursts: [burst({ at: 0, counts: [1, 0, 0, 0] })],
       }),
-      segment({ name: 'b', duration: 5, streams: [stream({ rate0: 0, rate1: 0 })] }),
+      segment({ devName: 'b', duration: 5, streams: [stream({ rate0: 0, rate1: 0 })] }),
     );
     const s = createWaveState();
     const r = rec();
@@ -546,7 +547,7 @@ describe('段推进', () => {
     const many = WAVE_MAX_STREAMS + 2;
     const streams: WaveStream[] = [];
     for (let i = 0; i < many; i++) streams.push(stream({ kind: i % 4, rate0: 2, rate1: 2 }));
-    useScript(segment({ name: 'a', duration: 1 }), segment({ name: 'b', duration: 5, streams }));
+    useScript(segment({ devName: 'a', duration: 1 }), segment({ devName: 'b', duration: 5, streams }));
     const s = createWaveState();
     const r = rec();
     stepWaves(s, 1, new Rng(2), rec()); // 跨进 b 段(越界的余数为 0)
@@ -807,7 +808,7 @@ describe('确定性(08 验收:同 seed 两局出怪序列一致)', () => {
   const SCRIPT = (): void =>
     useScript(
       segment({
-        name: 'a',
+        devName: 'a',
         duration: 2,
         dirStartDeg: 0,
         dirEndDeg: 60,
@@ -818,7 +819,7 @@ describe('确定性(08 验收:同 seed 两局出怪序列一致)', () => {
         bursts: [burst({ at: 0.5, offsetDeg: -90, spreadDeg: 8, counts: [2, 0, 1, 1] })],
       }),
       segment({
-        name: 'b',
+        devName: 'b',
         duration: 2,
         dirStartDeg: 60,
         dirEndDeg: 200,
@@ -884,7 +885,7 @@ describe('精英插入(14 号:实装 todos/08 预留的 WaveElite 接口)', () =
   const script = (withElite: boolean): void =>
     useScript(
       segment({
-        name: 'a',
+        devName: 'a',
         duration: 2,
         dirStartDeg: 0,
         dirEndDeg: 60,
@@ -973,7 +974,7 @@ describe('解锁精英事件(19 号:WAVE_LOCKED_ELITES 按解锁掩码门控)', 
   const script = (): void =>
     useScript(
       segment({
-        name: 'a',
+        devName: 'a',
         duration: 10,
         dirStartDeg: 0,
         dirEndDeg: 60,

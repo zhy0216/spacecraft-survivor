@@ -43,8 +43,12 @@ export interface UnlockCondition {
 export interface UnlockEntry {
   /** 唯一 id。waves.ts 的 LockedElite.unlockId 与它同串互相咬合(单测钉着) */
   id: string;
-  /** 图鉴显示名(名字只在本表存一份,逻辑不读) */
-  name: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/unlockText 的 unlockName,
+   * 按 id 查 content.unlocks)。
+   */
+  devName: string;
   /** UNLOCK_* */
   kind: number;
   /** 目标内容:按 kind 解释为 TOWERS / EDICTS / WAVE_LOCKED_ELITES 的下标 */
@@ -76,7 +80,7 @@ export interface UnlockProgress {
 export const UNLOCKS: UnlockEntry[] = [
   {
     id: 'tower-missile-nest',
-    name: '导弹巢',
+    devName: '导弹巢',
     kind: UNLOCK_TOWER,
     type: TOWER_MISSILE_NEST, // 首次胜利后才进三选一池;unlocks.test 钉着"它是非进化塔,池子闸门对它生效"
     condition: { kind: COND_FIRST_WIN, target: 0 },
@@ -86,14 +90,14 @@ export const UNLOCKS: UnlockEntry[] = [
     // 支援并入法令后"急速协议"随同轴合并消失,这一条改指进阶法令"超载协议" ——
     // 换的是解锁内容(kind/type 两行),不是这条锁本身
     id: 'edict-rapid',
-    name: '超载协议',
+    devName: '超载协议',
     kind: UNLOCK_EDICT,
     type: EDICT_OVERDRIVE, // 单局击杀达标才进三选一池(与法令池同一条闸门)
     condition: { kind: COND_KILLS, target: 300 }, // 单局 300 杀 ≈ 中盘偏后,占位待调
   },
   {
     id: 'elite-queen',
-    name: '虫群母巢',
+    devName: '虫群母巢',
     kind: UNLOCK_ELITE,
     type: 0, // WAVE_LOCKED_ELITES 的下标;unlocks.test 钉:该条的 unlockId === 本条 id
     condition: { kind: COND_ELITE_KILLS, target: 14 }, // 累计 14 只精英 ≈ 两三局,占位待调

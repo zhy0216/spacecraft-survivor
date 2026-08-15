@@ -132,7 +132,8 @@ export function towerStars(def: TowerDef): number[] {
 
 export interface CorridorRow {
   type: number;
-  name: string;
+  /** 稳定 ID(03 号:开发输出不读显示名,只印 slug;要中文名在 CLI/UI 边界再解析) */
+  slug: string;
   stars: number;
   difficulty: number;
   power: number;
@@ -147,7 +148,7 @@ export function corridorReport(): CorridorRow[] {
     for (const stars of towerStars(def)) {
       rows.push({
         type: def.type,
-        name: def.name,
+        slug: def.slug,
         stars,
         difficulty: difficultyOf(def),
         power: corridorPower(slotFor(def.type, stars), def, neutralBuffs()),

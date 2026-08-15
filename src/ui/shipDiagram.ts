@@ -20,7 +20,6 @@
  * "只读还是等选槽"(mode),鼠标停在哪一格是纯表现,交出去只会让两边的状态各存一份。
  */
 import {
-  throttleName,
   TOWERS,
   TOWER_ARC,
   TOWER_AUTOCANNON,
@@ -32,11 +31,13 @@ import {
   towerArcDeg,
   towerRange,
 } from '../data/towers';
-import { edictScopeLabel, EDICTS } from '../data/edicts';
+import { EDICTS } from '../data/edicts';
 import { SHIP_HULL_ART_URL } from '../render/artUrls';
 import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING, type WeaponSlot } from '../sim/armory';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
+import { edictName, throttleFamilyName, towerName } from './presentation/contentText';
+import { edictScopeLabel } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
 const TEXT_COLOR = '#c8dcf0';
@@ -373,12 +374,12 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       const lines: string[] = [`<div style="${FACING_CSS}">${facing}</div>`];
       if (ghost) {
         const gdef = TOWERS[ghost.type];
-        const gname = gdef?.name ?? `未知武器(${ghost.type})`;
+        const gname = gdef === undefined ? `未知武器(${ghost.type})` : towerName(ghost.type);
         if (equipped && def) {
           // 换装预览:旧的划掉、新的顶上 —— 玩家点下去之前就看得到自己拿什么换什么
           lines.push(
             `<div style="${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through">` +
-              `${def.name} ${'★'.repeat(equipped.stars)}</div>`,
+              `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}</div>`,
           );
         }
         lines.push(
@@ -389,8 +390,8 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
         const dps = world ? slotSustainedDps(equipped, def, world.buffs) : 0;
         lines.push(
           `<div style="${NAME_CSS}"><span style="color:${towerTintCss(equipped.type)}">` +
-            `${towerGlyph(equipped.type)}</span> ${def.name} ${'★'.repeat(equipped.stars)}</div>`,
-          `<div style="${META_CSS}">${throttleName(def.throttle)} · ` +
+            `${towerGlyph(equipped.type)}</span> ${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}</div>`,
+          `<div style="${META_CSS}">${throttleFamilyName(def.throttle)} · ` +
             `${Math.round(towerArcDeg(def, equipped.stars))}° · ${Math.round(dps)}/s</div>`,
         );
       } else {
@@ -442,7 +443,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       owned.push(
         `<span style="padding:2px 7px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
           `background:rgba(21,34,52,.62);font-size:11px;color:${TEXT_COLOR}">` +
-          `<span style="color:${color}">◆</span> ${edictScopeLabel(def)} ${def.name} ×${level}</span>`,
+          `<span style="color:${color}">◆</span> ${edictScopeLabel(def)} ${edictName(def.type)} ×${level}</span>`,
       );
     }
     edictWrap.innerHTML =
@@ -480,7 +481,7 @@ export function previewSustainedDps(world: World | null, type: number, stars: nu
 function ghostMeta(world: World | null, incoming: ShipDiagramIncoming): string {
   const def = TOWERS[incoming.type];
   if (!def) return '未知型号';
-  const head = `${throttleName(def.throttle)} · ${Math.round(towerArcDeg(def, incoming.stars))}°`;
+  const head = `${throttleFamilyName(def.throttle)} · ${Math.round(towerArcDeg(def, incoming.stars))}°`;
   if (!world) return head;
   return `${head} · ${Math.round(previewSustainedDps(world, incoming.type, incoming.stars))}/s`;
 }

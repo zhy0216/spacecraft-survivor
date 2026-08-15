@@ -29,7 +29,7 @@
  *   throttle >= 0 = **系限定**(弹药 0 / 过热 1 / 充能 2),四个族倍率只作用于该系武器;
  *   throttle === EDICT_THR_NONE(-1)= **全船无条件**(船体 / 经济 / 机动那几档)。
  */
-import { THR_AMMO, THR_CHARGE, THR_HEAT, throttleName } from './towers';
+import { THR_AMMO, THR_CHARGE, THR_HEAT } from './towers';
 
 // —— 系限定档(吸收原弹药库 / 散热器 / 电容组)——
 export const EDICT_AMMO = 0; // 弹药协议(原弹药库 + 曳光协议 + 急速协议)
@@ -78,7 +78,16 @@ export const EDICT_THR_NONE = -1;
 export interface EdictDef {
   /** 下标 === type,与 EDICT_* 一致;EDICTS[type] 直取,错一位就全船串味 */
   type: number;
-  name: string;
+  /**
+   * slug:翻译/编辑器身份 —— 全表唯一、小写下划线(见 edicts.test)。
+   * **数值 type 才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 edictName)。
+   */
+  devName: string;
   /**
    * 作用的武器系(data/towers 的 THR_*),或 EDICT_THR_NONE = 全船无条件生效。
    * 作用系相同的武器共享这一条法令的加成;不匹配的武器一个字都不受影响。
@@ -137,7 +146,8 @@ export interface EdictDef {
 export const EDICTS: EdictDef[] = [
   {
     type: EDICT_AMMO,
-    name: '弹药协议',
+    slug: 'ammo_protocol',
+    devName: '弹药协议',
     // 弹药系(机炮 / 点防 / 导弹巢 / 风暴机炮 / 荆棘星幕)。
     // "突发满速后必然停火装填"是弹药系的手感,这条正是买断那段停火的东西
     throttle: THR_AMMO,
@@ -158,7 +168,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_COOLANT,
-    name: '散热协议',
+    slug: 'coolant_protocol',
+    devName: '散热协议',
     throttle: THR_HEAT, // 过热系(激光 / 电弧 / 极光阵列 / 雷霆王冠)
     fireRateMul: 1,
     reloadMul: 1,
@@ -177,7 +188,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_CAPACITOR,
-    name: '电容协议',
+    slug: 'capacitor_protocol',
+    devName: '电容协议',
     throttle: THR_CHARGE, // 充能系(磁轨 / 迫击炮 / 湮灭长矛 / 焦土骤雨)
     fireRateMul: 1,
     reloadMul: 1,
@@ -196,7 +208,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_ARMOR,
-    name: '装甲协议',
+    slug: 'armor_protocol',
+    devName: '装甲协议',
     // 原装甲舱(HP +15 / 受击 ×0.8)与原结构加固(HP +20)合并成一条:两者是同一条船体轴。
     // HP 取 15 那一档而不是 20 —— 它带着减伤那半边,合并后单层总价值仍高于旧结构加固
     throttle: EDICT_THR_NONE,
@@ -217,7 +230,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_XP,
-    name: '增幅协议',
+    slug: 'amp_protocol',
+    devName: '增幅协议',
     // 原经验增幅器:"法令可以加速升级"的核心档。它不移动 rng、不改波次,只放大掉落收益,
     // 于是"点了它升级更快"是玩家一眼能验证的承诺
     throttle: EDICT_THR_NONE,
@@ -238,7 +252,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_MAGNET,
-    name: '磁力协议',
+    slug: 'magnet_protocol',
+    devName: '磁力协议',
     // 原磁力收集器与原磁力过载(两条 ×1.3 的同轴卡)合并成一条。配合磁吸缩小(240→80),
     // 它是玩家对抗"捡不到"的主要投资方向
     throttle: EDICT_THR_NONE,
@@ -259,7 +274,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_GYRO,
-    name: '重心校准',
+    slug: 'gyro_calibration',
+    devName: '重心校准',
     throttle: EDICT_THR_NONE,
     fireRateMul: 1,
     reloadMul: 1,
@@ -278,7 +294,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_CRUISE,
-    name: '巡航校准',
+    slug: 'cruise_calibration',
+    devName: '巡航校准',
     throttle: EDICT_THR_NONE,
     fireRateMul: 1,
     reloadMul: 1,
@@ -297,7 +314,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_STARCHART,
-    name: '星图协议',
+    slug: 'starchart_protocol',
+    devName: '星图协议',
     // 用户设计会:星币改成**每次击杀按概率掉落**(data/economy 的 STARCOIN_DROP_CHANCE),
     // 这条是唯一能抬那个概率的东西。二轮审查重锚:基础概率降到 3% 后,本层的加点同步
     // 从 +8 收到 +2 ⇒ 5 层 = 12.5% ≈ 基础的 4.2 倍;用户设计会再抬基础 +20 个百分点 → 23%,
@@ -324,7 +342,8 @@ export const EDICTS: EdictDef[] = [
     // 十条基础法令各占一条轴之后,**全武器伤害**是唯一没被占掉的那条 —— 也正因为它谁都吃,
     // 才配当解锁奖励。倍率取 1.15 而不是更高:5 层 ≈ ×2.01,与一把武器从 Lv1 升到 Lv5 同量级
     type: EDICT_OVERDRIVE,
-    name: '超载协议',
+    slug: 'overdrive_protocol',
+    devName: '超载协议',
     throttle: EDICT_THR_NONE,
     fireRateMul: 1,
     reloadMul: 1,
@@ -343,7 +362,8 @@ export const EDICTS: EdictDef[] = [
   },
   {
     type: EDICT_BOOST,
-    name: '增压校准',
+    slug: 'boost_calibration',
+    devName: '增压校准',
     // 机动档第三条:加速技能(空格)冷却 -0.3 秒/层(5 层 = -1.5 ⇒ 5 → 3.5s,真空期 ~3.9 → ~2.4s)。
     // 加法档取负值是这条轴的本意 —— "变强"的方向是减;触发点的 ≥ 0 夹取在 sim/world.ts。
     throttle: EDICT_THR_NONE,
@@ -399,57 +419,4 @@ export function edictHeldCount(levels: readonly number[]): number {
     if (edictLevel(levels, i) > 0) n++;
   }
   return n;
-}
-
-/** 数值印成字符串:先四舍五入到两位小数再交给 String(连乘会带出浮点毛刺,原样印是噪声) */
-function num(v: number): string {
-  return String(Math.round(v * 100) / 100);
-}
-
-/**
- * 法令的作用范围标签(系标签单一来源,UI 不许再抄第二份):
- * 系限定法令 = 系名(弹药系 / 过热系 / 充能系),全船法令 = 「全船」。
- */
-export function edictScopeLabel(def: EdictDef): string {
-  return def.throttle !== EDICT_THR_NONE ? throttleName(def.throttle) : '全船';
-}
-
-/**
- * 法令卡的一句话 = **念数值表里那几项非中性的字段**(三选一卡、船坞商店、HUD 悬停提示都念它 ——
- * 同一张表三处各念一遍必然走散)(乘法档 1、加法档 0 = "这档用不上",
- * 调回中性那一句自己就消失)。作用域在前:系限定法令念「弹药系 …」,全船法令念「全船 · …」。
- *
- * 念的是**一层的效果**而不是"当前总量":卡片上写的是"点下去会多出什么",
- * 而"已经叠到几层"由卡面/徽记的 ×N 单独报 —— 两件事分开说,
- * 玩家才不会把"这条法令有多强"和"这一张卡给多少"看混。
- */
-export function edictDesc(def: EdictDef): string {
-  const parts: string[] = [];
-  if (def.throttle !== EDICT_THR_NONE) {
-    const muls: string[] = [];
-    if (def.fireRateMul !== 1) muls.push(`射速 ×${num(def.fireRateMul)}`);
-    if (def.reloadMul !== 1) muls.push(`装填 ×${num(def.reloadMul)}`);
-    if (def.heatMaxMul !== 1) muls.push(`热上限 ×${num(def.heatMaxMul)}`);
-    if (def.chargeRateMul !== 1) muls.push(`充能 ×${num(def.chargeRateMul)}`);
-    if (muls.length > 0) parts.push(`${throttleName(def.throttle)} ${muls.join(' / ')}`);
-  }
-  if (def.damageMul !== 1) parts.push(`全武器伤害 ×${num(def.damageMul)}`);
-  if (def.hullHpAdd !== 0) parts.push(`船体 HP ${def.hullHpAdd > 0 ? '+' : ''}${num(def.hullHpAdd)}`);
-  if (def.damageTakenMul !== 1) parts.push(`受击 ×${num(def.damageTakenMul)}`);
-  if (def.xpMul !== 1) parts.push(`经验 ×${num(def.xpMul)}`);
-  if (def.magnetRadiusMul !== 1) parts.push(`磁吸半径 ×${num(def.magnetRadiusMul)}`);
-  if (def.turnRateAdd !== 0) {
-    parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
-  }
-  if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
-  if (def.boostCooldownAdd !== 0) {
-    parts.push(`加速冷却 ${def.boostCooldownAdd > 0 ? '+' : ''}${num(def.boostCooldownAdd)}s`);
-  }
-  if (def.starCoinChanceAdd !== 0) {
-    parts.push(`星币概率 ${def.starCoinChanceAdd > 0 ? '+' : ''}${num(def.starCoinChanceAdd * 100)}%`);
-  }
-  // 全船法令的前缀放在最后统一加:前面几行只推效果文案,加在开头不打断任何一行
-  if (def.throttle === EDICT_THR_NONE && parts.length > 0) parts.unshift('全船');
-  // 一项都没有 = 数值表把这一条的效果全调成中性了。**不许印成空串**
-  return parts.length > 0 ? parts.join(' · ') : '这一条在数值表里没有任何效果';
 }

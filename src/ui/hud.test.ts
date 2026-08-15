@@ -3,7 +3,7 @@
  * 末尾的小 DOM 桩只守重开/时停这两条流程约束:单实例换 World,不重复挂节点或监听器。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS, edictDesc, edictScopeLabel } from '../data/edicts';
+import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS } from '../data/edicts';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
@@ -20,6 +20,7 @@ import {
   slotSustainedDps,
 } from '../sim/tower';
 import type { World } from '../sim/world';
+import { initI18n } from '../i18n';
 import {
   boostReadout,
   createHud,
@@ -32,6 +33,12 @@ import {
   THREAT_INTENSITY_MAX,
   threatVisual,
 } from './hud';
+import { edictName, towerName, waveSegmentName } from './presentation/contentText';
+import { edictDesc, edictScopeLabel } from './presentation/edictText';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 describe('hudRatio / segmentReadout', () => {
   it('条形进度夹在 [0,1],坏分母与 NaN 不流进 CSS', () => {
@@ -46,7 +53,7 @@ describe('hudRatio / segmentReadout', () => {
   it('航段从 WAVE_SEGMENTS 派生名字、n/N 与段内进度', () => {
     const first = WAVE_SEGMENTS[0]!;
     const readout = segmentReadout(0, first.duration * 0.5);
-    expect(readout.label).toContain(first.name);
+    expect(readout.label).toContain(waveSegmentName(0));
     expect(readout.label).toContain(`1/${WAVE_SEGMENTS.length}`);
     expect(readout.ratio).toBe(0.5);
   });
@@ -316,7 +323,7 @@ describe('createHud', () => {
     expect(vitals.children[2]!.children[1]!.textContent).toBe('');
     expect(vitals.children[3]!.children[0]!.style.width).toBe('25%');
     expect(findText(root, '1:05')).toBeDefined();
-    expect(findText(root, WAVE_SEGMENTS[0]!.name)).toBeDefined();
+    expect(findText(root, waveSegmentName(0))).toBeDefined();
     const threat = root.children[1]!;
     expect(threat.title).toBe('主压方向');
     expect(Number.parseFloat(threat.style.left!)).toBeGreaterThan(680);
@@ -379,10 +386,10 @@ describe('createHud', () => {
     levels[EDICT_ARMOR] = 2;
     hud.setWorld(stubWorld({ edictLevels: levels }) as unknown as World);
     expect(edicts.style.display).toBe('block');
-    expect(findText(root, EDICTS[EDICT_AMMO]!.name)).toBeDefined();
+    expect(findText(root, edictName(EDICT_AMMO))).toBeDefined();
     // "拿过两次过热上限就显示 过热上限 ×2" —— 这一行就是那条要求的落点
-    expect(findText(root, `${EDICTS[EDICT_ARMOR]!.name}×2`)).toBeDefined();
-    expect(findText(root, EDICTS[EDICT_GYRO]!.name)).toBeUndefined();
+    expect(findText(root, `${edictName(EDICT_ARMOR)}×2`)).toBeDefined();
+    expect(findText(root, edictName(EDICT_GYRO))).toBeUndefined();
 
     // 重开一局(新世界无法令):徽记当帧收起
     hud.setWorld(stubWorld() as unknown as World);
@@ -405,7 +412,7 @@ describe('createHud', () => {
     chip.listeners.get('mouseenter')!();
     expect(tip.style.display).toBe('block');
     const def = EDICTS[EDICT_AMMO]!;
-    expect(tip.textContent).toBe(`${def.name} ×1\n${edictScopeLabel(def)}\n${edictDesc(def)}`);
+    expect(tip.textContent).toBe(`${edictName(def.type)} ×1\n${edictScopeLabel(def)}\n${edictDesc(def)}`);
     chip.listeners.get('mouseleave')!();
     expect(tip.style.display).toBe('none');
   });
@@ -712,9 +719,9 @@ describe('createHud', () => {
       slotSustainedDps(stubWeapon(TOWER_AUTOCANNON, 1), TOWERS[TOWER_AUTOCANNON]!, buffs);
     const laserDps = slotSustainedDps(stubWeapon(TOWER_LASER, 3), TOWERS[TOWER_LASER]!, buffs);
     // 星级 + 所属系 + 同型 ×N:合并格报最高星那把,系名直取单一来源
-    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name} ★★ · 弹药系 ×2`)).toBeDefined();
+    expect(findText(firepower, `${towerName(TOWER_AUTOCANNON)} ★★ · 弹药系 ×2`)).toBeDefined();
     expect(findText(firepower, formatDps(acDps))).toBeDefined();
-    expect(findText(firepower, `${TOWERS[TOWER_LASER]!.name} ★★★ · 过热系`)).toBeDefined();
+    expect(findText(firepower, `${towerName(TOWER_LASER)} ★★★ · 过热系`)).toBeDefined();
     expect(findText(firepower, formatDps(laserDps))).toBeDefined();
     expect(findText(firepower, formatDps(acDps + laserDps))).toBeDefined();
     // 发射读数:机炮格就绪(装填那把不拖累),激光格报过热剩余秒
@@ -734,7 +741,7 @@ describe('createHud', () => {
     // 换局(空槽新世界):武器格全收、文本清空,击杀归零
     hud.setWorld(stubWorld() as unknown as World);
     expect(rows[2]!.style.display).toBe('none');
-    expect(findText(firepower, `${TOWERS[TOWER_AUTOCANNON]!.name}`)).toBeUndefined();
+    expect(findText(firepower, `${towerName(TOWER_AUTOCANNON)}`)).toBeUndefined();
     expect(findText(firepower, '过热')).toBeUndefined();
   });
 

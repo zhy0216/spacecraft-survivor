@@ -69,7 +69,8 @@ function bossWorld(seed: number): World {
   tuning.stressSpawn = false;
   tuning.shipHullHp = 1e6;
   WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, {
-    name: 'short',
+    slug: 'short',
+    devName: 'short',
     duration: DUR,
     dirStartDeg: 0,
     dirEndDeg: 0,

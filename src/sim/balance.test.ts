@@ -49,7 +49,7 @@ function formatReport(): string {
   for (const r of rows) {
     const flag = Math.abs(r.ratio - 1) > CORRIDOR_BAND ? ' ← 越带' : '';
     lines.push(
-      `${pad(r.name, 8)} ${pad(String(r.stars), 4)} ${pad(r.difficulty.toFixed(2), 7)} ${pad(
+      `${pad(r.slug, 8)} ${pad(String(r.stars), 4)} ${pad(r.difficulty.toFixed(2), 7)} ${pad(
         r.power.toFixed(1),
         9,
       )} ${pad(r.line.toFixed(1), 9)} ${r.ratio.toFixed(2)}${flag}`,

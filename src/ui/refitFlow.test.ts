@@ -18,13 +18,11 @@ import {
   EDICT_GYRO,
   EDICT_MAGNET,
   EDICT_OVERDRIVE,
-  EDICTS,
 } from '../data/edicts';
 import {
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_RAILGUN,
-  TOWERS,
 } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
@@ -41,6 +39,12 @@ import {
   type World,
 } from '../sim/world';
 import { createRefitFlow, dockEdictEffect, refitDenyMessage } from './refitFlow';
+import { initI18n } from '../i18n';
+import { edictName, towerName } from './presentation/contentText';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 describe('整备面板纯文案', () => {
   it('商店相关拒绝码都有明确原因', () => {
@@ -354,7 +358,7 @@ describe('createRefitFlow 纯商店流程', () => {
 
   it('武器卡来自 shopWeapons，显示名称与 30 星币价格，售出卡置灰', () => {
     setup();
-    expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
     expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
     expect((cardsOf(dom).children[1] as StubEl).innerHTML).toContain('已售出');
     expect((cardsOf(dom).children[1] as StubEl).disabled).toBe(true);
@@ -367,7 +371,7 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
     expect((cardsOf(dom).children[0] as StubEl).disabled).toBe(true);
     expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain('已售出');
-    expect(toastOf(dom).textContent).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(toastOf(dom).textContent).toContain(towerName(TOWER_AUTOCANNON));
   });
 
   it('槽满时打开替换选择器，再以同一货架位和所选槽位购买', () => {
@@ -384,7 +388,7 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(cardsOf(dom).style.display).toBe('none');
     expect(pickerOf(dom).style.display).toBe('flex');
     // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 ★★★)
-    expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(towerName(TOWER_AUTOCANNON));
     expect(chipOf(dom, 2).innerHTML).toContain('正右');
     expect(chipOf(dom, 2).innerHTML).toContain('★★★');
     fire(chipOf(dom, 2), 'click');
@@ -425,7 +429,7 @@ describe('createRefitFlow 纯商店流程', () => {
     setup();
     const card = edictOf(dom, 0);
     expect(card.innerHTML).toContain('<img');
-    expect(card.innerHTML).toContain(EDICTS[EDICT_AMMO]!.name);
+    expect(card.innerHTML).toContain(edictName(EDICT_AMMO));
     expect(card.innerHTML).not.toContain(dockEdictEffect(EDICT_AMMO));
     expect(card.innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
     fire(card, 'mouseenter');
@@ -459,7 +463,7 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[0]!.stars = 2;
     setup();
     expect(chipOf(dom, 0).innerHTML).toContain('正前');
-    expect(chipOf(dom, 0).innerHTML).toContain(TOWERS[TOWER_LASER]?.name);
+    expect(chipOf(dom, 0).innerHTML).toContain(towerName(TOWER_LASER));
     expect(chipOf(dom, 0).innerHTML).toContain('★★');
     expect(chipOf(dom, 0).innerHTML).toContain('过热系'); // 舰船图上的武器格也标系
     expect(chipOf(dom, 1).innerHTML).toContain('右前');
@@ -476,8 +480,8 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[0]!.stars = 1;
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
-    expect(chipOf(dom, 1).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
-    expect(chipOf(dom, 0).innerHTML).not.toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(chipOf(dom, 1).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
+    expect(chipOf(dom, 0).innerHTML).not.toContain(towerName(TOWER_AUTOCANNON));
     expect(world.weaponCalls).toEqual([]);
     expect(world.starCoins).toBe(100);
     fire(cardsOf(dom).children[0] as StubEl, 'mouseleave');
@@ -494,9 +498,9 @@ describe('createRefitFlow 纯商店流程', () => {
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     fire(chipOf(dom, 5), 'mouseenter');
     expect(chipOf(dom, 5).innerHTML).toContain('line-through');
-    expect(chipOf(dom, 5).innerHTML).toContain(TOWERS[TOWER_RAILGUN]?.name);
-    expect(chipOf(dom, 5).innerHTML).toContain(TOWERS[TOWER_AUTOCANNON]?.name);
-    expect(chipOf(dom, 4).innerHTML).not.toContain(TOWERS[TOWER_AUTOCANNON]?.name);
+    expect(chipOf(dom, 5).innerHTML).toContain(towerName(TOWER_RAILGUN));
+    expect(chipOf(dom, 5).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
+    expect(chipOf(dom, 4).innerHTML).not.toContain(towerName(TOWER_AUTOCANNON));
   });
 
   it('替换态点到空槽不成交（真 DOM 靠 disabled 拦，这里是防桩）', () => {
@@ -518,8 +522,8 @@ describe('createRefitFlow 纯商店流程', () => {
     world.edictLevels[EDICT_MAGNET] = 2;
     world.edictLevels[EDICT_ARMOR] = 1;
     fire(repairOf(dom), 'click'); // 任一次购买都会重画左侧
-    expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_MAGNET]!.name} ×2`);
-    expect(edictWrapOf(dom).innerHTML).toContain(`${EDICTS[EDICT_ARMOR]!.name} ×1`);
+    expect(edictWrapOf(dom).innerHTML).toContain(`${edictName(EDICT_MAGNET)} ×2`);
+    expect(edictWrapOf(dom).innerHTML).toContain(`${edictName(EDICT_ARMOR)} ×1`);
   });
 
   it('武器卡只放图片/名称/价格，悬停说明数值、落位方向与当场合成', () => {

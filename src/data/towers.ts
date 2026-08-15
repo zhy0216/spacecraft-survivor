@@ -66,13 +66,7 @@ export const THR_AMMO = 0; // 弹药:弹夹 + 装填 → 突发满速后**必然
 export const THR_HEAT = 1; // 过热:热量累积 + 强制冷却 → **点射就永不停火**,只罚贪连射
 export const THR_CHARGE = 2; // 充能:蓄力满了才放 → 攒-放节奏,与射速旋钮无关
 
-/** 节流系的中文名(下标 = THR_*;武器系标签与系限定法令作用域的单一来源,UI 不许再抄第二份) */
-export const THROTTLE_NAMES = ['弹药系', '过热系', '充能系'] as const;
-
-/** 节流系名字:越界(数值表被改坏)不抛,回落成可读的问号档 */
-export function throttleName(throttle: number): string {
-  return THROTTLE_NAMES[throttle] ?? '?';
-}
+/** 节流系的中文名 —— 03 号起由 presenter(src/ui/presentation/contentText 的 throttleFamilyName)查翻译,本表不再持有 */
 
 // —— 开火表现 / 结算类型。sim/turret.ts 靠它 switch 分派,渲染层靠它选画法 ——
 export const FX_BULLET = 0; // 直射弹(机炮、点防)→ 真子弹,飞行途中碰撞
@@ -123,7 +117,16 @@ export interface TowerGrowth {
 export interface TowerDef {
   /** 下标 === type,与 TOWER_* 一致;TOWERS[cell.towerType] 直取,错一位就全塔串味 */
   type: number;
-  name: string;
+  /**
+   * slug:翻译/编辑器身份 —— 全表唯一、小写下划线(见 towers.test)。
+   * **数值 type 才是存档与模拟身份**,slug 不进存档、不被 sim 读取。
+   */
+  slug: string;
+  /**
+   * devName:开发/调参用的**中文开发名**,只给人看、逻辑不读。
+   * 玩家界面不得读它 —— 显示名一律走 presenter(src/ui/presentation/contentText 的 towerName)。
+   */
+  devName: string;
   /** 射界弧度(度),取自 data/arcs 的档位常量。角落格 +60° 的加宽在 sim/arc.ts 上叠,不在这里 */
   arcDeg: number;
   range: number;
@@ -194,7 +197,8 @@ export interface TowerDef {
 export const TOWERS: TowerDef[] = [
   {
     type: TOWER_AUTOCANNON,
-    name: '自动机炮',
+    slug: 'autocannon',
+    devName: '自动机炮',
     arcDeg: ARC_MEDIUM_DEG, // 中 100°(GDD §5.2)
     range: 380, // GDD §14 锁定
     damage: 6, // GDD §14 锁定
@@ -236,7 +240,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_LASER,
-    name: '激光棱镜',
+    slug: 'laser_prism',
+    devName: '激光棱镜',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(GDD §5.2)
     range: 340, // 占位待调
     damage: 3.3, // 自动求解:L₁≈19.6;再平衡跑 npm run balance
@@ -282,7 +287,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_ARC,
-    name: '电弧塔',
+    slug: 'arc_coil',
+    devName: '电弧塔',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
     range: 260, // 占位待调(短程仍是它的代价,只比机炮的 68%,但不再是抽到即坏卡的 58%)
     damage: 2.4, // 自动求解:L₁≈8.4;再平衡跑 npm run balance
@@ -324,7 +330,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_RAILGUN,
-    name: '磁轨炮',
+    slug: 'railgun',
+    devName: '磁轨炮',
     arcDeg: ARC_VERY_NARROW_DEG, // 极窄 30°(GDD §5.2:轴线艺术)
     range: 700, // 占位待调(全场最远,换极窄弧)
     damage: 86, // 自动求解:L₁≈50.0;再平衡跑 npm run balance
@@ -367,7 +374,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_PD,
-    name: '点防阵列',
+    slug: 'point_defense',
+    devName: '点防阵列',
     arcDeg: ARC_WIDE_DEG, // 广 150°(GDD §5.2)
     range: 210, // 占位待调(近防:射程仍全场最短 = 机炮的 55%,但漏怪贴脸前多一秒反应窗)
     damage: 1.3, // 自动求解:L₁≈8.6;再平衡跑 npm run balance
@@ -411,7 +419,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_MORTAR,
-    name: '等离子迫击炮',
+    slug: 'plasma_mortar',
+    devName: '等离子迫击炮',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(GDD §5.2)
     range: 520, // 占位待调
     // 直击不结算:抛射弹途中不碰撞(越过前排正是它的定位),伤害全在落点 → 见 aoeDamage。
@@ -458,7 +467,8 @@ export const TOWERS: TowerDef[] = [
   // 不做 Lv3/Lv5 等级小跳变(那档成长属于基塔)。数值全部占位待调 ——
   {
     type: TOWER_STORM_CANNON,
-    name: '风暴机炮',
+    slug: 'storm_cannon',
+    devName: '风暴机炮',
     arcDeg: ARC_WIDE_DEG, // 机炮 100° + 50°(= 大 50%,两种读法同数)= 150°,恰好落在广角档
     range: 380, // 占位待调(= 机炮)
     damage: 8.1, // 自动求解:L₃≈231.5(合成溢价);再平衡跑 npm run balance
@@ -501,7 +511,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_AURORA,
-    name: '极光阵列',
+    slug: 'aurora_array',
+    devName: '极光阵列',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(= 激光)
     range: 380, // 占位待调(比激光略远)
     damage: 5.2, // 平衡重锚:穿透 ×2 × 线宽覆盖 × 无过热 ⇒ 3★ 锚线 348,单发 3 → 5.2(每 tick)
@@ -545,7 +556,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_ANNIHILATION,
-    name: '湮灭长矛',
+    slug: 'annihilation_lance',
+    devName: '湮灭长矛',
     arcDeg: ARC_VERY_NARROW_DEG, // 极窄 30°(= 磁轨,轴线艺术不变)
     range: 900, // 占位待调("全屏贯穿":比磁轨 700 再远一截,射程本身就是贯穿的数值化)
     damage: 154, // 平衡重锚:合成溢价 1.5 × 最难档(难度 6.08)⇒ 3★ 锚线 997,单发 50 → 154
@@ -588,7 +600,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_THUNDER,
-    name: '雷霆王冠',
+    slug: 'thunder_crown',
+    devName: '雷霆王冠',
     arcDeg: ARC_WIDE_DEG, // 广 150°(= 电弧)
     range: 260, // 占位待调(= 电弧)
     damage: 12, // 平衡重锚:链数翻倍的签名在链跳几何和里只值 ×1.17(2.77→3.24 增速递减),单发 7 → 12 补足溢价线
@@ -630,7 +643,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_DELUGE,
-    name: '焦土骤雨',
+    slug: 'deluge_rain',
+    devName: '焦土骤雨',
     arcDeg: ARC_NARROW_DEG, // 窄 60°(= 迫击炮)
     range: 520, // 占位待调(= 迫击炮)
     damage: 0, // 直击不结算:伤害全在落点(同迫击炮口径)
@@ -672,7 +686,8 @@ export const TOWERS: TowerDef[] = [
   },
   {
     type: TOWER_THORN,
-    name: '荆棘星幕',
+    slug: 'thorn_curtain',
+    devName: '荆棘星幕',
     arcDeg: ARC_WIDE_DEG, // 广 150°(= 点防)
     range: 210, // 占位待调(= 点防)
     damage: 6.5, // 平衡重锚:点防被压到 1.4 后,荆棘的合成溢价线(3★ 172)要单发 6.5 才追得上
@@ -723,7 +738,8 @@ export const TOWERS: TowerDef[] = [
   //   等级成长全向(伤害在 AoE 档、弹夹加法成长);不叠 Lv3/Lv5 跳变 ——
   {
     type: TOWER_MISSILE_NEST,
-    name: '导弹巢',
+    slug: 'missile_nest',
+    devName: '导弹巢',
     arcDeg: ARC_MEDIUM_DEG, // 中 100°(比迫击炮的窄 60° 宽:导弹走弹道,射界宽一点才对得起装填的代价)
     range: 460, // 占位待调(夹在机炮 380 与迫击炮 520 之间)
     damage: 0, // 直击不结算:伤害全在落点(同迫击炮口径,见 FX_MORTAR 五件套)

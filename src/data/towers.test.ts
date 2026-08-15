@@ -53,13 +53,40 @@ describe('武器塔数值表', () => {
     expect(STAR_MAX).toBe(3);
     expect(TOWERS).toHaveLength(TOWER_KIND_COUNT);
     TOWERS.forEach((def, index) => expect(def.type).toBe(index));
-    expect(TOWERS.slice(0, 6).map((def) => def.name)).toEqual([
-      '自动机炮', '激光棱镜', '电弧塔', '磁轨炮', '点防阵列', '等离子迫击炮',
+    // 03 号:数据一致性测试断言稳定 ID(slug),中文显示名走 presenter 查翻译
+    expect(TOWERS.slice(0, 6).map((def) => def.slug)).toEqual([
+      'autocannon', 'laser_prism', 'arc_coil', 'railgun', 'point_defense', 'plasma_mortar',
     ]);
-    expect(TOWERS.slice(6, 12).map((def) => def.name)).toEqual([
-      '风暴机炮', '极光阵列', '湮灭长矛', '雷霆王冠', '焦土骤雨', '荆棘星幕',
+    expect(TOWERS.slice(6, 12).map((def) => def.slug)).toEqual([
+      'storm_cannon', 'aurora_array', 'annihilation_lance', 'thunder_crown', 'deluge_rain', 'thorn_curtain',
     ]);
-    expect(TOWERS[TOWER_MISSILE_NEST]?.name).toBe('导弹巢');
+    expect(TOWERS[TOWER_MISSILE_NEST]?.slug).toBe('missile_nest');
+  });
+
+  it('slug 稳定 ID:全表唯一、小写下划线,与 type 一一对应(03 号)', () => {
+    // slug 是翻译/编辑器身份;数值 type 才是存档与模拟身份 —— 顺序必须与 TOWER_* 常量一致,
+    // 错一位 presenter 就会拿 A 塔的 slug 去翻 B 塔的名字
+    const SLUGS = [
+      'autocannon',
+      'laser_prism',
+      'arc_coil',
+      'railgun',
+      'point_defense',
+      'plasma_mortar',
+      'storm_cannon',
+      'aurora_array',
+      'annihilation_lance',
+      'thunder_crown',
+      'deluge_rain',
+      'thorn_curtain',
+      'missile_nest',
+    ];
+    expect(TOWERS.length).toBe(SLUGS.length);
+    TOWERS.forEach((def, i) => {
+      expect(def.slug, `下标 ${i} 的 slug 必须与顺序表一致`).toBe(SLUGS[i]);
+      expect(def.slug, `下标 ${i} 的 slug 是小写下划线`).toMatch(/^[a-z][a-z0-9_]*$/);
+    });
+    expect(new Set(SLUGS).size).toBe(SLUGS.length);
   });
 
   it('基础自动机炮锚点保持不变', () => {
@@ -71,12 +98,12 @@ describe('武器塔数值表', () => {
   });
 
   it('六把合成武器的设计签名存在', () => {
-    expect(TOWERS[TOWER_STORM_CANNON]).toMatchObject({ name: '风暴机炮', reload: 0, burst: 2, fireInterval: 0.25 });
-    expect(TOWERS[TOWER_AURORA]).toMatchObject({ name: '极光阵列', pierce: 1, heatMax: 0 });
-    expect(TOWERS[TOWER_ANNIHILATION]).toMatchObject({ name: '湮灭长矛', chargeTime: 1.0, range: 900 });
-    expect(TOWERS[TOWER_THUNDER]).toMatchObject({ name: '雷霆王冠', chainCount: 6 });
-    expect(TOWERS[TOWER_DELUGE]).toMatchObject({ name: '焦土骤雨', burst: 3, aoeRadius: 105 });
-    expect(TOWERS[TOWER_THORN]).toMatchObject({ name: '荆棘星幕', fireInterval: 0.09, interceptsProjectiles: true });
+    expect(TOWERS[TOWER_STORM_CANNON]).toMatchObject({ slug: 'storm_cannon', reload: 0, burst: 2, fireInterval: 0.25 });
+    expect(TOWERS[TOWER_AURORA]).toMatchObject({ slug: 'aurora_array', pierce: 1, heatMax: 0 });
+    expect(TOWERS[TOWER_ANNIHILATION]).toMatchObject({ slug: 'annihilation_lance', chargeTime: 1.0, range: 900 });
+    expect(TOWERS[TOWER_THUNDER]).toMatchObject({ slug: 'thunder_crown', chainCount: 6 });
+    expect(TOWERS[TOWER_DELUGE]).toMatchObject({ slug: 'deluge_rain', burst: 3, aoeRadius: 105 });
+    expect(TOWERS[TOWER_THORN]).toMatchObject({ slug: 'thorn_curtain', fireInterval: 0.09, interceptsProjectiles: true });
   });
 
   it('节流机制字段自洽', () => {
@@ -140,12 +167,12 @@ describe('武器塔数值表', () => {
     for (const def of TOWERS) {
       // 迫击炮系直击恒 0,伤害全在落点档 —— 同一条不变式落在 towerAoeDamage 上
       const d = (stars: number) => (def.fx === FX_MORTAR ? towerAoeDamage(def, stars) : towerDamage(def, stars));
-      expect(d(1), def.name).toBeGreaterThan(0);
-      expect(d(2), def.name).toBeGreaterThanOrEqual(3 * d(1));
-      expect(d(3), def.name).toBeGreaterThanOrEqual(3 * d(2));
+      expect(d(1), def.devName).toBeGreaterThan(0);
+      expect(d(2), def.devName).toBeGreaterThanOrEqual(3 * d(1));
+      expect(d(3), def.devName).toBeGreaterThanOrEqual(3 * d(2));
       // 每星 = 两档旧级(starLevel 指数 0/2/4),g ≥ √3 是「每星 ×3」的等价写法 ——
       // 数值表与自动平衡求解器(sim/autobalance 的 solveGrowth 下界)共用 GROWTH_DAMAGE_MIN 一份
-      expect(def.growth.damage, def.name).toBeGreaterThanOrEqual(GROWTH_DAMAGE_MIN);
+      expect(def.growth.damage, def.devName).toBeGreaterThanOrEqual(GROWTH_DAMAGE_MIN);
     }
   });
 

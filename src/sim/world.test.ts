@@ -470,8 +470,9 @@ describe('磁吸涌(26 号)', () => {
   afterEach(() => {
     WAVE_SEGMENTS.splice(0, WAVE_SEGMENTS.length, ...REAL);
   });
-  const shortSeg = (name: string, duration: number): WaveSegment => ({
-    name,
+  const shortSeg = (devName: string, duration: number): WaveSegment => ({
+    slug: `short_${devName}`,
+    devName,
     duration,
     dirStartDeg: 0,
     dirEndDeg: 0,
