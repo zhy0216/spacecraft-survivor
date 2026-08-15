@@ -38,6 +38,7 @@ import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
 import { audioBus } from './render/audio';
 import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
 import { applyRandomStart } from './sim/loadout';
+import { tuning } from './sim/config';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
 import type { ShipCommand } from './sim/ship';
 import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
@@ -85,6 +86,12 @@ const I_HINT_WINDOW_SECONDS = 20;
 
 /** 连按三次 ~ 呼出调参面板的计数窗口(ms):窗内凑齐三下才算,慢了从头数 */
 const TILDE_WINDOW_MS = 1200;
+
+/** 缩放步长/范围:与 debugPanel 里那根「船占屏高」滑杆同口径,0 键恢复的默认档也取自 tuning 初值 */
+const CAMERA_FRACTION_STEP = 0.002;
+const CAMERA_FRACTION_MIN = 0.03;
+const CAMERA_FRACTION_MAX = 0.3;
+const CAMERA_FRACTION_DEFAULT = tuning.cameraShipHeightFraction;
 
 async function boot(): Promise<void> {
   const input = new Input();
@@ -241,6 +248,7 @@ async function boot(): Promise<void> {
     retry,
     // 面板不认识 World:投放商店走这个闭包,引用的是外层 let world(每局 startRun 都换成新的)
     spawnShop: () => world.debugSpawnShop(),
+    addWeapon: () => world.debugAddWeapon(),
   });
   if (!DEBUG) {
     debugPanel.hide();
@@ -299,6 +307,24 @@ async function boot(): Promise<void> {
       tildeCount = 0;
       debugPanel.toggle();
     }
+  });
+
+  // 镜头缩放快捷键(畅玩性):- 拉远(= 船占屏高变小)、+ 拉近、0 恢复默认。
+  // 允许按住连发(repeat)连续缩放;isTyping 守卫同 tilde:焦点在文本框里时不误触。
+  // 改的就是渲染层每帧现读的 tuning.cameraShipHeightFraction,当帧生效,
+  // 与调参面板那根滑杆是同一个数,两边拖着玩互相同步。
+  window.addEventListener('keydown', (e) => {
+    if (isTyping()) return;
+    if (e.code === 'Digit0') {
+      tuning.cameraShipHeightFraction = CAMERA_FRACTION_DEFAULT;
+      return;
+    }
+    const dir = e.code === 'Minus' ? -1 : e.code === 'Equal' ? 1 : 0;
+    if (dir === 0) return;
+    tuning.cameraShipHeightFraction = Math.min(
+      CAMERA_FRACTION_MAX,
+      Math.max(CAMERA_FRACTION_MIN, tuning.cameraShipHeightFraction + dir * CAMERA_FRACTION_STEP),
+    );
   });
 
   /**
