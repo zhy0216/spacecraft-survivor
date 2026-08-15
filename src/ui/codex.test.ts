@@ -152,7 +152,7 @@ describe('formatMul / edictSummaryText', () => {
   it('全船档:前缀「全船」;加法档印点数、概率档换算百分点', () => {
     expect(edictSummaryText(EDICTS[EDICT_OVERDRIVE]!)).toBe('全船:全武器伤害 ×1.15');
     expect(edictSummaryText(EDICTS[EDICT_GYRO]!)).toBe('全船:转向 +10°/s');
-    expect(edictSummaryText(EDICTS[EDICT_STARCHART]!)).toBe('全船:星币概率 +2%');
+    expect(edictSummaryText(EDICTS[EDICT_STARCHART]!)).toBe('全船:星币概率 +5%');
     expect(edictSummaryText(EDICTS[EDICT_BOOST]!)).toBe('全船:加速冷却 -0.3s');
   });
 

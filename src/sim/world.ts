@@ -1592,9 +1592,9 @@ export class World {
    * 只在 reap 里、对象回池之前调用:坐标必须当场读走。
    *
    * 改版后它同时管两本账:
-   *   **星币**(用户设计会:改成**概率掉落**):每次击杀**恒掷 1 次 rng**,命中
-   *     buffs.starCoinChance(基础 3%,星图协议每层 +2 个点 —— 二轮审查重锚,见
-   *     data/economy 的 STARCOIN_DROP_CHANCE)才进账,面额一个字不改 ——
+    *   **星币**(用户设计会:改成**概率掉落**):每次击杀**恒掷 1 次 rng**,命中
+    *     buffs.starCoinChance(基础 15%,星图协议每层 +5 个点 —— 重锚见
+    *     data/economy 的 STARCOIN_DROP_CHANCE)才进账,面额一个字不改 ——
    *     普通怪按型(ENEMIES[kind].starCoins,1-4)、精英 ELITE.starCoins(10)、
    *     Boss BOSS.starCoins(30)。**不造掉落物**:星币没有"掉在地上捡不到"的问题,
    *     也不占 DROP_MAX_ALIVE、不走磁吸;

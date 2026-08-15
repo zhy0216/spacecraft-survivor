@@ -100,12 +100,12 @@ describe('真脚本长跑:一局自然升级次数窗口(12–15)', () => {
       expect(b.upgrades).toBe(a.upgrades);
       expect(b.scrap).toBe(a.scrap);
       expect(b.checksum()).toBe(a.checksum());
-      // 星币闭合账(用户设计会:掉率 +20 个百分点 → 23%):真脚本一局(1958 杀)的收入要落在
-      // "20-27 件 25 币货"的窗口里 —— 星币从稀缺改成宽裕后,商店决策不再受攒币约束,
+      // 星币闭合账(重锚:掉率 23% → 15%):真脚本一局(1958 杀)的收入要落在
+      // "13-18 件 25 币货"的窗口里 —— 星币是"攒才花得起"的商店货币,给星图协议留出抬升空间,
       // 价/白送/法令的口径留待下一次重锚。掉出窗口 = 掉率/面额/白送三处有一处脱锚,
       // 回 data/economy 调数而不是放宽断言。
-      expect(a.starCoins).toBeGreaterThanOrEqual(20 * DOCK_EDICT_PRICE);
-      expect(a.starCoins).toBeLessThanOrEqual(27 * DOCK_EDICT_PRICE);
+      expect(a.starCoins).toBeGreaterThanOrEqual(13 * DOCK_EDICT_PRICE);
+      expect(a.starCoins).toBeLessThanOrEqual(18 * DOCK_EDICT_PRICE);
       expect(b.starCoins).toBe(a.starCoins);
     },
     120_000,

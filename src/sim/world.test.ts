@@ -184,8 +184,8 @@ describe('World 槽位制核心接线', () => {
       for (let i = 0; i < charts; i++) w.grantEdict(EDICT_STARCHART);
       return w;
     };
-    const a = mk(0); // 基础 23%(用户设计会:+20 个百分点)
-    const b = mk(EDICT_MAX_LEVEL); // 23% + 5×2% = 33%
+    const a = mk(0); // 基础 15%(重锚:23% → 15%)
+    const b = mk(EDICT_MAX_LEVEL); // 15% + 5×5% = 40%
     for (let i = 0; i < 200; i++) {
       for (const w of [a, b]) {
         const e = w.enemies.spawn();
@@ -198,7 +198,7 @@ describe('World 槽位制核心接线', () => {
     // 概率不同、掷的次数相同:同 seed 同操作序列,两条随机流必须停在同一格
     // (少了"每杀恒掷一次"这条,拿一层星图协议就会把整局的出怪序列整体挪位)
     expect(a.rng.next()).toBe(b.rng.next());
-    // 概率真的起作用了:5 层星图协议的收入高于基础档(200 杀,期望 ≈ 45 vs 64,比值 33/23 ≈ 1.43;
+    // 概率真的起作用了:5 层星图协议的收入高于基础档(200 杀,期望 ≈ 30 vs 80,比值 40/15 ≈ 2.67;
     // 掉率抬到 23% 后"押满翻五倍"的旧锚作废,压的是"法令确实加了点、且不是乘法走样"的下限)。
     // 钉的是**这一局挣到的**,不是余额 —— 开局白送的 STARTING_STAR_COINS 两边一样多,
     // 留在读数里只会把两档的倍数差冲淡
@@ -211,8 +211,8 @@ describe('World 槽位制核心接线', () => {
     // 与出怪/掉落无关的常数:换 seed 不该换到第二个数(它不掷 rng,也不进 checksum)
     expect(new World(1).starCoins).toBe(STARTING_STAR_COINS);
     expect(new World(999).starCoins).toBe(STARTING_STAR_COINS);
-    // 白送的口径曾是"配第一段收入(≈5 枚)恰好买一样";掉率抬到 23% 后段1 期望 ≈ 37 枚,
-    // 白送与价的比例留待下一次重锚 —— 它不因 seed 而变、且不足一把武器的价这两条不变
+    // 白送的口径曾是"配第一段收入(≈5 枚)恰好买一样";掉率抬到 23% 后段1 期望 ≈ 37 枚、再拍回
+    // 15% 后段1 期望 ≈ 24 枚,白送与价的比例留待下一次重锚 —— 它不因 seed 而变、且不足一把武器的价这两条不变
     expect(STARTING_STAR_COINS).toBeLessThan(DOCK_WEAPON_PRICE);
   });
 

@@ -319,8 +319,9 @@ export const EDICTS: EdictDef[] = [
     // 用户设计会:星币改成**每次击杀按概率掉落**(data/economy 的 STARCOIN_DROP_CHANCE),
     // 这条是唯一能抬那个概率的东西。二轮审查重锚:基础概率降到 3% 后,本层的加点同步
     // 从 +8 收到 +2 ⇒ 5 层 = 12.5% ≈ 基础的 4.2 倍;用户设计会再抬基础 +20 个百分点 → 23%,
-    // 本层加点暂不动(5 层 = 33%,相对增量只剩约 +43%,占位待调);概率的上夹在 sim/edictBuffs.ts
-    // (总概率恒落在 [0,1])
+    // 本层加点暂不动(5 层 = 33%,相对增量只剩约 +43%,占位待调);
+    // 再拍回:基础 15%、本层加点抬到 +5 ⇒ 5 层 = 40%,相对增量 ≈ +167%,重新成为"押满值得"的 build 路线;
+    // 概率的上夹在 sim/edictBuffs.ts(总概率恒落在 [0,1])
     throttle: EDICT_THR_NONE,
     fireRateMul: 1,
     reloadMul: 1,
@@ -334,7 +335,7 @@ export const EDICTS: EdictDef[] = [
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
     boostCooldownAdd: 0,
-    starCoinChanceAdd: 0.02, // 星币掉落概率 +2 个百分点(基础抬到 23% 后占位待调)
+    starCoinChanceAdd: 0.05, // 星币掉落概率 +5 个百分点(基础 15% 后重锚:押满 ≈ 40%)
     tint: 0xb8d8f0, // 占位待调(最浅的一档冷白蓝:与"星"的语感对上)
   },
   {

@@ -106,7 +106,7 @@ describe('法令聚合', () => {
     expect(b.hullHp).toBe(30);
   });
 
-  it('星币概率 = 基础 + 星图协议每层加点(重锚后 +2 个点),且夹在 [0,1]', () => {
+  it('星币概率 = 基础 + 星图协议每层加点(重锚后 +5 个点),且夹在 [0,1]', () => {
     const add = EDICTS[EDICT_STARCHART]!.starCoinChanceAdd;
     expect(agg((l) => (l[EDICT_STARCHART] = 1)).starCoinChance).toBeCloseTo(STARCOIN_DROP_CHANCE + add, 12);
     expect(agg((l) => (l[EDICT_STARCHART] = EDICT_MAX_LEVEL)).starCoinChance).toBeCloseTo(

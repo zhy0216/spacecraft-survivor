@@ -92,7 +92,7 @@ describe('法令表级不变量', () => {
     expect(EDICTS[EDICT_MAGNET]!.magnetRadiusMul).toBe(1.3);
     expect(EDICTS[EDICT_GYRO]!.turnRateAdd).toBe(10);
     expect(EDICTS[EDICT_CRUISE]!.cruiseSpeedMul).toBe(1.1);
-    expect(EDICTS[EDICT_STARCHART]!.starCoinChanceAdd).toBeCloseTo(0.02, 12); // 二轮审查重锚:+8 → +2
+    expect(EDICTS[EDICT_STARCHART]!.starCoinChanceAdd).toBeCloseTo(0.05, 12); // 基础 15% 后重锚:+2 → +5
     expect(EDICTS[EDICT_OVERDRIVE]!.damageMul).toBe(1.15);
     expect(EDICTS[EDICT_BOOST]!.boostCooldownAdd).toBeCloseTo(-0.3, 12); // 加速冷却 -0.3 秒/层
   });
