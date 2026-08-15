@@ -64,6 +64,8 @@ import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import {
   buildRunLogPayload,
   getLogEndpoint,
+  isLocalHost,
+  saveRunLogLocally,
   submitRunLog,
   type RunLogPayload,
 } from './ui/runLogUpload';
@@ -282,21 +284,31 @@ async function boot(): Promise<void> {
   // onTitle:局终之后回标题的出口。补的是流程死角 —— 玩家模式下 Esc 暂停菜单要求
   // `!run.paused`,而局终后 run.paused 恒真,没有这颗按钮就只剩重开两条路(见 gameOver.ts)。
   // 存档在 onGameOver 里已经删过,这里不必再管
+  // 上传/保存到本地二选一:localhost 上没部署 Worker,同一份负载落成 JSON 文件
+  const uploadLocal = isLocalHost();
   const gameOver = createGameOverUi({
     onRestart: restart,
     onRetry: retry,
     onTitle: toTitle,
     onVictoryContinue: () => victoryEpilogue.show(),
-      // 运行日志上传(同源 Cloudflare Worker + R2,接缝见 ui/runLogUpload.ts):本局没有日志 /
-      // 网络失败各回一个**稳定错误码**,结算卡按码查本地化文案 ——
-      // 后端内部错误字符串不原样上屏,玩家只需知道是否该重试
-      onUpload: async (): Promise<UploadOutcome> => {
-        const endpoint = getLogEndpoint();
-        if (pendingLog === null) return { status: 'error', code: 'no-log' };
-        return (await submitRunLog(endpoint, pendingLog))
+    // 运行日志上传(同源 Cloudflare Worker + R2,接缝见 ui/runLogUpload.ts):本局没有日志 /
+    // 网络失败各回一个**稳定错误码**,结算卡按码查本地化文案 ——
+    // 后端内部错误字符串不原样上屏,玩家只需知道是否该重试。
+    // 本地开发环境(localhost)没有同源 Worker:同一颗按钮改口「保存到本地」,
+    // 把同一份负载落成 JSON 文件(uploadLocal 选项负责改口,见 gameOver.ts)
+    onUpload: async (): Promise<UploadOutcome> => {
+      if (pendingLog === null) return { status: 'error', code: 'no-log' };
+      if (uploadLocal) {
+        return saveRunLogLocally(pendingLog)
           ? { status: 'done' }
-          : { status: 'error', code: 'upload-failed' };
-      },
+          : { status: 'error', code: 'save-failed' };
+      }
+      const endpoint = getLogEndpoint();
+      return (await submitRunLog(endpoint, pendingLog))
+        ? { status: 'done' }
+        : { status: 'error', code: 'upload-failed' };
+    },
+    uploadLocal,
   });
   // 语言切换成功后结算界面原地重画文案(09 号):用最近一次 RunSummary 重画,
   // 不重新评估进度、不重新上传、不触发 restart/title 回调

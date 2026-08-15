@@ -282,11 +282,14 @@ export function collectionCategoryName(kind: number): string {
 
 /**
  * 上传结果 → 按钮文案。已知 code 走本地化 key(no-endpoint / no-log / upload-failed /
- * network),**未知 code 兜底成通用失败 + 可诊断码** —— 后端内部错误字符串永不原样上屏。
+ * network / save-failed),**未知 code 兜底成通用失败 + 可诊断码** —— 后端内部错误字符串永不原样上屏。
  * null = 尚未上传(旧口径兼容),与 done 一样显示「已上传」。
+ * localSave = 本机开发环境(见 opts.uploadLocal):done 显示「已保存」而不是「已上传」。
  */
-export function uploadOutcomeText(outcome: UploadOutcome | null): string {
-  if (outcome === null || outcome.status === 'done') return t('ui:gameOver.action.uploaded');
+export function uploadOutcomeText(outcome: UploadOutcome | null, localSave = false): string {
+  if (outcome === null || outcome.status === 'done') {
+    return localSave ? t('ui:gameOver.action.saved') : t('ui:gameOver.action.uploaded');
+  }
   switch (outcome.code) {
     case 'no-endpoint':
       return t('ui:gameOver.upload.noEndpoint');
@@ -296,6 +299,8 @@ export function uploadOutcomeText(outcome: UploadOutcome | null): string {
       return t('ui:gameOver.upload.uploadFailed');
     case 'network':
       return t('ui:gameOver.upload.network');
+    case 'save-failed':
+      return t('ui:gameOver.upload.saveFailed');
     default:
       return t('ui:gameOver.upload.unknown', { code: outcome.code });
   }
@@ -352,6 +357,9 @@ export function collectionItemName(entry: UnlockEntry): string {
  *   返回 Promise<UploadOutcome>:done = 已上传,error = 失败(见 UploadOutcome 的码表)。
  *   上传中按钮置灰防重入,新一局 show 时状态复位 —— 这一局的上传结果不赖到下一局。
  *   胜利局确认战报进终幕之前,上传按钮照常留着:上传不跟任何一条主流程抢路。
+ * @param opts.uploadLocal 本机开发环境(ui/runLogUpload.ts 的 isLocalHost 检出,main.ts 传进来):
+ *   按钮改口「保存本局日志」,done 改口「已保存」,失败走 save-failed 码 ——
+ *   本地没有同源 Worker 可传,保存到本地文件是同一颗按钮的另一条去路。
  */
 export function createGameOverUi(opts: {
   onRestart: () => void;
@@ -359,6 +367,7 @@ export function createGameOverUi(opts: {
   onTitle?: () => void;
   onVictoryContinue?: () => void;
   onUpload?: () => Promise<UploadOutcome>;
+  uploadLocal?: boolean;
 }): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -401,10 +410,13 @@ export function createGameOverUi(opts: {
   titleBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
   titleBtn.textContent = t('ui:gameOver.action.title');
   // 「上传本局日志」垫底:它是遥测出口,不是玩法出口,颜色与「返回标题」同一档暗色。
+  // uploadLocal(本机开发)时改口「保存本局日志」—— 本地没有 Worker 可传,落成文件。
   // 状态三态:待传 → 上传中…(置灰)→ 已上传 / 失败原因(见 upload)
   const uploadBtn = document.createElement('button');
   uploadBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
-  uploadBtn.textContent = t('ui:gameOver.action.upload');
+  uploadBtn.textContent = opts.uploadLocal
+    ? t('ui:gameOver.action.save')
+    : t('ui:gameOver.action.upload');
   card.append(titleEl, noteEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   if (opts.onTitle) card.appendChild(titleBtn);
@@ -529,7 +541,11 @@ export function createGameOverUi(opts: {
     }
     uploadBtn.disabled = false;
     uploadBtn.textContent =
-      uploadOutcome === null ? t('ui:gameOver.action.upload') : uploadOutcomeText(uploadOutcome);
+      uploadOutcome === null
+        ? opts.uploadLocal
+          ? t('ui:gameOver.action.save')
+          : t('ui:gameOver.action.upload')
+        : uploadOutcomeText(uploadOutcome, opts.uploadLocal);
   }
 
   /**

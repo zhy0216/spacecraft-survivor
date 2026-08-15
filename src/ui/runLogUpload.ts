@@ -9,6 +9,10 @@
  *   - localStorage(starwreck.logEndpoint.v1)有值时覆盖默认同源端点;
  *   - 负载格式(RunLogPayload)是**本文件对后端的承诺**,后端解析按 v 分派。
  *
+ * 本地开发环境(localhost / 127.0.0.1)没有同源 Worker 可传:isLocalHost() 检出后,
+ * 上传按钮改口「保存到本地」—— saveRunLogLocally() 把同一份负载落成 JSON 文件
+ * (浏览器下载),本地分析器与将来的人工复盘吃的都是这份文件。
+ *
  * 兜底口径与两份既有存储适配器一致:localStorage 不可用一律静默兜底 ——
  * 读端点失败 = 使用同源默认端点,写端点失败 = 不写(这次配置丢就丢了,
  * 调试配置不是玩家进度,不值得为它打断流程)。
@@ -123,5 +127,37 @@ export async function submitRunLog(endpoint: string, payload: RunLogPayload): Pr
     return false;
   } finally {
     window.clearTimeout(timer);
+  }
+}
+
+/** 本地回环主机名(localhost / IPv4 / IPv6 环回)。Node 测试环境没有 location,一律不算本地。 */
+export function isLocalHost(): boolean {
+  try {
+    const host = location.hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把负载落成本地 JSON 文件(浏览器下载)。本地开发没有同源 Worker,「上传」改为保存:
+ * 文件名带种子与墙钟时间戳,连续存几局不会互相覆盖。下载失败(浏览器不让动 Blob/URL)
+ * 归成 false —— 与 submitRunLog 同一条口径:按钮上只需一句话,失败不值得分类。
+ */
+export function saveRunLogLocally(payload: RunLogPayload): boolean {
+  try {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${RUN_LOG_GAME_ID}-seed${payload.seed}-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    return true;
+  } catch {
+    return false;
   }
 }

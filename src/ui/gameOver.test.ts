@@ -227,6 +227,15 @@ describe('uploadOutcomeText(09 号上传结果映射)', () => {
       '上传失败(错误码 backend-timeout)',
     );
   });
+
+  it('localSave 口径(本机开发):done = 已保存、save-failed = 保存失败,未知码仍走通用失败', () => {
+    expect(uploadOutcomeText(null, true)).toBe('已保存');
+    expect(uploadOutcomeText({ status: 'done' }, true)).toBe('已保存');
+    expect(uploadOutcomeText({ status: 'error', code: 'save-failed' }, true)).toBe('保存失败');
+    expect(uploadOutcomeText({ status: 'error', code: 'backend-timeout' }, true)).toBe(
+      '上传失败(错误码 backend-timeout)',
+    );
+  });
 });
 
 describe('collectionCategoryName / collectionItemName(19 号图鉴)', () => {
@@ -301,6 +310,15 @@ describe('gameOver 英文输出(09 号)', () => {
     );
     expect(uploadOutcomeText({ status: 'error', code: 'backend-timeout' })).toBe(
       'Upload failed (error code backend-timeout)',
+    );
+  });
+
+  it('uploadOutcomeText 英文 localSave:Saved / Save failed', async () => {
+    await changeLocale('en');
+    expect(uploadOutcomeText({ status: 'done' }, true)).toBe('Saved');
+    expect(uploadOutcomeText(null, true)).toBe('Saved');
+    expect(uploadOutcomeText({ status: 'error', code: 'save-failed' }, true)).toBe(
+      'Save failed',
     );
   });
 
@@ -710,6 +728,31 @@ describe('createGameOverUi', () => {
     expect(upload.style.cssText).toContain('#5f7a99');
     ui.show(summary());
     expect(upload.disabled).toBe(false);
+  });
+
+  it('uploadLocal(本机开发):按钮改口「保存本局日志」,done = 已保存、save-failed = 保存失败', async () => {
+    const outcomes: UploadOutcome[] = [];
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onUpload: async () => outcomes.shift() ?? { status: 'done' },
+      uploadLocal: true,
+    });
+    const upload = panelButtons(dom)[1]!;
+    ui.show(summary());
+    expect(upload.textContent).toBe('保存本局日志(U)');
+    outcomes.push({ status: 'done' });
+    upload.listeners.get('click')!(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upload.textContent).toBe('已保存');
+    expect(upload.disabled).toBe(false);
+    // 保存失败是单独一句,不与"上传失败"混用(两种不同的下一步)
+    outcomes.push({ status: 'error', code: 'save-failed' });
+    upload.listeners.get('click')!(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upload.textContent).toBe('保存失败');
+    // 新一局 show 复位回「保存本局日志(U)」:上一局的结果不许赖到下一局
+    ui.show(summary());
+    expect(upload.textContent).toBe('保存本局日志(U)');
   });
 
   it('上传三态:点击 → 上传中(置灰)→ 已上传;已知码印本地化失败、未知码带可诊断码', async () => {

@@ -11,8 +11,10 @@ import {
   buildRunLogPayload,
   DEFAULT_RUN_LOG_ENDPOINT,
   getLogEndpoint,
+  isLocalHost,
   RUN_LOG_GAME_ID,
   RUN_LOG_PAYLOAD_VERSION,
+  saveRunLogLocally,
   setLogEndpoint,
   type RunLogMeta,
 } from './runLogUpload';
@@ -58,5 +60,17 @@ describe('端点存储(浏览器不可用时静默兜底)', () => {
   it('Node 里没有 localStorage:读 = Cloudflare 同源端点、写不炸', () => {
     expect(getLogEndpoint()).toBe(DEFAULT_RUN_LOG_ENDPOINT);
     expect(() => setLogEndpoint('http://example.test/logs')).not.toThrow();
+  });
+});
+
+describe('本地开发分支(isLocalHost / saveRunLogLocally)', () => {
+  it('Node 里没有 location:一律不算本地(localhost 分支只在浏览器里生效)', () => {
+    expect(isLocalHost()).toBe(false);
+  });
+
+  it('Node 里没有 document/URL.createObjectURL:保存返回 false,不炸', () => {
+    const log: RunLog = createRunLog(7);
+    logEvent(log, { k: 'upgradeSkip', t: 1 });
+    expect(saveRunLogLocally(buildRunLogPayload(log, meta()))).toBe(false);
   });
 });
