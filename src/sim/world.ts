@@ -69,7 +69,6 @@ import {
   DROP_MAX_ALIVE,
   MAGNET_PICKUP_RADIUS_MUL,
   MAGNET_PICKUP_SURGE,
-  REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   SHOP_BEACON_LIFETIME,
   SHOP_BEACON_MAX_DIST,
@@ -663,7 +662,7 @@ export class World {
   /**
    * —— 地图商店信标(用户设计会:取消"每跨一段自动弹面板")——
    * 每跨一个航段(约两分钟)在船周围随机方位、随机距离处生成一个信标,只存在
-   * SHOP_BEACON_LIFETIME 秒;玩家**开船撞上去**才开商店面板(时停)、才拿免费回血。
+   * SHOP_BEACON_LIFETIME 秒;玩家**开船撞上去**才开商店面板(时停)。
    * 没赶到就随信标一起消失,这一轮什么都没有 —— 于是"要不要冒着虫潮横穿半张图"
    * 成了每两分钟一次的真取舍(把面板搬上地图的全部意义就在这一句)。
    *
@@ -1119,16 +1118,12 @@ export class World {
       // 判定半径 = 信标半径 + 船体受击圆(damage.shipRadius 的唯一口径,与撞击精筛同一份几何)
       const br = SHOP_BEACON_RADIUS + shipRadius(tuning.shipLength);
       if (bdx * bdx + bdy * bdy <= br * br) {
-        // 到店:信标当场熄灭(一轮一次,面板关掉也不许再接一次),开面板 + 免费回血。
-        // 回血挂在**接上的这一刻**而不是关面板时:玩家要能在店里看着血条回上去,
-        // 再决定这 25 星币的付费修复还买不买(data/economy 的 REFIT_HEAL_FRACTION 那段)
+        // 到店:信标当场熄灭(一轮一次,面板关掉也不许再接一次),开面板。
+        // **不回血**(用户口径:商店不白送)—— 接上信标只是拿到"花 25 星币买 30 血"的资格,
+        // 全游戏唯一的回血出口是店里的付费修复(buyDockRepair)。
         this.shopBeaconActive = false;
         this.shopBeaconTtl = 0;
         this.refitPending = true;
-        this.ship.hp = Math.min(
-          this.ship.maxHp,
-          this.ship.hp + Math.ceil(this.ship.maxHp * REFIT_HEAL_FRACTION),
-        );
         openedRefit = true;
       } else if (this.shopBeaconTtl <= 0) {
         // 没赶到:信标熄灭,两张货架与特价一起作废 —— 留着的话下一轮会拿到过期货
@@ -2105,8 +2100,6 @@ export class World {
     this.dockEdictOffers.length = 0;
     this.shopWeapons.length = 0;
     this.shopDiscountIndex = -1;
-    // 免费回血**不在这里** —— 它挂在"接上信标"那一刻(见 step 里的接触分支):
-    // 关面板才回血的话,玩家在店里没法判断那 25 星币的付费修复还要不要买。
     this.offerCooldown = Math.max(this.offerCooldown, UPGRADE_OFFER_COOLDOWN);
     return true;
   }
@@ -2228,8 +2221,9 @@ export class World {
    * **零 rng**、失败一个字段都不动、可重复购买、夹在 maxHp 上不溢出。
    * 满血拒绝(DOCK_HP_FULL)是"可买但没必要"的口径,与 ui 的置灰按钮互为主备
    * (置灰只是读数,真正的裁决始终以返回码为准)。
-   * 修复量 = 固定 DOCK_REPAIR_HP(30) —— 不随 maxHp 膨胀,与 completeRefit 的免费回血
-   * (maxHp × REFIT_HEAL_FRACTION)刻意分开:付费修复是全程可预期的固定止损,不是比例血泵。
+   * 修复量 = 固定 DOCK_REPAIR_HP(30) —— 不随 maxHp 膨胀,不掷 rng。它是全游戏**唯一**
+   * 的回血出口(到店不白送,见 step 的信标接触分支):要回血就得花这 25 星币,
+   * 与法令同价的取舍见 data/economy 的 DOCK_REPAIR_PRICE 那段。
    *
    * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / DOCK_HP_FULL / DOCK_NO_STARCOINS)。
    */

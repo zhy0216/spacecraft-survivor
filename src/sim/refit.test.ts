@@ -5,7 +5,6 @@ import {
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_PRICE,
-  REFIT_HEAL_FRACTION,
   SHOP_BEACON_LIFETIME,
   SHOP_BEACON_MAX_DIST,
   SHOP_BEACON_MIN_DIST,
@@ -29,9 +28,8 @@ describe('槽位制整备与船坞商店', () => {
     expect(world.refitPending).toBe(false);
   });
 
-  it('接上地图商店信标:开面板 + 免费回血 30%,信标当场熄灭(一轮一次)', () => {
+  it('接上地图商店信标:开面板、不回血,信标当场熄灭(一轮一次)', () => {
     const world = new World(1);
-    const full = world.ship.maxHp;
     world.ship.hp = 1;
     // 手工点亮一个贴在船身上的信标(生成时机由 step 的跨段分支管,那条另有用例)
     world.shopBeaconActive = true;
@@ -45,7 +43,7 @@ describe('槽位制整备与船坞商店', () => {
 
     expect(world.refitPending).toBe(true);
     expect(openedAt).toBe(world.shopBeaconSegment);
-    expect(world.ship.hp).toBe(1 + Math.ceil(full * REFIT_HEAL_FRACTION));
+    expect(world.ship.hp).toBe(1); // 商店不白送:接上信标只是拿到付费修复的资格
     expect(world.shopBeaconActive).toBe(false); // 一轮一次:关掉面板也不许再接一次
     expect(world.shopBeaconTtl).toBe(0);
   });

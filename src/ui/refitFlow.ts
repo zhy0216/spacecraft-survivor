@@ -884,7 +884,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     syncPanel();
   }
 
-  /** 完成本轮整备:世界放行下一航段(含免费回血),收面板,回调归 main 恢复战斗 */
+  /** 完成本轮整备:世界放行下一航段,收面板,回调归 main 恢复战斗 */
   function resolve(): void {
     const completed = world.completeRefit();
     hide();
