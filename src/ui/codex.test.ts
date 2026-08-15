@@ -27,6 +27,7 @@ import {
   TOWER_LASER,
   TOWER_MISSILE_NEST,
   TOWER_MORTAR,
+  TOWER_STORM_CANNON,
 } from '../data/towers';
 import {
   COND_ELITE_KILLS,
@@ -197,12 +198,12 @@ describe('codexRows', () => {
     expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts']);
   });
 
-  it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图与渲染层同源', () => {
+  it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图三档星级与渲染层同源', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     expect(weapons.length).toBe(TOWERS.length);
     const auto = weapons.find((r) => r.id === String(TOWER_AUTOCANNON))!;
     expect(auto.locked).toBe(false);
-    expect(auto.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[0]] });
+    expect(auto.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[0] });
     const def = TOWERS[0]!;
     expect(auto.hover[0]).toBe('自动机炮 · 弹药系');
     expect(auto.hover[1]).toBe(starExpected(def, 1, false));
@@ -230,7 +231,7 @@ describe('codexRows', () => {
     expect(aurora.name).toBe(weaponDisplayName(TOWER_AURORA));
     expect(aurora.hover[0]).toBe(`${towerName(TOWER_LASER)} · 合★★★变身 · 过热系`);
     // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"合★★★"两相印证
-    expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
+    expect(aurora.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_LASER] });
   });
 
   it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
@@ -239,7 +240,7 @@ describe('codexRows', () => {
     )!;
     expect(locked.locked).toBe(true);
     expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
-    expect(locked.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_MISSILE_NEST]] });
+    expect(locked.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_MISSILE_NEST] });
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
       (r) => r.id === String(TOWER_MISSILE_NEST),
     )!;
@@ -557,6 +558,17 @@ function findEl(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl | undefin
   return undefined;
 }
 
+/** 深度收集:按谓词扫子树,返回全部命中(武器卡三档星级缩略图要数出三张图、三个标签) */
+function findAll(rootEl: StubEl, pred: (el: StubEl) => boolean): StubEl[] {
+  const out: StubEl[] = [];
+  const walk = (el: StubEl): void => {
+    if (pred(el)) out.push(el);
+    for (const kid of el.children) walk(kid);
+  };
+  walk(rootEl);
+  return out;
+}
+
 /** 反查父节点:卡片名改挂名称 div 之后,灰显断言要看它父格子的 cssText */
 function parentOf(rootEl: StubEl, target: StubEl): StubEl | undefined {
   for (const kid of rootEl.children) {
@@ -575,9 +587,16 @@ function findCell(dom: StubDom, kind: string, id: string): StubEl | undefined {
   );
 }
 
-/** 格子的可见文本:名称挂在子 div 上(桩的 textContent 不随子节点派生),取子树第一个有字的叶子 */
+/** 格子的可见文本:名称挂在子 div 上(桩的 textContent 不随子节点派生),取子树最后一个有字的叶子 ——
+ * 武器卡的艺术框里有星数标签(★/★★/★★★)先于名称,取第一个会把星数标签当成卡片名 */
 function cellText(cell: StubEl): string {
-  return findEl(cell, (el) => el.textContent.length > 0)?.textContent ?? '';
+  let last = '';
+  const walk = (el: StubEl): void => {
+    if (el.textContent.length > 0) last = el.textContent;
+    for (const kid of el.children) walk(kid);
+  };
+  walk(cell);
+  return last;
 }
 
 /** 悬停 tooltip:整页唯一那个 fixed 定位、pointer-events:none 的 div */
@@ -628,9 +647,9 @@ describe('createCodexUi', () => {
     // 卡片名是纯名称(数值在悬停里);分区标题在;行用 data-content-kind/id 定位
     expect(findEl(root(dom), (el) => el.textContent === '武器')).toBeDefined();
     expect(cellText(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!)).toBe('自动机炮');
-    // 锁定卡:名称 div 的父格子带 opacity 灰显
+    // 锁定卡:名称 div 的父格子带 opacity 灰显(星数标签也是叶子,按精确名称找)
     const lockedCell = findCell(dom, 'weapons', String(TOWER_MISSILE_NEST))!;
-    const lockedName = findEl(lockedCell, (el) => el.textContent.length > 0)!;
+    const lockedName = findEl(lockedCell, (el) => el.textContent === '导弹巢')!;
     expect(parentOf(root(dom), lockedName)!.style.cssText).toContain('opacity:.45');
   });
 
@@ -667,16 +686,36 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.display).toBe('none');
   });
 
-  it('卡片配图:全部武器含导弹巢直摆 PNG,法令仍走 SVG data URI', () => {
+  it('卡片配图:武器卡三档星级缩略图(同图放大 + 图下各标星数),敌/法令仍单图', () => {
     const ui = make();
     ui.show();
-    const thumbs = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
-    // 武器 13 卡 + 敌人 8 卡 + 法令 10 卡,配图数必然远多于零
-    expect(thumbs.length).toBeGreaterThan(20);
-    expect(thumbs.some((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
-    expect(thumbs.some((el) => el.src.includes('missile-nest-head'))).toBe(true);
-    const svg = thumbs.find((el) => el.src.startsWith('data:image/svg+xml'));
-    expect(svg).toBeDefined(); // 法令徽章仍走 data URI
+    const cell = findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!;
+    const starImgs = findAll(cell, (el) => el.tagName === 'IMG');
+    expect(starImgs.length).toBe(3);
+    expect(starImgs.map((el) => el.alt)).toEqual(['自动机炮 ★', '自动机炮 ★★', '自动机炮 ★★★']);
+    expect(starImgs.every((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
+    // 放大倍率与战斗同源(TOWER_STAR_HEAD_SCALES × 26px 基准):1★ 26 / 2★ 30 / 3★ 34
+    expect(starImgs[0]!.style.cssText).toContain('width:26px;height:26px;');
+    expect(starImgs[1]!.style.cssText).toContain('width:30px;height:30px;');
+    expect(starImgs[2]!.style.cssText).toContain('width:34px;height:34px;');
+    // 图下各标 ★/★★/★★★,标签色与 renderer 的 FX_STAR_COLORS 同一份(冷蓝/金/亮金)
+    const labels = findAll(cell, (el) => ['★', '★★', '★★★'].includes(el.textContent));
+    expect(labels.map((l) => l.textContent)).toEqual(['★', '★★', '★★★']);
+    expect(labels[0]!.style.cssText).toContain('color:#9adcff');
+    expect(labels[1]!.style.cssText).toContain('color:#ffd479');
+    expect(labels[2]!.style.cssText).toContain('color:#fff1a8');
+    // 合成武器行复用血统炮头:风暴机炮(display = 自动机炮)的三档图与机炮同源
+    const storm = findCell(dom, 'weapons', String(TOWER_STORM_CANNON))!;
+    const stormImgs = findAll(storm, (el) => el.tagName === 'IMG');
+    expect(stormImgs.every((el) => el.src.includes('autocannon-head'))).toBe(true);
+    // 敌/法令单图不变:图鉴图标 alt 的 PNG 与 SVG data URI 各在其位
+    const plain = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
+    expect(plain.some((el) => el.src.endsWith('.png'))).toBe(true);
+    expect(plain.some((el) => el.src.startsWith('data:image/svg+xml'))).toBe(true);
+    // 导弹巢贴图直摆(三档缩略图)
+    expect(
+      dom.created.some((el) => el.tagName === 'IMG' && el.src.includes('missile-nest-head')),
+    ).toBe(true);
   });
 
   it('Esc 关页走 onClose;收着时 Esc 不认;按钮同一条路', () => {

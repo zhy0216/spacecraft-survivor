@@ -6,9 +6,11 @@
  * 反复 show/hide 不重建 —— 建两份就是两份 Esc 监听器、两块遮罩。
  *
  * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令),内容是卡片网格 ——
- * 每张卡一张大图(56px)+ 名称,未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
+ * 每张卡配图 + 名称,未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
  * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
- * **星级三档全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
+ * **武器卡是星级三档缩略图**(同一张贴图按战斗倍率放大三张,图下各标 ★/★★/★★★ ——
+ * 游戏里 2★/3★ 的炮头就是放大件,不标星数玩家认不出图上画的是几星的枪);敌/法令仍一张大图。
+ * **星级三档数值全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
  *
  * 配图口径:有生成贴图的用真实 PNG(13 武器型号 / 5 敌型 + Boss,URL 清单与渲染层
@@ -47,7 +49,7 @@ import {
 } from '../data/unlocks';
 import { WAVE_LOCKED_ELITES } from '../data/waves';
 import { t } from '../i18n';
-import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS, TOWER_STAR_HEAD_SCALES } from '../render/artUrls';
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
 import { EDICT_ICONS, TOWER_ICONS } from './upgradeFlow';
@@ -103,8 +105,11 @@ const FILTER_ON_CSS =
 const SCROLL_CSS = 'flex:1 1 auto;overflow-y:auto;margin-top:4px;padding-right:6px;';
 const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;margin-top:12px;margin-bottom:6px;`;
 
-/** 卡片网格:每格 76px 起,列数随卡片宽度自适应(13 塔 ≈ 6-7 列 × 2 行) */
+/** 卡片网格:每格 76px 起,列数随卡片宽度自适应(敌人/法令 ≈ 6-7 列) */
 const GRID_CSS = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:8px;';
+/** 武器网格:星级三档缩略图并排 ≈ 96px + 卡片内边距,最小列宽放宽到 108px,别把三档图挤溢出 */
+const GRID_WEAPONS_CSS =
+  'display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px;';
 /** 图鉴卡片:图上名下;锁定卡整卡降透明度(图跟着一起压暗,与结算图鉴同一套灰显) */
 const CELL_CSS =
   'display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 2px 5px;' +
@@ -116,6 +121,17 @@ const CELL_IMG_CSS = 'object-fit:contain;background:rgba(5,7,13,.6);' +
   'border:1px solid rgba(43,74,110,.6);border-radius:4px;';
 const CELL_NAME_CSS =
   `font-size:11px;color:${VALUE_COLOR};text-align:center;line-height:1.3;letter-spacing:.02em;`;
+
+/**
+ * 星级三档缩略图:每档一列(图 + 星数标签),三列并排,1★ 基准 26px、
+ * 2★/3★ 按 TOWER_STAR_HEAD_SCALES 放大(26/30/34px) —— 与战斗里的炮位放大同一份倍率。
+ * 标签色与 renderer 的 FX_STAR_COLORS 同一份(1★ 冷蓝/2★ 金/3★ 亮金):金色留给星级徽记,
+ * 与 docs/weapon-star-fire-patterns「金色只用于星级徽记」同一条口径。
+ */
+const STAR_THUMB_COL_CSS = 'display:flex;flex-direction:column;align-items:center;gap:2px;';
+const STAR_LABEL_CSS = 'font-size:10px;line-height:1;letter-spacing:.02em;';
+const STAR_LABEL_COLORS = ['#9adcff', '#ffd479', '#fff1a8'] as const;
+const STAR_THUMB_BASE_PX = 26;
 
 /** 悬停 tooltip:整页只此一个,pointer-events:none 永不抢鼠标(与 HUD 法令悬停同一条口径) */
 const TIP_CSS =
@@ -153,10 +169,14 @@ export function codexUnlockStats(progress: Progress): { unlocked: number; total:
 }
 
 /**
- * 一行的配图。两种来路:真实贴图(PNG,清单与渲染层同源)或程序化 SVG 徽章
- * (无贴图条目:导弹巢与法令,字形 + 数值表 tint)。null = 没配到图,DOM 只摆文字。
+ * 一行的配图。三种来路:真实贴图(PNG,清单与渲染层同源)、星级三档(武器:同一张贴图按
+ * 战斗里的星级倍率 1/1.16/1.32 放大,图下各标 ★/★★/★★★)或程序化 SVG 徽章
+ * (数据表先加了新型而贴图还没跟上时:字形 + 数值表 tint)。null = 没配到图,DOM 只摆文字。
  */
-export type CodexArt = { kind: 'img'; urls: string[] } | { kind: 'svg'; svg: string };
+export type CodexArt =
+  | { kind: 'img'; urls: string[] }
+  | { kind: 'stars'; url: string }
+  | { kind: 'svg'; svg: string };
 
 /** 图鉴一行:名称 + 锁定标记 + 配图 + 悬停行(具体数值全部在悬停里,网格只摆图与名) */
 export interface CodexRow {
@@ -215,14 +235,23 @@ function imgArt(...urls: Array<string | undefined>): CodexArt | null {
 }
 
 /**
- * 武器配图:round-8 清单已覆盖全部 13 个型号(合成塔条目复用对应血统炮头);
- * 以后数据表先加了新型、贴图还没补上时,再按 MERGES 回退底座或画字形徽章。
+ * 武器配图:round-8 清单已覆盖全部 13 个型号(合成塔条目复用对应血统炮头)。
+ * 武器行是**星级三档**:同一张贴图按战斗里的倍率放大三张,图下各标星数 ——
+ * 游戏里 2★/3★ 的炮头就是放大件(1.16/1.32,见 renderer 与 docs/weapon-star-fire-patterns),
+ * 图鉴不标星数,玩家就看不出图上画的是几星的枪。以后数据表先加了新型、贴图还没补上时,
+ * 再按 MERGES 回退底座或画字形徽章。
  */
 export function towerArt(type: number): CodexArt | null {
-  if (type >= 0 && type < TOWER_ART_URLS.length) return imgArt(TOWER_ART_URLS[type]);
-  for (const r of MERGES) {
-    if (r.result === type) return imgArt(TOWER_ART_URLS[r.base]);
+  let url: string | undefined = TOWER_ART_URLS[type];
+  if (url === undefined) {
+    for (const r of MERGES) {
+      if (r.result === type) {
+        url = TOWER_ART_URLS[r.base];
+        break;
+      }
+    }
   }
+  if (url !== undefined) return { kind: 'stars', url };
   const def = TOWERS[type];
   if (def === undefined) return null;
   return { kind: 'svg', svg: glyphBadgeSvg(TOWER_ICONS[type] ?? '?', tintHex(def.tint)) };
@@ -526,8 +555,25 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     if (row.art !== null) {
       const artBox = document.createElement('div');
       artBox.style.cssText = CELL_ART_CSS;
-      const size = row.art.kind === 'img' && row.art.urls.length > 1 ? '34px' : '56px';
-      if (row.art.kind === 'img') {
+      if (row.art.kind === 'stars') {
+        // 星级三档缩略图:同一张贴图按战斗倍率放大,每档图下各标星数 ——
+        // 不标的话 2★/3★ 只是同图变大小,玩家认不出图上画的是几星的枪
+        for (let s = 0; s < 3; s++) {
+          const col = document.createElement('div');
+          col.style.cssText = STAR_THUMB_COL_CSS;
+          const img = document.createElement('img');
+          const px = Math.round(STAR_THUMB_BASE_PX * (TOWER_STAR_HEAD_SCALES[s] ?? 1));
+          img.style.cssText = CELL_IMG_CSS + `width:${px}px;height:${px}px;`;
+          img.src = row.art.url;
+          img.alt = `${row.name} ${'★'.repeat(s + 1)}`;
+          const label = document.createElement('div');
+          label.style.cssText = STAR_LABEL_CSS + `color:${STAR_LABEL_COLORS[s] ?? '#ffd479'};`;
+          label.textContent = '★'.repeat(s + 1);
+          col.append(img, label);
+          artBox.appendChild(col);
+        }
+      } else if (row.art.kind === 'img') {
+        const size = row.art.urls.length > 1 ? '34px' : '56px';
         for (const url of row.art.urls) {
           const img = document.createElement('img');
           img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
@@ -537,7 +583,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
         }
       } else {
         const img = document.createElement('img');
-        img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
+        img.style.cssText = CELL_IMG_CSS + 'width:56px;height:56px;';
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
         img.alt = t('ui:codex.alt');
         artBox.appendChild(img);
@@ -578,7 +624,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       label.textContent = section.title;
       scrollEl.appendChild(label);
       const grid = document.createElement('div');
-      grid.style.cssText = GRID_CSS;
+      grid.style.cssText = section.key === 'weapons' ? GRID_WEAPONS_CSS : GRID_CSS;
       for (const row of section.rows) appendCell(grid, row, section.key);
       scrollEl.appendChild(grid);
     }

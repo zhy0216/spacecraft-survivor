@@ -443,10 +443,11 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     toast.style.display = 'none';
   }
 
-  /** 图鉴的配图结构 → 商店卡可直接使用的 src。多图条目货架只取第一张主图。 */
+  /** 图鉴的配图结构 → 商店卡可直接使用的 src。多图条目货架只取第一张主图;武器星级三档同一张图 */
   function artSrc(art: CodexArt | null): string | null {
     if (art === null) return null;
     if (art.kind === 'img') return art.urls[0] ?? null;
+    if (art.kind === 'stars') return art.url;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(art.svg)}`;
   }
 

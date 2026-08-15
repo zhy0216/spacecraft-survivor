@@ -126,6 +126,7 @@ import {
   type RigTargetFacing,
 } from './enemyRig';
 import { type GeneratedArtTextures, loadGeneratedArt } from './generatedAssets';
+import { TOWER_STAR_HEAD_SCALES } from './artUrls';
 import { ENEMY_BODY_FILL, enemyTint, SHIP_EDGE, SHIP_FILL } from './palette';
 import { RigLayer, type RigDrive, type RigDriver, type RigEntity } from './rigLayer';
 import { Starfield } from './starfield';
@@ -1908,7 +1909,7 @@ export class Renderer {
         const s = new Sprite(tex);
         s.anchor.set(0.5, TOWER_HEAD_ANCHOR_Y);
         const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
-        const starScale = stars === 1 ? 1 : stars === 2 ? 1.16 : 1.32;
+        const starScale = TOWER_STAR_HEAD_SCALES[stars - 1] ?? 1;
         s.scale.set((size * starScale) / Math.max(tex.width, tex.height));
         // round-8 是带材质与功能色的完整炮头,再乘 tint 会吃掉钢蓝层次和橙色警示纹。
         // 武器身份色仍由弹道、射界与节流读数取 def.tint 表达。

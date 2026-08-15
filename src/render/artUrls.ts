@@ -115,6 +115,12 @@ const MISSILE_NEST_HEAD_URL = new URL(
   import.meta.url,
 ).href;
 
+/**
+ * 星级炮头展示倍率:下标 0..2 = 1★..3★。renderer 的炮位贴图按它放大、图鉴的三档缩略图
+ * 也按它放大 —— 抄第二份的下场是图鉴画的 2★ 与战斗里看到的 2★ 不是同一把枪。
+ */
+export const TOWER_STAR_HEAD_SCALES = [1, 1.16, 1.32] as const;
+
 export const TOWER_ART_URLS = [
   AUTOCANNON_HEAD_URL,
   LASER_PRISM_HEAD_URL,
