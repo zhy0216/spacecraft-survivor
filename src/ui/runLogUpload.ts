@@ -2,21 +2,24 @@
  * 运行日志的上传适配层 —— ui 层,与 ui/runSaveStorage.ts 同一条边界:
  * 浏览器能力(fetch / localStorage)只在这里碰,sim/runLog.ts 一字不识网络。
  *
- * 上传后端**尚未定案**(讨论后接):本文件把接缝先钉死,后端落地只换端点这一件事 ——
+ * 生产后端是同源 Cloudflare Worker `/api/logs`,日志落到私有 R2 bucket,D1 只做月度
+ * 数量/字节硬配额。本文件仍保留
+ * localStorage 端点覆盖,方便本地分析器或临时环境接管上传 ——
  *   - submitRunLog(endpoint, payload):POST JSON、10 秒超时、2xx 才算成功;
- *   - 端点存在 localStorage(starwreck.logEndpoint.v1),未配置 = 上传功能整条关闭;
+ *   - localStorage(starwreck.logEndpoint.v1)有值时覆盖默认同源端点;
  *   - 负载格式(RunLogPayload)是**本文件对后端的承诺**,后端解析按 v 分派。
- * 于是客户端这一侧的上传流程(按钮/状态/失败提示)今天就能做完并被测住,
- * 后端怎么写不阻塞它。
  *
  * 兜底口径与两份既有存储适配器一致:localStorage 不可用一律静默兜底 ——
- * 读端点失败 = 没有端点(按钮报"未配置上传地址"),写端点失败 = 不写(这次配置丢就丢了,
+ * 读端点失败 = 使用同源默认端点,写端点失败 = 不写(这次配置丢就丢了,
  * 调试配置不是玩家进度,不值得为它打断流程)。
  */
 import type { RunLog } from '../sim/runLog';
 
-/** 上传端点键(调试配置,不进设置存档 —— 后端定案前它只属于"想试上传的人") */
+/** 上传端点键(调试覆盖,不进设置存档) */
 export const RUN_LOG_ENDPOINT_KEY = 'starwreck.logEndpoint.v1';
+
+/** Cloudflare Worker 上的生产上传入口；同源部署不需要 CORS 或玩家配置。 */
+export const DEFAULT_RUN_LOG_ENDPOINT = '/api/logs';
 
 /** 上传请求的超时(ms):后端不回应就该有个了断,别让按钮永远停在"上传中…" */
 export const UPLOAD_TIMEOUT_MS = 10000;
@@ -82,12 +85,12 @@ export function buildRunLogPayload(log: RunLog, meta: RunLogMeta): RunLogPayload
   };
 }
 
-/** 读上传端点。没有 / localStorage 不可用 = null(上传功能整条关闭) */
-export function getLogEndpoint(): string | null {
+/** 读上传端点。调试覆盖缺失 / localStorage 不可用时使用同源 Cloudflare API。 */
+export function getLogEndpoint(): string {
   try {
-    return localStorage.getItem(RUN_LOG_ENDPOINT_KEY);
+    return localStorage.getItem(RUN_LOG_ENDPOINT_KEY) || DEFAULT_RUN_LOG_ENDPOINT;
   } catch {
-    return null;
+    return DEFAULT_RUN_LOG_ENDPOINT;
   }
 }
 

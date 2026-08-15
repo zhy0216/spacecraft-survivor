@@ -287,12 +287,11 @@ async function boot(): Promise<void> {
     onRetry: retry,
     onTitle: toTitle,
     onVictoryContinue: () => victoryEpilogue.show(),
-      // 运行日志上传(后端未定案,接缝见 ui/runLogUpload.ts):端点未配置 / 本局没有日志 /
-      // 网络失败三件事各回一个**稳定错误码**,结算卡按码查本地化文案 ——
-      // 后端内部错误字符串不原样上屏,玩家知道下一步去配端点还是重试
+      // 运行日志上传(同源 Cloudflare Worker + R2,接缝见 ui/runLogUpload.ts):本局没有日志 /
+      // 网络失败各回一个**稳定错误码**,结算卡按码查本地化文案 ——
+      // 后端内部错误字符串不原样上屏,玩家只需知道是否该重试
       onUpload: async (): Promise<UploadOutcome> => {
         const endpoint = getLogEndpoint();
-        if (endpoint === null) return { status: 'error', code: 'no-endpoint' };
         if (pendingLog === null) return { status: 'error', code: 'no-log' };
         return (await submitRunLog(endpoint, pendingLog))
           ? { status: 'done' }

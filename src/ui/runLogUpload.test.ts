@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { createRunLog, logEvent, type RunLog } from '../sim/runLog';
 import {
   buildRunLogPayload,
+  DEFAULT_RUN_LOG_ENDPOINT,
   getLogEndpoint,
   RUN_LOG_GAME_ID,
   RUN_LOG_PAYLOAD_VERSION,
@@ -54,8 +55,8 @@ describe('buildRunLogPayload(负载 = 本文件对后端的承诺)', () => {
 });
 
 describe('端点存储(浏览器不可用时静默兜底)', () => {
-  it('Node 里没有 localStorage:读 = null(未配置)、写不炸', () => {
-    expect(getLogEndpoint()).toBeNull();
+  it('Node 里没有 localStorage:读 = Cloudflare 同源端点、写不炸', () => {
+    expect(getLogEndpoint()).toBe(DEFAULT_RUN_LOG_ENDPOINT);
     expect(() => setLogEndpoint('http://example.test/logs')).not.toThrow();
   });
 });

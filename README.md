@@ -42,7 +42,13 @@ npm run build    # tsc 类型检查 + 产物构建
 
 每局从第一帧起记一卷**运行日志**(`src/sim/runLog.ts`):击杀逐只、升级/重摇/商店逐笔、跨段/Boss/受击/沉船/局终逐转折,只写不读、不进 checksum、不进存档。结算卡上「上传本局日志」(U)把时间线 + 结局读数 POST 给配置好的端点。
 
-上传后端**未定案**:接缝钉在 `src/ui/runLogUpload.ts`(负载格式 + `submitRunLog`),端点放在 localStorage 键 `starwreck.logEndpoint.v1` —— 后端落地只换端点,客户端流程不再动。端点未配置时按钮会明说「未配置上传地址」。
+生产环境部署在 Cloudflare Workers:静态游戏由 Workers Static Assets 托管,`POST /api/logs` 校验并把每局 JSON 日志写入私有 R2 bucket `starwreck-run-logs`。D1 数据库 `starwreck-logs` 只保存月度硬配额计数:单份最多 1 MiB、每月最多 5,000 份且正文总量不超过 4 GB;达到任一上限就拒绝写 R2。R2 日志 30 天后由生命周期规则自动删除,没有公开读取 API。`starwreck.logEndpoint.v1` 仍可覆盖默认同源端点,供本地分析器调试。
+
+```bash
+npm run cf:types    # Wrangler 配置变化后重新生成 Worker binding 类型
+npm run test:worker # 在 Workers runtime + 本地 R2/D1 中验证上传与硬配额
+npm run deploy      # 构建并部署静态资源、Worker、R2 与 D1 binding
+```
 
 **开发模式**:URL 加 `?debug` 恢复灰盒调参面板(实体数量、手感参数、波次读数、压测 1000 敌)与 `· dev` 页签。
 `?seed=123` 指定种子 —— 同 seed 两次运行、同 tick 的 checksum 必须一致。
