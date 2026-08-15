@@ -1173,8 +1173,6 @@ export class Renderer {
   private hasHullArt = false;
   /** 炮头贴图层:随槽位内容重建(Sprite/色块只在装填那一下增删),瞄准每帧只改已有精灵 */
   private weaponG = new Container();
-  /** 常驻星级徽记层:2★/3★ 不只在开火瞬间才可读。 */
-  private starG = new Graphics();
   private weaponBindings: WeaponBinding[] = [];
   /**
    * 炮位内容的脏标记签名:4 个槽的 type 压进一个数(每槽 4 位)。type 只在获得/替换/合成
@@ -1462,7 +1460,7 @@ export class Renderer {
     // → 炮位贴图 → 炮位状态读数 → 节流读数。
     // 扇形画在船体之下:它是底衬,不许糊住船身与炮位;状态读数长在炮位上,理应压住贴图。
     // 这里不建炮位几何 —— 槽位内容要等 sync() 的签名检查在首帧补上(weaponSig = -1)。
-    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.weaponStateG, this.starG, this.throttleG);
+    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.weaponStateG, this.throttleG);
     // 拖尾环形缓冲一次建齐(铁律 3):life ≤ 0 = 空闲槽,运行期只改字段
     for (let i = 0; i < BOOST_TRAIL_MAX; i++) this.boostTrail.push({ x: 0, y: 0, life: 0 });
 
@@ -1762,7 +1760,6 @@ export class Renderer {
     this.syncWeaponSprites();
     this.syncWeaponRotations();
     this.drawSlotWeaponState();
-    this.drawSlotStars();
     if (this.arcOverlay) {
       // 按住 Tab:射界扇形 + 判定圆 + 节流读数一起出现(全部读同一个 arcOverlay,
       // 不会出现"松了 Tab 但读数还挂着"的半套状态)
@@ -2055,31 +2052,6 @@ export class Renderer {
         }
         g.fill({ color: FX_CORE_COLOR, alpha: 0.5 + q * 0.42 });
         g.circle(tipX, tipY, 1.5 + q * 2.2).fill({ color: FX_CORE_COLOR, alpha: 0.72 + q * 0.25 });
-      }
-    }
-  }
-
-  /** 常驻星级徽记:一颗星保持干净炮位,2★/3★ 用冷金色菱点分层。 */
-  private drawSlotStars(): void {
-    const g = this.starG;
-    g.clear();
-    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-      const slot = this.world.weapons[i]!;
-      if (slot.type < 0) continue;
-      const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
-      if (stars < 2) continue;
-      const hp = WEAPON_HARDPOINTS[i];
-      if (!hp) continue;
-      const a = WEAPON_SLOT_FACING[i] ?? 0;
-      const x = hp.x + Math.cos(a) * CELL * 0.58;
-      const y = hp.y + Math.sin(a) * CELL * 0.58;
-      const color = stars === 3 ? 0xfff1a8 : 0xffd479;
-      const size = stars === 3 ? 2.8 : 2.3;
-      for (let n = 0; n < stars; n++) {
-        const ox = (n - (stars - 1) / 2) * CELL * 0.18;
-        g.poly([x + ox, y - size, x + ox + size, y, x + ox, y + size, x + ox - size, y])
-          .fill({ color, alpha: stars === 3 ? 0.95 : 0.82 })
-          .stroke({ width: 0.8, color: FX_CORE_COLOR, alpha: 0.8 });
       }
     }
   }
