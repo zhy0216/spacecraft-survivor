@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { changeLocale, initI18n } from '../i18n';
 import { createVictoryEpilogue } from './victoryEpilogue';
 
 interface StubEl {
@@ -11,6 +12,8 @@ interface StubEl {
   tabIndex: number;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
+  /** setAttribute 的记录(aria-label 断言用) */
+  attrs: Record<string, string>;
   append(...kids: StubEl[]): void;
   appendChild(kid: StubEl): StubEl;
   addEventListener(type: string, fn: (e: unknown) => void): void;
@@ -29,6 +32,7 @@ function createStubEl(tag = 'div'): StubEl {
     tabIndex: -1,
     children: [],
     listeners: new Map(),
+    attrs: {},
     append(...kids: StubEl[]): void {
       el.children.push(...kids);
     },
@@ -39,7 +43,9 @@ function createStubEl(tag = 'div'): StubEl {
     addEventListener(type: string, fn: (e: unknown) => void): void {
       el.listeners.set(type, fn);
     },
-    setAttribute(): void {},
+    setAttribute(name: string, value: string): void {
+      el.attrs[name] = value;
+    },
     focus(): void {},
   };
   return el;
@@ -70,7 +76,8 @@ describe('胜利终幕', () => {
   let keyHandlers: Array<(e: StubKeyEvent) => void>;
   let restore: () => void;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await initI18n('zh-CN');
     const g = globalThis as unknown as Record<string, unknown>;
     const prevWindow = g.window;
     const prevDocument = g.document;
@@ -140,5 +147,42 @@ describe('胜利终幕', () => {
     expect(closes).toBe(2);
     keyHandlers[0]!(keyEvent('Enter'));
     expect(closes).toBe(2);
+  });
+
+  it('refreshLocale 只重画文案:叙事/aria/alt 翻成英文,不重播、不触发 onClose(09 号)', async () => {
+    let closes = 0;
+    const epilogue = createVictoryEpilogue({ onClose: () => closes++ });
+    const root = uiRoot.children[0]!;
+    const image = created.find((el) => el.tagName === 'IMG')!;
+    epilogue.show();
+    expect(root.attrs['aria-label']).toBe('胜利终幕,点击返回主菜单');
+    expect(image.alt).toContain('拼装舰穿过破碎的甲虫 Boss');
+
+    await changeLocale('en');
+    epilogue.refreshLocale();
+    // 叙事整块翻成英文
+    expect(root.attrs['aria-label']).toBe('Victory epilogue, click to return to the title');
+    expect(image.alt).toContain('Boss');
+    expect(created.some((el) => el.textContent === 'Voyage log · past the cordon')).toBe(true);
+    expect(created.some((el) => el.textContent === 'There is still starlight beyond the gate')).toBe(
+      true,
+    );
+    expect(created.some((el) => el.textContent.includes('gatekeeper'))).toBe(true);
+    expect(created.some((el) => el.textContent === 'Next voyage · chase the signal')).toBe(true);
+    expect(created.some((el) => el.textContent.includes('Enter to return to the title'))).toBe(
+      true,
+    );
+    // 不重播/不重置:仍显示着、可见性不变、onClose 不触发
+    expect(root.style.display).toBe('block');
+    expect(epilogue.visible()).toBe(true);
+    expect(closes).toBe(0);
+
+    // 切回 zh 也原地换回,监听器仍只有最初那一条
+    await changeLocale('zh-CN');
+    epilogue.refreshLocale();
+    expect(root.attrs['aria-label']).toBe('胜利终幕,点击返回主菜单');
+    expect(created.some((el) => el.textContent.includes('只是守门者'))).toBe(true);
+    expect(keyHandlers.length).toBe(1);
+    expect(closes).toBe(0);
   });
 });

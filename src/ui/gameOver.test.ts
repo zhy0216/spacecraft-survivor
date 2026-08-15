@@ -22,7 +22,7 @@ import { WAVE_SEGMENTS } from '../data/waves';
 import { createProgress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_RUNNING, RESULT_WIN } from '../sim/world';
 import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
-import { initI18n } from '../i18n';
+import { initI18n, changeLocale } from '../i18n';
 import {
   collectionCategoryName,
   collectionItemName,
@@ -32,7 +32,10 @@ import {
   resultNote,
   resultTitle,
   segmentLabel,
+  summaryRows,
   summaryText,
+  type UploadOutcome,
+  uploadOutcomeText,
   weaponReportRows,
 } from './gameOver';
 import { towerName } from './presentation/contentText';
@@ -178,6 +181,54 @@ describe('summaryText', () => {
   });
 });
 
+describe('summaryRows(09 号结构化 label/value)', () => {
+  it('失败局三行、胜利局多一行 Boss 击杀,label 与 value 各自成列', () => {
+    expect(
+      summaryRows(summary({ result: RESULT_LOSE, survivedSec: 125, kills: 7, segment: 1 })),
+    ).toEqual([
+      { label: '存活时间', value: '2:05' },
+      { label: '击杀数量', value: '7' },
+      { label: '航段进度', value: '2/4' },
+    ]);
+    expect(
+      summaryRows(
+        summary({ result: RESULT_WIN, survivedSec: 550, kills: 1234, bossKilledAtSec: 550 }),
+      ),
+    ).toEqual([
+      { label: '存活时间', value: '9:10' },
+      { label: '击杀数量', value: '1234' },
+      { label: '航段进度', value: '4/4(全通)' },
+      { label: 'Boss 击杀', value: '9:10' },
+    ]);
+  });
+
+  it('summaryText 由同一份 rows 拼出,两条路永远同口径', () => {
+    const s = summary({ result: RESULT_WIN, survivedSec: 550, bossKilledAtSec: 550 });
+    expect(summaryText(s)).toBe(
+      summaryRows(s)
+        .map((r) => `${r.label} ${r.value}`)
+        .join('\n'),
+    );
+  });
+});
+
+describe('uploadOutcomeText(09 号上传结果映射)', () => {
+  it('done(null 兼容)= 已上传;已知错误码 → 本地化失败原因', () => {
+    expect(uploadOutcomeText(null)).toBe('已上传');
+    expect(uploadOutcomeText({ status: 'done' })).toBe('已上传');
+    expect(uploadOutcomeText({ status: 'error', code: 'no-endpoint' })).toBe('未配置上传地址');
+    expect(uploadOutcomeText({ status: 'error', code: 'no-log' })).toBe('本局无日志');
+    expect(uploadOutcomeText({ status: 'error', code: 'upload-failed' })).toBe('上传失败');
+    expect(uploadOutcomeText({ status: 'error', code: 'network' })).toBe('上传失败(网络错误)');
+  });
+
+  it('未知错误码 → 通用失败 + 可诊断码(内部错误字符串不上屏)', () => {
+    expect(uploadOutcomeText({ status: 'error', code: 'backend-timeout' })).toBe(
+      '上传失败(错误码 backend-timeout)',
+    );
+  });
+});
+
 describe('collectionCategoryName / collectionItemName(19 号图鉴)', () => {
   it('分类名按 UNLOCK_* 给三类文案,未知 kind 印码不静默(与 resultTitle 的未知码同一口径)', () => {
     expect(collectionCategoryName(UNLOCK_TOWER)).toBe('塔');
@@ -192,6 +243,73 @@ describe('collectionCategoryName / collectionItemName(19 号图鉴)', () => {
     expect(collectionItemName(UNLOCKS[1]!)).toBe('超载协议');
     // 虫群母巢的底敌型 = WAVE_LOCKED_ELITES[0].kind → 冲撞甲虫(这条钉着两表的下标咬合)
     expect(collectionItemName(UNLOCKS[2]!)).toBe('虫群母巢(冲撞甲虫精英)');
+  });
+});
+
+// —— 双语输出(09 号):结算纯函数在英文侧逐项钉住,与中文同源数据、只改展示 ——
+
+describe('gameOver 英文输出(09 号)', () => {
+  it('resultTitle / resultNote 英文:Boss destroyed / Hull destroyed,未知码带 result code', async () => {
+    await changeLocale('en');
+    expect(resultTitle(RESULT_WIN)).toBe('Boss destroyed');
+    expect(resultTitle(RESULT_LOSE)).toBe('Hull destroyed');
+    expect(resultTitle(RESULT_RUNNING)).toContain(`result code ${RESULT_RUNNING}`);
+    expect(resultTitle(RESULT_RUNNING)).not.toBe(resultTitle(RESULT_WIN));
+    expect(resultNote(RESULT_WIN)).toContain('Boss');
+  });
+
+  it('segmentLabel 英文:全通括号译成 all clear,普通段照报 n/count', async () => {
+    await changeLocale('en');
+    expect(segmentLabel(4, 4)).toBe('4/4 (all clear)');
+    expect(segmentLabel(1, 4)).toBe('2/4');
+    expect(segmentLabel(0, 0)).toBe('—');
+  });
+
+  it('summaryRows 英文:标签与值分行,顺序与中文一致(英文无需靠空格排版)', async () => {
+    await changeLocale('en');
+    const rows = summaryRows(
+      summary({ result: RESULT_WIN, survivedSec: 550, kills: 1234, bossKilledAtSec: 550 }),
+    );
+    expect(rows).toEqual([
+      { label: 'Survived', value: '9:10' },
+      { label: 'Kills', value: '1234' },
+      { label: 'Segment', value: '4/4 (all clear)' },
+      { label: 'Boss killed', value: '9:10' },
+    ]);
+    expect(summaryText(summary({ result: RESULT_LOSE, survivedSec: 125 }))).toContain('Survived');
+  });
+
+  it('collectionCategoryName 英文:Towers / Enemies / Edicts,未知分类带编号', async () => {
+    await changeLocale('en');
+    expect(collectionCategoryName(UNLOCK_TOWER)).toBe('Towers');
+    expect(collectionCategoryName(UNLOCK_ELITE)).toBe('Enemies');
+    expect(collectionCategoryName(UNLOCK_EDICT)).toBe('Edicts');
+    expect(collectionCategoryName(99)).toBe('Category 99');
+  });
+
+  it('uploadOutcomeText 英文:已知码映射 + 未知码带可诊断码', async () => {
+    await changeLocale('en');
+    expect(uploadOutcomeText(null)).toBe('Uploaded');
+    expect(uploadOutcomeText({ status: 'done' })).toBe('Uploaded');
+    expect(uploadOutcomeText({ status: 'error', code: 'no-endpoint' })).toBe(
+      'No upload endpoint configured',
+    );
+    expect(uploadOutcomeText({ status: 'error', code: 'no-log' })).toBe('No run log this game');
+    expect(uploadOutcomeText({ status: 'error', code: 'upload-failed' })).toBe('Upload failed');
+    expect(uploadOutcomeText({ status: 'error', code: 'network' })).toBe(
+      'Upload failed (network error)',
+    );
+    expect(uploadOutcomeText({ status: 'error', code: 'backend-timeout' })).toBe(
+      'Upload failed (error code backend-timeout)',
+    );
+  });
+
+  it('双语遍历不串:回到 zh 后输出仍旧是中文', async () => {
+    await changeLocale('en');
+    expect(resultTitle(RESULT_WIN)).toBe('Boss destroyed');
+    await changeLocale('zh-CN');
+    expect(resultTitle(RESULT_WIN)).toBe('Boss 击破');
+    expect(segmentLabel(4, 4)).toBe('4/4(全通)');
   });
 });
 
@@ -418,10 +536,14 @@ describe('createGameOverUi', () => {
     const s = summary({ result: RESULT_LOSE, survivedSec: 61, kills: 3, segment: 1 });
     ui.show(s);
 
-    const texts = root(dom).children[0]!.children.map((el) => el.textContent);
-    expect(texts).toContain(resultTitle(RESULT_LOSE));
-    expect(texts).toContain(resultNote(RESULT_LOSE));
-    expect(texts).toContain(summaryText(s));
+    // 09 号起统计从结构化 label/value 行渲染:标签与数值各自成节点(不再是整块 white-space:pre)
+    const cardEl = panel(dom);
+    expect(findEl(cardEl, (el) => el.textContent === resultTitle(RESULT_LOSE))).toBeDefined();
+    expect(findEl(cardEl, (el) => el.textContent === resultNote(RESULT_LOSE))).toBeDefined();
+    for (const row of summaryRows(s)) {
+      expect(findEl(cardEl, (el) => el.textContent === row.label)).toBeDefined();
+      expect(findEl(cardEl, (el) => el.textContent === row.value)).toBeDefined();
+    }
   });
 
   it('按钮与 Enter 都通向同一个 onRestart,且**点了当场收起来**', () => {
@@ -578,7 +700,7 @@ describe('createGameOverUi', () => {
     // 与默认 make() 同款但带 onUpload:2 颗 = 主动作 + 上传
     const ui = createGameOverUi({
       onRestart: () => restarts++,
-      onUpload: async () => null,
+      onUpload: async () => ({ status: 'done' }),
     });
     const buttons = panelButtons(dom);
     expect(buttons).toHaveLength(2);
@@ -590,27 +712,32 @@ describe('createGameOverUi', () => {
     expect(upload.disabled).toBe(false);
   });
 
-  it('上传三态:点击 → 上传中(置灰)→ 已上传;失败原因原样印在按钮上', async () => {
-    const outcomes: Array<string | null> = [];
+  it('上传三态:点击 → 上传中(置灰)→ 已上传;已知码印本地化失败、未知码带可诊断码', async () => {
+    const outcomes: UploadOutcome[] = [];
     const ui = createGameOverUi({
       onRestart: () => restarts++,
-      onUpload: async () => outcomes.shift() ?? null,
+      onUpload: async () => outcomes.shift() ?? { status: 'done' },
     });
     const upload = panelButtons(dom)[1]!;
     ui.show(summary());
     // 成功:点下去当场置灰改口,回调结算后改口「已上传」
-    outcomes.push(null);
+    outcomes.push({ status: 'done' });
     upload.listeners.get('click')!(undefined);
     expect(upload.textContent).toBe('上传中…');
     expect(upload.disabled).toBe(true);
     await new Promise((r) => setTimeout(r, 0)); // 等异步 onUpload 结算
     expect(upload.textContent).toBe('已上传');
     expect(upload.disabled).toBe(false);
-    // 失败:原因原样印出来("未配置上传地址"与"上传失败"是两种不同的下一步)
-    outcomes.push('未配置上传地址');
+    // 已知码:失败原因按本地化 key 印("未配置上传地址"与"上传失败"是两种不同的下一步)
+    outcomes.push({ status: 'error', code: 'no-endpoint' });
     upload.listeners.get('click')!(undefined);
     await new Promise((r) => setTimeout(r, 0));
     expect(upload.textContent).toBe('未配置上传地址');
+    // 未知码:通用失败 + 可诊断码(内部错误字符串不上屏)
+    outcomes.push({ status: 'error', code: 'backend-timeout' });
+    upload.listeners.get('click')!(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upload.textContent).toBe('上传失败(错误码 backend-timeout)');
     // 新一局 show 复位回待传:上一局的结果不许赖到下一局
     ui.show(summary());
     expect(upload.textContent).toBe('上传本局日志(U)');
@@ -622,7 +749,7 @@ describe('createGameOverUi', () => {
       onRestart: () => restarts++,
       onUpload: async () => {
         uploads++;
-        return null;
+        return { status: 'done' };
       },
     });
     const upload = panelButtons(dom)[1]!;
@@ -642,5 +769,69 @@ describe('createGameOverUi', () => {
     // repeat 不算(长按不连发)
     dom.key(keyEvent('KeyU', true));
     expect(uploads).toBe(1);
+  });
+
+  it('refreshLocale:切换语言重画文案,不重触发上传/重开/回标题;上传中状态保留', async () => {
+    let uploads = 0;
+    let resolveUpload!: (v: UploadOutcome) => void;
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onTitle: () => restarts++,
+      onUpload: () => {
+        uploads++;
+        return new Promise<UploadOutcome>((r) => {
+          resolveUpload = r;
+        });
+      },
+    });
+    ui.show(summary({ result: RESULT_LOSE, survivedSec: 61, kills: 3, segment: 1 }));
+    // 上传按钮 = 卡里最后一颗(restart/retry/title 之后垫底)
+    const buttons = panelButtons(dom);
+    const upload = buttons[buttons.length - 1]!;
+    // 上传中:点击后 onUpload 挂着不结算,状态停在"上传中…"(同步断言,微任务还没跑)
+    upload.listeners.get('click')!(undefined);
+    expect(upload.textContent).toBe('上传中…');
+    expect(upload.disabled).toBe(true);
+    // 切换语言 + refreshLocale:标题/统计/按钮/上传中状态全部按新语言重画
+    await changeLocale('en');
+    ui.refreshLocale();
+    const cardEl = panel(dom);
+    expect(findEl(cardEl, (el) => el.textContent === 'Hull destroyed')).toBeDefined();
+    expect(findEl(cardEl, (el) => el.textContent === 'Survived')).toBeDefined();
+    expect(findEl(cardEl, (el) => el.textContent === '1:01')).toBeDefined();
+    expect(panelButtons(dom)[0]!.textContent).toBe('Play Again (Enter)');
+    // 上传中状态保留:按钮仍显示当前语言的"上传中…",且置灰
+    expect(upload.textContent).toBe('Uploading…');
+    expect(upload.disabled).toBe(true);
+    // 不重触发任何回调:上传不重发、重开/回标题不触发
+    expect(uploads).toBe(1);
+    expect(restarts).toBe(0);
+    // 上传结算:按当前语言显示结果
+    resolveUpload({ status: 'done' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upload.textContent).toBe('Uploaded');
+    expect(upload.disabled).toBe(false);
+    expect(uploads).toBe(1);
+  });
+
+  it('refreshLocale:胜利终幕档的主动作重画不切回重开,重画后再切回 zh 同样不丢状态', async () => {
+    let epilogues = 0;
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onVictoryContinue: () => epilogues++,
+    });
+    ui.show(summary({ result: RESULT_WIN, newUnlocks: [0] }));
+    await changeLocale('en');
+    ui.refreshLocale();
+    // 胜利 + 有终幕钩子:主动作仍是"确认战报进终幕",不是"再来一局"
+    expect(panelButtons(dom)[0]!.textContent).toBe(
+      'Confirm Report · View Voyage Ending (Enter)',
+    );
+    expect(findEl(panel(dom), (el) => el.textContent === 'Unlocked: Missile Nest')).toBeDefined();
+    // 不触发任何回调
+    expect(restarts).toBe(0);
+    expect(epilogues).toBe(0);
+    // 重画不改可见性:结算卡仍弹着
+    expect(root(dom).style.display).toBe('flex');
   });
 });

@@ -331,9 +331,61 @@ export const ui = {
       edicts: '法令',
     },
   },
-  upload: {
-    noEndpoint: '未配置上传地址',
-    noLog: '本局无日志',
-    failed: '上传失败',
+  // —— 结算战报(09 号):结果标题/统计/武器战报/解锁/图鉴/按钮/上传状态。Enter/R/U 键位是字面量 ——
+  gameOver: {
+    title: {
+      win: 'Boss 击破',
+      lose: '船体解体',
+      unknown: '本局结束(结果码 {{code}})',
+    },
+    note: {
+      win: '封锁线 Boss 已被击破 —— 这艘船活着开出了怪潮',
+      lose: '船体 HP 归零 —— 这一局的账,都记在战报里',
+      unknown: '结果码没有配文案(这是个 bug)',
+    },
+    summary: {
+      survived: '存活时间',
+      kills: '击杀数量',
+      segment: '航段进度',
+      bossKilled: 'Boss 击杀',
+    },
+    segment: {
+      // 全通后缀(括号格式随语言;与 HUD 的 ui.segment.allClear 是两处,读法不同)
+      allClear: '(全通)',
+    },
+    report: {
+      title: '武器战报 · 峰值 {{dps}} DPS',
+    },
+    unlocks: {
+      line: '解锁:{{name}}',
+      unknown: '#{{index}}',
+    },
+    collection: {
+      title: '图鉴 · 内容解锁 {{unlocked}}/{{total}}',
+      locked: '(未解锁)',
+      category: {
+        tower: '塔',
+        elite: '敌人',
+        edict: '法令',
+        unknown: '分类 {{kind}}',
+      },
+    },
+    action: {
+      restart: '再来一局(Enter)',
+      retry: '再试这一局(R · 同种子同起手)',
+      title: '返回标题',
+      upload: '上传本局日志(U)',
+      uploading: '上传中…',
+      uploaded: '已上传',
+      epilogueContinue: '确认战报 · 查看航行结局(Enter)',
+    },
+    upload: {
+      noEndpoint: '未配置上传地址',
+      noLog: '本局无日志',
+      uploadFailed: '上传失败',
+      network: '上传失败(网络错误)',
+      // {{code}} = 稳定错误码(可诊断);内部错误字符串永不原样上屏
+      unknown: '上传失败(错误码 {{code}})',
+    },
   },
 } as const;

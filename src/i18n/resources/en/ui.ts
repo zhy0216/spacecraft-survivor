@@ -333,9 +333,61 @@ export const ui: DeepRecord<typeof zhUi> = {
       edicts: 'Edicts',
     },
   },
-  upload: {
-    noEndpoint: 'No upload endpoint configured',
-    noLog: 'No run log this game',
-    failed: 'Upload failed',
+  // —— Game over report (todo 09): result title / stats / weapon report / unlocks / codex / buttons / upload state. Enter/R/U key tokens are literals ——
+  gameOver: {
+    title: {
+      win: 'Boss destroyed',
+      lose: 'Hull destroyed',
+      unknown: 'Run over (result code {{code}})',
+    },
+    note: {
+      win: 'The cordon Boss is down — this ship sailed out of the swarm alive',
+      lose: 'Hull HP hit zero — the full tally is in the report below',
+      unknown: 'No copy wired for this result code (this is a bug)',
+    },
+    summary: {
+      survived: 'Survived',
+      kills: 'Kills',
+      segment: 'Segment',
+      bossKilled: 'Boss killed',
+    },
+    segment: {
+      // All-clear suffix; parenthesis style follows the language (a separate reading from the HUD's ui.segment.allClear)
+      allClear: ' (all clear)',
+    },
+    report: {
+      title: 'Weapon report · Peak {{dps}} DPS',
+    },
+    unlocks: {
+      line: 'Unlocked: {{name}}',
+      unknown: '#{{index}}',
+    },
+    collection: {
+      title: 'Codex · Unlocked {{unlocked}}/{{total}}',
+      locked: ' (locked)',
+      category: {
+        tower: 'Towers',
+        elite: 'Enemies',
+        edict: 'Edicts',
+        unknown: 'Category {{kind}}',
+      },
+    },
+    action: {
+      restart: 'Play Again (Enter)',
+      retry: 'Retry Run (R · same seed, same loadout)',
+      title: 'Back to Title',
+      upload: 'Upload Run Log (U)',
+      uploading: 'Uploading…',
+      uploaded: 'Uploaded',
+      epilogueContinue: 'Confirm Report · View Voyage Ending (Enter)',
+    },
+    upload: {
+      noEndpoint: 'No upload endpoint configured',
+      noLog: 'No run log this game',
+      uploadFailed: 'Upload failed',
+      network: 'Upload failed (network error)',
+      // {{code}} = a stable, diagnosable code; internal error strings are never shown verbatim
+      unknown: 'Upload failed (error code {{code}})',
+    },
   },
 };

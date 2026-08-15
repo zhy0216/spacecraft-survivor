@@ -3,9 +3,11 @@
  *
  * 它与标题/结算页一样只建一次、只做 DOM 展示，不认识 World。main.ts 决定何时弹出，
  * 玩家点击整张画面（或按 Enter）后，它只把“返回主菜单”这件事交还给 onClose。
- * 生成图不烤字：中文叙事由 DOM 叠上去，既清晰，也能在不重生成美术的情况下继续调文案。
+ * 生成图不烤字：叙事文本由 DOM 叠上去，既清晰，也能在不重生成美术的情况下继续调文案；
+ * 文案走 story:epilogue.*(09 号),语言切换后原地重画,不重播终幕流程。
  */
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 
 const ART_URL = new URL(
   '../../assets/game/ui/victory-epilogue-nanobanana.webp',
@@ -44,6 +46,8 @@ export interface VictoryEpilogueUi {
   show(): void;
   hide(): void;
   visible(): boolean;
+  /** 语言切换成功后原地重画叙事文案(09 号):只改文字,不重新 show / 不重置终幕流程 */
+  refreshLocale(): void;
 }
 
 export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpilogueUi {
@@ -53,12 +57,10 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
   root.style.cssText = ROOT_CSS;
   root.tabIndex = 0;
   root.setAttribute('role', 'button');
-  root.setAttribute('aria-label', '胜利终幕，点击返回主菜单');
 
   const art = document.createElement('img');
   art.style.cssText = ART_CSS;
   art.src = ART_URL;
-  art.alt = '拼装舰穿过破碎的甲虫 Boss，残骸核心把星图投向更深处的巨大阴影';
   art.draggable = false;
 
   const shade = document.createElement('div');
@@ -68,26 +70,36 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
   story.style.cssText = STORY_CSS;
   const kicker = document.createElement('div');
   kicker.style.cssText = KICKER_CSS;
-  kicker.textContent = '航行记录 · 封锁线之后';
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
-  title.textContent = '门后仍有星海';
   const reveal = document.createElement('div');
   reveal.style.cssText = REVEAL_CSS;
-  reveal.textContent = '你击穿的不是巢穴，只是守门者。';
   const body = document.createElement('div');
   body.style.cssText = BODY_CSS;
-  body.textContent = 'Boss 的残骸里没有王座，只有一枚仍在发亮的坐标。它正把你的航线，指向更深的黑暗。';
   const next = document.createElement('div');
   next.style.cssText = NEXT_CSS;
-  next.textContent = '下一次航行 · 追踪信号源';
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
-  hint.textContent = '点击画面 / Enter 返回主菜单';
   story.append(kicker, title, reveal, body, next, hint);
 
   root.append(art, shade, story);
   document.getElementById('ui')!.appendChild(root);
+
+  /**
+   * 叙事文案从 story:epilogue.* 现读(生成图不烤字:中英文都由 DOM 叠上去)。
+   * show 与 refreshLocale 共用 —— 语言切过之后,收着时的下次 show 也按当前语言重画。
+   */
+  function paintText(): void {
+    root.setAttribute('aria-label', t('story:epilogue.aria'));
+    art.alt = t('story:epilogue.alt');
+    kicker.textContent = t('story:epilogue.kicker');
+    title.textContent = t('story:epilogue.title');
+    reveal.textContent = t('story:epilogue.reveal');
+    body.textContent = t('story:epilogue.body');
+    next.textContent = t('story:epilogue.next');
+    hint.textContent = t('story:epilogue.hint');
+  }
+  paintText();
 
   function hide(): void {
     visible = false;
@@ -110,11 +122,20 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
 
   return {
     show(): void {
+      paintText();
       visible = true;
       root.style.display = 'block';
       root.focus();
     },
     hide,
     visible: () => visible,
+    /**
+     * 语言切换成功后原地重画(09 号):只把 kicker/标题/正文/下一航行提示/aria-label/alt
+     * 换成当前语言,**不重新 show、不重置流程、不触发 onClose** —— 终幕是一种进行中的状态,
+     * 切换语言不能把它重新播一遍。
+     */
+    refreshLocale(): void {
+      paintText();
+    },
   };
 }

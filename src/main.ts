@@ -47,7 +47,7 @@ import type { ShipCommand } from './sim/ship';
 import { RESULT_LOSE, RESULT_WIN, World } from './sim/world';
 import { canSaveRun, captureRun, digestRunSnapshot } from './sim/runSave';
 import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPanel';
-import { createGameOverUi } from './ui/gameOver';
+import { createGameOverUi, type UploadOutcome } from './ui/gameOver';
 import { createHud } from './ui/hud';
 import { loadIPressed, markIPressed } from './ui/keyHintStorage';
 import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
@@ -252,6 +252,8 @@ async function boot(): Promise<void> {
   // 胜利终幕必须先于结算页构造:两者都监听 Enter；同一次 keydown 里结算页把终幕 show 出来时，
   // 终幕监听器已经走过了“当前不可见”的分支，才不会同一按键又立刻把它关掉。
   const victoryEpilogue = createVictoryEpilogue({ onClose: toTitle });
+  // 语言切换成功后胜利终幕原地重画叙事文案(09 号):只改文字,不重播/不重置终幕流程
+  registerLocaleAware(victoryEpilogue);
 
   // 结算界面同样**只建一次**(理由同上:每局多挂一份 Enter 监听器 = 一次回车重开好几局),
   // 重开走的是它的 show/hide。它不认识 World,只收一份纯数据 RunSummary
@@ -264,14 +266,20 @@ async function boot(): Promise<void> {
     onTitle: toTitle,
     onVictoryContinue: () => victoryEpilogue.show(),
       // 运行日志上传(后端未定案,接缝见 ui/runLogUpload.ts):端点未配置 / 本局没有日志 /
-      // 网络失败三件事各回一句原因,结算卡的按钮原样印它 —— 玩家知道下一步去配端点还是重试
-      onUpload: async (): Promise<string | null> => {
+      // 网络失败三件事各回一个**稳定错误码**,结算卡按码查本地化文案 ——
+      // 后端内部错误字符串不原样上屏,玩家知道下一步去配端点还是重试
+      onUpload: async (): Promise<UploadOutcome> => {
         const endpoint = getLogEndpoint();
-        if (endpoint === null) return t('ui:upload.noEndpoint');
-        if (pendingLog === null) return t('ui:upload.noLog');
-        return (await submitRunLog(endpoint, pendingLog)) ? null : t('ui:upload.failed');
+        if (endpoint === null) return { status: 'error', code: 'no-endpoint' };
+        if (pendingLog === null) return { status: 'error', code: 'no-log' };
+        return (await submitRunLog(endpoint, pendingLog))
+          ? { status: 'done' }
+          : { status: 'error', code: 'upload-failed' };
       },
   });
+  // 语言切换成功后结算界面原地重画文案(09 号):用最近一次 RunSummary 重画,
+  // 不重新评估进度、不重新上传、不触发 restart/title 回调
+  registerLocaleAware(gameOver);
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
   // 换 World 不换它们(读数由 startRun 复位、tuning 是玩家自己拖的旋钮,重开不该替他复原)。

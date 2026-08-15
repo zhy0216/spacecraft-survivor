@@ -57,10 +57,14 @@ const TITLE_CSS = 'font-size:22px;letter-spacing:.18em;margin-bottom:6px;';
 const NOTE_CSS = `color:${IDLE_COLOR};margin-bottom:14px;`;
 
 /**
- * 读数区。white-space:pre + 等宽字体 + 左对齐(卡片本身居中):三行的标签都是 4 个汉字,
- * 于是数值天然对成一列,不必为三行读数摆一套 grid。写法与 ui/upgradeFlow.ts 的提示条同源。
+ * 读数区。label/value 分行排(flex:space-between 把标签与数值推到两端)——
+ * 09 号去掉了 white-space:pre 那套中文对齐:英文标签长短不一,靠空格排版
+ * 会错位,分行让两种语言都各就各位、长文案也不互相挤压。
  */
-const STATS_CSS = `white-space:pre;text-align:left;display:inline-block;color:${VALUE_COLOR};margin-bottom:16px;`;
+const STATS_CSS = 'display:inline-block;text-align:left;margin-bottom:16px;';
+const STAT_ROW_CSS = 'display:flex;justify-content:space-between;gap:18px;';
+const STAT_LABEL_CSS = `color:${IDLE_COLOR};`;
+const STAT_VALUE_CSS = `color:${VALUE_COLOR};text-align:right;`;
 
 /** 「解锁 XX」块:与读数同一套左对齐多行文本,但用提示条那支冷青蓝(19 号:解锁是正反馈,不是账本) */
 const UNLOCK_CSS =
@@ -91,10 +95,13 @@ const BTN_CSS =
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.1em;`;
 
 /**
- * 上传回调的返回口径:null = 成功(按钮改口「已上传」);非 null = 一句失败原因
- * (按钮原样印它 —— "未配置上传地址"与"上传失败"是两种不同的下一步,不该合成一句话)。
+ * 上传回调的返回口径:结构化结果 —— `{status:'done'}` = 成功(按钮改口「已上传」);
+ * `{status:'error', code}` = 失败,code 是**稳定错误码**(main.ts 侧映射,见
+ * ui:gameOver.upload.* 的已知码表)。后端返回的内部错误字符串**一律不许原样上屏**:
+ * 一个意外断言的内部文案不该糊到玩家眼前,未知 code 由 uploadOutcomeText 兜底成
+ * 通用失败 + 可诊断码(与 resultTitle 的未知结果码同一条"当场喊出来"的口径)。
  */
-export type UploadOutcome = string | null;
+export type UploadOutcome = { status: 'done' } | { status: 'error'; code: string };
 
 /** 一局的结算数据 —— **纯数据**,由 main.ts 从 World 上摘好递进来(见文件头) */
 export interface RunSummary {
@@ -125,6 +132,12 @@ export interface RunSummary {
 export interface GameOverUi {
   show(s: RunSummary): void;
   hide(): void;
+  /**
+   * 语言切换成功后原地重画文案(09 号):用最近一次 show 的 RunSummary 重画
+   * 标题/统计/战报/解锁/图鉴/按钮,**不重新评估进度、不重新上传、不触发任何回调**;
+   * 上传中状态保留(按钮仍显示当前语言的"上传中…"),结算后按当前语言显示结果。
+   */
+  refreshLocale(): void;
 }
 
 /**
@@ -148,7 +161,7 @@ export function formatDuration(sec: number): string {
  */
 export function segmentLabel(segment: number, count: number): string {
   if (count <= 0) return '—';
-  if (segment >= count) return `${count}/${count}(全通)`;
+  if (segment >= count) return `${count}/${count}${t('ui:gameOver.segment.allClear')}`;
   const n = segment > 0 ? segment + 1 : 1;
   return `${n}/${count}`;
 }
@@ -163,11 +176,11 @@ export function segmentLabel(segment: number, count: number): string {
 export function resultTitle(result: number): string {
   switch (result) {
     case RESULT_WIN:
-      return 'Boss 击破';
+      return t('ui:gameOver.title.win');
     case RESULT_LOSE:
-      return '船体解体';
+      return t('ui:gameOver.title.lose');
     default:
-      return `本局结束(结果码 ${result})`;
+      return t('ui:gameOver.title.unknown', { code: result });
   }
 }
 
@@ -175,33 +188,53 @@ export function resultTitle(result: number): string {
 export function resultNote(result: number): string {
   switch (result) {
     case RESULT_WIN:
-      return '封锁线 Boss 已被击破 —— 这艘船活着开出了怪潮';
+      return t('ui:gameOver.note.win');
     case RESULT_LOSE:
-      return '船体 HP 归零 —— 这一局的账,都记在战报里';
+      return t('ui:gameOver.note.lose');
     default:
-      return '结果码没有配文案(这是个 bug)';
+      return t('ui:gameOver.note.unknown');
   }
 }
 
+/** 一行统计:label + value 各自成节点(英文标签不再靠空格排版对齐) */
+export interface SummaryRow {
+  label: string;
+  value: string;
+}
+
 /**
- * 三行读数。做成**纯函数返回整块文本**(而不是就地改一堆 DOM 节点):
+ * 三行读数的结构化版。做成**纯函数返回 rows**(而不是就地改一堆 DOM 节点):
  * "结算到底显示了什么"于是能在 Node 里数出来 —— 少一行、把击杀数印成小数、
  * 胜利时航段印成 5/4,全都是要等真人打完一整局(8–10 分钟)才看得见的错。
  * 击杀数取整:kills 本来就是整数,这一句防的是将来有人往里塞个加权分。
  * 胜利时追加一行 Boss 击杀时刻。失败局**一律不显示这一行**(简单口径):
  * 这一行是"赢了这场仗"的记功,不是统计数字 —— 失败局就算真杀了 Boss
  * (Boss 死后被虫群淹了),读它也只是在伤口上撒盐。
+ * DOM 按 label/value 分行渲染(09 号:去掉 white-space:pre 那套中文对齐)。
  */
-export function summaryText(s: RunSummary): string {
-  const lines = [
-    `存活时间  ${formatDuration(s.survivedSec)}`,
-    `击杀数量  ${Math.round(s.kills)}`,
-    `航段进度  ${segmentLabel(s.segment, s.segmentCount)}`,
+export function summaryRows(s: RunSummary): SummaryRow[] {
+  const rows: SummaryRow[] = [
+    { label: t('ui:gameOver.summary.survived'), value: formatDuration(s.survivedSec) },
+    { label: t('ui:gameOver.summary.kills'), value: String(Math.round(s.kills)) },
+    { label: t('ui:gameOver.summary.segment'), value: segmentLabel(s.segment, s.segmentCount) },
   ];
   if (s.result === RESULT_WIN) {
-    lines.push(`Boss 击杀  ${formatDuration(s.bossKilledAtSec)}`);
+    rows.push({
+      label: t('ui:gameOver.summary.bossKilled'),
+      value: formatDuration(s.bossKilledAtSec),
+    });
   }
-  return lines.join('\n');
+  return rows;
+}
+
+/**
+ * summaryText 的纯字符串版(测试与外部读数用):由同一份 summaryRows 拼出,
+ * 保证 DOM 与字符串两条路显示的永远是同一套 label/value。
+ */
+export function summaryText(s: RunSummary): string {
+  return summaryRows(s)
+    .map((r) => `${r.label} ${r.value}`)
+    .join('\n');
 }
 
 export interface WeaponReportRow {
@@ -237,13 +270,34 @@ export function weaponReportRows(report: { type: number; damage: number }[]): We
 export function collectionCategoryName(kind: number): string {
   switch (kind) {
     case UNLOCK_TOWER:
-      return '塔';
+      return t('ui:gameOver.collection.category.tower');
     case UNLOCK_ELITE:
-      return '敌人';
+      return t('ui:gameOver.collection.category.elite');
     case UNLOCK_EDICT:
-      return '法令';
+      return t('ui:gameOver.collection.category.edict');
     default:
-      return `分类 ${kind}`;
+      return t('ui:gameOver.collection.category.unknown', { kind });
+  }
+}
+
+/**
+ * 上传结果 → 按钮文案。已知 code 走本地化 key(no-endpoint / no-log / upload-failed /
+ * network),**未知 code 兜底成通用失败 + 可诊断码** —— 后端内部错误字符串永不原样上屏。
+ * null = 尚未上传(旧口径兼容),与 done 一样显示「已上传」。
+ */
+export function uploadOutcomeText(outcome: UploadOutcome | null): string {
+  if (outcome === null || outcome.status === 'done') return t('ui:gameOver.action.uploaded');
+  switch (outcome.code) {
+    case 'no-endpoint':
+      return t('ui:gameOver.upload.noEndpoint');
+    case 'no-log':
+      return t('ui:gameOver.upload.noLog');
+    case 'upload-failed':
+      return t('ui:gameOver.upload.uploadFailed');
+    case 'network':
+      return t('ui:gameOver.upload.network');
+    default:
+      return t('ui:gameOver.upload.unknown', { code: outcome.code });
   }
 }
 
@@ -295,7 +349,7 @@ export function collectionItemName(entry: UnlockEntry): string {
  * @param opts.onVictoryContinue 胜利局确认战报后的去处。传入时，胜利卡的主按钮不直接重开，
  *   而是进入全屏终幕；失败局仍保留再来一局 / 同种子重试 / 返回标题三条路。
  * @param opts.onUpload 「上传本局日志」的去处(运行日志系统)。不传就不摆这个按钮。
- *   返回 Promise<UploadOutcome>:null = 已上传,非 null = 失败原因(印在按钮上)。
+ *   返回 Promise<UploadOutcome>:done = 已上传,error = 失败(见 UploadOutcome 的码表)。
  *   上传中按钮置灰防重入,新一局 show 时状态复位 —— 这一局的上传结果不赖到下一局。
  *   胜利局确认战报进终幕之前,上传按钮照常留着:上传不跟任何一条主流程抢路。
  */
@@ -334,23 +388,23 @@ export function createGameOverUi(opts: {
   const btn = document.createElement('button');
   btn.style.cssText = BTN_CSS;
   // 键位写在按钮上:结算界面没有别的地方能提示"Enter 也行",而重开是这里唯一的动作。
-  btn.textContent = '再来一局(Enter)';
+  btn.textContent = t('ui:gameOver.action.restart');
   // 「再试这一局」摆在「再来一局」下面:换种子重开仍是主动作(同一份怪潮打第二遍没什么可玩的),
   // 同 seed 重试是"这一局我想再练一次"的次动作 —— 顺序即优先级。
   // 起手由种子派生(随机开局),同 seed 重试连起手一起原样重来,标签上写明,免得和"再来一局"的区别只剩一个括号
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
-  retryBtn.textContent = '再试这一局(R · 同种子同起手)';
+  retryBtn.textContent = t('ui:gameOver.action.retry');
   // 「返回标题」排在最后、且用暗色:局终之后玩家八成想马上再开一局,
   // 回标题是那条"我先歇会儿 / 去改个设置"的次要出口,不该跟重开抢眼
   const titleBtn = document.createElement('button');
   titleBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
-  titleBtn.textContent = '返回标题';
+  titleBtn.textContent = t('ui:gameOver.action.title');
   // 「上传本局日志」垫底:它是遥测出口,不是玩法出口,颜色与「返回标题」同一档暗色。
   // 状态三态:待传 → 上传中…(置灰)→ 已上传 / 失败原因(见 upload)
   const uploadBtn = document.createElement('button');
   uploadBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
-  uploadBtn.textContent = '上传本局日志(U)';
+  uploadBtn.textContent = t('ui:gameOver.action.upload');
   card.append(titleEl, noteEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   if (opts.onTitle) card.appendChild(titleBtn);
@@ -363,8 +417,12 @@ export function createGameOverUi(opts: {
   let visible = false;
   /** 最近一次 show 的结果码:胜利 + 有终幕钩子时,主动作从“重开”切成“确认战报” */
   let shownResult = RESULT_LOSE;
+  /** 最近一次 show 的完整结算数据:refreshLocale 用它重画,不重评估进度(09 号) */
+  let lastSummary: RunSummary | null = null;
   /** 上传进行中(置灰防重入:onUpload 是异步的,双击会发两遍同一份负载) */
   let uploadBusy = false;
+  /** 本局上传的结果(null = 还没传,待传态);show 时复位,refreshLocale 按它重画 */
+  let uploadOutcome: UploadOutcome | null = null;
 
   function continuesToEpilogue(): boolean {
     return shownResult === RESULT_WIN && opts.onVictoryContinue !== undefined;
@@ -406,17 +464,72 @@ export function createGameOverUi(opts: {
   /**
    * 上传本局日志。三态都写在同一颗按钮上(待传 → 上传中… → 结果),不另开状态区:
    * 它是遥测出口,不值得占结算卡一整块版面。置灰防重入的理由见 uploadBusy 的注释;
-   * 结果直接印失败原因(null = 「已上传」)—— 玩家知道下一步该去配端点还是检查网络。
+   * 结果走 uploadOutcomeText 的码表(null = 「已上传」)—— 玩家知道下一步该去配端点
+   * 还是检查网络,后端内部错误字符串永不原样上屏。
    */
   async function upload(): Promise<void> {
     if (uploadBusy || opts.onUpload === undefined) return;
     uploadBusy = true;
     uploadBtn.disabled = true;
-    uploadBtn.textContent = '上传中…';
+    uploadBtn.textContent = t('ui:gameOver.action.uploading');
     const outcome = await opts.onUpload();
     uploadBusy = false;
+    uploadOutcome = outcome;
+    paintUploadBtn();
+  }
+
+  /** 标题(带胜负色域)+ 副注:show 与 refreshLocale 共用,保证两边永远同一条口径 */
+  function paintTitle(s: RunSummary): void {
+    titleEl.textContent = resultTitle(s.result);
+    // 整块面板只有这几个字用暖色(GDD §12);胜利则是我方冷色域
+    titleEl.style.color = s.result === RESULT_LOSE ? LOSE_COLOR : OK_COLOR;
+  }
+
+  function paintNote(s: RunSummary): void {
+    noteEl.textContent = resultNote(s.result);
+  }
+
+  /** 统计行:label/value 各成一个节点(flex 两端排开),不再是整块 white-space:pre 文本 */
+  function renderStats(s: RunSummary): void {
+    statsEl.replaceChildren();
+    for (const row of summaryRows(s)) {
+      const line = document.createElement('div');
+      line.style.cssText = STAT_ROW_CSS;
+      const label = document.createElement('span');
+      label.style.cssText = STAT_LABEL_CSS;
+      label.textContent = row.label;
+      const value = document.createElement('span');
+      value.style.cssText = STAT_VALUE_CSS;
+      value.textContent = row.value;
+      line.append(label, value);
+      statsEl.appendChild(line);
+    }
+  }
+
+  /** 主动作 + 重试/回标题的显隐:按当前结果与终幕钩子现读 t()(show 与 refreshLocale 共用) */
+  function paintButtons(): void {
+    const epilogueNext = continuesToEpilogue();
+    btn.textContent = epilogueNext
+      ? t('ui:gameOver.action.epilogueContinue')
+      : t('ui:gameOver.action.restart');
+    retryBtn.style.display = epilogueNext ? 'none' : 'block';
+    titleBtn.style.display = epilogueNext ? 'none' : 'block';
+  }
+
+  /**
+   * 上传按钮状态:待传 / 上传中(置灰)/ 结果(已上传 / 失败原因),全部现读 t()。
+   * refreshLocale 调它时保持 uploadBusy 与 uploadOutcome 原样 —— 只换语言,不改状态。
+   */
+  function paintUploadBtn(): void {
+    if (opts.onUpload === undefined) return;
+    if (uploadBusy) {
+      uploadBtn.textContent = t('ui:gameOver.action.uploading');
+      uploadBtn.disabled = true;
+      return;
+    }
     uploadBtn.disabled = false;
-    uploadBtn.textContent = outcome === null ? '已上传' : outcome;
+    uploadBtn.textContent =
+      uploadOutcome === null ? t('ui:gameOver.action.upload') : uploadOutcomeText(uploadOutcome);
   }
 
   /**
@@ -433,7 +546,9 @@ export function createGameOverUi(opts: {
     reportEl.replaceChildren();
     const title = document.createElement('div');
     title.style.cssText = REPORT_TITLE_CSS;
-    title.textContent = `武器战报 · 峰值 ${Math.round(s.peakDps > 0 ? s.peakDps : 0)} DPS`;
+    title.textContent = t('ui:gameOver.report.title', {
+      dps: Math.round(s.peakDps > 0 ? s.peakDps : 0),
+    });
     reportEl.appendChild(title);
     for (const row of weaponReportRows(s.weaponReport)) {
       const line = document.createElement('div');
@@ -463,8 +578,14 @@ export function createGameOverUi(opts: {
     }
     const lines: string[] = [];
     for (const i of s.newUnlocks) {
-      // 名字走 unlockName(查 content.unlocks 翻译) —— 与局内 toast 同源,结算页报的与局内弹的是同一句
-      lines.push(`解锁:${UNLOCKS[i] === undefined ? `#${i}` : unlockName(UNLOCKS[i]!)}`);
+      // 名字走 unlockName(查 content.unlocks 翻译) —— 与局内 toast 同源,结算页报的与局内弹的是同一句;
+      // 下标越界 → 本地化错误且带原始下标(与 resultTitle 的未知结果码同一口径)
+      const entry = UNLOCKS[i];
+      const name =
+        entry === undefined
+          ? t('ui:gameOver.unlocks.unknown', { index: i })
+          : unlockName(entry);
+      lines.push(t('ui:gameOver.unlocks.line', { name }));
     }
     unlockEl.textContent = lines.join('\n');
     unlockEl.style.display = 'block';
@@ -479,7 +600,10 @@ export function createGameOverUi(opts: {
     }
     let unlocked = 0;
     for (const c of content) if ((mask & (1 << c.index)) !== 0) unlocked++;
-    collectionTitleEl.textContent = `图鉴 · 内容解锁 ${unlocked}/${content.length}`;
+    collectionTitleEl.textContent = t('ui:gameOver.collection.title', {
+      unlocked,
+      total: content.length,
+    });
     collectionItemsEl.replaceChildren();
     for (const kind of [UNLOCK_TOWER, UNLOCK_ELITE, UNLOCK_EDICT]) {
       const members = content.filter((c) => c.entry.kind === kind);
@@ -493,7 +617,7 @@ export function createGameOverUi(opts: {
         const item = document.createElement('div');
         item.style.cssText = locked ? ITEM_LOCKED_CSS : ITEM_CSS;
         item.textContent = locked
-          ? `${collectionItemName(entry)}(未解锁)`
+          ? `${collectionItemName(entry)}${t('ui:gameOver.collection.locked')}`
           : collectionItemName(entry);
         collectionItemsEl.appendChild(item);
       }
@@ -532,28 +656,40 @@ export function createGameOverUi(opts: {
 
   return {
     show(s: RunSummary): void {
+      lastSummary = s;
       shownResult = s.result;
-      titleEl.textContent = resultTitle(s.result);
-      // 整块面板只有这几个字用暖色(GDD §12);胜利则是我方冷色域
-      titleEl.style.color = s.result === RESULT_LOSE ? LOSE_COLOR : OK_COLOR;
-      noteEl.textContent = resultNote(s.result);
-      statsEl.textContent = summaryText(s);
+      paintTitle(s);
+      paintNote(s);
+      renderStats(s);
       renderWeaponReport(s);
       renderUnlocks(s);
       renderCollection(s);
-      // 胜利时先让玩家确认完整战报，再进故事终幕；终幕本身点击后回主菜单，
-      // 所以这张卡不再同时摆重试/回标题三条岔路。失败流程保持原样。
-      const epilogueNext = continuesToEpilogue();
-      btn.textContent = epilogueNext ? '确认战报 · 查看航行结局(Enter)' : '再来一局(Enter)';
-      retryBtn.style.display = epilogueNext ? 'none' : 'block';
-      titleBtn.style.display = epilogueNext ? 'none' : 'block';
+      paintButtons();
       // 上传状态属于"上一局的那一次 show":新一局复位回待传 —— 已上传/失败那句不许赖到下一局
       uploadBusy = false;
-      uploadBtn.disabled = false;
-      uploadBtn.textContent = '上传本局日志(U)';
+      uploadOutcome = null;
+      paintUploadBtn();
       visible = true;
       root.style.display = 'flex';
     },
     hide,
+    /**
+     * 语言切换成功后原地重画(09 号)。用最近一次 show 的 RunSummary 重画标题/统计/
+     * 战报/解锁/图鉴/按钮 —— **不重新评估进度、不重新上传、不触发任何回调**;
+     * 上传中状态保留(仍显示当前语言的"上传中…"),结算后按当前语言显示结果。
+     * 收着时(还没 show 过)无事可做,下次 show 按当前语言现刷。
+     */
+    refreshLocale(): void {
+      if (lastSummary === null) return;
+      const s = lastSummary;
+      paintTitle(s);
+      paintNote(s);
+      renderStats(s);
+      renderWeaponReport(s);
+      renderUnlocks(s);
+      renderCollection(s);
+      paintButtons();
+      paintUploadBtn();
+    },
   };
 }
