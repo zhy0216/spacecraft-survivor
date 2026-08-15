@@ -282,6 +282,57 @@ export const ui: DeepRecord<typeof zhUi> = {
     },
     unknownEdict: 'Unknown edict',
   },
+  // —— Codex (todo 08): title / unlock stats / cumulative stats / back / filters / image alt. Entries & hover come from content presenters ——
+  codex: {
+    title: 'Codex · Unlocked {{unlocked}}/{{total}}',
+    alt: 'Codex icon',
+    back: 'Back ({{esc}})',
+    stats: 'Wins {{wins}} · Total kills {{kills}} · Elite kills {{eliteKills}}',
+    star: {
+      // {{stars}} is the repeated ★ string (★/★★/★★★); the sentence itself is translated
+      damage: '{{stars}} Damage {{dmg}}',
+      mortarDamage: '{{stars}} AoE damage {{dmg}}',
+      range: 'Range {{range}}',
+      charge: 'Charge {{sec}}s',
+      rate: 'Fire rate {{rate}}/s',
+    },
+    weapon: {
+      head: {
+        fusion: '{{name}} · fused from {{base}} {{stars}} · {{family}}',
+      },
+      unknown: 'Unknown weapon #{{type}}',
+    },
+    enemy: {
+      hp: 'HP {{hp}} · Contact {{dmg}}',
+      drops: 'Scrap {{scrap}} · Star coins {{coins}}',
+    },
+    boss: {
+      head: '{{name}} · Giant charge · Summons swarms',
+      stats: 'HP {{hp}} · Contact {{dmg}}',
+      rewards: 'Star coins {{coins}} · Size ×{{scale}}',
+    },
+    elite: {
+      // Elite entry name shared by codex and game over (base enemy name in parentheses)
+      name: '{{name}} ({{base}} elite)',
+      affixes: 'Affixes {{list}}',
+    },
+    edict: {
+      maxLevel: 'Up to {{max}} levels',
+      unknown: 'Unknown edict #{{type}}',
+    },
+    locked: 'Locked · {{cond}}',
+    section: {
+      weapons: 'Weapons',
+      enemies: 'Enemies',
+      edicts: 'Edicts',
+    },
+    filter: {
+      all: 'All',
+      weapons: 'Weapons',
+      enemies: 'Enemies',
+      edicts: 'Edicts',
+    },
+  },
   upload: {
     noEndpoint: 'No upload endpoint configured',
     noLog: 'No run log this game',

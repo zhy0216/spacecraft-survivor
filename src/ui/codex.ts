@@ -46,6 +46,7 @@ import {
   type UnlockEntry,
 } from '../data/unlocks';
 import { WAVE_LOCKED_ELITES } from '../data/waves';
+import { t } from '../i18n';
 import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
@@ -137,7 +138,7 @@ export function formatMul(v: number): string {
 
 /** 统计行:三个累计计数器,与结算界面的元进度读数同源 */
 export function codexStatsText(p: Progress): string {
-  return `胜场 ${p.wins} · 总击杀 ${p.kills} · 精英击杀 ${p.eliteKills}`;
+  return t('ui:codex.stats', { wins: p.wins, kills: p.kills, eliteKills: p.eliteKills });
 }
 
 /** 内容解锁计数(与结算图鉴同口径:数掩码置位) */
@@ -164,6 +165,11 @@ export interface CodexRow {
   art: CodexArt | null;
   /** 悬停 tooltip 的行:首行标题,其余具体数值;锁定行末条 = 「未解锁 · 条件」 */
   hover: string[];
+  /**
+   * 稳定身份(不随语言变):武器/法令 = 数值 type,敌人 = kind,Boss = 'boss',精英 = 解锁条目 id。
+   * DOM 层写进 `data-content-id`,测试与自动化用它找行,不再拿中文名当唯一身份。
+   */
+  id?: string;
 }
 
 export interface CodexSection {
@@ -238,53 +244,56 @@ export function edictArt(type: number): CodexArt | null {
  * 3★ = 旧 Lv5,数值由同表的 towerDamage/towerRange 等 getter 现算(与 sim 同一份函数,
  * 图鉴印的与游戏里打的永远同一个数)。
  */
-function starLine(def: TowerDef, stars: number): string {
+export function starLine(def: TowerDef, stars: number): string {
   const dmg = def.fx === FX_MORTAR ? towerAoeDamage(def, stars) : towerDamage(def, stars);
   const range = Math.round(towerRange(def, stars));
+  const star = '★'.repeat(stars);
+  const dmgKey = def.fx === FX_MORTAR ? 'ui:codex.star.mortarDamage' : 'ui:codex.star.damage';
+  const head = t(dmgKey, { stars: star, dmg: formatMul(dmg) });
   if (def.throttle === THR_CHARGE) {
-    return (
-      `${'★'.repeat(stars)} ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
-      `射程 ${range} · 充能 ${formatMul(towerChargeTime(def, stars))}s`
-    );
+    const sec = formatMul(towerChargeTime(def, stars));
+    return `${head} · ${t('ui:codex.star.range', { range })} · ${t('ui:codex.star.charge', { sec })}`;
   }
   const interval = towerFireInterval(def, stars);
   const rate = interval > 0 ? formatMul(1 / interval) : '—';
-  return (
-    `${'★'.repeat(stars)} ${def.fx === FX_MORTAR ? '落点伤害' : '伤害'} ${formatMul(dmg)} · ` +
-    `射程 ${range} · 射速 ${rate}/s`
-  );
+  return `${head} · ${t('ui:codex.star.range', { range })} · ${t('ui:codex.star.rate', { rate })}`;
 }
 
 /** 武器悬停行:标题(合成武器带血统)+ 三条星级读数 */
 export function weaponHover(type: number): string[] {
   const def = TOWERS[type];
-  if (def === undefined) return [`未知塔型 #${type}`];
+  if (def === undefined) return [t('ui:codex.weapon.unknown', { type })];
   let head = `${towerName(type)} · ${throttleFamilyName(def.throttle)}`;
   for (const r of MERGES) {
     if (r.result === type) {
-      head = `${towerName(type)} · 由${towerName(r.base)}合${'★'.repeat(3)}变身 · ${throttleFamilyName(def.throttle)}`;
+      head = t('ui:codex.weapon.head.fusion', {
+        name: towerName(type),
+        base: towerName(r.base),
+        stars: '★'.repeat(3),
+        family: throttleFamilyName(def.throttle),
+      });
     }
   }
   return [head, starLine(def, 1), starLine(def, 2), starLine(def, 3)];
 }
 
 /** 敌型悬停行:标题 + 身板 + 掉落(残骸是升级资源、星币是商店货币,两样都报) */
-function enemyHover(e: EnemyDef): string[] {
+export function enemyHover(e: EnemyDef): string[] {
   return [
     `${enemyName(e.kind)} · ${behaviorName(e.behavior)}`,
-    `HP ${e.hp} · 接触 ${e.contactDamage}`,
-    `残骸 ${e.scrap} · 星币 ${e.starCoins}`,
+    t('ui:codex.enemy.hp', { hp: e.hp, dmg: e.contactDamage }),
+    t('ui:codex.enemy.drops', { scrap: e.scrap, coins: e.starCoins }),
   ];
 }
 
 /** 精英悬停行:词缀名单走 presenter(affixes 下标 → 名字),锁定追加条件 */
-function eliteHover(entry: UnlockEntry): string[] {
+export function eliteHover(entry: UnlockEntry): string[] {
   const lines: string[] = [collectionItemName(entry)];
   const elite = WAVE_LOCKED_ELITES[entry.type];
   if (elite !== undefined) {
     const names: string[] = [];
     for (const a of elite.affixes) names.push(affixName(a));
-    lines.push(`词缀 ${names.join(' · ')}`);
+    lines.push(t('ui:codex.elite.affixes', { list: names.join(' · ') }));
   }
   return lines;
 }
@@ -292,8 +301,8 @@ function eliteHover(entry: UnlockEntry): string[] {
 /** 法令悬停行:效果摘要 + 叠层上限(满层即从卡池剔出,上限就是"这条能推多深") */
 export function edictHover(type: number): string[] {
   const def = EDICTS[type];
-  if (def === undefined) return [`未知法令 #${type}`];
-  return [edictSummaryText(def), `最多 ${EDICT_MAX_LEVEL} 层`];
+  if (def === undefined) return [t('ui:codex.edict.unknown', { type })];
+  return [edictSummaryText(def), t('ui:codex.edict.maxLevel', { max: EDICT_MAX_LEVEL })];
 }
 
 /**
@@ -316,6 +325,7 @@ function rowForLocked(
   name: string,
   hover: string[],
   art: CodexArt | null,
+  id: string,
 ): CodexRow {
   const idx = lockIndexOf(kind, type);
   if (idx >= 0 && (mask & (1 << idx)) === 0) {
@@ -323,16 +333,17 @@ function rowForLocked(
       name,
       locked: true,
       art,
-      hover: [...hover, `未解锁 · ${unlockConditionText(UNLOCKS[idx]!)}`],
+      id,
+      hover: [...hover, t('ui:codex.locked', { cond: unlockConditionText(UNLOCKS[idx]!) })],
     };
   }
-  return { name, locked: false, art, hover };
+  return { name, locked: false, art, id, hover };
 }
 
 /**
  * 全量目录:武器 → 敌人 → 法令。
- * 分区标题「武器/敌人」取目录语义,与结算图鉴块的「塔/敌人」分类名并立 ——
- * 那里是解锁项的窄块,这里是通读目录,读法不同(若需统一再并一处)。
+ * 分区标题取 `ui.codex.section.*`(与结算图鉴块的分类名各自成段,读法不同 ——
+ * 那里是解锁项的窄块,这里是通读目录)。
  */
 export function codexRows(progress: Progress): CodexSection[] {
   const mask = progress.unlockMask;
@@ -341,10 +352,18 @@ export function codexRows(progress: Progress): CodexSection[] {
   const weapons: CodexRow[] = [];
   for (let type = 0; type < TOWERS.length; type++) {
     weapons.push(
-      rowForLocked(mask, UNLOCK_TOWER, type, towerName(type), weaponHover(type), towerArt(type)),
+      rowForLocked(
+        mask,
+        UNLOCK_TOWER,
+        type,
+        towerName(type),
+        weaponHover(type),
+        towerArt(type),
+        String(type),
+      ),
     );
   }
-  sections.push({ key: 'weapons', title: '武器', rows: weapons });
+  sections.push({ key: 'weapons', title: t('ui:codex.section.weapons'), rows: weapons });
 
   const enemies: CodexRow[] = [];
   for (const e of ENEMIES) {
@@ -353,6 +372,7 @@ export function codexRows(progress: Progress): CodexSection[] {
       locked: false,
       art: imgArt(ENEMY_ART_URLS[e.kind]),
       hover: enemyHover(e),
+      id: String(e.kind),
     });
   }
   // Boss = 放大的冲撞甲虫:HP/接触按底座 × 倍率现算(与 sim 的派生同一条公式)
@@ -361,11 +381,14 @@ export function codexRows(progress: Progress): CodexSection[] {
     name: bossName(),
     locked: false,
     art: imgArt(BOSS_ART_URL),
+    id: 'boss',
     hover: [
-      `${bossName()} · 巨型冲锋 · 召唤蜂群`,
-      `HP ${Math.round(base.hp * BOSS.hpMul)} · 接触 ` +
-        `${Math.round(base.contactDamage * BOSS.contactDamageMul)}`,
-      `星币 ${BOSS.starCoins} · 体型 ×${BOSS.scale}`,
+      t('ui:codex.boss.head', { name: bossName() }),
+      t('ui:codex.boss.stats', {
+        hp: Math.round(base.hp * BOSS.hpMul),
+        dmg: Math.round(base.contactDamage * BOSS.contactDamageMul),
+      }),
+      t('ui:codex.boss.rewards', { coins: BOSS.starCoins, scale: BOSS.scale }),
     ],
   });
   // 精英事件(UNLOCK_ELITE 条目):命名走 collectionItemName(与结算图鉴同源),
@@ -376,24 +399,33 @@ export function codexRows(progress: Progress): CodexSection[] {
     const locked = (mask & (1 << i)) === 0;
     const eliteKind = WAVE_LOCKED_ELITES[entry.type]?.kind;
     const hover = locked
-      ? [...eliteHover(entry), `未解锁 · ${unlockConditionText(entry)}`]
+      ? [...eliteHover(entry), t('ui:codex.locked', { cond: unlockConditionText(entry) })]
       : eliteHover(entry);
     enemies.push({
       name: collectionItemName(entry),
       locked,
       art: eliteKind === undefined ? null : imgArt(ENEMY_ART_URLS[eliteKind]),
       hover,
+      id: entry.id,
     });
   }
-  sections.push({ key: 'enemies', title: '敌人', rows: enemies });
+  sections.push({ key: 'enemies', title: t('ui:codex.section.enemies'), rows: enemies });
 
   const edicts: CodexRow[] = [];
   for (const d of EDICTS) {
     edicts.push(
-      rowForLocked(mask, UNLOCK_EDICT, d.type, edictName(d.type), edictHover(d.type), edictArt(d.type)),
+      rowForLocked(
+        mask,
+        UNLOCK_EDICT,
+        d.type,
+        edictName(d.type),
+        edictHover(d.type),
+        edictArt(d.type),
+        String(d.type),
+      ),
     );
   }
-  sections.push({ key: 'edicts', title: '法令', rows: edicts });
+  sections.push({ key: 'edicts', title: t('ui:codex.section.edicts'), rows: edicts });
 
   return sections;
 }
@@ -409,15 +441,17 @@ export interface CodexUi {
   show(): void;
   hide(): void;
   visible(): boolean;
+  /** 语言切换成功后原地重画文案:保留筛选/滚动/掩码/统计(只重画,不重建监听、不改 filter) */
+  refreshLocale(): void;
 }
 
-/** 过滤器档位:值与 CodexSection.key 一一对应,'all' = 全部显示 */
-const FILTERS: Array<{ key: string; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'weapons', label: '武器' },
-  { key: 'enemies', label: '敌人' },
-  { key: 'edicts', label: '法令' },
-];
+/** 过滤器档位:值与 CodexSection.key 一一对应,'all' = 全部显示。key 恒稳定(切换语言不变),label 现读 t() */
+const FILTERS = [
+  { key: 'all', labelKey: 'ui:codex.filter.all' },
+  { key: 'weapons', labelKey: 'ui:codex.filter.weapons' },
+  { key: 'enemies', labelKey: 'ui:codex.filter.enemies' },
+  { key: 'edicts', labelKey: 'ui:codex.filter.edicts' },
+] as const;
 
 export function createCodexUi(hooks: CodexHooks): CodexUi {
   let visible = false;
@@ -439,7 +473,8 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   const filterBtns = new Map<string, HTMLButtonElement>();
   for (const f of FILTERS) {
     const btn = document.createElement('button');
-    btn.textContent = f.label;
+    btn.textContent = t(f.labelKey);
+    btn.setAttribute('data-filter', f.key);
     btn.addEventListener('click', () => {
       filter = f.key;
       paintFilters();
@@ -453,7 +488,8 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   scrollEl.style.cssText = SCROLL_CSS;
   const backBtn = document.createElement('button');
   backBtn.style.cssText = BACK_BTN_CSS;
-  backBtn.textContent = '返回(Esc)';
+  backBtn.setAttribute('data-action', 'codex-back');
+  backBtn.textContent = t('ui:codex.back', { esc: t('common:keys.esc') });
   backBtn.addEventListener('click', close);
 
   // 悬停 tooltip:整页只此一个(与 HUD 法令悬停同一条口径),卡片悬停点亮、移开即隐
@@ -464,17 +500,29 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   root.append(card, tip);
   document.getElementById('ui')!.appendChild(root);
 
-  /** 过滤器按钮的选中态:选中的高亮,其余回落 */
+  /** 静态 chrome(返回按钮):show 与 refreshLocale 共用 —— 语言切换发生在图鉴收着时,
+   * refreshLocale 会提前返回,于是 show 也要按当前语言刷它(标题/统计/网格/alt 在 render 里现读) */
+  function paintStatic(): void {
+    backBtn.textContent = t('ui:codex.back', { esc: t('common:keys.esc') });
+  }
+
+  /** 过滤器按钮的选中态:选中的高亮,其余回落;标签现读 t()(语言切换后 paintFilters 一起重刷) */
   function paintFilters(): void {
     for (const f of FILTERS) {
-      filterBtns.get(f.key)!.style.cssText = f.key === filter ? FILTER_ON_CSS : FILTER_BTN_CSS;
+      const btn = filterBtns.get(f.key)!;
+      btn.textContent = t(f.labelKey);
+      btn.style.cssText = f.key === filter ? FILTER_ON_CSS : FILTER_BTN_CSS;
     }
   }
 
-  /** 一张卡:配图容器 + 名称;悬停点亮 tooltip(定位在卡下方,贴屏边时夹回) */
-  function appendCell(grid: HTMLElement, row: CodexRow): void {
+  /** 一张卡:配图容器 + 名称;悬停点亮 tooltip(定位在卡下方,贴屏边时夹回)。
+   * data-content-kind = 分区键、data-content-id = 行 id(见 CodexRow.id)——
+   * 测试与自动化用它们定位行,不拿本地化名称当唯一身份。 */
+  function appendCell(grid: HTMLElement, row: CodexRow, kind: string): void {
     const cell = document.createElement('div');
     cell.style.cssText = row.locked ? CELL_LOCKED_CSS : CELL_CSS;
+    cell.dataset.contentKind = kind;
+    cell.dataset.contentId = row.id ?? '';
     if (row.art !== null) {
       const artBox = document.createElement('div');
       artBox.style.cssText = CELL_ART_CSS;
@@ -484,14 +532,14 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
           const img = document.createElement('img');
           img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
           img.src = url;
-          img.alt = '图鉴图标';
+          img.alt = t('ui:codex.alt');
           artBox.appendChild(img);
         }
       } else {
         const img = document.createElement('img');
         img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
-        img.alt = '图鉴图标';
+        img.alt = t('ui:codex.alt');
         artBox.appendChild(img);
       }
       cell.appendChild(artBox);
@@ -520,7 +568,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   function render(): void {
     const p = hooks.getProgress();
     const { unlocked, total } = codexUnlockStats(p);
-    titleEl.textContent = `图鉴 · 内容解锁 ${unlocked}/${total}`;
+    titleEl.textContent = t('ui:codex.title', { unlocked, total });
     statsEl.textContent = codexStatsText(p);
     scrollEl.replaceChildren();
     for (const section of codexRows(p)) {
@@ -531,7 +579,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       scrollEl.appendChild(label);
       const grid = document.createElement('div');
       grid.style.cssText = GRID_CSS;
-      for (const row of section.rows) appendCell(grid, row);
+      for (const row of section.rows) appendCell(grid, row, section.key);
       scrollEl.appendChild(grid);
     }
   }
@@ -555,8 +603,27 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     close();
   });
 
+  /**
+   * 语言切换成功后原地重画(08 号)。图鉴只建一次,切换不能靠销毁重建 ——
+   * 重画走 render()(标题/统计/网格整块重排),**保留**:
+   *   - filter(闭包里的本地状态,render 只读它,不重置);
+   *   - 滚动位置(先记 scrollEl.scrollTop,重排后还原 —— 重排会先滚回顶);
+   *   - 掩码与统计(现读同一份 progress,未变);
+   *   - tooltip 保持原样(tip 在 scrollEl 外,render 不碰它)。
+   * **不重建 window 监听、不重注册任何事件**;收着时无事可做(下次 show 按当前语言重刷)。
+   */
+  function refreshLocale(): void {
+    if (!visible) return;
+    const top = scrollEl.scrollTop;
+    paintStatic();
+    paintFilters();
+    render();
+    scrollEl.scrollTop = top;
+  }
+
   return {
     show(): void {
+      paintStatic();
       paintFilters();
       render();
       visible = true;
@@ -564,5 +631,6 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     },
     hide,
     visible: () => visible,
+    refreshLocale,
   };
 }

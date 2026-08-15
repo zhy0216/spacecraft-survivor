@@ -860,6 +860,8 @@ async function boot(): Promise<void> {
       titleScreen.show(titleDigest());
     },
   });
+  // 语言切换成功后图鉴原地重画文案(08 号):保留筛选/滚动/掩码/统计,不重建监听(见 codex 的 refreshLocale)
+  registerLocaleAware(codex);
 
   /**
    * 标题界面(进游戏的第一屏)。四条出口:

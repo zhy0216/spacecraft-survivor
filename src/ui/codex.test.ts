@@ -22,6 +22,8 @@ import {
   towerFireInterval,
   towerRange,
   TOWERS,
+  TOWER_AURORA,
+  TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_MISSILE_NEST,
   TOWER_MORTAR,
@@ -35,18 +37,23 @@ import {
 } from '../data/unlocks';
 import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import { createProgress, type Progress } from '../sim/progress';
-import { initI18n } from '../i18n';
+import { changeLocale, initI18n } from '../i18n';
 import {
   codexRows,
   codexStatsText,
   codexUnlockStats,
   createCodexUi,
+  edictHover,
+  eliteHover,
+  enemyHover,
   formatMul,
   glyphBadgeSvg,
+  starLine,
   tintHex,
+  weaponHover,
   type CodexArt,
 } from './codex';
-import { affixName, bossName, enemyName, towerName } from './presentation/contentText';
+import { affixName, bossName, enemyName } from './presentation/contentText';
 import { behaviorName } from './presentation/behaviorText';
 import { edictSummaryText } from './presentation/edictText';
 import { unlockConditionText } from './presentation/unlockText';
@@ -83,6 +90,18 @@ function starExpected(def: typeof TOWERS[number], stars: number, mortar: boolean
     `${'★'.repeat(stars)} ${mortar ? '落点伤害' : '伤害'} ${formatMul(dmg)} · 射程 ${range} · ` +
     `射速 ${formatMul(1 / interval)}/s`
   );
+}
+
+/** 同一组读数的英文期望串(08 号:双语输出各有断言,数据改档两边自动跟上) */
+function starExpectedEn(def: typeof TOWERS[number], stars: number, mortar: boolean): string {
+  const dmg = mortar ? towerAoeDamage(def, stars) : towerDamage(def, stars);
+  const range = Math.round(towerRange(def, stars));
+  const head = `${'★'.repeat(stars)} ${mortar ? 'AoE damage' : 'Damage'} ${formatMul(dmg)}`;
+  if (def.throttle === THR_CHARGE) {
+    return `${head} · Range ${range} · Charge ${formatMul(towerChargeTime(def, stars))}s`;
+  }
+  const interval = towerFireInterval(def, stars);
+  return `${head} · Range ${range} · Fire rate ${formatMul(1 / interval)}/s`;
 }
 
 describe('unlockConditionText', () => {
@@ -181,7 +200,7 @@ describe('codexRows', () => {
   it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图与渲染层同源', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     expect(weapons.length).toBe(TOWERS.length);
-    const auto = weapons.find((r) => r.name === '自动机炮')!;
+    const auto = weapons.find((r) => r.id === String(TOWER_AUTOCANNON))!;
     expect(auto.locked).toBe(false);
     expect(auto.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[0]] });
     const def = TOWERS[0]!;
@@ -195,7 +214,7 @@ describe('codexRows', () => {
 
   it('迫击炮类:落点伤害 + 充能节奏(直击伤害恒 0,不印误导性的 0)', () => {
     const mortar = codexRows(progress(0))[0]!.rows.find(
-      (r) => r.name === towerName(TOWER_MORTAR),
+      (r) => r.id === String(TOWER_MORTAR),
     )!;
     expect(mortar.hover[1]).toBe(starExpected(TOWERS[TOWER_MORTAR]!, 1, true));
     expect(mortar.hover[1]).toContain('落点伤害');
@@ -205,7 +224,7 @@ describe('codexRows', () => {
 
   it('合成武器经 MERGES 反查底座名并复用血统炮头(数据表改名图鉴跟着走)', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
-    const aurora = weapons.find((r) => r.name === '极光阵列')!;
+    const aurora = weapons.find((r) => r.id === String(TOWER_AURORA))!;
     expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合★★★变身 · 过热系');
     // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"底座合★★★"两相印证
     expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
@@ -213,13 +232,13 @@ describe('codexRows', () => {
 
   it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
     const locked = codexRows(progress(0))[0]!.rows.find(
-      (r) => r.name === towerName(TOWER_MISSILE_NEST),
+      (r) => r.id === String(TOWER_MISSILE_NEST),
     )!;
     expect(locked.locked).toBe(true);
     expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
     expect(locked.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_MISSILE_NEST]] });
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
-      (r) => r.name === towerName(TOWER_MISSILE_NEST),
+      (r) => r.id === String(TOWER_MISSILE_NEST),
     )!;
     expect(unlocked.locked).toBe(false);
     expect(unlocked.hover.some((l) => l.includes('未解锁'))).toBe(false);
@@ -229,7 +248,7 @@ describe('codexRows', () => {
     const enemies = codexRows(progress(0))[1]!.rows;
     expect(enemies.length).toBe(ENEMIES.length + 1 + 1);
     const larvaDef = ENEMIES[0]!;
-    const larva = enemies.find((r) => r.name === enemyName(KIND_SWARM))!;
+    const larva = enemies.find((r) => r.id === String(KIND_SWARM))!;
     expect(larva.hover).toEqual([
       `${enemyName(KIND_SWARM)} · ${behaviorName(0)}`,
       `HP ${larvaDef.hp} · 接触 ${larvaDef.contactDamage}`,
@@ -237,7 +256,7 @@ describe('codexRows', () => {
     ]);
     expect(larva.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[0]] });
     const beetle = ENEMIES[BOSS.baseKind]!;
-    const boss = enemies.find((r) => r.name === bossName())!;
+    const boss = enemies.find((r) => r.id === 'boss')!;
     expect(boss.hover).toEqual([
       `${bossName()} · 巨型冲锋 · 召唤蜂群`,
       `HP ${Math.round(beetle.hp * BOSS.hpMul)} · 接触 ` +
@@ -253,7 +272,7 @@ describe('codexRows', () => {
   });
 
   it('精英事件条目命名走 collectionItemName(与结算图鉴同源);悬停报词缀名单', () => {
-    const elite = codexRows(progress(0))[1]!.rows.find((r) => r.name.includes('虫群母巢'))!;
+    const elite = codexRows(progress(0))[1]!.rows.find((r) => r.id === 'elite-queen')!;
     expect(elite.locked).toBe(true);
     expect(elite.name).toContain('精英');
     expect(elite.hover[elite.hover.length - 1]).toBe('未解锁 · 累计精英击杀 14');
@@ -264,8 +283,8 @@ describe('codexRows', () => {
     expect(affixes).toContain(affixName(4));
     // 精英 = 带词缀的底座(冲撞甲虫),图同一张
     expect(elite.art).toEqual({ kind: 'img', urls: [ENEMY_ART_URLS[KIND_BEETLE]] });
-    const unlocked = codexRows(progress(FULL_MASK))[1]!.rows.find((r) =>
-      r.name.includes('虫群母巢'),
+    const unlocked = codexRows(progress(FULL_MASK))[1]!.rows.find(
+      (r) => r.id === 'elite-queen',
     )!;
     expect(unlocked.locked).toBe(false);
     expect(unlocked.hover.some((l) => l.includes('未解锁'))).toBe(false);
@@ -274,15 +293,117 @@ describe('codexRows', () => {
   it('法令全量 10 条:悬停 = 效果摘要 + 叠层上限;超载协议未解锁带条件', () => {
     const edicts = codexRows(progress(0))[2]!.rows;
     expect(edicts.length).toBe(EDICTS.length);
-    const over = edicts.find((r) => r.name === '超载协议')!;
+    const over = edicts.find((r) => r.id === String(EDICT_OVERDRIVE))!;
     expect(over.locked).toBe(true);
     expect(over.hover[over.hover.length - 1]).toBe('未解锁 · 单局击杀 300');
-    const ammo = edicts.find((r) => r.name === '弹药协议')!;
+    const ammo = edicts.find((r) => r.id === String(EDICT_AMMO))!;
     expect(ammo.locked).toBe(false);
     expect(ammo.hover).toEqual(['弹药系:射速 ×1.25 · 装填 ×0.7', '最多 5 层']);
     expect(ammo.art?.kind).toBe('svg');
     expect(svgOf(ammo.art)).toContain('▦'); // EDICT_ICONS[0]
     expect(svgOf(ammo.art)).toContain(tintHex(EDICTS[EDICT_AMMO]!.tint));
+  });
+});
+
+// —— 双语输出(08 号):图鉴是内容翻译的验收页,英文侧逐项钉住 ——
+
+describe('codex 英文输出(08 号)', () => {
+  it('codexStatsText 英文:胜场 / 总击杀 / 精英击杀', async () => {
+    await changeLocale('en');
+    expect(codexStatsText(progress(0, { wins: 3, kills: 1280, eliteKills: 9 }))).toBe(
+      'Wins 3 · Total kills 1280 · Elite kills 9',
+    );
+  });
+
+  it('starLine 英文:直击/落点伤害 + 射程 + 射速/充能,★ 符号保留', async () => {
+    await changeLocale('en');
+    const auto = TOWERS[TOWER_AUTOCANNON]!;
+    expect(starLine(auto, 1)).toBe(starExpectedEn(auto, 1, false));
+    expect(starLine(auto, 2)).toBe(starExpectedEn(auto, 2, false));
+    expect(starLine(auto, 3)).toBe(starExpectedEn(auto, 3, false));
+    const mortar = TOWERS[TOWER_MORTAR]!;
+    expect(starLine(mortar, 1)).toBe(starExpectedEn(mortar, 1, true));
+    expect(starLine(mortar, 1)).toContain('AoE damage');
+    expect(starLine(mortar, 1)).toContain('Charge');
+    expect(starLine(auto, 1)).toContain('★ Damage');
+  });
+
+  it('weaponHover 英文:普通标题 / 合成血统 / 未知型号带编号', async () => {
+    await changeLocale('en');
+    const auto = weaponHover(TOWER_AUTOCANNON);
+    expect(auto[0]).toBe('Auto Cannon · Ammo-fed');
+    expect(auto[1]).toBe(starExpectedEn(TOWERS[TOWER_AUTOCANNON]!, 1, false));
+    // 合成武器:血统走 ui.codex.weapon.head.fusion
+    const aurora = weaponHover(TOWER_AURORA);
+    expect(aurora[0]).toBe('Aurora Array · fused from Laser Prism ★★★ · Heat-managed');
+    // 未知型号:本地化兜底且含原始编号
+    expect(weaponHover(999)[0]).toBe('Unknown weapon #999');
+  });
+
+  it('enemyHover 英文:身板与掉落逐项翻', async () => {
+    await changeLocale('en');
+    const larvaDef = ENEMIES[KIND_SWARM]!;
+    expect(enemyHover(larvaDef)).toEqual([
+      `${enemyName(KIND_SWARM)} · ${behaviorName(0)}`,
+      `HP ${larvaDef.hp} · Contact ${larvaDef.contactDamage}`,
+      `Scrap ${larvaDef.scrap} · Star coins ${larvaDef.starCoins}`,
+    ]);
+  });
+
+  it('Boss 悬停英文:巨型冲锋 · 召唤蜂群 + 身板 + 奖励', async () => {
+    await changeLocale('en');
+    const beetle = ENEMIES[BOSS.baseKind]!;
+    const enemies = codexRows(progress(0))[1]!.rows;
+    const boss = enemies.find((r) => r.id === 'boss')!;
+    expect(boss.hover).toEqual([
+      `${bossName()} · Giant charge · Summons swarms`,
+      `HP ${Math.round(beetle.hp * BOSS.hpMul)} · Contact ` +
+        `${Math.round(beetle.contactDamage * BOSS.contactDamageMul)}`,
+      `Star coins ${BOSS.starCoins} · Size ×${BOSS.scale}`,
+    ]);
+  });
+
+  it('精英条目英文:名称带底座、词缀名单、锁定条件、悬停直出', async () => {
+    await changeLocale('en');
+    const entry = UNLOCKS[2]!;
+    const elite = eliteHover(entry);
+    expect(elite[0]).toBe('Hive Queen (Ram Beetle elite)');
+    expect(elite).toContain('Affixes Frenzy · Armored · Phased'); // [0,3,4]
+    const row = codexRows(progress(0))[1]!.rows.find((r) => r.id === 'elite-queen')!;
+    expect(row.locked).toBe(true);
+    expect(row.hover[row.hover.length - 1]).toBe('Locked · 14 elite kills total');
+    // 全解锁:锁定尾巴消失
+    const unlocked = codexRows(progress(FULL_MASK))[1]!.rows.find((r) => r.id === 'elite-queen')!;
+    expect(unlocked.locked).toBe(false);
+    expect(unlocked.hover.some((l) => l.startsWith('Locked'))).toBe(false);
+  });
+
+  it('法令悬停英文:效果摘要 + 叠层上限;未知法令带编号', async () => {
+    await changeLocale('en');
+    const ammo = edictHover(EDICT_AMMO);
+    expect(ammo[0]).toBe('Ammo-fed:Fire rate ×1.25 · Reload ×0.7');
+    expect(ammo[1]).toBe('Up to 5 levels');
+    expect(edictHover(999)[0]).toBe('Unknown edict #999');
+  });
+
+  it('锁定条件英文:首次胜利 / 单局击杀(武器与法令各一);分区标题翻成 Weapons/Enemies/Edicts', async () => {
+    await changeLocale('en');
+    const sections = codexRows(progress(0));
+    expect(sections.map((s) => s.title)).toEqual(['Weapons', 'Enemies', 'Edicts']);
+    expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts']);
+    const nest = sections[0]!.rows.find((r) => r.id === String(TOWER_MISSILE_NEST))!;
+    expect(nest.locked).toBe(true);
+    expect(nest.hover[nest.hover.length - 1]).toBe('Locked · First victory');
+    const over = sections[2]!.rows.find((r) => r.id === String(EDICT_OVERDRIVE))!;
+    expect(over.locked).toBe(true);
+    expect(over.hover[over.hover.length - 1]).toBe('Locked · 300 kills in a run');
+  });
+
+  it('双语遍历不串:回到 zh 后输出仍旧是中文(语言切换是全局的,不污染其它用例)', async () => {
+    await changeLocale('en');
+    expect(codexStatsText(progress(0, { wins: 1 }))).toContain('Wins');
+    await changeLocale('zh-CN');
+    expect(codexStatsText(progress(0, { wins: 1 }))).toBe('胜场 1 · 总击杀 0 · 精英击杀 0');
   });
 });
 
@@ -294,6 +415,12 @@ interface StubEl {
   textContent: string;
   src: string;
   alt: string;
+  /** data-content-kind / data-content-id 落在这里(08 号:测试用它们定位行) */
+  dataset: Record<string, string>;
+  /** 过滤器按钮的 data-filter / 返回按钮的 data-action(08 号:测试用稳定属性定位控件) */
+  setAttribute(name: string, value: string): void;
+  /** 目录滚动区:refreshLocale 的"保留滚动位置"要读写它 */
+  scrollTop: number;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
@@ -310,6 +437,12 @@ function createStubEl(tag = 'div'): StubEl {
     textContent: '',
     src: '',
     alt: '',
+    dataset: {},
+    setAttribute(name: string, value: string): void {
+      const key = name.replace(/^data-/, '');
+      el.dataset[key] = value;
+    },
+    scrollTop: 0,
     children: [],
     listeners: new Map<string, (e: unknown) => void>(),
     append(...kids: StubEl[]): void {
@@ -431,6 +564,19 @@ function parentOf(rootEl: StubEl, target: StubEl): StubEl | undefined {
   return undefined;
 }
 
+/** 按 data-content-kind + data-content-id 找卡片格子(08 号:不用本地化名称当唯一身份) */
+function findCell(dom: StubDom, kind: string, id: string): StubEl | undefined {
+  return findEl(
+    root(dom),
+    (el) => el.dataset.contentKind === kind && el.dataset.contentId === id,
+  );
+}
+
+/** 格子的可见文本:名称挂在子 div 上(桩的 textContent 不随子节点派生),取子树第一个有字的叶子 */
+function cellText(cell: StubEl): string {
+  return findEl(cell, (el) => el.textContent.length > 0)?.textContent ?? '';
+}
+
 /** 悬停 tooltip:整页唯一那个 fixed 定位、pointer-events:none 的 div */
 function tip(dom: StubDom): StubEl {
   return dom.created.find(
@@ -476,11 +622,12 @@ describe('createCodexUi', () => {
     expect(title.textContent).toBe('图鉴 · 内容解锁 0/3');
     const stats = findEl(root(dom), (el) => el.textContent.startsWith('胜场'))!;
     expect(stats.textContent).toBe('胜场 1 · 总击杀 100 · 精英击杀 2');
-    // 卡片名是纯名称(数值在悬停里);分区标题在
+    // 卡片名是纯名称(数值在悬停里);分区标题在;行用 data-content-kind/id 定位
     expect(findEl(root(dom), (el) => el.textContent === '武器')).toBeDefined();
-    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeDefined();
+    expect(cellText(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!)).toBe('自动机炮');
     // 锁定卡:名称 div 的父格子带 opacity 灰显
-    const lockedName = findEl(root(dom), (el) => el.textContent === '导弹巢')!;
+    const lockedCell = findCell(dom, 'weapons', String(TOWER_MISSILE_NEST))!;
+    const lockedName = findEl(lockedCell, (el) => el.textContent.length > 0)!;
     expect(parentOf(root(dom), lockedName)!.style.cssText).toContain('opacity:.45');
   });
 
@@ -488,24 +635,23 @@ describe('createCodexUi', () => {
     const ui = make();
     ui.show();
     const edictBtn = dom.created.find(
-      (el) => el.tagName === 'BUTTON' && el.textContent === '法令',
+      (el) => el.tagName === 'BUTTON' && el.dataset.filter === 'edicts',
     )!;
     edictBtn.listeners.get('click')?.({});
-    expect(findEl(root(dom), (el) => el.textContent === '弹药协议')).toBeDefined();
-    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeUndefined();
+    expect(findCell(dom, 'edicts', String(EDICT_AMMO))).toBeDefined();
+    expect(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))).toBeUndefined();
     const allBtn = dom.created.find(
-      (el) => el.tagName === 'BUTTON' && el.textContent === '全部',
+      (el) => el.tagName === 'BUTTON' && el.dataset.filter === 'all',
     )!;
     allBtn.listeners.get('click')?.({});
-    expect(findEl(root(dom), (el) => el.textContent === '自动机炮')).toBeDefined();
-    expect(findEl(root(dom), (el) => el.textContent === '弹药协议')).toBeDefined();
+    expect(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))).toBeDefined();
+    expect(findCell(dom, 'edicts', String(EDICT_AMMO))).toBeDefined();
   });
 
   it('悬停 tooltip:进卡弹出(含 ★/★★/★★★ 星级读数),出卡收起', () => {
     const ui = make();
     ui.show();
-    const nameEl = findEl(root(dom), (el) => el.textContent === '自动机炮')!;
-    const cell = parentOf(root(dom), nameEl)!;
+    const cell = findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!;
     // 初始 display:none 落在构造时的 cssText 里(桩不解析 cssText,与遮罩同款断言)
     expect(tip(dom).style.cssText).toContain('display:none');
     cell.listeners.get('mouseenter')?.({});
@@ -540,7 +686,7 @@ describe('createCodexUi', () => {
     expect(closes).toBe(1); // 收着时不再响应
     ui.show();
     const back = dom.created.find(
-      (el) => el.tagName === 'BUTTON' && el.textContent === '返回(Esc)',
+      (el) => el.tagName === 'BUTTON' && el.dataset.action === 'codex-back',
     )!;
     back.listeners.get('click')?.({});
     expect(closes).toBe(2);
@@ -554,5 +700,63 @@ describe('createCodexUi', () => {
     }
     expect(dom.windowListeners).toBe(1);
     expect(dom.ui.children.length).toBe(1);
+  });
+
+  it('refreshLocale 原地重画:筛选/滚动/统计/掩码全保留,只重画文案(08 号)', async () => {
+    const ui = make();
+    ui.show();
+    // 切到「敌人」筛选,摆一个滚动位置
+    const enemyBtn = dom.created.find(
+      (el) => el.tagName === 'BUTTON' && el.dataset.filter === 'enemies',
+    )!;
+    enemyBtn.listeners.get('click')?.({});
+    const scroll = dom.created.find((el) => el.style.cssText.includes('overflow-y:auto'))!;
+    scroll.scrollTop = 120;
+    // 悬停 tooltip 是 scrollEl 外的独立节点,refreshLocale 不许碰它
+    tip(dom).style.display = 'block';
+    // 切换语言 + refreshLocale(语言真切过去了,main 的 setLanguage 才会触发它)
+    await changeLocale('en');
+    ui.refreshLocale();
+    // 筛选仍是 enemies:敌卡在、武器卡不在;行用 data-content-kind/id 定位
+    expect(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))).toBeUndefined();
+    const swarm = findCell(dom, 'enemies', String(KIND_SWARM))!;
+    expect(cellText(swarm)).toContain('Swarm Leech');
+    const boss = findCell(dom, 'enemies', 'boss')!;
+    expect(cellText(boss)).toContain('Hive Colossus');
+    expect(cellText(findCell(dom, 'enemies', 'elite-queen')!)).toContain(
+      'Hive Queen (Ram Beetle elite)',
+    );
+    // 筛选按钮标签翻成英文;标题/统计按当前语言重画(掩码与统计值未变)
+    expect(
+      dom.created.find((el) => el.tagName === 'BUTTON' && el.textContent === 'Enemies'),
+    ).toBeDefined();
+    const title = findEl(root(dom), (el) => el.textContent.startsWith('Codex ·'))!;
+    expect(title.textContent).toBe('Codex · Unlocked 0/3');
+    const stats = findEl(root(dom), (el) => el.textContent.startsWith('Wins'))!;
+    expect(stats.textContent).toBe('Wins 1 · Total kills 100 · Elite kills 2');
+    // 滚动位置还原、返回按钮翻新、tooltip 原样
+    expect(scroll.scrollTop).toBe(120);
+    const back = dom.created.find(
+      (el) => el.tagName === 'BUTTON' && el.textContent === 'Back (Esc)',
+    )!;
+    expect(back).toBeDefined();
+    expect(tip(dom).style.display).toBe('block');
+    // 不重建监听器(整页只建一次的口径)
+    expect(dom.windowListeners).toBe(1);
+    // 再刷一次幂等:滚动不丢、筛选不重置
+    await changeLocale('zh-CN');
+    ui.refreshLocale();
+    expect(scroll.scrollTop).toBe(120);
+    expect(findCell(dom, 'weapons', String(TOWER_AUTOCANNON))).toBeUndefined();
+    // 收着时切换语言(refreshLocale 提前返回),show() 也要按当前语言刷静态 chrome
+    ui.hide();
+    await changeLocale('en');
+    ui.show();
+    expect(
+      dom.created.find((el) => el.tagName === 'BUTTON' && el.textContent === 'Back (Esc)'),
+    ).toBeDefined();
+    expect(cellText(findCell(dom, 'enemies', String(KIND_SWARM))!)).toContain('Swarm Leech');
+    // show 的整块重排把遮罩重新铺上,但监听器仍只有最初那一条
+    expect(dom.windowListeners).toBe(1);
   });
 });

@@ -280,6 +280,57 @@ export const ui = {
     },
     unknownEdict: '未知法令',
   },
+  // —— 图鉴(08 号):标题/解锁统计/累计统计/返回/筛选/图片 alt;条目内容与悬停走 content presenter ——
+  codex: {
+    title: '图鉴 · 内容解锁 {{unlocked}}/{{total}}',
+    alt: '图鉴图标',
+    back: '返回({{esc}})',
+    stats: '胜场 {{wins}} · 总击杀 {{kills}} · 精英击杀 {{eliteKills}}',
+    star: {
+      // {{stars}} 是 ★ 重复串(★/★★/★★★),句子本身照翻
+      damage: '{{stars}} 伤害 {{dmg}}',
+      mortarDamage: '{{stars}} 落点伤害 {{dmg}}',
+      range: '射程 {{range}}',
+      charge: '充能 {{sec}}s',
+      rate: '射速 {{rate}}/s',
+    },
+    weapon: {
+      head: {
+        fusion: '{{name}} · 由{{base}}合{{stars}}变身 · {{family}}',
+      },
+      unknown: '未知武器 #{{type}}',
+    },
+    enemy: {
+      hp: 'HP {{hp}} · 接触 {{dmg}}',
+      drops: '残骸 {{scrap}} · 星币 {{coins}}',
+    },
+    boss: {
+      head: '{{name}} · 巨型冲锋 · 召唤蜂群',
+      stats: 'HP {{hp}} · 接触 {{dmg}}',
+      rewards: '星币 {{coins}} · 体型 ×{{scale}}',
+    },
+    elite: {
+      // 图鉴/结算共用的精英条目名(底座带进括号;unlockName 是条目名,base 是底敌型名)
+      name: '{{name}}({{base}}精英)',
+      affixes: '词缀 {{list}}',
+    },
+    edict: {
+      maxLevel: '最多 {{max}} 层',
+      unknown: '未知法令 #{{type}}',
+    },
+    locked: '未解锁 · {{cond}}',
+    section: {
+      weapons: '武器',
+      enemies: '敌人',
+      edicts: '法令',
+    },
+    filter: {
+      all: '全部',
+      weapons: '武器',
+      enemies: '敌人',
+      edicts: '法令',
+    },
+  },
   upload: {
     noEndpoint: '未配置上传地址',
     noLog: '本局无日志',

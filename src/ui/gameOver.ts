@@ -25,6 +25,7 @@ import { WAVE_LOCKED_ELITES } from '../data/waves';
 import type { Progress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 import { edictName, enemyName, towerName } from './presentation/contentText';
 import { unlockName } from './presentation/unlockText';
 
@@ -255,7 +256,8 @@ function eliteBaseName(entry: UnlockEntry): string | null {
 
 /**
  * 图鉴条目显示名:塔/法令走 presenter(towerName / edictName 查翻译)、解锁名走 unlockName;
- * 精英条目把底敌型名带进括号("虫群母巢(冲撞甲虫精英)"),未解锁时玩家也读得到"解锁的是什么"。
+ * 精英条目把底敌型名带进括号(「虫群母巢(冲撞甲虫精英)」),未解锁时玩家也读得到"解锁的是什么"。
+ * 括号格式走 `ui:codex.elite.name`(09 号迁移结算界面时会连其它文案一起收进 t())。
  */
 export function collectionItemName(entry: UnlockEntry): string {
   switch (entry.kind) {
@@ -265,7 +267,9 @@ export function collectionItemName(entry: UnlockEntry): string {
       return edictName(entry.type);
     case UNLOCK_ELITE: {
       const base = eliteBaseName(entry);
-      return base === null ? unlockName(entry) : `${unlockName(entry)}(${base}精英)`;
+      return base === null
+        ? unlockName(entry)
+        : t('ui:codex.elite.name', { name: unlockName(entry), base });
     }
     default:
       return unlockName(entry);
