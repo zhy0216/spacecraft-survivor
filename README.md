@@ -11,7 +11,8 @@
 ```bash
 npm install
 npm run dev      # http://localhost:5173 —— 玩家形态,直接开玩
-npm test         # 单测:RNG / 对象池 / 空间哈希 / World 确定性
+npm test         # 单测:RNG / 对象池 / 空间哈希 / World 确定性 / i18n 质量门禁
+npm run test:i18n # 只跑 i18n 专项门禁(也是 npm test 的一部分)
 npm run build    # tsc 类型检查 + 产物构建
 ```
 
@@ -45,6 +46,18 @@ npm run build    # tsc 类型检查 + 产物构建
 
 **开发模式**:URL 加 `?debug` 恢复灰盒调参面板(实体数量、手感参数、波次读数、压测 1000 敌)与 `· dev` 页签。
 `?seed=123` 指定种子 —— 同 seed 两次运行、同 tick 的 checksum 必须一致。
+`?locale=pseudo`(仅开发模式)切到**伪语言**(`en-XA`):英文文案原地膨胀 30–40%,专用于布局压力测试。
+
+## 语言 / i18n
+
+支持 **简体中文(zh-CN,默认)** 与 **English(en)** 两种语言;`自动` 档跟随系统语言。
+语言设置在 **标题 / 暂停 → 设置 → 语言**(三档循环:自动 → 简体中文 → English),偏好持久化、切换即时生效、
+战斗中切换不打断战斗。
+
+给玩家加文案的完整规则、术语表、伪语言用法与人工验收清单见 [`docs/i18n.md`](docs/i18n.md) ——
+一句话:**文案一律走 `t()`,两种语言都写,翻译串只进 `textContent`,sim/data/core 不碰 i18n**,
+这些由 `npm test` 里的 i18n 质量门禁(硬编码中文 AST 扫描 / key 与插值 parity / 依赖边界 /
+跨语言确定性 / 存储回归)自动把关。
 
 ## 架构三铁律
 

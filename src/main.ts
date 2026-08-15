@@ -35,7 +35,14 @@ import { isTyping } from './core/isTyping';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
-import { changeLocale, currentLocale, initI18n, resolveEffectiveLocale, t } from './i18n';
+import {
+  activatePseudo,
+  changeLocale,
+  currentI18nLanguage,
+  initI18n,
+  resolveEffectiveLocale,
+  t,
+} from './i18n';
 import { registerLocaleAware, refreshAllLocaleAware } from './i18n/registry';
 import type { LanguagePreference } from './i18n';
 import { audioBus } from './render/audio';
@@ -85,12 +92,21 @@ const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 2
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 /**
+ * 伪语言(?locale=pseudo):仅开发环境(import.meta.env.DEV)可用的界面压力测试工具,
+ * 由英文资源膨胀生成(en-XA),不写入设置、不进正式语言列表(见 src/i18n/pseudo.ts)。
+ * 优先于设置里的语言偏好;生产构建无视这一参数 —— 玩家拿到的是设置里的正常语言。
+ */
+const PSEUDO_REQUESTED =
+  import.meta.env.DEV && new URLSearchParams(location.search).get('locale') === 'pseudo';
+
+/**
  * 把当前生效语言同步到 document 的"浏览器级显示设置":
- * html lang 供屏幕阅读器/拼写检查/字体选型用,dir 先把接口留好(两种语言都是 ltr),
- * document.title 走资源里的本地化基底 + 开发模式标记。**只读当前语言,不触发切换**。
+ * html lang 供屏幕阅读器/拼写检查/字体选型用(伪语言时是合法的 BCP47 标签 en-XA),
+ * dir 先把接口留好(两种语言都是 ltr),document.title 走资源里的本地化基底 + 开发模式标记。
+ * **只读当前语言,不触发切换**。
  */
 function applyDocumentLocale(): void {
-  document.documentElement.lang = currentLocale();
+  document.documentElement.lang = currentI18nLanguage();
   document.documentElement.dir = 'ltr';
   // · dev 是开发标记,不翻译
   document.title = DEBUG ? `${t('ui:title.base')} · dev` : t('ui:title.base');
@@ -124,8 +140,13 @@ async function boot(): Promise<void> {
   applySettings(settings);
   // 语言:**先解析偏好、再 await initI18n,之后才轮到任何 UI 被创建** ——
   // 不然首屏会先闪一遍默认语言再换过来(标题/暂停/设置页都只建一次,没法靠销毁重建补救)。
-  // auto 在这里现读 navigator.languages,所以"浏览器偏好英文 + 设置 auto"的第一帧就是英文
-  await initI18n(resolveEffectiveLocale(settings.language));
+  // auto 在这里现读 navigator.languages,所以"浏览器偏好英文 + 设置 auto"的第一帧就是英文。
+  // ?locale=pseudo(仅 DEV)优先:它是调试工具,不落盘、不经过设置偏好。
+  if (PSEUDO_REQUESTED) {
+    await activatePseudo();
+  } else {
+    await initI18n(resolveEffectiveLocale(settings.language));
+  }
   applyDocumentLocale();
   // 浏览器自动播放策略:AudioContext 只能由用户手势解锁。在首次键盘/点击的同步栈里 resume
   // 一次就摘掉监听(浏览器要求 resume 必须落在手势处理里;之后发声全靠已解锁的 ctx)。

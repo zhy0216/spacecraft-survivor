@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:i18n": "vitest run src/i18n",
     "balance": "vite-node scripts/autobalance.ts"
   },
   "dependencies": {

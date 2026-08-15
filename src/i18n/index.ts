@@ -13,9 +13,10 @@
  * 切换到尚未载入的语言时,先静态加载资源,再 changeLanguage。
  */
 import i18next from 'i18next';
-import type { Resource } from 'i18next';
+import type { InitOptions, Resource } from 'i18next';
 import type { LanguagePreference, SupportedLocale } from './locale';
 import { SUPPORTED_LOCALES, normalizeLocale, resolveLanguage } from './locale';
+import { createPseudoBundle, PSEUDO_LOCALE } from './pseudo';
 
 const NAMESPACES = ['common', 'ui', 'content', 'story'] as const;
 export type NamespaceId = (typeof NAMESPACES)[number];
@@ -69,10 +70,18 @@ export async function initI18n(locale: SupportedLocale): Promise<void> {
     'zh-CN': fallbackBundle,
     [locale]: primaryBundle,
   };
-  await i18next.init({
-    lng: locale,
+  await i18next.init(sharedInitOptions(locale, resources));
+  initialized = true;
+}
+
+/** init 的公共配置:正式初始化与伪语言初始化共用同一份选项,免得两处漂移。 */
+function sharedInitOptions(lng: string, resources: Resource): InitOptions {
+  return {
+    lng,
     fallbackLng: 'zh-CN',
-    supportedLngs: [...SUPPORTED_LOCALES],
+    // supportedLngs 里允许 en-XA 存在,但 en-XA 不在 SUPPORTED_LOCALES 里 ——
+    // 那是开发/测试的伪语言,currentLocale() 仍把它归一成 'en',设置列表看不到它。
+    supportedLngs: [...SUPPORTED_LOCALES, PSEUDO_LOCALE],
     ns: [...NAMESPACES],
     defaultNS: 'common',
     load: 'currentOnly',
@@ -90,8 +99,38 @@ export async function initI18n(locale: SupportedLocale): Promise<void> {
       // escapeValue: false —— 安全前提见文件头注释:翻译字符串只进 textContent,绝不进 innerHTML。
       escapeValue: false,
     },
-  });
-  initialized = true;
+  };
+}
+
+/**
+ * 伪语言(en-XA):由英文资源原地膨胀生成(见 pseudo.ts),仅开发/测试用。
+ * 入口在 main.ts 的 `?locale=pseudo`(只认 DEV);不写设置、不进语言列表。
+ * 与 initI18n 同一条启动纪律:先 await 本函数、再建任何 UI。
+ * 已初始化时调用视为"切到伪语言"(与 activateLocale 同一条幂等路径)。
+ */
+export async function activatePseudo(): Promise<void> {
+  const [fallbackBundle, enBundle] = await Promise.all([
+    ensureLoaded('zh-CN'),
+    ensureLoaded('en'),
+  ]);
+  const pseudoBundle = createPseudoBundle(enBundle);
+  if (!initialized) {
+    // i18next 实例在 init 之前还没有 addResourceBundle(资源方法随 init 就位),
+    // 首启直接走 init 的 resources 参数注册 en-XA 即可。
+    await i18next.init(
+      sharedInitOptions(PSEUDO_LOCALE, {
+        'zh-CN': fallbackBundle,
+        [PSEUDO_LOCALE]: pseudoBundle,
+      }),
+    );
+    initialized = true;
+    return;
+  }
+  for (const ns of NAMESPACES) {
+    const nsBundle = pseudoBundle[ns];
+    if (nsBundle !== undefined) i18next.addResourceBundle(PSEUDO_LOCALE, ns, nsBundle, true, true);
+  }
+  await i18next.changeLanguage(PSEUDO_LOCALE);
 }
 
 /** 载入目标语言包、灌进 store,再切换语言。 */
@@ -118,6 +157,15 @@ export async function changeLocale(locale: SupportedLocale): Promise<void> {
 export function currentLocale(): SupportedLocale {
   const raw = i18next.resolvedLanguage ?? i18next.language ?? 'zh-CN';
   return normalizeLocale(raw) ?? 'zh-CN';
+}
+
+/**
+ * i18next 实例当前生效的语言标签(原始值,不做归一)。
+ * 常规语言下与 currentLocale() 一致;伪语言激活时是 'en-XA' ——
+ * 供 documentElement.lang(BCP47 合法标签)这类"要原始标签"的地方使用。
+ */
+export function currentI18nLanguage(): string {
+  return i18next.resolvedLanguage ?? i18next.language ?? 'zh-CN';
 }
 
 /**
@@ -153,3 +201,4 @@ export { t } from 'i18next';
 export type { SupportedLocale, LanguagePreference } from './locale';
 export type { LocaleAware, DeepRecord } from './types';
 export { registerLocaleAware, refreshAllLocaleAware } from './registry';
+export { createPseudoBundle, isPseudoLocale, PSEUDO_LOCALE } from './pseudo';
