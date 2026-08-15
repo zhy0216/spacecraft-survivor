@@ -13,6 +13,7 @@ import { t } from '../../i18n';
 import { AFFIXES } from '../../data/affixes';
 import { ENEMIES, KIND_BOSS } from '../../data/enemies';
 import { EDICTS } from '../../data/edicts';
+import { MERGES } from '../../data/merges';
 import { THR_AMMO, THR_CHARGE, THR_HEAT, TOWERS } from '../../data/towers';
 import { WAVE_SEGMENTS } from '../../data/waves';
 
@@ -38,6 +39,19 @@ export function towerName(type: number): string {
   const slug = TOWERS[type]?.slug;
   if (slug === undefined) return t('content:errors.unknownTower', { type });
   return t(`content:towers.${slug as TowerSlug}.name`);
+}
+
+/**
+ * 玩家看到的武器名:合成武器不改名 —— 合到 3★ 变身后的槽位仍显示基础武器名
+ * (用户口径「三星武器不改名字,自动机炮 3★ 还是叫自动机炮」)。
+ * 合成武器的独立名字(风暴机炮等)只活在数值表/翻译表里,不进玩家文案;
+ * 槽位、战报、图鉴一律走这里,towerName 只留给"这一型本身叫什么"(卡片标题、血统反查)。
+ */
+export function weaponDisplayName(type: number): string {
+  for (const r of MERGES) {
+    if (r.result === type) return towerName(r.base);
+  }
+  return towerName(type);
 }
 
 /** 敌名:ENEMIES[kind].slug → content.enemies.<slug>.name;KIND_BOSS 走 bossName;越界 → 本地化错误 */

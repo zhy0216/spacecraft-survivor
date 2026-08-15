@@ -77,7 +77,7 @@ import {
   type ShipDiagramState,
   type ShipDiagramUi,
 } from './shipDiagram';
-import { edictName, towerName } from './presentation/contentText';
+import { edictName, towerName, weaponDisplayName } from './presentation/contentText';
 import { edictDesc } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
@@ -565,16 +565,12 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     }
     if (c1 === 2) {
       if (c2 === 2) {
-        notes.push(
-          mergeResult >= 0
-            ? t('ui:refit.note.buyChainThree', { stars: '★'.repeat(3), name: towerName(mergeResult) })
-            : t('ui:refit.note.buyChainThreePlain', { stars: '★'.repeat(3) }),
-        );
+        notes.push(t('ui:refit.note.buyChainThreePlain', { stars: '★'.repeat(3) }));
       } else {
         notes.push(t('ui:refit.note.buyFuse', { stars: '★'.repeat(2) }));
       }
     } else if (mergeResult >= 0 && c2 === 2) {
-      notes.push(t('ui:refit.note.fuseOneMore', { stars: '★'.repeat(2), name: towerName(mergeResult) }));
+      notes.push(t('ui:refit.note.fuseOneMore', { stars: '★'.repeat(2) }));
     }
     return notes;
   }
@@ -749,16 +745,16 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     };
   }
 
-  /** 买成之后的合成尾巴:'' / ' 合到 ★★' / ' 合 ★★★ 变身「…」' —— 独立成函数,买入回执与
-   * 换装回执共用同一份(todo 07 修掉旧版对「已购入：」的字符串切片:切片在翻译下必断) */
+  /** 买成之后的合成尾巴:'' / ' 合到 ★★' / ' 合到 ★★★' —— 独立成函数,买入回执与
+   * 换装回执共用同一份(todo 07 修掉旧版对「已购入：」的字符串切片:切片在翻译下必断)。
+   * 合到 ★★★ 变身成合成武器时也只报「合到 ★★★」:玩家看到的武器名不变(用户口径
+   * 「三星武器不改名字」),星级本身就说明强化。 */
   function weaponFusionSuffix(type: number, before: { max: number; result: number }): string {
     const result = mergeResultOf(type);
     const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
-    if (afterResult > before.result) {
-      return t('ui:refit.receipt.transformSuffix', { stars: '★'.repeat(3), name: towerName(result) });
-    }
-    const afterMax = slotMaxStars(world.weapons, type);
-    if (afterMax > before.max) return t('ui:refit.receipt.fusedSuffix', { stars: '★'.repeat(afterMax) });
+    // 变身 = 合成结果槽从无到有,报 ★★★;普通升星照槽里最高星报
+    const stars = afterResult > before.result ? 3 : slotMaxStars(world.weapons, type);
+    if (stars > before.max) return t('ui:refit.receipt.fusedSuffix', { stars: '★'.repeat(stars) });
     return '';
   }
 
@@ -807,7 +803,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const oldSlot = world.weapons[slotIndex];
     const oldName =
       oldSlot && oldSlot.type >= 0
-        ? `${towerName(oldSlot.type)} ${'★'.repeat(oldSlot.stars)}`
+        ? `${weaponDisplayName(oldSlot.type)} ${'★'.repeat(oldSlot.stars)}`
         : null;
     const before = weaponBefore(pending.type);
     const code = world.buyShopWeapon(pending.index, slotIndex);

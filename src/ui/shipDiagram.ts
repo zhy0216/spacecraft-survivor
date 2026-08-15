@@ -43,7 +43,7 @@ import {
 import { tuning } from '../sim/config';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
-import { edictName, throttleFamilyName, towerName } from './presentation/contentText';
+import { edictName, throttleFamilyName, weaponDisplayName } from './presentation/contentText';
 import { edictScopeLabel } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
@@ -503,13 +503,13 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
           // 换装预览:旧的划掉、新的顶上 —— 玩家点下去之前就看得到自己拿什么换什么
           const old = document.createElement('div');
           old.style.cssText = `${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through;`;
-          old.textContent = `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
+          old.textContent = `${weaponDisplayName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
           chip.appendChild(old);
         }
         const ghostName = document.createElement('div');
         ghostName.style.cssText = `${NAME_CSS}color:${SEL_COLOR};`;
         ghostName.textContent =
-          (gdef === undefined ? t('ui:slot.unknownWeapon', { type: ghost.type }) : towerName(ghost.type)) +
+          (gdef === undefined ? t('ui:slot.unknownWeapon', { type: ghost.type }) : weaponDisplayName(ghost.type)) +
           ` ${'★'.repeat(ghost.stars)}`;
         chip.appendChild(ghostName);
         if (!equipped) {
@@ -526,7 +526,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
         glyph.style.cssText = `color:${towerTintCss(equipped.type)};`;
         glyph.textContent = towerGlyph(equipped.type);
         const nameText = document.createElement('span');
-        nameText.textContent = `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
+        nameText.textContent = `${weaponDisplayName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
         name.append(glyph, nameText);
         chip.appendChild(name);
         const meta = document.createElement('div');

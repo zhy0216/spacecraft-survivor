@@ -14,7 +14,7 @@ import { t } from '../i18n';
 import { audioBus } from '../render/audio';
 import type { World } from '../sim/world';
 import { createShipDiagram, slotFacingName, type ShipDiagramUi } from './shipDiagram';
-import { throttleFamilyName, towerName } from './presentation/contentText';
+import { throttleFamilyName, weaponDisplayName } from './presentation/contentText';
 
 const ROOT_CSS =
   'position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;' +
@@ -143,5 +143,5 @@ export function slotSummary(world: World, slot: number): string {
   if (!s || s.type < 0) return `${facing} · ${t('ui:slot.empty')}`;
   const def = TOWERS[s.type];
   if (!def) return `${facing} · ${t('ui:slot.unknownTower', { type: s.type })}`;
-  return `${facing} · ${towerName(s.type)} ${'★'.repeat(s.stars)} · ${throttleFamilyName(def.throttle)}`;
+  return `${facing} · ${weaponDisplayName(s.type)} ${'★'.repeat(s.stars)} · ${throttleFamilyName(def.throttle)}`;
 }

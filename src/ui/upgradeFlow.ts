@@ -31,7 +31,7 @@ import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT
 import { audioBus } from '../render/audio';
 import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
-import { towerName } from './presentation/contentText';
+import { weaponDisplayName } from './presentation/contentText';
 import { edictDesc } from './presentation/edictText';
 import { optionLabel } from './presentation/upgradeText';
 
@@ -628,19 +628,20 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   /**
    * 取用成功后的回执文案,按两类各说各的话。**在 takeUpgrade 之后调用**,星级/层数
    * 一律现读 World —— 卡片承诺的是"点下去之后",回执说的就是"点下去之后"。
-   * 新武器卡按"点前 → 点后"的差说话:落了新 ★(获得)/ 三合一升星(合到 ★★/★★★)/
-   * 合到 ★★★ 变身(名字直取合成结果)。beforeMax/beforeResult 是点卡前的快照。
+   * 新武器卡按"点前 → 点后"的差说话:落了新 ★(获得)/ 三合一升星(合到 ★★/★★★)。
+   * 合到 ★★★ 变身成合成武器时也只报"合到 ★★★" —— 玩家看到的武器名不变
+   * (用户口径「三星武器不改名字」),星级本身就说明强化。beforeMax/beforeResult 是点卡前的快照。
    */
   function successToast(opt: UpgradeOption, beforeMax: number, beforeResult: number): string {
     const label = optionLabel(opt);
     if (opt.kind === OFFER_NEW_WEAPON) {
       const result = mergeResultOf(opt.type);
       const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
-      if (afterResult > beforeResult) {
-        return tDynamic('ui:upgrade.toast.transformed', { label, name: towerName(result) });
+      // 变身 = 合成结果槽从无到有:与普通升星同一条回执,只报 ★★★(名字不变,没别的可报)
+      const stars = afterResult > beforeResult ? 3 : slotMaxStars(world.weapons, opt.type);
+      if (stars >= 2 && stars > beforeMax) {
+        return tDynamic('ui:upgrade.toast.fusedTo', { label, stars: '★'.repeat(stars) });
       }
-      const afterMax = slotMaxStars(world.weapons, opt.type);
-      if (afterMax > beforeMax) return tDynamic('ui:upgrade.toast.fusedTo', { label, stars: '★'.repeat(afterMax) });
       return tDynamic('ui:upgrade.toast.gotWeapon', { label });
     }
     // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
@@ -715,7 +716,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
         ? tDynamic('ui:upgrade.picker.slotUnknown', { i, type: slot.type })
         : tDynamic('ui:upgrade.picker.slotTaken', {
             i,
-            name: towerName(slot.type),
+            name: weaponDisplayName(slot.type),
             stars: '★'.repeat(slot.stars),
           });
     }

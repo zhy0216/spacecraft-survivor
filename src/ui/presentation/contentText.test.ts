@@ -19,6 +19,7 @@ import {
   THR_HEAT,
   TOWER_AUTOCANNON,
   TOWER_MISSILE_NEST,
+  TOWER_STORM_CANNON,
   TOWERS,
 } from '../../data/towers';
 import { WAVE_SEGMENTS } from '../../data/waves';
@@ -31,6 +32,7 @@ import {
   throttleFamilyName,
   towerName,
   waveSegmentName,
+  weaponDisplayName,
 } from './contentText';
 
 describe('contentText presenter', () => {
@@ -78,6 +80,17 @@ describe('contentText presenter', () => {
     expect(affixDescription(999)).toBe('未知词缀 #999');
     expect(waveSegmentName(999)).toBe('未知航段 #999');
     expect(throttleFamilyName(999)).toBe('未知节流系 #999');
+  });
+
+  it('weaponDisplayName:合成武器不改名 —— 显示名 = 基础武器名,基础武器原样', async () => {
+    // 用户口径「三星武器不改名字」:风暴机炮(3× 自动机炮合 ★★★ 变身)显示名仍是自动机炮
+    expect(weaponDisplayName(TOWER_STORM_CANNON)).toBe(towerName(TOWER_AUTOCANNON));
+    expect(weaponDisplayName(TOWER_AUTOCANNON)).toBe('自动机炮');
+    expect(weaponDisplayName(TOWER_MISSILE_NEST)).toBe('导弹巢');
+    expect(weaponDisplayName(999)).toBe('未知武器 #999');
+    await changeLocale('en');
+    expect(weaponDisplayName(TOWER_STORM_CANNON)).toBe('Auto Cannon');
+    expect(weaponDisplayName(TOWER_MISSILE_NEST)).toBe('Missile Nest');
   });
 
   it('en 越界错误同样本地化', async () => {

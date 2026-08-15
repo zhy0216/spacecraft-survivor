@@ -204,7 +204,6 @@ export const ui: DeepRecord<typeof zhUi> = {
     toast: {
       gotWeapon: 'Got: {{label}} ★',
       fusedTo: '{{label}} fused to {{stars}}',
-      transformed: '{{label}} ★★★ transforms into 「{{name}}」',
       edictActive: 'Edict active: {{label}}',
       edictLevel: '{{label}} ×{{lv}}',
     },
@@ -260,15 +259,13 @@ export const ui: DeepRecord<typeof zhUi> = {
       mountEmpty: 'Mounts to the empty {{facing}} slot',
       slotFullAbsorb: 'Slots full · fuses with two ★, no replacement',
       slotFullReplace: 'Slots full · must replace one',
-      buyChainThree: 'Buy to chain-fuse {{stars}} into 「{{name}}」',
       buyChainThreePlain: 'Buy to chain-fuse {{stars}}',
       buyFuse: 'Buy to fuse {{stars}}',
-      fuseOneMore: 'One more fuses {{stars}} into 「{{name}}」',
+      fuseOneMore: 'One more fuses {{stars}}',
     },
     receipt: {
       purchased: 'Bought: {{name}}',
       fusedSuffix: ' fused to {{stars}}',
-      transformSuffix: ' fuses {{stars}} into 「{{name}}」',
       swapped: 'Swapped: {{name}}{{fusion}} → {{oldName}}',
       edict: 'Bought: {{name}}',
       edictFallback: 'Edict',
@@ -298,7 +295,7 @@ export const ui: DeepRecord<typeof zhUi> = {
     },
     weapon: {
       head: {
-        fusion: '{{name}} · fused from {{base}} {{stars}} · {{family}}',
+        fusion: '{{name}} · fused at {{stars}} · {{family}}',
       },
       unknown: 'Unknown weapon #{{type}}',
     },

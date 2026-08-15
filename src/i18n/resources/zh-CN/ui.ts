@@ -201,7 +201,6 @@ export const ui = {
     toast: {
       gotWeapon: '获得:{{label}} ★',
       fusedTo: '{{label}} 合到 {{stars}}',
-      transformed: '{{label}} 合 ★★★ 变身「{{name}}」',
       edictActive: '法令生效:{{label}}',
       edictLevel: '{{label}} ×{{lv}}',
     },
@@ -258,15 +257,13 @@ export const ui = {
       mountEmpty: '装到「{{facing}}」空槽',
       slotFullAbsorb: '槽已满 · 与两把 ★ 三合一,无需替换',
       slotFullReplace: '槽已满 · 需替换一把',
-      buyChainThree: '买下连合 {{stars}} 变身「{{name}}」',
       buyChainThreePlain: '买下连合 {{stars}}',
       buyFuse: '买下合成 {{stars}}',
-      fuseOneMore: '再合一把 {{stars}} 变身「{{name}}」',
+      fuseOneMore: '再合一把 {{stars}}',
     },
     receipt: {
       purchased: '已购入：{{name}}',
       fusedSuffix: ' 合到 {{stars}}',
-      transformSuffix: ' 合 {{stars}} 变身「{{name}}」',
       swapped: '已换装：{{name}}{{fusion}} → {{oldName}}',
       edict: '已购入：{{name}}',
       edictFallback: '法令',
@@ -296,7 +293,7 @@ export const ui = {
     },
     weapon: {
       head: {
-        fusion: '{{name}} · 由{{base}}合{{stars}}变身 · {{family}}',
+        fusion: '{{name}} · 合{{stars}}变身 · {{family}}',
       },
       unknown: '未知武器 #{{type}}',
     },

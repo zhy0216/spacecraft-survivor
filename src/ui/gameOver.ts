@@ -26,7 +26,7 @@ import type { Progress } from '../sim/progress';
 import { RESULT_LOSE, RESULT_WIN } from '../sim/world';
 import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
-import { edictName, enemyName, towerName } from './presentation/contentText';
+import { edictName, enemyName, towerName, weaponDisplayName } from './presentation/contentText';
 import { unlockName } from './presentation/unlockText';
 
 /** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
@@ -258,7 +258,7 @@ export function weaponReportRows(report: { type: number; damage: number }[]): We
   for (const r of report) {
     const dmg = r.damage > 0 && Number.isFinite(r.damage) ? r.damage : 0;
     rows.push({
-      name: towerName(r.type),
+      name: weaponDisplayName(r.type),
       damage: Math.round(dmg),
       ratio: total > 0 ? dmg / total : 0,
     });

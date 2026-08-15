@@ -57,7 +57,7 @@ import {
   edictName,
   enemyName,
   throttleFamilyName,
-  towerName,
+  weaponDisplayName,
 } from './presentation/contentText';
 import { behaviorName } from './presentation/behaviorText';
 import { edictSummaryText } from './presentation/edictText';
@@ -263,12 +263,12 @@ export function starLine(def: TowerDef, stars: number): string {
 export function weaponHover(type: number): string[] {
   const def = TOWERS[type];
   if (def === undefined) return [t('ui:codex.weapon.unknown', { type })];
-  let head = `${towerName(type)} · ${throttleFamilyName(def.throttle)}`;
+  let head = `${weaponDisplayName(type)} · ${throttleFamilyName(def.throttle)}`;
   for (const r of MERGES) {
     if (r.result === type) {
+      // 血统行不报底座名:合成武器显示名 = 底座名(用户口径「三星武器不改名字」),报了就是自己合自己
       head = t('ui:codex.weapon.head.fusion', {
-        name: towerName(type),
-        base: towerName(r.base),
+        name: weaponDisplayName(type),
         stars: '★'.repeat(3),
         family: throttleFamilyName(def.throttle),
       });
@@ -356,7 +356,7 @@ export function codexRows(progress: Progress): CodexSection[] {
         mask,
         UNLOCK_TOWER,
         type,
-        towerName(type),
+        weaponDisplayName(type),
         weaponHover(type),
         towerArt(type),
         String(type),

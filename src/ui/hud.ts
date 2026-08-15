@@ -29,7 +29,7 @@ import type { Enemy, World } from '../sim/world';
 import { t } from '../i18n';
 import { formatNumber } from '../i18n/format';
 import { formatDuration } from './gameOver';
-import { bossName, edictName, throttleFamilyName, towerName, waveSegmentName } from './presentation/contentText';
+import { bossName, edictName, throttleFamilyName, waveSegmentName, weaponDisplayName } from './presentation/contentText';
 import { edictDesc, edictScopeLabel } from './presentation/edictText';
 
 const OK_COLOR = '#9adcff';
@@ -1049,7 +1049,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       }
       if (!firstSeen) continue;
       totalDps += dps;
-      const name = def === undefined ? '?' : towerName(slot.type);
+      const name = def === undefined ? '?' : weaponDisplayName(slot.type);
       const b = weaponBoxes[boxCursor++]!;
       b.box.style.display = 'block';
       // 星级 + 所属系:同型合并成一格印 ×N,星级取同型最高那把(与 DPS 求和同一条合并口径)

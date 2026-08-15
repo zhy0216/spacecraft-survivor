@@ -20,7 +20,6 @@ import {
   EDICT_OVERDRIVE,
 } from '../data/edicts';
 import {
-  TOWER_ANNIHILATION,
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_RAILGUN,
@@ -676,7 +675,8 @@ describe('createRefitFlow 纯商店流程', () => {
     fire(refreshOf(dom), 'click'); // 重画货架(第 0 格现在是磁轨炮)
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     expect(toastOf(dom).textContent).toBe(`已购入：${towerName(TOWER_RAILGUN)} 合到 ★★`);
-    // 第三档:2× 1★ + 2× 2★,再买 1 把 → 3× 1★ 合到 2★、3× 2★ 合到 3★ 当场变身
+    // 第三档:2× 1★ + 2× 2★,再买 1 把 → 3× 1★ 合到 2★、3× 2★ 合到 3★ 当场变身;
+    // 变身只报「合到 ★★★」不报合成武器名 —— 三星武器不改名字,名字还是磁轨炮
     world.shopWeapons[0] = TOWER_RAILGUN;
     world.weapons[0]!.type = TOWER_RAILGUN;
     world.weapons[0]!.stars = 1;
@@ -689,9 +689,7 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weaponCode = 0;
     fire(refreshOf(dom), 'click');
     fire(cardsOf(dom).children[0] as StubEl, 'click');
-    expect(toastOf(dom).textContent).toBe(
-      `已购入：${towerName(TOWER_RAILGUN)} 合 ★★★ 变身「${towerName(TOWER_ANNIHILATION)}」`,
-    );
+    expect(toastOf(dom).textContent).toBe(`已购入：${towerName(TOWER_RAILGUN)} 合到 ★★★`);
   });
 
   it('换装回执照报旧武器;最高星级没涨就不带合成尾巴', () => {

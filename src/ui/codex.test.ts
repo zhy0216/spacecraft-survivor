@@ -53,7 +53,7 @@ import {
   weaponHover,
   type CodexArt,
 } from './codex';
-import { affixName, bossName, enemyName } from './presentation/contentText';
+import { affixName, bossName, enemyName, towerName, weaponDisplayName } from './presentation/contentText';
 import { behaviorName } from './presentation/behaviorText';
 import { edictSummaryText } from './presentation/edictText';
 import { unlockConditionText } from './presentation/unlockText';
@@ -222,11 +222,14 @@ describe('codexRows', () => {
     expect(mortar.hover[1]).not.toContain('伤害 0');
   });
 
-  it('合成武器经 MERGES 反查底座名并复用血统炮头(数据表改名图鉴跟着走)', () => {
+  it('合成武器不改名:行名与悬停都显示底座名(三星武器还是叫原名字),血统炮头照旧复用', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     const aurora = weapons.find((r) => r.id === String(TOWER_AURORA))!;
-    expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合★★★变身 · 过热系');
-    // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"底座合★★★"两相印证
+    // 显示名 = 底座名(用户口径「三星武器不改名字」),血统行只报"合★★★变身"不再重复底座
+    expect(aurora.name).toBe(towerName(TOWER_LASER));
+    expect(aurora.name).toBe(weaponDisplayName(TOWER_AURORA));
+    expect(aurora.hover[0]).toBe(`${towerName(TOWER_LASER)} · 合★★★变身 · 过热系`);
+    // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"合★★★"两相印证
     expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
   });
 
@@ -333,9 +336,9 @@ describe('codex 英文输出(08 号)', () => {
     const auto = weaponHover(TOWER_AUTOCANNON);
     expect(auto[0]).toBe('Auto Cannon · Ammo-fed');
     expect(auto[1]).toBe(starExpectedEn(TOWERS[TOWER_AUTOCANNON]!, 1, false));
-    // 合成武器:血统走 ui.codex.weapon.head.fusion
+    // 合成武器:血统走 ui.codex.weapon.head.fusion,名字仍是底座名(三星武器不改名字)
     const aurora = weaponHover(TOWER_AURORA);
-    expect(aurora[0]).toBe('Aurora Array · fused from Laser Prism ★★★ · Heat-managed');
+    expect(aurora[0]).toBe('Laser Prism · fused at ★★★ · Heat-managed');
     // 未知型号:本地化兜底且含原始编号
     expect(weaponHover(999)[0]).toBe('Unknown weapon #999');
   });
