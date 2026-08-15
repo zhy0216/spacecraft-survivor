@@ -48,7 +48,8 @@ export interface Settings {
  * 出厂设置。**与各处代码里原本写死的值一致**(音量 0.8 = audio.ts 的 masterVolume 初值,
  * 震屏/飘字/顿帧都是原本恒开)—— 于是"没有设置文件的新玩家"与"设置全默认的老玩家"
  * 玩到的是同一个游戏,设置系统上线不改变任何既有手感。语言默认 auto:
- * 没有明确说过要哪种语言的人,理应跟着系统语言走。
+ * 没有明确说过要哪种语言的人,理应跟着系统语言走 —— 而 auto 探测不到
+ * 中文时回落英文(见 i18n/locale.ts 的 resolveLanguage:默认英文,除非浏览器检测到中文)。
  */
 export function createSettings(): Settings {
   return {

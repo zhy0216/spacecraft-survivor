@@ -152,11 +152,11 @@ export async function changeLocale(locale: SupportedLocale): Promise<void> {
 }
 
 /**
- * 当前生效语言。实例未初始化 / 读到不支持的值时兜回 zh-CN。
+ * 当前生效语言。实例未初始化 / 读到不支持的值时兜回 en(默认英文,与 resolveLanguage 同口径)。
  */
 export function currentLocale(): SupportedLocale {
-  const raw = i18next.resolvedLanguage ?? i18next.language ?? 'zh-CN';
-  return normalizeLocale(raw) ?? 'zh-CN';
+  const raw = i18next.resolvedLanguage ?? i18next.language ?? 'en';
+  return normalizeLocale(raw) ?? 'en';
 }
 
 /**
@@ -165,7 +165,7 @@ export function currentLocale(): SupportedLocale {
  * 供 documentElement.lang(BCP47 合法标签)这类"要原始标签"的地方使用。
  */
 export function currentI18nLanguage(): string {
-  return i18next.resolvedLanguage ?? i18next.language ?? 'zh-CN';
+  return i18next.resolvedLanguage ?? i18next.language ?? 'en';
 }
 
 /**

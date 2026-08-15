@@ -3,7 +3,7 @@
  * ① 显式 zh-CN / en 直接采用 —— 玩家手动选过就该听玩家的,不探测系统;
  * ② auto 按 navigator.languages 的**顺序**扫描 —— 浏览器偏好列表本身就是用户优先级,
  *    命中第一个可支持的就定,而不是像旧版那样只看第一个;
- * ③ 一个都命中不了(含 Node 没有 navigator)→ 回落 zh-CN,绝不抛错。
+ * ③ 一个都命中不了(含 Node 没有 navigator)→ 回落 en —— 默认英文,除非浏览器检测到中文,绝不抛错。
  * detectSystemLanguages 是唯一碰环境的一小步,测它时临时替换 globalThis.navigator,测完还原。
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -64,10 +64,10 @@ describe('语言解析:resolveLanguage 偏好 → 具体语言', () => {
     expect(resolveLanguage('auto', ['en-GB'])).toBe('en');
   });
 
-  it('auto 一个都不命中 → 回落 zh-CN(Node 没有 navigator / detected 为 null 也走这里)', () => {
-    expect(resolveLanguage('auto', ['fr-FR', 'ja-JP'])).toBe('zh-CN');
-    expect(resolveLanguage('auto', null)).toBe('zh-CN');
-    expect(resolveLanguage('auto', [])).toBe('zh-CN');
+  it('auto 一个都不命中 → 回落 en(Node 没有 navigator / detected 为 null 也走这里)', () => {
+    expect(resolveLanguage('auto', ['fr-FR', 'ja-JP'])).toBe('en');
+    expect(resolveLanguage('auto', null)).toBe('en');
+    expect(resolveLanguage('auto', [])).toBe('en');
   });
 
   it('isLanguagePreference:只认三张合法牌(auto / zh-CN / en),老设置里的怪字符串进不来', () => {
@@ -91,16 +91,16 @@ describe('语言解析:detectSystemLanguages 与 resolveEffectiveLocale', () => 
     expect(resolveEffectiveLocale('auto')).toBe('en');
   });
 
-  it('没有 navigator(Node/测试环境)时返回 null,resolveEffectiveLocale 回落 zh-CN 不抛错', () => {
+  it('没有 navigator(Node/测试环境)时返回 null,resolveEffectiveLocale 回落 en 不抛错', () => {
     delete g.navigator;
     expect(detectSystemLanguages()).toBeNull();
-    expect(resolveEffectiveLocale('auto')).toBe('zh-CN');
+    expect(resolveEffectiveLocale('auto')).toBe('en');
     expect(resolveEffectiveLocale('en')).toBe('en'); // 显式偏好不受影响
   });
 
-  it('navigator 存在但没有 languages(极旧浏览器)→ null 同款回落', () => {
+  it('navigator 存在但没有 languages(极旧浏览器)→ null 同款回落 en', () => {
     setNavigator({ language: 'en-US' });
     expect(detectSystemLanguages()).toBeNull();
-    expect(resolveEffectiveLocale('auto')).toBe('zh-CN');
+    expect(resolveEffectiveLocale('auto')).toBe('en');
   });
 });

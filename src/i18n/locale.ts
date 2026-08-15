@@ -32,8 +32,9 @@ export function normalizeLocale(value: string): SupportedLocale | null {
 
 /**
  * 语言偏好 → 具体语言。`'auto'` 时按优先级顺序扫描候选系统标签(detected,
- * 即 navigator.languages 的顺序),命中第一个可支持的语言就定;一个都不命中
- * (包括 Node 环境没有 navigator、detected 为 null)回落默认的 zh-CN。
+ * 即 navigator.languages 的顺序),命中第一个可支持的语言就定。
+ * **默认英文,除非浏览器检测到中文**:一个都不命中(包括 Node 环境没有
+ * navigator、detected 为 null)回落 `'en'` —— zh-CN 只在明确探测到时生效。
  * 显式 `zh-CN` / `en` 不探测系统、原样直出 —— 玩家手动选过就该听玩家的。
  */
 export function resolveLanguage(
@@ -47,5 +48,5 @@ export function resolveLanguage(
       if (locale !== null) return locale;
     }
   }
-  return 'zh-CN';
+  return 'en';
 }
