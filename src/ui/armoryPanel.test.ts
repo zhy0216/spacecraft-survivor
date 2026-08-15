@@ -122,7 +122,8 @@ describe('舰船背包面板', () => {
     const head = diagram.children[0]!;
     const ring = diagram.children[2]!;
     const chipLayer = ring.children[ring.children.length - 1]!;
-    const hullArt = ring.children[ring.children.length - 2]!;
+    // 环里最后一层是卡片、倒数第二层是炮位贴图层,再往前一层才是舰壳图(两层叠放保证可点)
+    const hullArt = ring.children[ring.children.length - 3]!;
     const chips = chipLayer.children;
 
     expect(opened).toBe(1);
@@ -139,6 +140,38 @@ describe('舰船背包面板', () => {
     expect(panel.selected()).toBe(-1);
     expect(world.weapons[0]!.type).toBe(TOWER_LASER);
     expect(world.weapons[2]!.type).toBe(TOWER_AUTOCANNON);
+  });
+
+  it('舰船图上装备的武器在硬点可见,换位后炮位贴图实时跟上', () => {
+    const world = createWorld();
+    const panel = createArmoryPanel({
+      canOpen: () => true,
+      onOpen: () => {},
+      onClose: () => {},
+    });
+    panel.setWorld(world);
+    panel.show();
+
+    const root = dom.ui.children[0]!;
+    const diagram = root.children[0]!;
+    const ring = diagram.children[2]!;
+    const chipLayer = ring.children[ring.children.length - 1]!;
+    const turretLayer = ring.children[ring.children.length - 2]!;
+    const turrets = turretLayer.children;
+    const chips = chipLayer.children;
+
+    // 槽 0 = 自动炮、槽 2 = 激光:炮位贴图按真实朝向落在硬点上,换位前 src 跟着各自槽位走
+    expect(turrets[0]!.style.display).toBe('block');
+    expect(turrets[0]!.style.opacity).toBe('1');
+    expect(turrets[0]!.src).toContain('autocannon');
+    expect(turrets[2]!.style.transform).toContain('rotate(90deg)');
+
+    fire(chips[0]!, 'click');
+    fire(chips[2]!, 'click');
+
+    // 换位后炮头实时换位:槽 0 现在装激光,槽 2 现在装自动炮 —— 不是等关掉面板才更新
+    expect(turrets[0]!.src).toContain('laser');
+    expect(turrets[2]!.src).toContain('autocannon');
   });
 
   it('refreshLocale(05 号):切到 en 后标题/槽位朝向翻新,选择态与交换态原地保留', async () => {

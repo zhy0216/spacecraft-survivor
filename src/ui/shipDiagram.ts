@@ -32,9 +32,15 @@ import {
   towerRange,
 } from '../data/towers';
 import { EDICTS } from '../data/edicts';
-import { SHIP_HULL_ART_URL } from '../render/artUrls';
+import { SHIP_HULL_ART_URL, TOWER_ART_URLS } from '../render/artUrls';
 import { t } from '../i18n';
-import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING, type WeaponSlot } from '../sim/armory';
+import {
+  WEAPON_HARDPOINTS,
+  WEAPON_SLOT_COUNT,
+  WEAPON_SLOT_FACING,
+  type WeaponSlot,
+} from '../sim/armory';
+import { tuning } from '../sim/config';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
 import { edictName, throttleFamilyName, towerName } from './presentation/contentText';
@@ -123,6 +129,26 @@ const WEDGE_MAX_R = 102;
 /** 归一化用的射程区间(px,取自 data/towers 的最短/最远两把)。夹在 [0,1] 后线性映射到半径 */
 const RANGE_MIN = 200;
 const RANGE_MAX = 900;
+
+// —— 炮位贴图(舰壳图上画出"船上那门炮")——
+// 几何口径与 render/renderer 的炮位同步(shipG 局部空间):硬点坐标问 sim/armory 的
+// WEAPON_HARDPOINTS(船心 0,0,+X 船头),再按舰壳图的图面/世界宽度比缩放到本图。
+// 世界里舰壳图宽 = shipLength + CELL×SHIP_HULL_LENGTH_PAD(=48+12×0.72=56.64),
+// 图面上舰壳图宽 154px(HULL_ART_CSS),两者相除 = 每世界 px 在图面上是几 px。
+/** 舰壳图在图面上的显示宽度(px,与 HULL_ART_CSS 的 width 同值) */
+const HULL_ART_PX = 154;
+/** 舰壳图的世界宽度(shipLength + CELL×SHIP_HULL_LENGTH_PAD,renderer 的 hull.width 同口径) */
+const HULL_ART_WORLD_W = tuning.shipLength + (tuning.shipLength / 4) * 0.72;
+/** 世界 px → 图面 px:硬点与炮头尺寸都乘它 */
+const PX_PER_WORLD = HULL_ART_PX / HULL_ART_WORLD_W;
+/** 炮头贴图边长(世界 px = CELL×0.88,renderer 的 SLOT_GLYPH)→ 图面 px */
+const TURRET_PX = (tuning.shipLength / 4) * 0.88 * PX_PER_WORLD;
+/** 炮头的机械转轴在贴图里距顶边 72%(renderer 的 TOWER_HEAD_ANCHOR_Y),旋转以它为原点 */
+const TURRET_ANCHOR_Y = 0.72;
+/** 星级 → 炮头贴图缩放(renderer 的 starScale 同表:1★ 原大、2★ 1.16、3★ 1.32) */
+function turretStarScale(stars: number): number {
+  return stars >= 3 ? 1.32 : stars === 2 ? 1.16 : 1;
+}
 
 const BOARD_CSS =
   'pointer-events:auto;display:flex;flex-direction:column;align-items:center;gap:12px;' +
@@ -301,6 +327,22 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   hullArt.addEventListener('error', () => { hullArt.style.display = 'none'; });
   ring.append(hullEdge, hull, bow, hullArt);
 
+  // —— 炮位贴图层:八个硬点上各放一枚真实炮头贴图,盖在舰壳图上、压在卡片层下 ——
+  // 与槽位卡片同一条生命周期:整局只建一次,paint 只改 src/位置/旋转/显隐。
+  // 贴图加载失败的单枚炮位就地隐藏(与 hullArt 同一条退路,不炸掉整层)。
+  const turretLayer = document.createElement('div');
+  turretLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
+  const turrets: HTMLImageElement[] = [];
+  for (let slot = 0; slot < WEAPON_SLOT_COUNT; slot++) {
+    const img = document.createElement('img');
+    img.style.cssText = 'position:absolute;pointer-events:none;object-fit:contain;';
+    img.alt = '';
+    img.addEventListener('error', () => { img.style.display = 'none'; });
+    turretLayer.appendChild(img);
+    turrets.push(img);
+  }
+  ring.appendChild(turretLayer);
+
   // 槽位卡片:整局只建一次,此后每次 paint 只改文案与描边(与 armoryPanel 同一条生命周期)。
   // 单独装进一层 chipLayer 并**最后挂**:后挂 = 盖在扇形与船体之上(卡片永远可点),
   // 同时"环里最后一层就是八张卡、下标即槽位"成了一条稳定契约 ——
@@ -362,6 +404,41 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
     if (lastState.mode === 'pick') paint(lastWorld, lastState); // 只读态的悬停不改画面,省一次重画
   }
 
+  /** 一枚炮头贴图:按"这一格最终装的是什么"摆到硬点上,朝向 = 槽位射界中心(见文件头)。
+   * 船体局部 +X = 船头、+Y = 右舷(WEAPON_HARDPOINTS),图面上船头朝上、右舷朝右:
+   * 于是硬点 (hx, hy) → 图面 (RING_C + hy·scale, RING_C − hx·scale)(与 hullArt 的 rotate(-90°) 对齐)。
+   * 机械转轴在贴图 72% 处(TOWER_HEAD_ANCHOR_Y),故绕 (50%, 72%) 旋转、该点落在硬点上。 */
+  function paintTurret(index: number, type: number, stars: number, ghost: boolean): void {
+    const img = turrets[index]!;
+    const def = type >= 0 ? TOWERS[type] : undefined;
+    const url = def !== undefined && type >= 0 && type < TOWER_ART_URLS.length ? TOWER_ART_URLS[type] : undefined;
+    if (url === undefined) {
+      img.style.display = 'none';
+      img.src = ''; // 清掉旧 src:隐藏的炮头不该还指着一把已经不在这格的炮
+      return;
+    }
+    const hp = WEAPON_HARDPOINTS[index];
+    if (!hp) {
+      // 硬点表写坏:这一枚炮头不画,不炸掉整层(与 renderer 的 syncWeaponSprites 同一条退路)
+      img.style.display = 'none';
+      img.src = '';
+      return;
+    }
+    const size = TURRET_PX * turretStarScale(stars);
+    const hx = RING_C + hp.y * PX_PER_WORLD;
+    const hy = RING_C - hp.x * PX_PER_WORLD;
+    img.src = url;
+    img.style.display = 'block';
+    img.style.width = `${size}px`;
+    img.style.height = `${size}px`;
+    img.style.left = `${hx - size / 2}px`;
+    img.style.top = `${hy - size * TURRET_ANCHOR_Y}px`;
+    img.style.transformOrigin = '50% 72%';
+    img.style.transform = `rotate(${slotFacingDeg(index)}deg)`;
+    // 幽灵炮头压暗一档:与扇形/卡片的幽灵态同一支"还没买下来"的口径
+    img.style.opacity = ghost ? '.45' : '1';
+  }
+
   /** 一枚射界扇形:conic-gradient 的 0deg = 正上、顺时针为正,与槽位朝向同一口径(见文件头) */
   function paintWedge(index: number, type: number, level: number, ghost: boolean): void {
     const wedge = wedges[index]!;
@@ -404,6 +481,10 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       const facing = slotFacingName(slot);
 
       if (equipped && def && world) totalDps += slotSustainedDps(equipped, def, world.buffs);
+
+      // 炮头贴图按"这一格最终会是什么"画:虚装盖住原有的那把(与扇形/卡片同一份幽灵口径)
+      if (ghost) paintTurret(slot, ghost.type, ghost.stars, true);
+      else paintTurret(slot, equipped?.type ?? -1, equipped?.stars ?? 1, false);
 
       // 扇形按"这一格最终会是什么"画:虚装盖住原有的那把,于是换装前后的射界差是看得见的
       if (ghost) paintWedge(slot, ghost.type, ghost.stars, true);
