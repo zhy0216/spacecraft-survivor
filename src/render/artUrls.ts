@@ -115,9 +115,29 @@ const MISSILE_NEST_HEAD_URL = new URL(
   import.meta.url,
 ).href;
 
+// 星级图鉴试点:自动机炮与激光棱镜先接入独立的 2★/3★ 变体。2★ 是基础炮头的青色描边强化,
+// 3★ 则由 Nano Banana Pro 按合成形态重画成风暴机炮 / 极光阵列；其余型号继续复用基础炮头。
+// 这些变体只服务图鉴预览,战斗层仍使用下方 TOWER_ART_URLS 的常驻炮头。
+const AUTOCANNON_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-8/towers/autocannon-head-star2.png',
+  import.meta.url,
+).href;
+const AUTOCANNON_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-8/towers/autocannon-head-star3.png',
+  import.meta.url,
+).href;
+const LASER_PRISM_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-8/towers/laser-prism-head-star2.png',
+  import.meta.url,
+).href;
+const LASER_PRISM_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-8/towers/laser-prism-head-star3.png',
+  import.meta.url,
+).href;
+
 /**
- * 星级炮头展示倍率:下标 0..2 = 1★..3★。renderer 的炮位贴图按它放大 ——
- * 图鉴的三档缩略图三张同大(星数靠图下标签读,不跟这份倍率,见 ui/codex 的 appendStarThumbs)。
+ * 星级炮头展示倍率:下标 0..2 = 1★..3★。renderer 的战斗炮位贴图按它放大；
+ * 图鉴的三档缩略图统一尺寸,星数靠图下标签读(贴图清单见 TOWER_STAR_ART_URLS)。
  */
 export const TOWER_STAR_HEAD_SCALES = [1, 1.16, 1.32] as const;
 
@@ -135,6 +155,35 @@ export const TOWER_ART_URLS = [
   PLASMA_MORTAR_HEAD_URL, // 焦土骤雨
   POINT_DEFENSE_HEAD_URL, // 荆棘星幕
   MISSILE_NEST_HEAD_URL,
+] as const;
+
+/** 图鉴专用的 1★/2★/3★ 贴图清单,顺序仍严格对应 TOWERS[type]。 */
+const AUTOCANNON_STAR_ART_URLS = [
+  AUTOCANNON_HEAD_URL,
+  AUTOCANNON_HEAD_STAR2_URL,
+  AUTOCANNON_HEAD_STAR3_URL,
+] as const;
+const LASER_PRISM_STAR_ART_URLS = [
+  LASER_PRISM_HEAD_URL,
+  LASER_PRISM_HEAD_STAR2_URL,
+  LASER_PRISM_HEAD_STAR3_URL,
+] as const;
+const SAME_STAR_ART = (url: string): readonly [string, string, string] => [url, url, url];
+
+export const TOWER_STAR_ART_URLS = [
+  AUTOCANNON_STAR_ART_URLS,
+  LASER_PRISM_STAR_ART_URLS,
+  SAME_STAR_ART(ARC_COIL_HEAD_URL),
+  SAME_STAR_ART(RAILGUN_HEAD_URL),
+  SAME_STAR_ART(POINT_DEFENSE_HEAD_URL),
+  SAME_STAR_ART(PLASMA_MORTAR_HEAD_URL),
+  AUTOCANNON_STAR_ART_URLS, // 风暴机炮(合成型号复用血统炮头)
+  LASER_PRISM_STAR_ART_URLS, // 极光阵列
+  SAME_STAR_ART(RAILGUN_HEAD_URL), // 湮灭长矛
+  SAME_STAR_ART(ARC_COIL_HEAD_URL), // 雷霆王冠
+  SAME_STAR_ART(PLASMA_MORTAR_HEAD_URL), // 焦土骤雨
+  SAME_STAR_ART(POINT_DEFENSE_HEAD_URL), // 荆棘星幕
+  SAME_STAR_ART(MISSILE_NEST_HEAD_URL),
 ] as const;
 
 export const SUPPORT_ART_URLS = [

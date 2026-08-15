@@ -37,7 +37,7 @@ import {
   type UnlockEntry,
 } from '../data/unlocks';
 import { MERGES } from '../data/merges';
-import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_STAR_ART_URLS } from '../render/artUrls';
 import { createProgress, type Progress } from '../sim/progress';
 import { changeLocale, initI18n } from '../i18n';
 import {
@@ -204,7 +204,9 @@ describe('codexRows', () => {
     expect(weapons.length).toBe(TOWERS.length - MERGES.length);
     const auto = weapons.find((r) => r.id === String(TOWER_AUTOCANNON))!;
     expect(auto.locked).toBe(false);
-    expect(auto.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[0] });
+    expect(auto.art).toEqual({ kind: 'stars', urls: TOWER_STAR_ART_URLS[0] });
+    expect(auto.art?.kind === 'stars' && auto.art.urls[1]).not.toBe(TOWER_STAR_ART_URLS[0]![0]);
+    expect(auto.art?.kind === 'stars' && auto.art.urls[2]).not.toBe(TOWER_STAR_ART_URLS[0]![0]);
     const def = TOWERS[0]!;
     expect(auto.hover[0]).toBe('自动机炮 · 弹药系');
     expect(auto.hover[1]).toBe(starExpected(def, 1, false));
@@ -235,7 +237,7 @@ describe('codexRows', () => {
     expect(laser.hover[3]).toBe(starExpected(TOWERS[TOWER_AURORA]!, 3, false));
     expect(laser.hover[4]).toBe('★★★ 变身 极光阵列');
     // 贴图仍是底座行自己的血统炮头(round-8 清单)
-    expect(laser.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_LASER] });
+    expect(laser.art).toEqual({ kind: 'stars', urls: TOWER_STAR_ART_URLS[TOWER_LASER] });
   });
 
   it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
@@ -244,7 +246,7 @@ describe('codexRows', () => {
     )!;
     expect(locked.locked).toBe(true);
     expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
-    expect(locked.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_MISSILE_NEST] });
+    expect(locked.art).toEqual({ kind: 'stars', urls: TOWER_STAR_ART_URLS[TOWER_MISSILE_NEST] });
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
       (r) => r.id === String(TOWER_MISSILE_NEST),
     )!;

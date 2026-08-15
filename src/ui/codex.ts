@@ -51,7 +51,7 @@ import {
 } from '../data/unlocks';
 import { WAVE_LOCKED_ELITES } from '../data/waves';
 import { t } from '../i18n';
-import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_STAR_ART_URLS } from '../render/artUrls';
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
 import { EDICT_ICONS, TOWER_ICONS } from './upgradeFlow';
@@ -195,13 +195,13 @@ export function codexUnlockStats(progress: Progress): { unlocked: number; total:
 }
 
 /**
- * 一行的配图。三种来路:真实贴图(PNG,清单与渲染层同源)、星级三档(武器:同一张贴图
- * 三档同大,图下各标 ★/★★/★★★)或程序化 SVG 徽章
+ * 一行的配图。三种来路:真实贴图(PNG,清单与渲染层同源)、星级三档(武器:每档可以
+ * 使用自己的贴图,图下仍标 ★/★★/★★★)或程序化 SVG 徽章
  * (数据表先加了新型而贴图还没跟上时:字形 + 数值表 tint)。null = 没配到图,DOM 只摆文字。
  */
 export type CodexArt =
   | { kind: 'img'; urls: string[] }
-  | { kind: 'stars'; url: string }
+  | { kind: 'stars'; urls: readonly string[] }
   | { kind: 'svg'; svg: string };
 
 /** 图鉴一行:名称 + 锁定标记 + 配图 + 悬停行(具体数值全部在悬停里,网格只摆图与名) */
@@ -262,13 +262,14 @@ function imgArt(...urls: Array<string | undefined>): CodexArt | null {
 
 /**
  * 武器配图:round-8 清单已覆盖全部 13 个型号。武器行是**星级三档**:
- * 同一张贴图三档同大、图下各标星数。合成武器不在武器区单独成行
+ * 每档按清单取自己的贴图、统一尺寸、图下各标星数。当前先为自动机炮/激光棱镜接入
+ * 独立 2★/3★ 试点图,其余型号仍三档复用基础炮头。合成武器不在武器区单独成行
  * (它的 3★ 数值折进底座行的第三档,见 weaponHover),所以这里不会收到合成型号;
  * 以后数据表先加了新型、贴图还没补上时,画字形徽章兜底。
  */
 export function towerArt(type: number): CodexArt | null {
-  const url: string | undefined = TOWER_ART_URLS[type];
-  if (url !== undefined) return { kind: 'stars', url };
+  const urls = TOWER_STAR_ART_URLS[type];
+  if (urls !== undefined) return { kind: 'stars', urls };
   const def = TOWERS[type];
   if (def === undefined) return null;
   return { kind: 'svg', svg: glyphBadgeSvg(TOWER_ICONS[type] ?? '?', tintHex(def.tint)) };
@@ -615,10 +616,12 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     });
   }
 
-  /** 三档星级缩略图(武器行专用):同一张贴图三档同大(48px),每档图下各标星数 ——
+  /** 三档星级缩略图(武器行专用):三档贴图统一为 48px,每档图下各标星数 ——
    * 星数靠标签读,不靠图的大小。点开弹高清看图,标题带星数(哪一档点开看得清楚)。 */
-  function appendStarThumbs(artBox: HTMLElement, url: string, name: string): void {
+  function appendStarThumbs(artBox: HTMLElement, urls: readonly string[], name: string): void {
     for (let s = 0; s < 3; s++) {
+      const url = urls[s] ?? urls[0];
+      if (url === undefined) continue;
       const col = document.createElement('div');
       col.style.cssText = STAR_THUMB_COL_CSS;
       const img = document.createElement('img');
@@ -689,7 +692,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       const artBox = document.createElement('div');
       artBox.style.cssText = WEAPON_ROW_ART_CSS;
       if (row.art.kind === 'stars') {
-        appendStarThumbs(artBox, row.art.url, row.name);
+        appendStarThumbs(artBox, row.art.urls, row.name);
       } else if (row.art.kind === 'img') {
         const img = document.createElement('img');
         img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;cursor:zoom-in;';

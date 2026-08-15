@@ -43,6 +43,7 @@ import {
 import { tuning } from '../sim/config';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
+import { starLine } from './codex';
 import { edictName, throttleFamilyName, weaponDisplayName } from './presentation/contentText';
 import { edictScopeLabel } from './presentation/edictText';
 
@@ -194,6 +195,12 @@ const FOOT_CSS = 'width:100%;display:flex;flex-direction:column;gap:6px;';
 const FOOT_TITLE_CSS = `color:${MUTED_COLOR};font-size:10px;letter-spacing:.16em;text-transform:uppercase;`;
 const EDICT_WRAP_CSS = 'display:flex;flex-wrap:wrap;gap:5px;';
 const HINT_CSS = `color:${MUTED_COLOR};font-size:11px;letter-spacing:.04em;text-align:center;`;
+/** 悬停武器槽的描述 tooltip:整页只此一个,pointer-events:none 永不抢鼠标(与 HUD/图鉴同一条口径) */
+const TIP_CSS =
+  'position:fixed;display:none;max-width:300px;white-space:pre-line;line-height:1.55;' +
+  'z-index:1000;pointer-events:none;background:rgba(10,16,26,.97);' +
+  `border:1px solid ${LINE_COLOR};border-radius:6px;padding:8px 10px;` +
+  `color:${TEXT_COLOR};font-size:12px;`;
 
 /** 要虚装到船上的那把武器(悬停货架卡 / 待选槽替换时的幽灵) */
 export interface ShipDiagramIncoming {
@@ -377,7 +384,12 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
 
-  root.append(head, hpTrack, ring, foot, hint);
+  // 悬停武器槽的描述 tooltip:整页只此一个(与 HUD 法令悬停同一条口径),最后挂 ——
+  // 头/HP 条/环/脚部的 children 下标不因它挪位
+  const tip = document.createElement('div');
+  tip.style.cssText = TIP_CSS;
+
+  root.append(head, hpTrack, ring, foot, hint, tip);
 
   /** 鼠标停在哪一格(-1 = 没有)。只在 pick 态下改变画面 —— 是纯表现,不交给调用方 */
   let hoverSlot = -1;
@@ -402,6 +414,38 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
     if (hoverSlot === slot) return;
     hoverSlot = slot;
     if (lastState.mode === 'pick') paint(lastWorld, lastState); // 只读态的悬停不改画面,省一次重画
+    showChipTip(slot);
+  }
+
+  /**
+   * 悬停已装武器的槽 → 弹描述 tooltip(名称★星级 · 系 / 当前星级那一行数值 / 持续火力)。
+   * 空槽收起 —— 与商店货架、图鉴同一套"数值进悬停"的口径;描述的是**这格现在装的这把**,
+   * 不是待买的幽灵。paint 一律先把 tip 收起:换装/换位后世界变了,旧描述不许还悬在屏幕上。
+   */
+  function showChipTip(slot: number): void {
+    const world = lastWorld;
+    const s = slot >= 0 ? world?.weapons[slot] : undefined;
+    const def = s && s.type >= 0 ? TOWERS[s.type] : undefined;
+    if (!world || !s || s.type < 0 || def === undefined) {
+      tip.style.display = 'none';
+      return;
+    }
+    const stars = s.stars >= 1 && s.stars <= 3 ? s.stars : 1;
+    const dps = world ? slotSustainedDps(s, def, world.buffs) : 0;
+    tip.textContent = [
+      `${weaponDisplayName(s.type)} ${'★'.repeat(stars)} · ${throttleFamilyName(def.throttle)}`,
+      starLine(def, stars),
+      `${t('ui:ship.readoutDps')} ${Math.round(dps)}/s`,
+    ].join('\n');
+    tip.style.display = 'block';
+    // 定位在槽位卡下方,贴屏边时夹回(与 HUD/图鉴 tooltip 同一条"永远可读"的口径)
+    const anchor = chips[slot]!;
+    const rect = typeof anchor.getBoundingClientRect === 'function'
+      ? anchor.getBoundingClientRect()
+      : { left: 8, bottom: 8 };
+    const vw = window.innerWidth || 1024;
+    tip.style.left = `${Math.max(8, Math.min(rect.left, vw - 316))}px`;
+    tip.style.top = `${rect.bottom + 6}px`;
   }
 
   /** 一枚炮头贴图:按"这一格最终装的是什么"摆到硬点上,朝向 = 槽位射界中心(见文件头)。
@@ -466,6 +510,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   function paint(world: World | null, state: ShipDiagramState): void {
     lastWorld = world;
     lastState = state;
+    tip.style.display = 'none'; // 换装/换位/重画后旧描述不作数,悬停重新点亮
     const pick = state.mode === 'pick';
     const swap = state.mode === 'swap';
     // pick 态:虚装落在鼠标停着的那一格;view 态:落在调用方算好的空槽上

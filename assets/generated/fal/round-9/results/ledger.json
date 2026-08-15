@@ -1,0 +1,27 @@
+{
+  "model": "fal-ai/nano-banana-pro/edit",
+  "unit_price_usd": 0.15,
+  "successful_generations": 2,
+  "total_cost_usd": 0.30,
+  "jobs": [
+    {
+      "id": "storm-cannon-star3-01",
+      "status": "completed",
+      "cost_usd": 0.15,
+      "verdict": "selected; distinct twin-barrel evolved body, continuous-feed core and heavier recoil structure"
+    },
+    {
+      "id": "aurora-array-star3-01",
+      "status": "completed",
+      "cost_usd": 0.15,
+      "verdict": "selected; central crystal spine, two side prisms and visibly transformed precision-array silhouette"
+    }
+  ],
+  "non_billable_errors": [
+    {
+      "request_id": "01a005c1-8c5a-7223-a0d0-12e2e64ee088",
+      "status": 422,
+      "reason": "genmedia dynamic flags were initially passed with equals syntax; validation rejected the request before generation"
+    }
+  ]
+}

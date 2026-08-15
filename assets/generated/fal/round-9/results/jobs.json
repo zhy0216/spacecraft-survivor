@@ -1,0 +1,29 @@
+{
+  "endpoint": "fal-ai/nano-banana-pro/edit",
+  "resolution": "1K",
+  "aspect_ratio": "1:1",
+  "output_format": "png",
+  "system_prompt": "You are the senior game-asset artist for a top-down science-fiction survivors game. Produce exactly one isolated production-ready rotating turret-head sprite. The camera is locked directly overhead with orthographic projection. The weapon forward direction must point exactly to the top edge. Preserve the visual bloodline of the reference while redesigning it into a genuinely higher-tier weapon, not a glow or scale edit. Obey the flat chroma-key background and never add a pedestal, floor, text, border, shadow, projectile, beam, muzzle flash, or UI.",
+  "jobs": [
+    {
+      "id": "storm-cannon-star3-01",
+      "seed": 69101,
+      "request_id": "01a005c2-33d0-7931-a57f-174f65d5ae87",
+      "input": "assets/game/fal-round-8/towers/autocannon-head.png",
+      "source": "assets/generated/fal/round-9/towers/storm-cannon-star3-source.png",
+      "alpha": "assets/generated/fal/round-9/towers/storm-cannon-star3-alpha.png",
+      "runtime": "assets/game/fal-round-8/towers/autocannon-head-star3.png",
+      "prompt": "Redesign the reference Auto Cannon as the evolved 3-star Storm Cannon. Retain exactly two dominant long forward physical cannon barrels; add thicker reinforced shrouds, rapid-fire cooling jackets, a continuous-feed rotary breech, paired enclosed ammunition cyclers, heavier recoil braces, and a bright cold-cyan reactor core. Strict orthographic top-down view, vertical firing axis, lower-middle pivot, cold blue-gray salvage steel, no base, effects, text, shadow, or UI."
+    },
+    {
+      "id": "aurora-array-star3-01",
+      "seed": 69102,
+      "request_id": "01a005c3-4c6f-7882-863a-178710ed8d27",
+      "input": "assets/game/fal-round-8/towers/laser-prism-head.png",
+      "source": "assets/generated/fal/round-9/towers/aurora-array-star3-source.png",
+      "alpha": "assets/generated/fal/round-9/towers/aurora-array-star3-alpha.png",
+      "runtime": "assets/game/fal-round-8/towers/laser-prism-head-star3.png",
+      "prompt": "Redesign the reference Laser Prism as the evolved 3-star Aurora Array. Retain one dominant central faceted cyan prism, extend it into a high-energy crystal spine, and add exactly two smaller side focusing prisms, three converging forward emitter rails, a white-cyan containment core, superconducting channels, and a continuous-power breech with no heat vents. Strict orthographic top-down view, perfect vertical symmetry, lower-middle pivot, no base, beam, text, shadow, or UI."
+    }
+  ]
+}

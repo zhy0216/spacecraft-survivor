@@ -174,6 +174,66 @@ describe('舰船背包面板', () => {
     expect(turrets[2]!.src).toContain('autocannon');
   });
 
+  it('悬停已装武器的槽弹描述 tooltip(名称★星级/当前星级数值/持续火力),空槽与移开即隐', () => {
+    const world = createWorld();
+    const panel = createArmoryPanel({
+      canOpen: () => true,
+      onOpen: () => {},
+      onClose: () => {},
+    });
+    panel.setWorld(world);
+    panel.show();
+
+    const root = dom.ui.children[0]!;
+    const diagram = root.children[0]!;
+    const ring = diagram.children[2]!;
+    const chipLayer = ring.children[ring.children.length - 1]!;
+    const chips = chipLayer.children;
+    // tooltip 挂在舰船图 root 的末尾(头/HP 条/环/脚部的下标不因它挪位)
+    const tip = diagram.children[diagram.children.length - 1]!;
+
+    expect(tip.style.display).toBe('none');
+
+    fire(chips[0]!, 'mouseenter');
+    expect(tip.style.display).toBe('block');
+    expect(tip.textContent).toContain('自动机炮 ★ · 弹药系');
+    expect(tip.textContent).toContain('伤害');
+    expect(tip.textContent).toContain('射程');
+    expect(tip.textContent).toContain('持续火力');
+    expect(tip.style.left).toBe('8px'); // 桩 DOM 报不出几何,夹回左缘
+    expect(tip.style.top).toBe('14px');
+
+    fire(chips[0]!, 'mouseleave');
+    expect(tip.style.display).toBe('none');
+
+    // 空槽不弹描述
+    fire(chips[1]!, 'mouseenter');
+    expect(tip.style.display).toBe('none');
+  });
+
+  it('换位后描述 tooltip 收起(世界变了,旧描述不许还悬着)', () => {
+    const world = createWorld();
+    const panel = createArmoryPanel({
+      canOpen: () => true,
+      onOpen: () => {},
+      onClose: () => {},
+    });
+    panel.setWorld(world);
+    panel.show();
+
+    const root = dom.ui.children[0]!;
+    const diagram = root.children[0]!;
+    const ring = diagram.children[2]!;
+    const chipLayer = ring.children[ring.children.length - 1]!;
+    const chips = chipLayer.children;
+    const tip = diagram.children[diagram.children.length - 1]!;
+
+    fire(chips[0]!, 'mouseenter');
+    expect(tip.style.display).toBe('block');
+    fire(chips[0]!, 'click');
+    expect(tip.style.display).toBe('none');
+  });
+
   it('refreshLocale(05 号):切到 en 后标题/槽位朝向翻新,选择态与交换态原地保留', async () => {
     const world = createWorld();
     const panel = createArmoryPanel({

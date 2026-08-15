@@ -447,7 +447,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   function artSrc(art: CodexArt | null): string | null {
     if (art === null) return null;
     if (art.kind === 'img') return art.urls[0] ?? null;
-    if (art.kind === 'stars') return art.url;
+    if (art.kind === 'stars') return art.urls[0] ?? null;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(art.svg)}`;
   }
 
