@@ -294,9 +294,7 @@ export const ui: DeepRecord<typeof zhUi> = {
       rate: 'Fire rate {{rate}}/s',
     },
     weapon: {
-      head: {
-        fusion: '{{name}} · fused at {{stars}} · {{family}}',
-      },
+      fused: 'Fuses at ★★★ into {{name}}',
       unknown: 'Unknown weapon #{{type}}',
     },
     enemy: {

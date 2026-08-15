@@ -292,9 +292,7 @@ export const ui = {
       rate: '射速 {{rate}}/s',
     },
     weapon: {
-      head: {
-        fusion: '{{name}} · 合{{stars}}变身 · {{family}}',
-      },
+      fused: '★★★ 变身 {{name}}',
       unknown: '未知武器 #{{type}}',
     },
     enemy: {

@@ -1,6 +1,6 @@
 /**
  * 图鉴页(ui/codex.ts)。主体测的是那几个**纯函数** —— 图鉴上到底显示了什么:
- * 锁定判定、悬停行(尤其 **1★/2★/3★ 星级三档读数**)、合成武器血统、每行配了哪张图,
+ * 锁定判定、悬停行(尤其 **1★/2★/3★ 星级三档读数**)、合成武器变身、每行配了哪张图,
  * 哪一条错都只是几行字符串拼接,却要等真人进一次图鉴才看得见(与 gameOver.test 测
  * summaryText 同一条理由)。
  *
@@ -36,6 +36,7 @@ import {
   UNLOCKS,
   type UnlockEntry,
 } from '../data/unlocks';
+import { MERGES } from '../data/merges';
 import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import { createProgress, type Progress } from '../sim/progress';
 import { changeLocale, initI18n } from '../i18n';
@@ -54,7 +55,7 @@ import {
   weaponHover,
   type CodexArt,
 } from './codex';
-import { affixName, bossName, enemyName, towerName, weaponDisplayName } from './presentation/contentText';
+import { affixName, bossName, enemyName, weaponDisplayName } from './presentation/contentText';
 import { behaviorName } from './presentation/behaviorText';
 import { edictSummaryText } from './presentation/edictText';
 import { unlockConditionText } from './presentation/unlockText';
@@ -198,9 +199,9 @@ describe('codexRows', () => {
     expect(sections.map((s) => s.key)).toEqual(['weapons', 'enemies', 'edicts']);
   });
 
-  it('武器全量 13 型:悬停三档星级读数全印(2★/3★ 伤害不再缺席),配图三档星级与渲染层同源', () => {
+  it('武器只列基础型号(合成武器不单独成行):悬停三档星级读数全印,3★ 档印变身数值与去向', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
-    expect(weapons.length).toBe(TOWERS.length);
+    expect(weapons.length).toBe(TOWERS.length - MERGES.length);
     const auto = weapons.find((r) => r.id === String(TOWER_AUTOCANNON))!;
     expect(auto.locked).toBe(false);
     expect(auto.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[0] });
@@ -208,7 +209,9 @@ describe('codexRows', () => {
     expect(auto.hover[0]).toBe('自动机炮 · 弹药系');
     expect(auto.hover[1]).toBe(starExpected(def, 1, false));
     expect(auto.hover[2]).toBe(starExpected(def, 2, false));
-    expect(auto.hover[3]).toBe(starExpected(def, 3, false));
+    // 3★ 档印的是风暴机炮的数值:合到 3★ 那一刻就变身,游戏里没有"没变身的 3★ 机炮"
+    expect(auto.hover[3]).toBe(starExpected(TOWERS[TOWER_STORM_CANNON]!, 3, false));
+    expect(auto.hover[4]).toBe('★★★ 变身 风暴机炮');
     // 成长曲线确实在涨:★★/★★★ 的伤害与 ★ 不同(这正是旧版图鉴漏印的两行)
     expect(auto.hover[2]).not.toContain(`★★ 伤害 ${formatMul(def.damage)}`);
   });
@@ -223,15 +226,16 @@ describe('codexRows', () => {
     expect(mortar.hover[1]).not.toContain('伤害 0');
   });
 
-  it('合成武器不改名:行名与悬停都显示底座名(三星武器还是叫原名字),血统炮头照旧复用', () => {
+  it('合成武器不单独成行:底座行的 ★★★ 档印变身数值,末条注明变身去向(用户口径:3★ 就是合成武器)', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
-    const aurora = weapons.find((r) => r.id === String(TOWER_AURORA))!;
-    // 显示名 = 底座名(用户口径「三星武器不改名字」),血统行只报"合★★★变身"不再重复底座
-    expect(aurora.name).toBe(towerName(TOWER_LASER));
-    expect(aurora.name).toBe(weaponDisplayName(TOWER_AURORA));
-    expect(aurora.hover[0]).toBe(`${towerName(TOWER_LASER)} · 合★★★变身 · 过热系`);
-    // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"合★★★"两相印证
-    expect(aurora.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_LASER] });
+    expect(weapons.find((r) => r.id === String(TOWER_AURORA))).toBeUndefined();
+    const laser = weapons.find((r) => r.id === String(TOWER_LASER))!;
+    expect(laser.name).toBe(weaponDisplayName(TOWER_LASER));
+    expect(laser.hover[0]).toBe('激光棱镜 · 过热系');
+    expect(laser.hover[3]).toBe(starExpected(TOWERS[TOWER_AURORA]!, 3, false));
+    expect(laser.hover[4]).toBe('★★★ 变身 极光阵列');
+    // 贴图仍是底座行自己的血统炮头(round-8 清单)
+    expect(laser.art).toEqual({ kind: 'stars', url: TOWER_ART_URLS[TOWER_LASER] });
   });
 
   it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
@@ -332,14 +336,14 @@ describe('codex 英文输出(08 号)', () => {
     expect(starLine(auto, 1)).toContain('★ Damage');
   });
 
-  it('weaponHover 英文:普通标题 / 合成血统 / 未知型号带编号', async () => {
+  it('weaponHover 英文:普通标题 / 3★ 变身行 / 未知型号带编号', async () => {
     await changeLocale('en');
     const auto = weaponHover(TOWER_AUTOCANNON);
     expect(auto[0]).toBe('Auto Cannon · Ammo-fed');
     expect(auto[1]).toBe(starExpectedEn(TOWERS[TOWER_AUTOCANNON]!, 1, false));
-    // 合成武器:血统走 ui.codex.weapon.head.fusion,名字仍是底座名(三星武器不改名字)
-    const aurora = weaponHover(TOWER_AURORA);
-    expect(aurora[0]).toBe('Laser Prism · fused at ★★★ · Heat-managed');
+    // 3★ 档印合成武器数值,末条报变身去向(合成武器不单独成行)
+    expect(auto[3]).toBe(starExpectedEn(TOWERS[TOWER_STORM_CANNON]!, 3, false));
+    expect(auto[4]).toBe('Fuses at ★★★ into Storm Cannon');
     // 未知型号:本地化兜底且含原始编号
     expect(weaponHover(999)[0]).toBe('Unknown weapon #999');
   });
@@ -686,7 +690,7 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.display).toBe('none');
   });
 
-  it('卡片配图:武器 = 一行一种的星级三档缩略图(同图放大 + 图下各标星数),敌/法令仍单图网格', () => {
+  it('卡片配图:武器 = 一行一种的星级三档缩略图(三张同大 + 图下各标星数),敌/法令仍单图网格', () => {
     const ui = make();
     ui.show();
     const cell = findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!;
@@ -696,9 +700,9 @@ describe('createCodexUi', () => {
     expect(starImgs.length).toBe(3);
     expect(starImgs.map((el) => el.alt)).toEqual(['自动机炮 ★', '自动机炮 ★★', '自动机炮 ★★★']);
     expect(starImgs.every((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
-    // 放大倍率与战斗同源(TOWER_STAR_HEAD_SCALES × 36px 基准):1★ 36 / 2★ 42 / 3★ 48
-    expect(starImgs[0]!.style.cssText).toContain('width:36px;height:36px;');
-    expect(starImgs[1]!.style.cssText).toContain('width:42px;height:42px;');
+    // 三档同一尺寸(星数靠图下标签读,不靠图的大小)
+    expect(starImgs[0]!.style.cssText).toContain('width:48px;height:48px;');
+    expect(starImgs[1]!.style.cssText).toContain('width:48px;height:48px;');
     expect(starImgs[2]!.style.cssText).toContain('width:48px;height:48px;');
     // 图下各标 ★/★★/★★★,标签色与 renderer 的 FX_STAR_COLORS 同一份(冷蓝/金/亮金)
     const labels = findAll(cell, (el) => ['★', '★★', '★★★'].includes(el.textContent));
@@ -706,10 +710,8 @@ describe('createCodexUi', () => {
     expect(labels[0]!.style.cssText).toContain('color:#9adcff');
     expect(labels[1]!.style.cssText).toContain('color:#ffd479');
     expect(labels[2]!.style.cssText).toContain('color:#fff1a8');
-    // 合成武器行复用血统炮头:风暴机炮(display = 自动机炮)的三档图与机炮同源
-    const storm = findCell(dom, 'weapons', String(TOWER_STORM_CANNON))!;
-    const stormImgs = findAll(storm, (el) => el.tagName === 'IMG');
-    expect(stormImgs.every((el) => el.src.includes('autocannon-head'))).toBe(true);
+    // 合成武器不单独成行:武器区只有基础型号,风暴机炮那一行不存在
+    expect(findCell(dom, 'weapons', String(TOWER_STORM_CANNON))).toBeUndefined();
     // 敌/法令单图网格不变:图鉴图标 alt 的 PNG 与 SVG data URI 各在其位
     const plain = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
     expect(plain.some((el) => el.src.endsWith('.png'))).toBe(true);

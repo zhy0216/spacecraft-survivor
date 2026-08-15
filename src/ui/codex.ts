@@ -9,8 +9,7 @@
  * 武器是**一行一种的纵向列表**(名称 + 三档星级缩略图,整行悬停弹 tooltip,内容区可滚动);
  * 未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
  * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
- * **武器行是星级三档缩略图**(同一张贴图按战斗倍率放大三张,图下各标 ★/★★/★★★ ——
- * 游戏里 2★/3★ 的炮头就是放大件,不标星数玩家认不出图上画的是几星的枪);敌/法令仍一张大图。
+ * **武器行是星级三档缩略图**(同一张贴图三档**同大**,图下各标 ★/★★/★★★,星数靠标签读);敌/法令仍一张大图。
  * **星级三档数值全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
  *
@@ -29,7 +28,7 @@ import {
   type EnemyDef,
 } from '../data/enemies';
 import { EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
-import { MERGES } from '../data/merges';
+import { isMergeResult, mergeResultOf } from '../data/merges';
 import {
   FX_MORTAR,
   THR_CHARGE,
@@ -50,7 +49,7 @@ import {
 } from '../data/unlocks';
 import { WAVE_LOCKED_ELITES } from '../data/waves';
 import { t } from '../i18n';
-import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS, TOWER_STAR_HEAD_SCALES } from '../render/artUrls';
+import { BOSS_ART_URL, ENEMY_ART_URLS, TOWER_ART_URLS } from '../render/artUrls';
 import type { Progress } from '../sim/progress';
 import { collectionItemName } from './gameOver';
 import { EDICT_ICONS, TOWER_ICONS } from './upgradeFlow';
@@ -60,6 +59,7 @@ import {
   edictName,
   enemyName,
   throttleFamilyName,
+  towerName,
   weaponDisplayName,
 } from './presentation/contentText';
 import { behaviorName } from './presentation/behaviorText';
@@ -121,15 +121,15 @@ const CELL_NAME_CSS =
   `font-size:11px;color:${VALUE_COLOR};text-align:center;line-height:1.3;letter-spacing:.02em;`;
 
 /**
- * 星级三档缩略图:每档一列(图 + 星数标签),三列并排,1★ 基准 36px、
- * 2★/3★ 按 TOWER_STAR_HEAD_SCALES 放大(36/42/48px) —— 与战斗里的炮位放大同一份倍率。
+ * 星级三档缩略图:每档一列(图 + 星数标签),三列并排,三张图**同一尺寸**(48px) ——
+ * 星数靠图下的标签读,不靠图的大小(战斗里的炮位贴图仍按星级放大,图鉴不跟那份倍率)。
  * 标签色与 renderer 的 FX_STAR_COLORS 同一份(1★ 冷蓝/2★ 金/3★ 亮金):金色留给星级徽记,
  * 与 docs/weapon-star-fire-patterns「金色只用于星级徽记」同一条口径。
  */
 const STAR_THUMB_COL_CSS = 'display:flex;flex-direction:column;align-items:center;gap:2px;';
 const STAR_LABEL_CSS = 'font-size:11px;line-height:1;letter-spacing:.02em;';
 const STAR_LABEL_COLORS = ['#9adcff', '#ffd479', '#fff1a8'] as const;
-const STAR_THUMB_BASE_PX = 36;
+const STAR_THUMB_BASE_PX = 48;
 
 /**
  * 武器行(一行一种):名称 + 三档星级缩略图,整行悬停弹 tooltip,纵向列表靠 scrollEl 滚动。
@@ -179,8 +179,8 @@ export function codexUnlockStats(progress: Progress): { unlocked: number; total:
 }
 
 /**
- * 一行的配图。三种来路:真实贴图(PNG,清单与渲染层同源)、星级三档(武器:同一张贴图按
- * 战斗里的星级倍率 1/1.16/1.32 放大,图下各标 ★/★★/★★★)或程序化 SVG 徽章
+ * 一行的配图。三种来路:真实贴图(PNG,清单与渲染层同源)、星级三档(武器:同一张贴图
+ * 三档同大,图下各标 ★/★★/★★★)或程序化 SVG 徽章
  * (数据表先加了新型而贴图还没跟上时:字形 + 数值表 tint)。null = 没配到图,DOM 只摆文字。
  */
 export type CodexArt =
@@ -245,22 +245,13 @@ function imgArt(...urls: Array<string | undefined>): CodexArt | null {
 }
 
 /**
- * 武器配图:round-8 清单已覆盖全部 13 个型号(合成塔条目复用对应血统炮头)。
- * 武器行是**星级三档**:同一张贴图按战斗里的倍率放大三张,图下各标星数 ——
- * 游戏里 2★/3★ 的炮头就是放大件(1.16/1.32,见 renderer 与 docs/weapon-star-fire-patterns),
- * 图鉴不标星数,玩家就看不出图上画的是几星的枪。以后数据表先加了新型、贴图还没补上时,
- * 再按 MERGES 回退底座或画字形徽章。
+ * 武器配图:round-8 清单已覆盖全部 13 个型号。武器行是**星级三档**:
+ * 同一张贴图三档同大、图下各标星数。合成武器不在武器区单独成行
+ * (它的 3★ 数值折进底座行的第三档,见 weaponHover),所以这里不会收到合成型号;
+ * 以后数据表先加了新型、贴图还没补上时,画字形徽章兜底。
  */
 export function towerArt(type: number): CodexArt | null {
-  let url: string | undefined = TOWER_ART_URLS[type];
-  if (url === undefined) {
-    for (const r of MERGES) {
-      if (r.result === type) {
-        url = TOWER_ART_URLS[r.base];
-        break;
-      }
-    }
-  }
+  const url: string | undefined = TOWER_ART_URLS[type];
   if (url !== undefined) return { kind: 'stars', url };
   const def = TOWERS[type];
   if (def === undefined) return null;
@@ -298,20 +289,22 @@ export function starLine(def: TowerDef, stars: number): string {
   return `${head} · ${t('ui:codex.star.range', { range })} · ${t('ui:codex.star.rate', { rate })}`;
 }
 
-/** 武器悬停行:标题(合成武器带血统)+ 三条星级读数 */
+/** 武器悬停行:标题 + 三条星级读数。有配方的基础武器第三档印**变身后的**数值 ——
+ * 合到 3★ 的那一刻当场变身,游戏里不存在"没变身的 3★ 基础武器",印底座自己的 3★ 成长
+ * 就是印一个打不出来的数;末条再注明变身去向(合成武器的独立名字只在这里亮相)。 */
 export function weaponHover(type: number): string[] {
   const def = TOWERS[type];
   if (def === undefined) return [t('ui:codex.weapon.unknown', { type })];
-  let head = `${weaponDisplayName(type)} · ${throttleFamilyName(def.throttle)}`;
-  for (const r of MERGES) {
-    if (r.result === type) {
-      // 血统行不报底座名:合成武器显示名 = 底座名(用户口径「三星武器不改名字」),报了就是自己合自己
-      head = t('ui:codex.weapon.head.fusion', {
-        name: weaponDisplayName(type),
-        stars: '★'.repeat(3),
-        family: throttleFamilyName(def.throttle),
-      });
-    }
+  const head = `${weaponDisplayName(type)} · ${throttleFamilyName(def.throttle)}`;
+  const fused = mergeResultOf(type);
+  if (fused >= 0) {
+    return [
+      head,
+      starLine(def, 1),
+      starLine(def, 2),
+      starLine(TOWERS[fused]!, 3),
+      t('ui:codex.weapon.fused', { name: towerName(fused) }),
+    ];
   }
   return [head, starLine(def, 1), starLine(def, 2), starLine(def, 3)];
 }
@@ -390,6 +383,9 @@ export function codexRows(progress: Progress): CodexSection[] {
 
   const weapons: CodexRow[] = [];
   for (let type = 0; type < TOWERS.length; type++) {
+    // 合成武器 = 底座行 ★★★ 档的变身形态(用户口径「3★ 自动机炮就是风暴机炮」),
+    // 再单独成行就是两行同名同图 —— 变身的数值与去向已折进底座行的悬停(weaponHover)
+    if (isMergeResult(type)) continue;
     weapons.push(
       rowForLocked(
         mask,
@@ -570,15 +566,14 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     });
   }
 
-  /** 三档星级缩略图(武器行专用):同一张贴图按战斗倍率放大三张,每档图下各标星数 ——
-   * 不标的话 2★/3★ 只是同图变大小,玩家认不出图上画的是几星的枪。 */
+  /** 三档星级缩略图(武器行专用):同一张贴图三档同大(48px),每档图下各标星数 ——
+   * 星数靠标签读,不靠图的大小。 */
   function appendStarThumbs(artBox: HTMLElement, url: string, name: string): void {
     for (let s = 0; s < 3; s++) {
       const col = document.createElement('div');
       col.style.cssText = STAR_THUMB_COL_CSS;
       const img = document.createElement('img');
-      const px = Math.round(STAR_THUMB_BASE_PX * (TOWER_STAR_HEAD_SCALES[s] ?? 1));
-      img.style.cssText = CELL_IMG_CSS + `width:${px}px;height:${px}px;`;
+      img.style.cssText = CELL_IMG_CSS + `width:${STAR_THUMB_BASE_PX}px;height:${STAR_THUMB_BASE_PX}px;`;
       img.src = url;
       img.alt = `${name} ${'★'.repeat(s + 1)}`;
       const label = document.createElement('div');
