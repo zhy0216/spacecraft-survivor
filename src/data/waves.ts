@@ -300,13 +300,16 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
     dirStartDeg: 320,
     dirEndDeg: 480,
     streams: [
-      { kind: KIND_SWARM, rate0: 4.2, rate1: 5.4, spreadDeg: 65 },
-      { kind: KIND_STRAFER, rate0: 1.0, rate1: 1.5, spreadDeg: 35 },
-      { kind: KIND_TRAILER, rate0: 0.5, rate1: 0.9, spreadDeg: 25 },
-      // 冲撞甲虫进流,速率压得极低:它单只 40 HP、撞一下 18 伤,再多就不是"考转向"而是刷血条了
-      { kind: KIND_BEETLE, rate0: 0.15, rate1: 0.35, spreadDeg: 20 },
+      // 收尾加压(2026-08-15):6:00 商店窗口(段首 30s)维持近当前压力,6:30 起速率直线拉起 ——
+      // 段尾 ~19 只/s,与中后段约成 ~14 只/s 均速,把同屏存活(刷怪 − 击杀)推向 01 号
+      // 「1000 敌同屏」预算并维持到 Boss(1400 上限是保险丝不是目标,见 WAVE_MAX_ALIVE)
+      { kind: KIND_SWARM, rate0: 4.2, rate1: 12.0, spreadDeg: 65 },
+      { kind: KIND_STRAFER, rate0: 1.0, rate1: 3.2, spreadDeg: 35 },
+      { kind: KIND_TRAILER, rate0: 0.5, rate1: 1.7, spreadDeg: 25 },
+      // 冲撞甲虫进流,速率仍压得极低(全场占比 ~3%):它单只 40 HP、撞一下 18 伤,再多就不是"考转向"而是刷血条了
+      { kind: KIND_BEETLE, rate0: 0.15, rate1: 0.6, spreadDeg: 20 },
       // 孢子炮手随密度爬升到 ~10%:远程压力跟着虫潮一起加码,点防的作用窗口越来越值钱
-      { kind: KIND_SPORE, rate0: 0.5, rate1: 0.9, spreadDeg: 30 },
+      { kind: KIND_SPORE, rate0: 0.5, rate1: 1.5, spreadDeg: 30 },
     ],
     bursts: [
       { at: 25, offsetDeg: -90, spreadDeg: 14, pattern: BURST_PATTERN_DIRECTIONAL, counts: [0, 6, 0, 2, 0] },

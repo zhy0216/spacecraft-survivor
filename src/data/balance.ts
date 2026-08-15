@@ -205,7 +205,7 @@ export const GATE_EDICT_LEVELS_MIN = 5;
 
 /**
  * 欠闸门配装的 TTK 与闸门 TTK 的最小时间比:欠闸门打 2 倍以上的时间,
- * 期间每 9 秒一波召唤怪在场上无限堆积(淹没账见 sim/bossGate.test.ts)。
+ * 期间每 7 秒一波召唤怪在场上无限堆积(淹没账见 sim/bossGate.test.ts)。
  */
 export const GATE_TTK_RATIO_MIN = 2;
 

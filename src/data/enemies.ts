@@ -99,8 +99,9 @@ export const BOSS: BossDef = {
   slug: 'hive_colossus',
   devName: '母巢巨兽',
   scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
-  hpMul: 47, // 闸门反推(自动求解):净 DPS × TTK 82.5s / 68.8 ≈ 47.5 → 取整 47;
-  // Boss HP = 40 × 1.72 × 47 ≈ 3234。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
+  hpMul: 37, // 闸门反推(自动求解):净 DPS × TTK 82.5s / 68.8 ≈ 37.0 → 取整 37;
+  // Boss HP = 40 × 1.72 × 37 ≈ 2546(原 3234:2026-08-15 召唤加压,清场需求 16.8 → 25.6 DPS,
+  // 净 DPS 同步被吃掉一截 —— 两笔账同池,推导见 sim/balance.ts 的 bossHpMulForGate)
   dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦
   contactDamageMul: 2, // 底座 18 → 36:大质量撞击
   speedMul: 0.8, // 底座 70 → 56:大而慢
@@ -110,10 +111,10 @@ export const BOSS: BossDef = {
   chargeSpeedMul: 1, // 底座 380 → 380
   chargeDuration: 1.2, // 占位待调
   chargeRecover: 1.8, // 占位待调(冲完长硬直 = 反打窗口)
-  summonInterval: 9, // 占位待调:每 9 秒召唤一批
+  summonInterval: 7, // 原 9s 占位 → 7s(2026-08-15):与 summonCounts 一起把召唤流 0.89 → 1.43 只/s(约 +60%)
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调
-  summonCounts: [6, 2, 0, 0, 0], // 6 蜂群蛭 + 2 侧掠者,型号/数量直给;长度契约与 WaveBurst.counts 同款(长度 = ENEMY_KIND_COUNT,短一位会静默漏一型)
+  summonCounts: [8, 2, 0, 0, 0], // 8 蜂群蛭 + 2 侧掠者(原 6+2):清场需求 25.6 DPS,贴在闸门 2× 余量线(28.2)以内且保两侧舷交替
   starCoins: 30, // 3 次重摇的价(10 × 3),占位待调
 };
 

@@ -9,7 +9,7 @@
  * 保守口径:最弱合法配装都能过,闸门才算数。
  * Boss HP = 闸门净 DPS(扣掉召唤清场需求)× TTK 目标 —— 见 sim/balance.ts 的 bossHpMulForGate。
  *
- * 欠闸门 = 纯 DPS 闸门:净 DPS 不足 ⇒ TTK 拉长 ⇒ 每 9 秒一批召唤怪无限堆积,
+ * 欠闸门 = 纯 DPS 闸门:净 DPS 不足 ⇒ TTK 拉长 ⇒ 每 7 秒一批召唤怪无限堆积,
  * 未清召唤 HP 远超船体承受上限(淹没账),玩家在磨死 Boss 之前先被虫潮咬穿。
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -79,7 +79,7 @@ describe('Boss 闸门数学(闭式)', () => {
 
   it('淹没账:欠闸门 TTK 期间的未清召唤 HP ≥ 10 × 船体 HP —— 虫潮先于血条把船咬穿', () => {
     // 代表性欠闸门的 TTK 里落几批召唤、每批多少 HP,全是闭式算术:
-    // TTK ≥ 165s ⇒ ≥ 18 批 × 151.4 ≈ 2724 HP,而船体只有 100(无装甲口径)
+    // TTK ≈ 288s ⇒ ≥ 41 批 × 178.9 ≈ 7334 HP,而船体只有 100(无装甲口径)
     const levels = createEdictLevels();
     levels[EDICT_ARMOR] = 2;
     const buffs = buffsForLevels(levels);
