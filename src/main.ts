@@ -246,6 +246,8 @@ async function boot(): Promise<void> {
       run.paused = false;
     },
   });
+  // 语言切换成功后整备商店原地重画文案(07 号):不刷新货架、不扣星币,货架/折扣/pendingBuy 照旧
+  registerLocaleAware(refitFlow);
 
   // 胜利终幕必须先于结算页构造:两者都监听 Enter；同一次 keydown 里结算页把终幕 show 出来时，
   // 终幕监听器已经走过了“当前不可见”的分支，才不会同一按键又立刻把它关掉。

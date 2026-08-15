@@ -20,10 +20,12 @@ import {
   EDICT_OVERDRIVE,
 } from '../data/edicts';
 import {
+  TOWER_ANNIHILATION,
   TOWER_AUTOCANNON,
   TOWER_LASER,
   TOWER_RAILGUN,
 } from '../data/towers';
+import { mergeResultOf } from '../data/merges';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
 import { WAVE_SEGMENTS } from '../data/waves';
@@ -98,6 +100,7 @@ interface StubEl {
   handlers: Map<string, Array<(event: StubEvent) => void>>;
   append(...children: StubEl[]): void;
   appendChild(child: StubEl): StubEl;
+  replaceChildren(): void;
   addEventListener(type: string, handler: (event: StubEvent) => void): void;
 }
 
@@ -114,6 +117,7 @@ function createStubEl(tagName = 'div'): StubEl {
     handlers: new Map(),
     append(...children): void { element.children.push(...children); },
     appendChild(child): StubEl { element.children.push(child); return child; },
+    replaceChildren(): void { element.children = []; },
     addEventListener(type, handler): void {
       const handlers = element.handlers.get(type) ?? [];
       handlers.push(handler);
@@ -190,6 +194,53 @@ interface StubWorld {
   completeRefit(): boolean;
 }
 
+/**
+ * 桩版三合一:3× N★ → 1× (N+1)★;N=2 且有配方 → 当场变身为合成武器。只补足回执要读的
+ * 槽位账本(与 World.fuseTriplesOf 同一条形状,能覆盖「合到 ★★ / 合 ★★★ 变身」两档)。
+ */
+function fuseStubWeapons(world: StubWorld, type: number): void {
+  for (let star = 1; star < 3; star++) {
+    for (;;) {
+      const slots = world.weapons.filter((s) => s && s.type === type && s.stars === star);
+      if (slots.length < 3) break;
+      let removed = 0;
+      for (const s of world.weapons) {
+        if (removed >= 3) break;
+        if (s && s.type === type && s.stars === star) {
+          s.type = -1;
+          s.stars = 0;
+          removed++;
+        }
+      }
+      const result = star === 2 ? mergeResultOf(type) : -1;
+      const target = world.weapons.find((s) => !s || s.type < 0) ?? world.weapons[0];
+      if (target) {
+        target.type = result >= 0 ? result : type;
+        target.stars = star + 1;
+      }
+    }
+  }
+}
+
+/** 桩版落位:给 slotIndex = 换装(占着格直接换),否则落第一个空槽;随后跑一轮三合一 */
+function acquireStubWeapon(world: StubWorld, type: number, slotIndex?: number): void {
+  if (slotIndex !== undefined && slotIndex >= 0) {
+    const slot = world.weapons[slotIndex];
+    if (slot && slot.type >= 0) {
+      slot.type = type;
+      slot.stars = 1;
+    }
+  } else {
+    const empty = world.weapons.findIndex((s) => !s || s.type < 0);
+    if (empty >= 0) {
+      const s = world.weapons[empty]!;
+      s.type = type;
+      s.stars = 1;
+    }
+  }
+  fuseStubWeapons(world, type);
+}
+
 function createStubWorld(): StubWorld {
   const world: StubWorld = {
     refitPending: true,
@@ -216,8 +267,10 @@ function createStubWorld(): StubWorld {
       world.weaponCalls.push([index, slotIndex]);
       if (world.replaceNeeded && slotIndex === undefined) return ACQUIRE_REPLACE_NEEDED;
       if (world.weaponCode < 0) return world.weaponCode;
+      const type = world.shopWeapons[index];
       world.starCoins -= DOCK_WEAPON_PRICE;
       world.shopWeapons[index] = -1;
+      if (type !== undefined && type >= 0) acquireStubWeapon(world, type, slotIndex);
       return world.weaponCode;
     },
     refreshShop(): number {
@@ -292,11 +345,22 @@ function findText(root: StubEl, part: string): boolean {
   return false;
 }
 
-/** 在桩树里找 style 含某段文字的节点(替换预览的 line-through 画在子节点上) */
+/** 在桩树里找 style 含某段文字的节点(打折的 line-through 与星币金色都画在子节点上) */
 function findStyle(root: StubEl, part: string): boolean {
-  if (root.style.cssText?.includes(part)) return true;
+  for (const value of Object.values(root.style)) {
+    if (typeof value === 'string' && value.includes(part)) return true;
+  }
   for (const child of root.children) {
     if (findStyle(child, part)) return true;
+  }
+  return false;
+}
+
+/** 在桩树里找 src 含某段文字的 IMG 节点(货架配图 img 单独管理,不再是 innerHTML 字符串) */
+function findImgSrc(root: StubEl, part: string): boolean {
+  if (root.tagName === 'IMG' && root.src.includes(part)) return true;
+  for (const child of root.children) {
+    if (findImgSrc(child, part)) return true;
   }
   return false;
 }
@@ -350,35 +414,36 @@ describe('createRefitFlow 纯商店流程', () => {
     world.shopDiscountIndex = DOCK_EDICT_COUNT + 0; // 武器货架第 0 格打特价
     setup();
     const card = cardsOf(dom).children[0] as StubEl;
-    expect(card.innerHTML).toContain('特价');
-    expect(card.innerHTML).toContain('<s'); // 原价划线
-    expect(card.innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
-    expect(card.innerHTML).toContain(`${shopDiscountPrice(DOCK_WEAPON_PRICE)} ★`);
-    expect(card.innerHTML).toContain(STAR_GOLD); // 特价与星币同款金色
+    // 价格是独立节点(textContent + 行内含样式),不再拼 innerHTML
+    expect(findText(card, '特价')).toBe(true);
+    expect(findStyle(card, 'line-through')).toBe(true); // 原价划线
+    expect(findText(card, `${DOCK_WEAPON_PRICE} ★`)).toBe(true);
+    expect(findText(card, `${shopDiscountPrice(DOCK_WEAPON_PRICE)} ★`)).toBe(true);
+    expect(findStyle(card, STAR_GOLD)).toBe(true); // 特价与星币同款金色
     // 第 1 格不是特价:照旧印原价、不划线
     world.shopWeapons[1] = TOWER_LASER;
     fire(refreshOf(dom), 'click');
     const full = cardsOf(dom).children[1] as StubEl;
-    expect(full.innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
-    expect(full.innerHTML).not.toContain('<s>');
+    expect(findText(full, `${DOCK_WEAPON_PRICE} ★`)).toBe(true);
+    expect(findStyle(full, 'line-through')).toBe(false);
   });
 
   it('特价法令行:原价划线、特价亮金', () => {
     world.shopDiscountIndex = 0; // 法令货架第 0 格打特价
     setup();
     const row = edictOf(dom, 0);
-    expect(row.innerHTML).toContain('特价');
-    expect(row.innerHTML).toContain('<s');
-    expect(row.innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
-    expect(row.innerHTML).toContain(`${shopDiscountPrice(DOCK_EDICT_PRICE)} ★`);
-    expect(row.innerHTML).toContain(STAR_GOLD);
+    expect(findText(row, '特价')).toBe(true);
+    expect(findStyle(row, 'line-through')).toBe(true);
+    expect(findText(row, `${DOCK_EDICT_PRICE} ★`)).toBe(true);
+    expect(findText(row, `${shopDiscountPrice(DOCK_EDICT_PRICE)} ★`)).toBe(true);
+    expect(findStyle(row, STAR_GOLD)).toBe(true);
   });
 
   it('武器卡来自 shopWeapons，显示名称与 30 星币价格，售出卡置灰', () => {
     setup();
-    expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
-    expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain(`${DOCK_WEAPON_PRICE} ★`);
-    expect((cardsOf(dom).children[1] as StubEl).innerHTML).toContain('已售出');
+    expect(findText(cardsOf(dom).children[0] as StubEl, towerName(TOWER_AUTOCANNON))).toBe(true);
+    expect(findText(cardsOf(dom).children[0] as StubEl, `${DOCK_WEAPON_PRICE} ★`)).toBe(true);
+    expect(findText(cardsOf(dom).children[1] as StubEl, '已售出')).toBe(true);
     expect((cardsOf(dom).children[1] as StubEl).disabled).toBe(true);
   });
 
@@ -388,7 +453,7 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(world.weaponCalls).toEqual([[0, undefined]]);
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
     expect((cardsOf(dom).children[0] as StubEl).disabled).toBe(true);
-    expect((cardsOf(dom).children[0] as StubEl).innerHTML).toContain('已售出');
+    expect(findText(cardsOf(dom).children[0] as StubEl, '已售出')).toBe(true);
     expect(toastOf(dom).textContent).toContain(towerName(TOWER_AUTOCANNON));
   });
 
@@ -446,10 +511,10 @@ describe('createRefitFlow 纯商店流程', () => {
   it('法令卡显示图片、名称与 25 星币价格，悬停才显示效果，购买后下架', () => {
     setup();
     const card = edictOf(dom, 0);
-    expect(card.innerHTML).toContain('<img');
-    expect(card.innerHTML).toContain(edictName(EDICT_AMMO));
-    expect(card.innerHTML).not.toContain(dockEdictEffect(EDICT_AMMO));
-    expect(card.innerHTML).toContain(`${DOCK_EDICT_PRICE} ★`);
+    expect(findImgSrc(card, 'image/svg+xml')).toBe(true); // 法令配图 = 程序化 SVG 徽章,img 节点
+    expect(findText(card, edictName(EDICT_AMMO))).toBe(true);
+    expect(findText(card, dockEdictEffect(EDICT_AMMO))).toBe(false);
+    expect(findText(card, `${DOCK_EDICT_PRICE} ★`)).toBe(true);
     fire(card, 'mouseenter');
     expect(tooltipOf(dom).textContent).toContain(dockEdictEffect(EDICT_AMMO).split(' ')[0]);
     expect(tooltipOf(dom).style.display).toBe('block');
@@ -458,7 +523,7 @@ describe('createRefitFlow 纯商店流程', () => {
     fire(card, 'click');
     expect(world.edictCalls).toEqual([0]);
     expect(card.disabled).toBe(true);
-    expect(card.innerHTML).toContain('已售出');
+    expect(findText(card, '已售出')).toBe(true);
   });
 
   it('修复按钮在满血时禁用，残血时调用 buyDockRepair', () => {
@@ -552,9 +617,8 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[1]!.stars = 1;
     setup();
     const card = cardsOf(dom).children[0] as StubEl;
-    expect(card.innerHTML).toContain('<img');
-    expect(card.innerHTML).toContain('autocannon-head.png');
-    expect(card.innerHTML).not.toContain('射程');
+    expect(findImgSrc(card, 'autocannon-head.png')).toBe(true); // 配图是独立 img 节点
+    expect(findText(card, '射程')).toBe(false);
     fire(card, 'mouseenter');
     expect(tooltipOf(dom).textContent).toContain('射程');
     expect(tooltipOf(dom).textContent).toContain('/s');
@@ -594,6 +658,213 @@ describe('createRefitFlow 纯商店流程', () => {
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     expect(next.weaponCalls).toEqual([[0, undefined]]);
     expect(world.weaponCalls).toEqual([]);
+  });
+
+  it('回执三档:入手新武器 / 三合一合到 ★★ / 连锁合到 ★★★ 变身,各说各的话', () => {
+    setup();
+    // 第一档:新入手,槽里落下 1★(最高星级 0 → 1,尾巴报「合到 ★」)
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(toastOf(dom).textContent).toBe(`已购入：${towerName(TOWER_AUTOCANNON)} 合到 ★`);
+    // 第二档:同型已有 2× 1★,再买 1 把 → 3× 1★ 当场合到 ★★
+    world.shopWeapons[0] = TOWER_RAILGUN;
+    world.weapons[0]!.type = TOWER_RAILGUN;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_RAILGUN;
+    world.weapons[1]!.stars = 1;
+    world.weaponCode = 0;
+    fire(refreshOf(dom), 'click'); // 重画货架(第 0 格现在是磁轨炮)
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(toastOf(dom).textContent).toBe(`已购入：${towerName(TOWER_RAILGUN)} 合到 ★★`);
+    // 第三档:2× 1★ + 2× 2★,再买 1 把 → 3× 1★ 合到 2★、3× 2★ 合到 3★ 当场变身
+    world.shopWeapons[0] = TOWER_RAILGUN;
+    world.weapons[0]!.type = TOWER_RAILGUN;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_RAILGUN;
+    world.weapons[1]!.stars = 1;
+    world.weapons[2]!.type = TOWER_RAILGUN;
+    world.weapons[2]!.stars = 2;
+    world.weapons[3]!.type = TOWER_RAILGUN;
+    world.weapons[3]!.stars = 2;
+    world.weaponCode = 0;
+    fire(refreshOf(dom), 'click');
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(toastOf(dom).textContent).toBe(
+      `已购入：${towerName(TOWER_RAILGUN)} 合 ★★★ 变身「${towerName(TOWER_ANNIHILATION)}」`,
+    );
+  });
+
+  it('换装回执照报旧武器;最高星级没涨就不带合成尾巴', () => {
+    world.replaceNeeded = true;
+    // 已持 1★ 自动机炮,再买一把自动机炮换掉别的槽:max 仍 1 → 无尾巴
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    for (let i = 1; i < world.weapons.length; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'click'); // 槽满 → 替换态
+    expect(pickerOf(dom).style.display).toBe('flex');
+    fire(chipOf(dom, 3), 'click'); // 换掉「激光棱镜 ★」
+    expect(toastOf(dom).textContent).toBe(`已换装：${towerName(TOWER_AUTOCANNON)} → ${towerName(TOWER_LASER)} ★`);
+  });
+
+  it('刷新回执:已刷新货架并报花费', () => {
+    setup();
+    fire(refreshOf(dom), 'click');
+    expect(toastOf(dom).textContent).toBe(`已刷新货架 —— 花费 ${DOCK_SHOP_REFRESH_PRICE} 星币`);
+  });
+
+  it('refreshLocale 重画文案且货架/折扣/余额/HP/pendingBuy 与业务计数全不动', async () => {
+    world.replaceNeeded = true;
+    world.shopDiscountIndex = DOCK_EDICT_COUNT + 0; // 第 0 格打特价
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    for (let i = 1; i < world.weapons.length; i++) {
+      world.weapons[i]!.type = TOWER_LASER;
+      world.weapons[i]!.stars = 1;
+    }
+    const flow = setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'click'); // 进入替换态(pendingBuy 生效)
+    expect(pickerOf(dom).style.display).toBe('flex');
+    const shelfBefore = JSON.stringify([world.shopWeapons, world.shopDiscountIndex]);
+    const coinsBefore = world.starCoins;
+    const hpBefore = world.ship.hp;
+    const callsBefore = {
+      weapon: world.weaponCalls.length,
+      refresh: world.refreshCalls,
+      edict: world.edictCalls.length,
+      repair: world.repairCalls,
+      complete: world.completeCalls,
+    };
+    await initI18n('en');
+    flow.refreshLocale();
+    // 世界账本一行不动:不刷新货架、不扣币、不买不修不整备(也不消费 rng —— 桩没有 rng 可消费)
+    expect(JSON.stringify([world.shopWeapons, world.shopDiscountIndex])).toBe(shelfBefore);
+    expect(world.starCoins).toBe(coinsBefore);
+    expect(world.ship.hp).toBe(hpBefore);
+    expect(world.weaponCalls.length).toBe(callsBefore.weapon);
+    expect(world.refreshCalls).toBe(callsBefore.refresh);
+    expect(world.edictCalls.length).toBe(callsBefore.edict);
+    expect(world.repairCalls).toBe(callsBefore.repair);
+    expect(world.completeCalls).toBe(callsBefore.complete);
+    // pendingBuy 保留:替换态还开着,提示翻成英文、武器名照旧
+    expect(pickerOf(dom).style.display).toBe('flex');
+    expect((pickerOf(dom).children[1] as StubEl).textContent).toContain('Click a slot');
+    expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(towerName(TOWER_AUTOCANNON));
+    // 静态标签/特价句翻成英文
+    expect(((shopHeadOf(dom).children[0] as StubEl).children[1] as StubEl).textContent).toBe('Ship Supply');
+    expect(segmentOf(dom).textContent).toContain('Segment 2');
+    expect(finishOf(dom).textContent).toContain('Finish refit');
+    const card = cardsOf(dom).children[0] as StubEl;
+    expect(findText(card, 'On sale')).toBe(true);
+    expect(findText(card, `${shopDiscountPrice(DOCK_WEAPON_PRICE)} ★`)).toBe(true);
+    // 特价整句(含原价)在悬停 tooltip 里,卡面只印「On sale N ★」
+    fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
+    expect(findText(tooltipOf(dom), 'was')).toBe(true);
+  });
+});
+
+describe('整备面板英文文案(todo 07 中英双验)', () => {
+  let dom: StubDom;
+  let world: StubWorld;
+  let resolved: number;
+
+  function setup(): ReturnType<typeof createRefitFlow> {
+    const flow = createRefitFlow({ world: worldAsWorld(world), onResolved: () => { resolved++; } });
+    flow.show(1);
+    return flow;
+  }
+
+  beforeEach(() => {
+    dom = installDom();
+    world = createStubWorld();
+    resolved = 0;
+  });
+
+  afterEach(() => dom.restore());
+
+  it('英文静态文案:眉题/标题/分区/修复/完成/替换层全走英文', async () => {
+    const flow = setup();
+    await initI18n('en');
+    flow.refreshLocale();
+    expect(((shopHeadOf(dom).children[0] as StubEl).children[0] as StubEl).textContent).toBe('DOCK SUPPLY');
+    expect(((shopHeadOf(dom).children[0] as StubEl).children[1] as StubEl).textContent).toBe('Ship Supply');
+    expect(segmentOf(dom).textContent).toBe('Refit · Segment 2');
+    expect((weaponHeadOf(dom).children[0] as StubEl).textContent).toBe('Weapon Supply');
+    expect((starSectionOf(dom).children[0] as StubEl).textContent).toBe('Edict Cards');
+    expect(pickerOf(dom).children[0]?.textContent).toBe('Weapon slots full');
+    expect(pickerOf(dom).children[WEAPON_PICKER_CANCEL_INDEX]?.textContent).toBe('Cancel');
+    expect(repairOf(dom).textContent).toContain(`+${Math.round(DOCK_REPAIR_FRACTION * 100)}%`);
+    expect(repairOf(dom).textContent).toContain(`${DOCK_REPAIR_PRICE} ★`);
+    expect(finishOf(dom).textContent).toBe('Finish refit · start next wave');
+    expect(refreshOf(dom).textContent).toBe(`Refresh ${DOCK_SHOP_REFRESH_PRICE} ★`);
+  });
+
+  it('英文拒绝码逐码有文案且不露 key/中文,未知码带原号', async () => {
+    await initI18n('en');
+    const codes = [
+      ACQUIRE_REPLACE_NEEDED,
+      SHOP_WEAPON_SOLD,
+      SHOP_NO_STARCOINS,
+      SHOP_NO_REFRESH_STARCOINS,
+      DOCK_EDICT_SOLD,
+      DOCK_NO_STARCOINS,
+      DOCK_HP_FULL,
+      REFIT_NOT_ACTIVE,
+    ];
+    for (const code of codes) {
+      const text = refitDenyMessage(code);
+      expect(text.length).toBeGreaterThan(4);
+      expect(text).not.toContain('ui:refit');
+      expect(text).not.toContain('理由码');
+      expect(text).not.toContain('星币');
+      expect(text).not.toContain('已售');
+    }
+    expect(refitDenyMessage(-999)).toContain('-999');
+  });
+
+  it('英文特价卡:On sale 句 + 划线,非特价格照旧;悬停 notes 走英文', async () => {
+    world.shopWeapons = [TOWER_AUTOCANNON, TOWER_LASER, TOWER_RAILGUN];
+    world.shopDiscountIndex = DOCK_EDICT_COUNT + 1; // 武器货架第 1 格特价
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    const flow = setup();
+    await initI18n('en');
+    flow.refreshLocale();
+    const sale = cardsOf(dom).children[1] as StubEl;
+    expect(findText(sale, 'On sale')).toBe(true);
+    expect(findStyle(sale, 'line-through')).toBe(true);
+    expect(findText(sale, `${DOCK_WEAPON_PRICE} ★`)).toBe(true);
+    expect(findText(sale, `${shopDiscountPrice(DOCK_WEAPON_PRICE)} ★`)).toBe(true);
+    const normal = cardsOf(dom).children[0] as StubEl;
+    expect(findStyle(normal, 'line-through')).toBe(false);
+    // 悬停 weaponNotes 的英文:持有清单与合成预告
+    fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
+    expect(tooltipOf(dom).textContent).toContain('Held ★ ×2');
+    expect(tooltipOf(dom).textContent).toContain('Buy to fuse ★★');
+  });
+
+  it('英文购买回执与刷新回执走整句', async () => {
+    const flow = setup();
+    await initI18n('en');
+    flow.refreshLocale();
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(toastOf(dom).textContent).toContain('Bought:');
+    expect(toastOf(dom).textContent).toContain(towerName(TOWER_AUTOCANNON));
+    fire(refreshOf(dom), 'click');
+    expect(toastOf(dom).textContent).toContain('Shelf refreshed');
+  });
+
+  it('英文法令卡售出后显示 Sold out', async () => {
+    const flow = setup();
+    await initI18n('en');
+    flow.refreshLocale();
+    fire(edictOf(dom, 0), 'click');
+    expect(world.edictCalls).toEqual([0]);
+    expect(findText(edictOf(dom, 0), 'Sold out')).toBe(true);
   });
 });
 

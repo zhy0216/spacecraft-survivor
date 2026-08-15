@@ -63,6 +63,7 @@ import {
   type World,
 } from '../sim/world';
 import { audioBus } from '../render/audio';
+import { t } from '../i18n';
 import {
   edictArt,
   edictHover,
@@ -130,9 +131,18 @@ const CARD_CSS =
   `color:${TEXT_COLOR};font:inherit;text-align:center;cursor:pointer;box-sizing:border-box;` +
   'display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:4px;' +
   'transition:border-color 100ms,background 100ms,opacity 100ms,transform 100ms;';
-const ITEM_ART_CSS =
-  'display:block;width:68px;height:68px;max-width:100%;object-fit:contain;border-radius:6px;' +
+/**
+ * 配图容器与图/字形节点分开管理:卡面上 img 与 span 相互替换(syncPanel 现画现换),
+ * 容器恒定 68×68,图 `object-fit:contain`、字形居中 —— 与 05 号 shipDiagram 的
+ * 「标签/数值/图标分节点」同一条纪律,翻译串与内容名一律只进 textContent。
+ */
+const ITEM_ART_BOX_CSS =
+  'display:flex;align-items:center;justify-content:center;width:68px;height:68px;' +
+  'max-width:100%;box-sizing:border-box;';
+const ITEM_ART_IMG_CSS =
+  'display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;' +
   'border:1px solid rgba(43,74,110,.6);background:rgba(5,7,13,.66);box-sizing:border-box;';
+const ITEM_ART_GLYPH_CSS = `color:${MUTED_COLOR};font-size:28px;`;
 const ITEM_NAME_CSS =
   `display:block;color:${OK_COLOR};font-size:11px;line-height:1.25;min-height:2.5em;` +
   'word-break:keep-all;overflow-wrap:normal;';
@@ -194,6 +204,12 @@ export interface RefitFlowUi {
   show(segmentIndex: number): void;
   /** 收面板。**不恢复战斗、不动 loop** —— 那是 main.ts 的事(World 与 ui 都不认识流程) */
   hide(): void;
+  /**
+   * 语言切换后原地重画(07 号):静态标签现刷,货架/替换选择器/舰船图用 syncPanel 重画
+   * (纯读 world,不消费 rng、不扣星币)。**保留** 货架 type 与售出状态、折扣位、pendingBuy、
+   * 舰船背包选择槽、星币/HP/可修复性;不改 shown、不调任何业务方法。
+   */
+  refreshLocale(): void;
 }
 
 /**
@@ -208,30 +224,35 @@ export interface RefitFlowOpts {
 }
 
 /**
- * 理由码 → 中文拒绝文案。只保留商店相关的码(weld/move/evolve 那批随甲板删除)。
+ * 理由码 → 拒绝文案的翻译入口(07 号迁移):从「码 → 中文字符串」改成「码 → key + vars」,
+ * t() 在调用时按当前语言取值,漏码会走 `deny.unknown` 兜底串(带原始编号,不冒充成别的理由)。
  * 独立成纯函数、不碰 DOM,于是能在 Node 里单测:漏一个码就会静默退化成兜底文案。
  */
+interface DenyEntry {
+  key: string;
+  vars?: Record<string, number | string>;
+}
+const DENY_MSGS: Record<number, DenyEntry> = {
+  [ACQUIRE_REPLACE_NEEDED]: { key: 'ui:refit.deny.replaceNeeded' },
+  [SHOP_WEAPON_SOLD]: { key: 'ui:refit.deny.weaponSold' },
+  // 两处「星币不足」共用同一句(拒绝码不同,文案同源)
+  [SHOP_NO_STARCOINS]: { key: 'ui:refit.deny.noStarCoins' },
+  [DOCK_NO_STARCOINS]: { key: 'ui:refit.deny.noStarCoins' },
+  [SHOP_NO_REFRESH_STARCOINS]: { key: 'ui:refit.deny.noRefreshCoins' },
+  [DOCK_EDICT_SOLD]: { key: 'ui:refit.deny.edictSold' },
+  [DOCK_HP_FULL]: { key: 'ui:refit.deny.hpFull' },
+  [REFIT_NOT_ACTIVE]: { key: 'ui:refit.deny.notActive' },
+};
+
+/** 动态 key 的 t() 调用:i18next 的插值参数类型按静态 key 展开,这里 key 是映射表里的字面量 */
+function tDynamic(key: string, vars?: Record<string, number | string>): string {
+  return (t as unknown as (key: string, vars?: Record<string, number | string>) => string)(key, vars);
+}
+
 export function refitDenyMessage(code: number): string {
-  switch (code) {
-    case ACQUIRE_REPLACE_NEEDED:
-      return '武器槽已满：先选择一把要替换的武器';
-    case SHOP_WEAPON_SOLD:
-      return '这把武器已经售出';
-    case SHOP_NO_STARCOINS:
-      return '星币不足，无法购买';
-    case SHOP_NO_REFRESH_STARCOINS:
-      return '星币不足，无法刷新货架';
-    case DOCK_EDICT_SOLD:
-      return '这张法令已经售出';
-    case DOCK_NO_STARCOINS:
-      return '星币不足，无法购买';
-    case DOCK_HP_FULL:
-      return '船体已满血，无需修复';
-    case REFIT_NOT_ACTIVE:
-      return '整备已经结束';
-    default:
-      return `整备操作被拒绝(理由码 ${code})`;
-  }
+  const entry = DENY_MSGS[code];
+  if (!entry) return tDynamic('ui:refit.deny.unknown', { code });
+  return tDynamic(entry.key, entry.vars);
 }
 
 /**
@@ -242,7 +263,7 @@ export function refitDenyMessage(code: number): string {
  */
 export function dockEdictEffect(type: number): string {
   const def = EDICTS[type];
-  if (!def) return '未知法令';
+  if (!def) return t('ui:refit.unknownEdict');
   return edictDesc(def);
 }
 
@@ -273,10 +294,8 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   const shopTitleBox = document.createElement('div');
   const shopEyebrow = document.createElement('div');
   shopEyebrow.style.cssText = EYEBROW_CSS;
-  shopEyebrow.textContent = 'DOCK SUPPLY';
   const shopTitle = document.createElement('div');
   shopTitle.style.cssText = SHOP_TITLE_CSS;
-  shopTitle.textContent = '舰装商店';
   shopTitleBox.append(shopEyebrow, shopTitle);
   shopHead.appendChild(shopTitleBox);
 
@@ -292,7 +311,6 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   weaponHead.className = 'starwreck-refit-section-head';
   const weaponTitle = document.createElement('div');
   weaponTitle.style.cssText = SECTION_TITLE_CSS;
-  weaponTitle.textContent = '武器商店';
   const refreshBtn = document.createElement('button');
   refreshBtn.style.cssText = REFRESH_BTN_CSS;
   refreshBtn.className = 'starwreck-refit-button';
@@ -310,13 +328,11 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   picker.style.display = 'none';
   const pickerTitle = document.createElement('div');
   pickerTitle.style.cssText = SECTION_TITLE_CSS;
-  pickerTitle.textContent = '武器槽已满';
   const pickerHint = document.createElement('div');
   pickerHint.style.cssText = `color:${MUTED_COLOR};font-size:11px;`;
   const pickerCancel = document.createElement('button');
   pickerCancel.style.cssText = BTN_CSS;
   pickerCancel.className = 'starwreck-refit-button';
-  pickerCancel.textContent = '取消购买';
   pickerCancel.addEventListener('click', cancelPicker);
   picker.append(pickerTitle, pickerHint, pickerCancel);
   weaponSection.appendChild(picker);
@@ -326,27 +342,12 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   starSection.style.cssText = SECTION_CSS;
   const starTitle = document.createElement('div');
   starTitle.style.cssText = SECTION_TITLE_CSS;
-  starTitle.textContent = '法令卡';
   const edictCards = document.createElement('div');
   edictCards.style.cssText = CARDS_CSS;
   starSection.append(starTitle, edictCards);
-  const edictRows: HTMLButtonElement[] = [];
-  for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
-    const row = document.createElement('button');
-    row.style.cssText = CARD_CSS;
-    row.className = 'starwreck-refit-card starwreck-refit-row';
-    row.addEventListener('click', () => buyDockEdict(i));
-    row.addEventListener('mouseenter', () => showEdictTip(i, row));
-    row.addEventListener('mouseleave', hideTip);
-    row.addEventListener('focus', () => showEdictTip(i, row));
-    row.addEventListener('blur', hideTip);
-    edictCards.appendChild(row);
-    edictRows.push(row);
-  }
   const repairBtn = document.createElement('button');
   repairBtn.style.cssText = BTN_CSS;
   repairBtn.className = 'starwreck-refit-button';
-  repairBtn.textContent = `修复船体 +${Math.round(DOCK_REPAIR_FRACTION * 100)}% HP · ${DOCK_REPAIR_PRICE} ★`;
   repairBtn.addEventListener('click', buyRepair);
   starSection.appendChild(repairBtn);
 
@@ -354,7 +355,6 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   finish.style.cssText = PRIMARY_BTN_CSS;
   finish.className = 'starwreck-refit-button';
   finish.style.marginTop = 'auto';
-  finish.textContent = '完成整备 · 开始下一波';
   finish.addEventListener('click', resolve);
 
   shop.append(shopHead, segment, weaponSection, starSection, finish);
@@ -381,28 +381,45 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   ui.append(root, toast);
 
   // 武器货架卡:与法令行同一条"只建一次、整局复用"的生命周期,syncPanel 只改文案与置灰
-  const weaponCards: HTMLButtonElement[] = [];
+  const weaponCardBodies: ShopCardEls[] = [];
   for (let i = 0; i < DOCK_WEAPON_COUNT; i++) {
-    const card = document.createElement('button');
-    card.style.cssText = CARD_CSS;
-    card.className = 'starwreck-refit-card';
-    card.addEventListener('click', () => buyWeapon(i));
+    const body = createShopCard('starwreck-refit-card');
+    const card = body.root;
+    const index = i;
+    card.addEventListener('click', () => buyWeapon(index));
     // 悬停同时做两件事：舰船上虚装预览 + 像图鉴一样弹说明。
     card.addEventListener('mouseenter', () => {
-      hoverCardChanged(i);
-      showWeaponTip(i, card);
+      hoverCardChanged(index);
+      showWeaponTip(index, card);
     });
     card.addEventListener('mouseleave', () => {
       hoverCardChanged(-1);
       hideTip();
     });
-    card.addEventListener('focus', () => showWeaponTip(i, card));
+    card.addEventListener('focus', () => showWeaponTip(index, card));
     card.addEventListener('blur', hideTip);
     cards.appendChild(card);
-    weaponCards.push(card);
+    weaponCardBodies.push(body);
+  }
+
+  // —— 法令卡行(与武器卡同一套 ShopCardEls 结构) ——
+  const edictCardBodies: ShopCardEls[] = [];
+  for (let i = 0; i < DOCK_EDICT_COUNT; i++) {
+    const body = createShopCard('starwreck-refit-card starwreck-refit-row');
+    const row = body.root;
+    const index = i;
+    row.addEventListener('click', () => buyDockEdict(index));
+    row.addEventListener('mouseenter', () => showEdictTip(index, row));
+    row.addEventListener('mouseleave', hideTip);
+    row.addEventListener('focus', () => showEdictTip(index, row));
+    row.addEventListener('blur', hideTip);
+    edictCards.appendChild(row);
+    edictCardBodies.push(body);
   }
 
   let shown = false;
+  /** 上一次 show() 的航段下标:语言切换重画航段行时要照它现读翻译 */
+  let lastSegment = 0;
   /** 待换槽购买:null = 不在替换态。index = 武器货架位,type 由世界验过 ≥ 0 */
   let pendingBuy: { index: number; type: number } | null = null;
   /** 鼠标停在第几张货架卡(-1 = 没有);只喂舰船图的幽灵预览,不参与任何裁决 */
@@ -433,18 +450,76 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(art.svg)}`;
   }
 
-  function itemArtHtml(art: CodexArt | null, fallback: string): string {
-    const src = artSrc(art);
-    if (src === null) {
-      return `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;color:${MUTED_COLOR};font-size:28px">${fallback}</span>`;
-    }
-    return `<img style="${ITEM_ART_CSS}" src="${src}" alt="">`;
+  /** 一张货架卡的可复用节点:图容器/名称/价格行分开管理,只建一次,之后只改 textContent */
+  interface ShopCardEls {
+    root: HTMLButtonElement;
+    /** 配图容器(img 与 fallback 字形互相替换,paintArt 现画现换) */
+    art: HTMLDivElement;
+    name: HTMLSpanElement;
+    /** 价格行 = 原价节点 + 特价节点(各自 textContent,行内含样式) */
+    price: HTMLDivElement;
+    base: HTMLSpanElement;
+    sale: HTMLSpanElement;
   }
 
+  function createShopCard(className: string): ShopCardEls {
+    const root = document.createElement('button');
+    root.style.cssText = CARD_CSS;
+    root.className = className;
+    const art = document.createElement('div');
+    art.style.cssText = ITEM_ART_BOX_CSS;
+    const name = document.createElement('span');
+    name.style.cssText = ITEM_NAME_CSS;
+    const base = document.createElement('span');
+    const sale = document.createElement('span');
+    const price = document.createElement('div');
+    price.style.cssText = ITEM_PRICE_CSS;
+    price.append(base, sale);
+    root.append(art, name, price);
+    return { root, art, name, price, base, sale };
+  }
+
+  /** 往配图容器里画图:有 src 摆 img,没有摆字形(售出/未知照样有东西可读) */
+  function paintArt(box: HTMLDivElement, art: CodexArt | null, fallback: string): void {
+    box.replaceChildren();
+    const src = artSrc(art);
+    if (src === null) {
+      const glyph = document.createElement('span');
+      glyph.style.cssText = ITEM_ART_GLYPH_CSS;
+      glyph.textContent = fallback;
+      box.appendChild(glyph);
+      return;
+    }
+    const img = document.createElement('img');
+    img.style.cssText = ITEM_ART_IMG_CSS;
+    img.src = src;
+    img.alt = '';
+    box.appendChild(img);
+  }
+
+  /** 价格行的节点版(原价 + 特价各一节点):打折时原价划线、特价亮金;不折只印原价 */
+  function paintPrice(card: ShopCardEls, discounted: boolean, base: number): void {
+    if (discounted) {
+      const sale = shopDiscountPrice(base);
+      card.base.textContent = t('ui:refit.price.normal', { base });
+      card.base.style.textDecoration = 'line-through';
+      card.base.style.color = MUTED_COLOR;
+      card.sale.textContent = t('ui:refit.price.saleCard', { sale });
+      card.sale.style.color = STAR_COLOR;
+      card.sale.style.display = '';
+      return;
+    }
+    card.base.textContent = t('ui:refit.price.normal', { base });
+    card.base.style.textDecoration = 'none';
+    card.base.style.color = TEXT_COLOR;
+    card.sale.style.display = 'none';
+  }
+
+  /** 悬停 tooltip 用的整句价格(打折 = 特价 + 原价一句带过),与卡面分开走不同句子 */
   function priceText(discounted: boolean, base: number): string {
     return discounted
-      ? `特价 ${shopDiscountPrice(base)} ★（原价 ${base} ★）`
-      : `${base} ★`;
+      ? t('ui:refit.price.sale', { sale: shopDiscountPrice(base), base })
+      : t('ui:refit.price.normal', { base });
   }
 
   function placeTip(anchor: HTMLElement): void {
@@ -472,33 +547,34 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     const mergeResult = mergeResultOf(type);
     const notes: string[] = [];
     if (c1 + c2 + c3 > 0) {
+      // ★ ×N 的持有清单是符号 + 数量,跨语言中性,作为插值变量塞进整句翻译
       const parts: string[] = [];
       if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
       if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
       if (c1 > 0) parts.push(`★ ×${c1}`);
-      notes.push(`已有 ${parts.join(' ')}`);
+      notes.push(t('ui:refit.note.held', { holdings: parts.join(' ') }));
     } else {
-      notes.push('入手 ★');
+      notes.push(t('ui:refit.note.newStar'));
     }
     const empty = firstEmptySlot();
     if (empty >= 0) {
-      notes.push(`装到「${slotFacingName(empty)}」空槽`);
+      notes.push(t('ui:refit.note.mountEmpty', { facing: slotFacingName(empty) }));
     } else {
       // 槽满但同型已凑两把 ★:买下走吸收合成(3 把合 1 把,不占槽),不需要替换
-      notes.push(c1 === 2 ? '槽已满 · 与两把 ★ 三合一,无需替换' : '槽已满 · 需替换一把');
+      notes.push(c1 === 2 ? t('ui:refit.note.slotFullAbsorb') : t('ui:refit.note.slotFullReplace'));
     }
     if (c1 === 2) {
       if (c2 === 2) {
         notes.push(
           mergeResult >= 0
-            ? `买下连合 ${'★'.repeat(3)} 变身「${towerName(mergeResult)}」`
-            : `买下连合 ${'★'.repeat(3)}`,
+            ? t('ui:refit.note.buyChainThree', { stars: '★'.repeat(3), name: towerName(mergeResult) })
+            : t('ui:refit.note.buyChainThreePlain', { stars: '★'.repeat(3) }),
         );
       } else {
-        notes.push(`买下合成 ${'★'.repeat(2)}`);
+        notes.push(t('ui:refit.note.buyFuse', { stars: '★'.repeat(2) }));
       }
     } else if (mergeResult >= 0 && c2 === 2) {
-      notes.push(`再合一把 ${'★'.repeat(2)} 变身「${towerName(mergeResult)}」`);
+      notes.push(t('ui:refit.note.fuseOneMore', { stars: '★'.repeat(2), name: towerName(mergeResult) }));
     }
     return notes;
   }
@@ -569,22 +645,12 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   }
 
   /**
-   * 货架价格的 HTML(打折机制):原价恒印;本格是特价位(shopDiscountIndex)时原价划线、
-   * 特价亮金(与星币同款金色),一眼就是"这件打折"。特价数走 shopDiscountPrice ——
-   * 与 World 扣费共用同一份算法,印 15 就扣 15,绝不各说各话。
-   */
-  function priceHtml(discounted: boolean, base: number): string {
-    if (!discounted) return `${base} ★`;
-    return (
-      `<span style="color:${STAR_COLOR}">特价 <s style="color:${MUTED_COLOR}">${base} ★</s>` +
-      ` ${shopDiscountPrice(base)} ★</span>`
-    );
-  }
-
-  /**
    * 全店唯一的刷新点:任何购买/刷新/换局后当场重刷。置灰只认"已售出/满血"两样 UI 读数;
    * **星币不足不置灰**,那是点击时的 deny 反馈 —— 余额随时可能被另一张卡花掉,置灰态会
    * 过期,真正的裁决始终以 world 的返回码为准。
+   *
+   * **纯读**:只读 world(货架/法令/HP/折扣位)并把面板画成节点,不调用任何业务方法 ——
+   * refreshLocale 也走它,于是语言切换不消费 rng、不扣星币。
    */
   function syncPanel(): void {
     hideTip();
@@ -596,52 +662,49 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     picker.style.display = pickerOpen ? 'flex' : 'none';
     if (pendingBuy) {
       const name = towerName(pendingBuy.type);
-      pickerHint.textContent = `在中间舰船背包上点一个武器槽，把它换成「${name}」；取消不扣星币`;
+      pickerHint.textContent = t('ui:refit.picker.hint', { name });
     }
     setGrey(refreshBtn, pickerOpen);
-    refreshBtn.textContent = `刷新 ${DOCK_SHOP_REFRESH_PRICE} ★`;
-    for (let i = 0; i < weaponCards.length; i++) {
-      const card = weaponCards[i]!;
+    refreshBtn.textContent = t('ui:refit.refresh', { price: DOCK_SHOP_REFRESH_PRICE });
+
+    for (let i = 0; i < weaponCardBodies.length; i++) {
+      const body = weaponCardBodies[i]!;
       const type = world.shopWeapons[i];
       const sold = type === undefined || type < 0;
-      setGrey(card, sold || pickerOpen);
+      setGrey(body.root, sold || pickerOpen);
       if (sold) {
-        card.innerHTML =
-          `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;` +
-          `color:${MUTED_COLOR};font-size:24px">—</span>` +
-          `<span style="${ITEM_NAME_CSS}color:${MUTED_COLOR}">${type === undefined ? '本轮无货' : '已售出'}</span>`;
+        paintArt(body.art, null, '—');
+        body.name.textContent = type === undefined ? t('ui:refit.sold.out') : t('ui:refit.sold.sold');
+        body.name.style.color = MUTED_COLOR;
+        body.price.style.display = 'none';
         continue;
       }
+      body.name.style.color = OK_COLOR;
+      body.price.style.display = '';
       const def = TOWERS[type];
-      card.innerHTML =
-        itemArtHtml(towerArt(type), '?') +
-        `<span style="${ITEM_NAME_CSS}">${def === undefined ? `未知武器(${type})` : towerName(type)}</span>` +
-        `<span style="${ITEM_PRICE_CSS}">${priceHtml(
-          world.shopDiscountIndex === DOCK_EDICT_COUNT + i,
-          DOCK_WEAPON_PRICE,
-        )}</span>`;
+      body.name.textContent = def === undefined ? t('ui:refit.sold.unknown', { type }) : towerName(type);
+      paintArt(body.art, towerArt(type), '?');
+      paintPrice(body, world.shopDiscountIndex === DOCK_EDICT_COUNT + i, DOCK_WEAPON_PRICE);
     }
 
     // 法令卡
-    for (let i = 0; i < edictRows.length; i++) {
-      const row = edictRows[i]!;
+    for (let i = 0; i < edictCardBodies.length; i++) {
+      const body = edictCardBodies[i]!;
       const type = world.dockEdictOffers[i];
       const sold = type === undefined || type < 0;
-      setGrey(row, sold);
+      setGrey(body.root, sold);
       if (sold) {
-        row.innerHTML =
-          `<span style="${ITEM_ART_CSS}display:flex;align-items:center;justify-content:center;` +
-          `color:${MUTED_COLOR};font-size:24px">—</span>` +
-          `<span style="${ITEM_NAME_CSS}color:${MUTED_COLOR}">${type === undefined ? '本轮无货' : '已售出'}</span>`;
-      } else {
-        row.innerHTML =
-          itemArtHtml(edictArt(type), '◆') +
-          `<span style="${ITEM_NAME_CSS}">${edictName(type)}</span>` +
-          `<span style="${ITEM_PRICE_CSS}">${priceHtml(
-            world.shopDiscountIndex === i,
-            DOCK_EDICT_PRICE,
-          )}</span>`;
+        paintArt(body.art, null, '—');
+        body.name.textContent = type === undefined ? t('ui:refit.sold.out') : t('ui:refit.sold.sold');
+        body.name.style.color = MUTED_COLOR;
+        body.price.style.display = 'none';
+        continue;
       }
+      body.name.style.color = OK_COLOR;
+      body.price.style.display = '';
+      body.name.textContent = edictName(type);
+      paintArt(body.art, edictArt(type), '◆');
+      paintPrice(body, world.shopDiscountIndex === i, DOCK_EDICT_PRICE);
     }
 
     // 付费修复:满血置灰
@@ -650,6 +713,28 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     // 舰船背包:与货架同一次重画。买完一把武器、修完一次船,中间的图当帧就跟上 ——
     // 两块面板要是各刷各的,玩家就得靠"关了再开"去确认自己刚买的东西真的装上了
     shipDiagram.paint(world, diagramState());
+  }
+
+  /** 静态标签(店头/分区标题/按钮)按当前语言现刷 —— show 与 refreshLocale 共用 */
+  function syncStatic(): void {
+    shopEyebrow.textContent = t('ui:refit.eyebrow');
+    shopTitle.textContent = t('ui:refit.title');
+    weaponTitle.textContent = t('ui:refit.weapons');
+    starTitle.textContent = t('ui:refit.edicts');
+    pickerTitle.textContent = t('ui:refit.picker.title');
+    pickerCancel.textContent = t('ui:refit.picker.cancel');
+    finish.textContent = t('ui:refit.finish');
+    segment.textContent =
+      lastSegment >= WAVE_SEGMENTS.length
+        ? t('ui:refit.segment.final')
+        : t('ui:refit.segment.line', { n: lastSegment + 1 });
+    repairBtn.textContent = t('ui:refit.repair', {
+      pct: Math.round(DOCK_REPAIR_FRACTION * 100),
+      price: DOCK_REPAIR_PRICE,
+    });
+    // 舰船图的标题/副题/法令标题只在这一处刷(shipDiagram.paint 不碰它们);正文由 syncPanel
+    // 再用当前世界状态重画一遍,所以这里刷完标题即可,画布以最后一次 paint 为准
+    shipDiagram.refreshLocale();
   }
 
   /**
@@ -664,17 +749,23 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     };
   }
 
-  /** 买成之后的回执:三合一当场升星 / ★★★ 变身时,回执把结果说出来而不是干巴巴的"已购入" */
-  function weaponReceipt(type: number, before: { max: number; result: number }): string {
-    const name = towerName(type);
+  /** 买成之后的合成尾巴:'' / ' 合到 ★★' / ' 合 ★★★ 变身「…」' —— 独立成函数,买入回执与
+   * 换装回执共用同一份(todo 07 修掉旧版对「已购入：」的字符串切片:切片在翻译下必断) */
+  function weaponFusionSuffix(type: number, before: { max: number; result: number }): string {
     const result = mergeResultOf(type);
     const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
     if (afterResult > before.result) {
-      return `已购入：${name} 合 ${'★'.repeat(3)} 变身「${towerName(result)}」`;
+      return t('ui:refit.receipt.transformSuffix', { stars: '★'.repeat(3), name: towerName(result) });
     }
     const afterMax = slotMaxStars(world.weapons, type);
-    if (afterMax > before.max) return `已购入：${name} 合到 ${'★'.repeat(afterMax)}`;
-    return `已购入：${name}`;
+    if (afterMax > before.max) return t('ui:refit.receipt.fusedSuffix', { stars: '★'.repeat(afterMax) });
+    return '';
+  }
+
+  /** 买成之后的回执:三合一当场升星 / ★★★ 变身时,回执把结果说出来而不是干巴巴的"已购入" */
+  function weaponReceipt(type: number, before: { max: number; result: number }): string {
+    const name = towerName(type);
+    return t('ui:refit.receipt.purchased', { name }) + weaponFusionSuffix(type, before);
   }
 
   /**
@@ -684,8 +775,8 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
    */
   function buyWeapon(index: number): void {
     if (!shown || pendingBuy) return;
-    const card = weaponCards[index];
-    if (!card || card.disabled) return; // 售出置灰自守:真 DOM 不会点穿 disabled,桩会
+    const body = weaponCardBodies[index];
+    if (!body || body.root.disabled) return; // 售出置灰自守:真 DOM 不会点穿 disabled,桩会
     const type = world.shopWeapons[index];
     if (type === undefined || type < 0) return;
     const before = weaponBefore(type);
@@ -732,11 +823,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    // 换装的回执:换下的旧武器照报,三合一升星/★★★ 变身照 weaponReceipt 的口径补一句
-    const receipt = weaponReceipt(pending.type, before);
+    // 换装的回执:换下的旧武器照报,三合一升星/★★★ 变身照 weaponFusionSuffix 的口径补一句
     const name = towerName(pending.type);
-    const fusion = receipt.slice(`已购入：${name}`.length); // '' / ' 合到 ★★' / ' 合 ★★★ 变身「…」'
-    flash(oldName ? `已换装：${name}${fusion} → ${oldName}` : receipt, OK_COLOR);
+    const fusion = weaponFusionSuffix(pending.type, before);
+    flash(
+      oldName ? t('ui:refit.receipt.swapped', { name, fusion, oldName }) : weaponReceipt(pending.type, before),
+      OK_COLOR,
+    );
     audioBus.playPlace();
     syncPanel();
   }
@@ -757,7 +850,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    flash(`已刷新货架 —— 花费 ${DOCK_SHOP_REFRESH_PRICE} 星币`, OK_COLOR);
+    flash(t('ui:refit.receipt.refreshed', { price: DOCK_SHOP_REFRESH_PRICE }), OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }
@@ -765,8 +858,8 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   /** 买第 index 张法令卡:即时生效、无放置 —— 法令是全船被动,点一下就是买(语义同升级卡) */
   function buyDockEdict(index: number): void {
     if (!shown) return;
-    const row = edictRows[index];
-    if (!row || row.disabled) return;
+    const body = edictCardBodies[index];
+    if (!body || body.root.disabled) return;
     const type = world.dockEdictOffers[index];
     const code = world.buyDockEdict(index);
     if (code < 0) {
@@ -774,8 +867,8 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    const name = type !== undefined && type >= 0 ? edictName(type) : '法令';
-    flash(`已购入：${name}`, OK_COLOR);
+    const name = type !== undefined && type >= 0 ? edictName(type) : t('ui:refit.receipt.edictFallback');
+    flash(t('ui:refit.receipt.edict', { name }), OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }
@@ -789,7 +882,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    flash(`已修复船体 +${Math.round(DOCK_REPAIR_FRACTION * 100)}%`, OK_COLOR);
+    flash(t('ui:refit.receipt.repaired', { pct: Math.round(DOCK_REPAIR_FRACTION * 100) }), OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }
@@ -824,16 +917,23 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       pendingBuy = null;
       hoverCard = -1;
       clearFlash();
-      segment.textContent =
-        segmentIndex >= WAVE_SEGMENTS.length
-          ? '整备 · 决战在即'
-          : `整备 · 航段 ${segmentIndex + 1}`;
+      lastSegment = segmentIndex;
+      syncStatic();
       // Tweakpane 是运行时追加到 body 的后置兄弟;临时抬高 #ui 的堆叠层,确保固定商店盖住它
       ui.style.zIndex = '10';
       root.style.display = 'block';
       syncPanel();
     },
     hide,
+    // 语言切换后原地重画(07 号)。只重画文案与节点内容,syncPanel 纯读 world:
+    // 不调 refreshShop/buy*/completeRefit、不消费 rng、不扣星币。货架 type 与售出状态、
+    // 折扣位、pendingBuy、舰船背包选择槽、星币/HP/可修复性全部照旧 —— 一条业务路径都不走。
+    // shown 不变(收着 = 无操作,下次 show 会按当前语言重刷)。
+    refreshLocale(): void {
+      if (!shown) return;
+      syncStatic();
+      syncPanel();
+    },
     setWorld(next: World): void {
       world = next;
       hide();
