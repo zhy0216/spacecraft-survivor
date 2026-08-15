@@ -263,6 +263,7 @@ const edictOf = (dom: StubDom, index: number): StubEl => edictCardsOf(dom).child
 const repairOf = (dom: StubDom): StubEl => starSectionOf(dom).children[2] as StubEl;
 const finishOf = (dom: StubDom): StubEl => shopOf(dom).children[4] as StubEl;
 // 舰船图:root 的第二个孩子是它的容器(shop 仍是第一个),里头是 shipDiagram.root
+const boardWrapOf = (dom: StubDom): StubEl => rootOf(dom).children[1] as StubEl;
 const boardOf = (dom: StubDom): StubEl => (rootOf(dom).children[1] as StubEl).children[0] as StubEl;
 const headOf = (dom: StubDom): StubEl => boardOf(dom).children[0] as StubEl;
 const ringOf = (dom: StubDom): StubEl => boardOf(dom).children[2] as StubEl;
@@ -305,6 +306,15 @@ describe('createRefitFlow 纯商店流程', () => {
     expect((shopHeadOf(dom).children[0] as StubEl).children[0]?.textContent).toBe('DOCK SUPPLY');
     expect((shopHeadOf(dom).children[0] as StubEl).children[1]?.textContent).toBe('舰装商店');
     expect(cardsOf(dom).children.length).toBe(DOCK_WEAPON_COUNT);
+  });
+
+  it('舰船背包相对整屏居中，与右侧货架交叠时货架仍在上层', () => {
+    setup();
+    expect(rootOf(dom).style.cssText).toContain('transparent 360px');
+    expect(boardWrapOf(dom).style.cssText).toContain('inset:0');
+    expect(boardWrapOf(dom).style.cssText).not.toContain('right:340px');
+    expect(boardWrapOf(dom).style.cssText).toContain('z-index:1');
+    expect(shopOf(dom).style.cssText).toContain('z-index:2');
   });
 
   it('最后一跨(Boss 登场那一跨)的越界段下标:标题不印"航段 5",改拟决战字样', () => {

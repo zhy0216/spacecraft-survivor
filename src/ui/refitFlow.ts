@@ -85,16 +85,20 @@ const LINE_COLOR = '#2b4a6e';
 const STAR_COLOR = '#ffd86e';
 const ROOT_CSS =
   'position:fixed;inset:0;z-index:20;display:none;pointer-events:none!important;' +
-  // 淡幕:整备是时停时刻,压暗背后那一屏虫潮才读得清货架与舰船图(仍透出地图,信标位置不丢)
-  'background:radial-gradient(120% 100% at 30% 50%,rgba(4,8,14,.42) 0%,rgba(3,6,11,.68) 100%);' +
+  // 淡幕从 HUD 左列的右边才开始:左列最宽 300px + 48px 边距，再留 12px 呼吸缝。
+  // 这样星币/船体/火力面板与背包一样清晰，中央战场仍会逐渐压暗以托住舰船图。
+  'background:linear-gradient(90deg,transparent 0,transparent 360px,rgba(4,8,14,.42) 460px,rgba(3,6,11,.68) 100%);' +
   `color:${TEXT_COLOR};font:13px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;` +
   '-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;';
-/** 舰船背包的容器:占满货架以外的中央区,屏太矮时让它自己滚动 */
+/**
+ * 舰船背包的容器:桌面端相对**整块屏幕**居中,不再按「扣掉右侧商店」后的剩余区域居中。
+ * 右侧货架有更高的层级，窄屏上两者一旦交叠，仍由货架盖住背包边缘，不会挡住购买操作。
+ */
 const BOARD_WRAP_CSS =
-  'position:absolute;left:0;top:0;bottom:0;right:340px;display:flex;align-items:center;' +
+  'position:absolute;inset:0;z-index:1;display:flex;align-items:center;' +
   'justify-content:center;padding:20px;box-sizing:border-box;overflow:auto;pointer-events:none;';
 const SHOP_CSS =
-  'position:absolute;right:0;top:0;height:100%;width:340px;box-sizing:border-box;display:flex;' +
+  'position:absolute;right:0;top:0;z-index:2;height:100%;width:340px;box-sizing:border-box;display:flex;' +
   'pointer-events:auto;flex-direction:column;gap:14px;padding:24px 22px 20px;overflow:auto;' +
   `border-left:1px solid ${LINE_COLOR};background:linear-gradient(180deg,#080e18 0%,#060b13 100%);` +
   'box-shadow:-20px 0 48px rgba(0,0,0,.34);';

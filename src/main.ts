@@ -364,8 +364,8 @@ async function boot(): Promise<void> {
   /**
    * 商店面板(整备)此刻是否开着。**HUD 淡出按它豁免**:商店优化后星币余额从店头挪回
    * 左上统计版(HUD 左列的 ★ 星币),店开着的这段时间 HUD 不许被 run.paused 淡成 0.06 ——
-   * 否则那行余额在买东西的时候正好看不见。商店自己的淡幕(半透明渐变)已经压着战场,
-   * HUD 保持全亮既给余额让路,又不与商店抢焦点(它 pointer-events:none,叠放在下层)。
+   * 否则那行余额在买东西的时候正好看不见。商店自己的淡幕从左列右边才开始,
+   * HUD 左列与背包保持同等清晰，又不与商店抢焦点(它 pointer-events:none,叠放在下层)。
    */
   let refitOpen = false;
 
@@ -858,7 +858,7 @@ async function boot(): Promise<void> {
     // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
     // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。
     // **商店整备期间豁免淡出**(refitOpen):星币余额已从店头挪回左上统计版,店开着时
-    // 那行读数必须亮着 —— 商店自己的半透明淡幕压在它上面,亮度仍够读(见 refitOpen 注释)
+    // 那行读数必须亮着 —— 商店淡幕从 HUD 左列右边才开始，左列不再被压暗(见 refitOpen 注释)
     hud.setPaused(run.paused && !refitOpen);
     hud.sync();
 
