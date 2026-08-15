@@ -142,10 +142,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v8 旧档判废(子弹星级快照升版):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v9 旧档判废(增压校准升版:法令层数表 10 → 11):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v8json = serializeRunSnapshot(snap).replace('"v":9', '"v":8');
-    expect(parseRunSnapshot(v8json)).toBeNull();
+    const v9json = serializeRunSnapshot(snap).replace('"v":10', '"v":9');
+    expect(parseRunSnapshot(v9json)).toBeNull();
   });
 
   it('特价位(打折机制)随档保存:读档后特价不丢,checksum 一致', () => {

@@ -51,6 +51,8 @@ export interface EdictBuffs {
   turnRateAdd: number;
   /** 巡航速度倍率(> 1 = 更快,连乘) */
   cruiseSpeedMul: number;
+  /** 加速技能冷却的加减秒(加法,负值 = 更短;来自增压校准) */
+  boostCooldownAdd: number;
   /**
    * 每次击杀掉星币的概率,**已含基础值**(data/economy 的 STARCOIN_DROP_CHANCE)且已夹在 [0, 1]。
    * 下游(World.onEnemyKilled)直接拿它与一次 rng 比大小,不再自己加基础值 ——
@@ -76,6 +78,7 @@ export function createEdictBuffs(): EdictBuffs {
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChance: clamp01(STARCOIN_DROP_CHANCE),
   };
 }
@@ -111,6 +114,7 @@ export function aggregateEdictBuffs(levels: readonly number[], out: EdictBuffs):
   out.magnetRadiusMul = 1;
   out.turnRateAdd = 0;
   out.cruiseSpeedMul = 1;
+  out.boostCooldownAdd = 0;
   let starChance = STARCOIN_DROP_CHANCE;
 
   for (let i = 0; i < EDICT_KIND_COUNT; i++) {
@@ -132,6 +136,7 @@ export function aggregateEdictBuffs(levels: readonly number[], out: EdictBuffs):
       out.magnetRadiusMul *= Math.pow(def.magnetRadiusMul, n);
       out.turnRateAdd += def.turnRateAdd * n; // 加法档
       out.cruiseSpeedMul *= Math.pow(def.cruiseSpeedMul, n);
+      out.boostCooldownAdd += def.boostCooldownAdd * n; // 加法档(负值 = 冷却更短)
       starChance += def.starCoinChanceAdd * n; // 加法档(绝对概率点数)
     }
   }

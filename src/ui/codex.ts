@@ -189,6 +189,7 @@ export function edictSummaryText(def: EdictDef): string {
   if (def.magnetRadiusMul !== 1) parts.push(`磁吸 ×${formatMul(def.magnetRadiusMul)}`);
   if (def.turnRateAdd !== 0) parts.push(`转向 +${def.turnRateAdd}°/s`);
   if (def.cruiseSpeedMul !== 1) parts.push(`巡航 ×${formatMul(def.cruiseSpeedMul)}`);
+  if (def.boostCooldownAdd !== 0) parts.push(`加速 ${def.boostCooldownAdd > 0 ? '+' : ''}${formatMul(def.boostCooldownAdd)}s`);
   if (def.starCoinChanceAdd !== 0) parts.push(`星币 +${Math.round(def.starCoinChanceAdd * 100)}%`);
   return `${scope}:${parts.length === 0 ? '—' : parts.join(' · ')}`;
 }

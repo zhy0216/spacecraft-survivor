@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AFFIXES } from '../data/affixes';
 import { BOSS, ENEMIES, KIND_BEETLE } from '../data/enemies';
-import { EDICT_AMMO, EDICT_GYRO, EDICT_OVERDRIVE, EDICT_STARCHART, EDICTS } from '../data/edicts';
+import { EDICT_AMMO, EDICT_BOOST, EDICT_GYRO, EDICT_OVERDRIVE, EDICT_STARCHART, EDICTS } from '../data/edicts';
 import {
   THR_CHARGE,
   towerAoeDamage,
@@ -129,6 +129,7 @@ describe('formatMul / edictSummaryText', () => {
     expect(edictSummaryText(EDICTS[EDICT_OVERDRIVE]!)).toBe('全船:伤害 ×1.15');
     expect(edictSummaryText(EDICTS[EDICT_GYRO]!)).toBe('全船:转向 +10°/s');
     expect(edictSummaryText(EDICTS[EDICT_STARCHART]!)).toBe('全船:星币 +2%');
+    expect(edictSummaryText(EDICTS[EDICT_BOOST]!)).toBe('全船:加速 -0.3s');
   });
 
   it('全中性字段(被改坏的条目)回落成破折号,不印空串', () => {

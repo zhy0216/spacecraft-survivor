@@ -39,7 +39,7 @@ export const EDICT_CAPACITOR = 2; // 电容协议(原电容组)
 export const EDICT_ARMOR = 3; // 装甲协议(原装甲舱 + 结构加固)
 export const EDICT_XP = 4; // 增幅协议(原经验增幅器)
 export const EDICT_MAGNET = 5; // 磁力协议(原磁力收集器 + 磁力过载)
-// —— 机动档(原法令独有的两条,原样保留)——
+// —— 机动档(原法令独有的两条,原样保留;增压校准是第三条,动的是加速技能冷却)——
 export const EDICT_GYRO = 6; // 重心校准
 export const EDICT_CRUISE = 7; // 巡航校准
 // —— 经济档(用户设计会:星币改 10% 概率掉落,这条是玩家对抗"抽不到星币"的唯一投资方向)——
@@ -52,7 +52,13 @@ export const EDICT_STARCHART = 8; // 星图协议
  * 它进的是卡池,不是白送的永久加成)。
  */
 export const EDICT_OVERDRIVE = 9; // 超载协议
-export const EDICT_KIND_COUNT = 10;
+/**
+ * 机动档第三条:加速技能(空格)冷却 -0.3 秒/层(5 层 = 5 → 3.5s,真空期 ~3.9 → 2.4s)。
+ * 排在第 10 位而不是跟在巡航校准后面:0..9 是旧存档的掩码位,EDICT_OVERDRIVE 的下标位尤其
+ * 不许动(见 data/unlocks.ts),新法令一律往后追加。
+ */
+export const EDICT_BOOST = 10; // 增压校准
+export const EDICT_KIND_COUNT = 11;
 
 /**
  * 同一条法令的叠层上限(用户设计会定死)。与 data/towers.ts 的 STAR_MAX 同一条待遇:
@@ -103,6 +109,11 @@ export interface EdictDef {
   /** 巡航速度倍率,连乘;不用填 1 */
   cruiseSpeedMul: number;
   /**
+   * 加速技能冷却的加减秒,**加法**(负值 = 更短,增压校准 = -0.3)。全表唯一的负向加法轴:
+   * 这条"变强"的方向是减,加法档不许为负的审计(edicts.test)只对它开绿灯。不用填 0
+   */
+  boostCooldownAdd: number;
+  /**
    * 星币掉落概率加点(**加法**,绝对概率:0.08 = +8 个百分点)。
    * 基础概率在 data/economy.ts 的 STARCOIN_DROP_CHANCE;总概率夹在 [0, 1]
    * (夹取在 sim/edictBuffs.ts,本表只管"这一层加几个点")。不用填 0
@@ -141,6 +152,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x4fb3a5, // 占位待调(青绿)
   },
@@ -159,6 +171,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x5aa8d8, // 占位待调(中调天蓝)
   },
@@ -177,6 +190,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x7d8ee8, // 占位待调(偏紫的蓝)
   },
@@ -197,6 +211,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x8fa6bd, // 占位待调(低饱和钢蓝)
   },
@@ -217,6 +232,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0xa0e8cf, // 占位待调(冷薄荷绿:b > r 守住冷色审计)
   },
@@ -237,6 +253,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1.3, // 磁吸半径 +30%(连乘,5 层 ≈ ×3.7 ⇒ 80 → 297,约等于旧的 240 宽容档)
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x8ab8e8, // 占位待调(冷灰蓝)
   },
@@ -255,6 +272,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 10, // 转向 +10°/s(加法,5 层 = +50 ⇒ 基线 100 翻半倍)
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x9fb0e0, // 占位待调(淡靛)
   },
@@ -273,6 +291,7 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1.1, // 巡航速度 +10%(连乘,5 层 ≈ ×1.61)
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0x6fd0e8, // 占位待调(冷青)
   },
@@ -296,12 +315,13 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0.02, // 星币掉落概率 +2 个百分点(基础抬到 23% 后占位待调)
     tint: 0xb8d8f0, // 占位待调(最浅的一档冷白蓝:与"星"的语感对上)
   },
   {
     // 进阶法令(解锁才进池,见 data/unlocks.ts 的 edict-rapid 条目)。
-    // 九条基础法令各占一条轴之后,**全武器伤害**是唯一没被占掉的那条 —— 也正因为它谁都吃,
+    // 十条基础法令各占一条轴之后,**全武器伤害**是唯一没被占掉的那条 —— 也正因为它谁都吃,
     // 才配当解锁奖励。倍率取 1.15 而不是更高:5 层 ≈ ×2.01,与一把武器从 Lv1 升到 Lv5 同量级
     type: EDICT_OVERDRIVE,
     name: '超载协议',
@@ -317,8 +337,30 @@ export const EDICTS: EdictDef[] = [
     magnetRadiusMul: 1,
     turnRateAdd: 0,
     cruiseSpeedMul: 1,
+    boostCooldownAdd: 0,
     starCoinChanceAdd: 0,
     tint: 0xa8c0ff, // 占位待调(高亮靛白:全场唯一一条碰伤害的法令,色上也该最扎眼)
+  },
+  {
+    type: EDICT_BOOST,
+    name: '增压校准',
+    // 机动档第三条:加速技能(空格)冷却 -0.3 秒/层(5 层 = -1.5 ⇒ 5 → 3.5s,真空期 ~3.9 → ~2.4s)。
+    // 加法档取负值是这条轴的本意 —— "变强"的方向是减;触发点的 ≥ 0 夹取在 sim/world.ts。
+    throttle: EDICT_THR_NONE,
+    fireRateMul: 1,
+    reloadMul: 1,
+    heatMaxMul: 1,
+    chargeRateMul: 1,
+    damageMul: 1,
+    hullHpAdd: 0,
+    damageTakenMul: 1,
+    xpMul: 1,
+    magnetRadiusMul: 1,
+    turnRateAdd: 0,
+    cruiseSpeedMul: 1,
+    boostCooldownAdd: -0.3, // 加速冷却 -0.3 秒/层(占位待调)
+    starCoinChanceAdd: 0,
+    tint: 0x58e0c0, // 占位待调(冷薄荷青:b > r 守住冷色审计,且与各系/各法令都不撞)
   },
 ];
 
@@ -400,6 +442,9 @@ export function edictDesc(def: EdictDef): string {
     parts.push(`转向 ${def.turnRateAdd > 0 ? '+' : ''}${num(def.turnRateAdd)}°/s`);
   }
   if (def.cruiseSpeedMul !== 1) parts.push(`巡航速度 ×${num(def.cruiseSpeedMul)}`);
+  if (def.boostCooldownAdd !== 0) {
+    parts.push(`加速冷却 ${def.boostCooldownAdd > 0 ? '+' : ''}${num(def.boostCooldownAdd)}s`);
+  }
   if (def.starCoinChanceAdd !== 0) {
     parts.push(`星币概率 ${def.starCoinChanceAdd > 0 ? '+' : ''}${num(def.starCoinChanceAdd * 100)}%`);
   }

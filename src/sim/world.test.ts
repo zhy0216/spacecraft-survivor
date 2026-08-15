@@ -6,7 +6,7 @@ import {
   MAGNET_PICKUP_SURGE,
   STARTING_STAR_COINS,
 } from '../data/economy';
-import { EDICT_ARMOR, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
+import { EDICT_ARMOR, EDICT_BOOST, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
 import { KIND_BOSS, KIND_SWARM } from '../data/enemies';
 import {
   STAR_MAX,
@@ -258,6 +258,24 @@ describe('加速技能(空格)', () => {
     const restTicks = Math.ceil(world.boostCooldown * 60) + 2;
     for (let i = 0; i < restTicks; i++) world.step(cmd);
     expect(world.boostTime).toBeGreaterThan(0);
+  });
+
+  it('增压校准:每层扣 0.3 秒冷却(3 层 = 5 → 4.1s),触发即按当前聚合生效', () => {
+    const world = new World(11);
+    const cmd = { desiredHeading: { x: 1, y: 0 }, boost: true };
+    for (let i = 0; i < 3; i++) world.grantEdict(EDICT_BOOST);
+    world.step(cmd);
+    // 触发那一帧的冷却 = base + 法令(-0.9),再被当帧的递减吃掉 1/60
+    expect(world.boostCooldown).toBeCloseTo(tuning.boostCooldown - 0.3 * 3 - 1 / 60, 3);
+    expect(world.boostCooldown).toBeGreaterThan(0);
+  });
+
+  it('增压校准叠满 5 层冷却仍为正:触发点的 ≥ 0 夹取不让冷却变成负的', () => {
+    const world = new World(12);
+    for (let i = 0; i < EDICT_MAX_LEVEL; i++) world.grantEdict(EDICT_BOOST);
+    const cmd = { desiredHeading: { x: 1, y: 0 }, boost: true };
+    world.step(cmd);
+    expect(world.boostCooldown).toBeGreaterThan(0); // 5 - 1.5 = 3.5s,距 0 还很远
   });
 
   it('无方向输入时沿船头满推:松着方向键按空格,船也真的动起来', () => {

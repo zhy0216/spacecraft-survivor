@@ -1,7 +1,7 @@
 /**
  * 法令数值表的表级不变量(用户设计会:支援并入法令后重写)—— 与 data/towers.test.ts 同风格:
  * 数据表是"改数据即可调平衡"的那一头,这里钉的是**表本身的结构**:
- * 十条齐全、编号 === 下标、效果字段全数值、层数工具按层说话、作用域路由二选一。
+ * 十一条齐全、编号 === 下标、效果字段全数值、层数工具按层说话、作用域路由二选一。
  * 聚合(层数 → 倍率)在 sim/edictBuffs.test.ts 钉;三选一/世界级接线在 sim/upgrade.test.ts
  * 与 sim/world.test.ts 钉。
  */
@@ -15,6 +15,7 @@ import {
   edictLevel,
   EDICT_AMMO,
   EDICT_ARMOR,
+  EDICT_BOOST,
   EDICT_CAPACITOR,
   EDICT_COOLANT,
   EDICT_CRUISE,
@@ -30,8 +31,8 @@ import {
 } from './edicts';
 
 describe('法令表级不变量', () => {
-  it('十条齐全,编号与 EDICT_* 常量一一对应、与下标一致', () => {
-    expect(EDICT_KIND_COUNT).toBe(10);
+  it('十一条齐全,编号与 EDICT_* 常量一一对应、与下标一致', () => {
+    expect(EDICT_KIND_COUNT).toBe(11);
     expect(EDICTS).toHaveLength(EDICT_KIND_COUNT);
     const ids = [
       EDICT_AMMO,
@@ -44,6 +45,7 @@ describe('法令表级不变量', () => {
       EDICT_CRUISE,
       EDICT_STARCHART,
       EDICT_OVERDRIVE,
+      EDICT_BOOST,
     ];
     EDICTS.forEach((e, i) => {
       expect(e.type, `下标 ${i} 的 type 必须 === 下标`).toBe(i);
@@ -53,7 +55,7 @@ describe('法令表级不变量', () => {
     expect(new Set(ids)).toEqual(new Set(EDICTS.map((e) => e.type))); // 无重复编号
   });
 
-  it('十条的效果数值逐条到位(全部数值型,一条轴一条法令)', () => {
+  it('十一条的效果数值逐条到位(全部数值型,一条轴一条法令)', () => {
     // 三条系限定档:数值逐字继承原支援表(合并的是两张表,不是两组数值)
     expect(EDICTS[EDICT_AMMO]!.fireRateMul).toBe(1.25); // 原弹药库
     expect(EDICTS[EDICT_AMMO]!.reloadMul).toBe(0.7);
@@ -68,6 +70,7 @@ describe('法令表级不变量', () => {
     expect(EDICTS[EDICT_CRUISE]!.cruiseSpeedMul).toBe(1.1);
     expect(EDICTS[EDICT_STARCHART]!.starCoinChanceAdd).toBeCloseTo(0.02, 12); // 二轮审查重锚:+8 → +2
     expect(EDICTS[EDICT_OVERDRIVE]!.damageMul).toBe(1.15);
+    expect(EDICTS[EDICT_BOOST]!.boostCooldownAdd).toBeCloseTo(-0.3, 12); // 加速冷却 -0.3 秒/层
   });
 
   it('一条轴只归一条法令:任何两条法令的非中性字段集合都不相交', () => {
@@ -85,6 +88,7 @@ describe('法令表级不变量', () => {
       'magnetRadiusMul',
       'turnRateAdd',
       'cruiseSpeedMul',
+      'boostCooldownAdd',
       'starCoinChanceAdd',
     ] as const;
     const NEUTRAL: Record<(typeof KEYS)[number], number> = {
@@ -99,6 +103,7 @@ describe('法令表级不变量', () => {
       magnetRadiusMul: 1,
       turnRateAdd: 0,
       cruiseSpeedMul: 1,
+      boostCooldownAdd: 0,
       starCoinChanceAdd: 0,
     };
     const owner = new Map<string, number>();
@@ -127,6 +132,7 @@ describe('法令表级不变量', () => {
         for (const k of GLOBAL_MUL) expect(e[k], `${e.name}.${k}`).toBe(1);
         expect(e.hullHpAdd, `${e.name}.hullHpAdd`).toBe(0);
         expect(e.turnRateAdd, `${e.name}.turnRateAdd`).toBe(0);
+        expect(e.boostCooldownAdd, `${e.name}.boostCooldownAdd`).toBe(0);
         expect(e.starCoinChanceAdd, `${e.name}.starCoinChanceAdd`).toBe(0);
       } else {
         // 全船的法令:四个族倍率必须整段中性(同上,路由不认它们)
@@ -151,6 +157,8 @@ describe('法令表级不变量', () => {
       expect(e.hullHpAdd, e.name).toBeGreaterThanOrEqual(0);
       expect(e.turnRateAdd, e.name).toBeGreaterThanOrEqual(0);
       expect(e.starCoinChanceAdd, e.name).toBeGreaterThanOrEqual(0);
+      // 冷却轴是唯一例外:"变强"的方向是减 —— 只许 <= 0,拿了只会更短不许更长
+      expect(e.boostCooldownAdd, e.name).toBeLessThanOrEqual(0);
       // 渲染色一律冷色(GDD §12:蓝分量必须压过红分量)
       const r = (e.tint >> 16) & 0xff;
       const b = e.tint & 0xff;

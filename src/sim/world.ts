@@ -1061,10 +1061,12 @@ export class World {
 
     // 加速技能(空格):触发判定在计时递减**之前** —— 触发那一帧就是加速的第一帧,
     // 玩家按下与船提速之间没有一帧的空档。冷却从触发起算(含加速窗),归零前按了也不响。
+    // 冷却 = tuning.boostCooldown + 法令聚合的 boostCooldownAdd(增压校准 -0.3s/层),
+    // 夹取 ≥ 0 保底:层数表被写坏成极端值也不许冷却变成负的(负冷却 = 每帧都能点火)。
     // cmd.boost 是每逻辑帧采样的纯数据输入(与 desiredHeading 同一条铁律 1 口径)
     if (cmd.boost && this.boostCooldown <= 0) {
       this.boostTime = tuning.boostDuration;
-      this.boostCooldown = tuning.boostCooldown;
+      this.boostCooldown = Math.max(0, tuning.boostCooldown + this.buffs.boostCooldownAdd);
     }
     const boosting = this.boostTime > 0;
     if (this.boostTime > 0) this.boostTime = Math.max(0, this.boostTime - SIM_DT);

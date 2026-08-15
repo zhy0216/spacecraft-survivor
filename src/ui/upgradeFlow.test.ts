@@ -5,6 +5,7 @@ import {
   createEdictLevels,
   EDICT_AMMO,
   EDICT_ARMOR,
+  EDICT_BOOST,
   EDICT_COOLANT,
   EDICT_CRUISE,
   EDICT_GYRO,
@@ -148,6 +149,7 @@ describe('升级卡片纯文案', () => {
     expect(cardDesc(edictOpt(EDICT_CRUISE))).toContain('巡航速度');
     expect(cardDesc(edictOpt(EDICT_STARCHART))).toContain('星币概率');
     expect(cardDesc(edictOpt(EDICT_OVERDRIVE))).toContain('全武器伤害');
+    expect(cardDesc(edictOpt(EDICT_BOOST))).toContain('加速冷却 -0.3s');
   });
 
   it('法令等级行报当前层 → 下一层(「散热协议 ×2 → ×3」),没拿过时报上限', () => {

@@ -10,6 +10,7 @@ import {
   createEdictLevels,
   EDICT_AMMO,
   EDICT_ARMOR,
+  EDICT_BOOST,
   EDICT_CAPACITOR,
   EDICT_COOLANT,
   EDICT_CRUISE,
@@ -45,6 +46,7 @@ describe('法令聚合', () => {
     expect(b.magnetRadiusMul).toBe(1);
     expect(b.turnRateAdd).toBe(0);
     expect(b.cruiseSpeedMul).toBe(1);
+    expect(b.boostCooldownAdd).toBe(0);
     expect(b.starCoinChance).toBeCloseTo(STARCOIN_DROP_CHANCE, 12);
   });
 
@@ -62,9 +64,11 @@ describe('法令聚合', () => {
     expect(agg((l) => (l[EDICT_CRUISE] = 2)).cruiseSpeedMul).toBeCloseTo(1.1 ** 2, 12);
   });
 
-  it('加法档按层求和:3 层装甲协议 = +45,3 层重心校准 = +30°/s', () => {
+  it('加法档按层求和:3 层装甲协议 = +45,3 层重心校准 = +30°/s,3 层增压校准 = -0.9s', () => {
     expect(agg((l) => (l[EDICT_ARMOR] = 3)).hullHp).toBe(45);
     expect(agg((l) => (l[EDICT_GYRO] = 3)).turnRateAdd).toBe(30);
+    expect(agg((l) => (l[EDICT_BOOST] = 3)).boostCooldownAdd).toBeCloseTo(-0.9, 12);
+    expect(agg((l) => (l[EDICT_BOOST] = EDICT_MAX_LEVEL)).boostCooldownAdd).toBeCloseTo(-1.5, 12);
   });
 
   it('系限定档只落进自己那一族,另外两族恒中性', () => {
@@ -142,6 +146,7 @@ describe('法令聚合', () => {
     for (const b of [short, long]) {
       expect(Number.isFinite(b.damageMul)).toBe(true);
       expect(Number.isFinite(b.hullHp)).toBe(true);
+      expect(Number.isFinite(b.boostCooldownAdd)).toBe(true);
       expect(Number.isFinite(b.starCoinChance)).toBe(true);
       expect(b.fireRateMul.every(Number.isFinite)).toBe(true);
     }
