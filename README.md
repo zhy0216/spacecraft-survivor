@@ -1,84 +1,91 @@
-# 《星骸》STARWRECK
+# STARWRECK 《星骸》
 
-一艘由你逐格拼出来的战舰,在无尽虫潮中转舵寻找射界。
-太空割草(Survivors-like)× 甲板空间拼图。
+A warship you weld together tile by tile, turning in an endless bug swarm to bring your broadside to bear.
+Space survivors-like × deck-space puzzle (Backpack-like).
 
-- 设计文档:[GDD.md](GDD.md)
-- MVP 任务拆解:[todos/](todos/README.md)
+- Game design doc: [GDD.md](GDD.md) (Chinese)
+- MVP task breakdown: [todos/](todos/README.md) (Chinese)
+- 中文版:[README.zh.md](README.zh.md)
 
-## 快速开始
+## Quick Start
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173 —— 玩家形态,直接开玩
-npm test         # 单测:RNG / 对象池 / 空间哈希 / World 确定性 / i18n 质量门禁
-npm run test:i18n # 只跑 i18n 专项门禁(也是 npm test 的一部分)
-npm run build    # tsc 类型检查 + 产物构建
+npm run dev        # http://localhost:5173 —— the playable build, jump right in
+npm test           # unit tests: RNG / object pool / spatial hash / World determinism / i18n quality gates
+npm run test:i18n  # i18n gates only (also part of npm test)
+npm run build      # tsc type-check + production build
 ```
 
-## 当前状态:玩家可畅玩的完整 MVP
+## Current Status: Complete Playable MVP
 
-打开是**标题界面**(继续上次航行 / 开始新航行 / 设置)→ 开局随机落下两座基础塔(塔型与槽位都由本局种子现抽)→ 甲板割草战斗(4 航段 + 精英 + Boss)→ 三选一升级 / 每两分钟整备(船坞商店、免费重排、付费修复)→ 结算入图鉴 → 元进度解锁新塔/新法令。
-战斗中 `Esc` 暂停(继续 / 保存并退出 / 再来一局 / 再试一局 / 设置 / 静音);`?seed=123` 可复现同一局 —— 同 seed 连开局那两座塔都一样。
+Title screen (continue last run / start new run / settings) → two base towers drop at random (tower types and slots both drawn from the run seed) → deck-mowing combat (4 legs + elite + boss) → three-choice upgrades / refit every two minutes (dry-dock shop, free reroll, paid repair) → results into the codex → meta progression unlocks new towers and edicts.
 
-### 存档
+In battle: `Esc` pauses (resume / save & quit / restart run / retry / settings / mute); `?seed=123` reproduces the same run — same seed, same starting towers.
 
-两份存档,各用各的键、互不牵连:
+### Saves
 
-| | 键 | 存什么 | 什么时候写 |
+Three separate storage keys, each independent:
+
+| | Key | What | Written when |
 |---|---|---|---|
-| 元进度 | `starwreck.progress.v1` | 跨局解锁位、累计计数 | 每局结算 |
-| 局内存档 | `starwreck.run.v1` | **这一局的全部真状态**(含 rng 游标与场上实体) | 升级/整备时停、暂停、页面隐藏 |
-| 设置 | `starwreck.settings.v1` | 音量/静音/震屏/飘字/顿帧 | 改动即写 |
+| Meta progress | `starwreck.progress.v1` | cross-run unlocks, cumulative counters | end of every run |
+| Run save | `starwreck.run.v1` | **the entire true state of this run** (incl. rng cursor and entities on the field) | upgrade/refit pause, pause, page hidden |
+| Settings | `starwreck.settings.v1` | volume/mute/screen shake/damage numbers/hit-stop | on every change |
 
-局内存档只留一个槽位、每次覆盖;**局终即删**(留着它,下次进标题那颗「继续」通向的是一场已经结束的战斗)。
-口径与字段表见 [`src/sim/runSave.ts`](src/sim/runSave.ts) 的文件头 —— 该存什么照着 `World.checksum()` 那份"什么是真状态"的清单逐条对齐,验收标准是**读档后 checksum 不变、且此后每一帧都还不变**(`runSave.test.ts` 就是这么钉的)。
+The run save has a single slot, overwritten each time, and **deleted when the run ends** (keep it around and the title-screen "Continue" would lead into a battle that is already over).
+The exact schema and field table live in the file header of [`src/sim/runSave.ts`](src/sim/runSave.ts) — what to persist follows the "what is true state" checklist of `World.checksum()` item by item. Acceptance criterion: **after loading, the checksum is unchanged — and stays unchanged every frame thereafter** (that's what `runSave.test.ts` pins down).
 
-### 设置
+### Settings
 
-每一项都接在真落点上(音量→`render/audio`、震屏与伤害飘字→`Renderer.setEffects`、击杀顿帧→`main` 的冻结窗),不摆装饰性开关。标题与暂停两个入口共用同一页。
+Every option is wired to a real effect (volume → `render/audio`, screen shake & damage numbers → `Renderer.setEffects`, kill hit-stop → the freeze window in `main`); no decorative toggles. Title and pause share the same settings screen.
 
-### 运行日志与上传
+### Run Log & Upload
 
-每局从第一帧起记一卷**运行日志**(`src/sim/runLog.ts`):击杀逐只、升级/重摇/商店逐笔、跨段/Boss/受击/沉船/局终逐转折,只写不读、不进 checksum、不进存档。结算卡上「上传本局日志」(U)把时间线 + 结局读数 POST 给配置好的端点。
+Every run records a **run log** (`src/sim/runLog.ts`) from its very first frame: kills one by one, every upgrade/reroll/shop transaction, every transition (leg / boss / hit / sunk / run end). It is write-only: never read back, not part of the checksum, not in saves. "Upload this run's log" (U) on the results card POSTs the timeline + outcome readouts to the configured endpoint.
 
-生产环境部署在 Cloudflare Workers:静态游戏由 Workers Static Assets 托管,`POST /api/logs` 校验并把每局 JSON 日志写入私有 R2 bucket `starwreck-run-logs`。D1 数据库 `starwreck-logs` 只保存月度硬配额计数:单份最多 1 MiB、每月最多 5,000 份且正文总量不超过 4 GB;达到任一上限就拒绝写 R2。R2 日志 30 天后由生命周期规则自动删除,没有公开读取 API。`starwreck.logEndpoint.v1` 仍可覆盖默认同源端点,供本地分析器调试。
+Production runs on Cloudflare Workers: the static game is served by Workers Static Assets, and `POST /api/logs` validates and writes each run's JSON log to the private R2 bucket `starwreck-run-logs`. The D1 database `starwreck-logs` only holds monthly hard-quota counters: at most 1 MiB per log, at most 5,000 logs per month with no more than 4 GB total body; hitting either cap rejects the R2 write. R2 logs are deleted automatically after 30 days by a lifecycle rule, and there is no public read API. `starwreck.logEndpoint.v1` still overrides the default same-origin endpoint for local analyzer debugging.
 
 ```bash
-npm run cf:types    # Wrangler 配置变化后重新生成 Worker binding 类型
-npm run test:worker # 在 Workers runtime + 本地 R2/D1 中验证上传与硬配额
-npm run deploy      # 构建并部署静态资源、Worker、R2 与 D1 binding
+npm run cf:types    # regenerate Worker binding types after wrangler config changes
+npm run test:worker # validate upload & hard quotas against Workers runtime + local R2/D1
+npm run deploy      # build & deploy static assets, Worker, R2 and D1 bindings
 ```
 
-**开发模式**:URL 加 `?debug` 恢复灰盒调参面板(实体数量、手感参数、波次读数、压测 1000 敌)与 `· dev` 页签。
-`?seed=123` 指定种子 —— 同 seed 两次运行、同 tick 的 checksum 必须一致。
-`?locale=pseudo`(仅开发模式)切到**伪语言**(`en-XA`):英文文案原地膨胀 30–40%,专用于布局压力测试。
+**Dev mode**: append `?debug` to the URL to restore the greybox tuning panel (entity counts, feel parameters, wave readouts, 1000-enemy stress test) and the `· dev` tab.
+`?seed=123` sets the seed — two runs with the same seed must produce the same checksum at the same tick.
+`?locale=pseudo` (dev mode only) switches to the **pseudo language** (`en-XA`): English copy inflates 30–40% in place, for layout stress testing.
 
-## 语言 / i18n
+## Languages / i18n
 
-支持 **简体中文(zh-CN,默认)** 与 **English(en)** 两种语言;`自动` 档跟随系统语言。
-语言设置在 **标题 / 暂停 → 设置 → 语言**(三档循环:自动 → 简体中文 → English),偏好持久化、切换即时生效、
-战斗中切换不打断战斗。
+Supports **Simplified Chinese (zh-CN, default)** and **English (en)**; the `Auto` setting follows the system language.
+The language setting lives at **Title / Pause → Settings → Language** (three-way cycle: Auto → 简体中文 → English); the preference persists, applies instantly, and switching mid-battle never interrupts the run.
 
-给玩家加文案的完整规则、术语表、伪语言用法与人工验收清单见 [`docs/i18n.md`](docs/i18n.md) ——
-一句话:**文案一律走 `t()`,两种语言都写,翻译串只进 `textContent`,sim/data/core 不碰 i18n**,
-这些由 `npm test` 里的 i18n 质量门禁(硬编码中文 AST 扫描 / key 与插值 parity / 依赖边界 /
-跨语言确定性 / 存储回归)自动把关。
+Full rules for adding player-facing copy, the glossary, pseudo-language usage and the manual acceptance checklist: [`docs/i18n.md`](docs/i18n.md). In one line: **all copy goes through `t()`, written in both languages, translation strings only ever go into `textContent`, and sim/data/core never touch i18n** — enforced by the i18n quality gates in `npm test` (hardcoded-Chinese AST scan / key & interpolation parity / dependency boundary / cross-language determinism / storage regression).
 
-## 架构三铁律
+## Three Architecture Laws
 
-1. **`sim/` 纯逻辑,永不 import pixi/DOM** —— 换来确定性、Node 单测、渲染可替换。
-2. **固定时步 60Hz**(`core/loop.ts`),渲染层用 alpha 在实体 prev/cur 位置间插值。
-3. **实体 = 对象池里的普通对象;界面分两层**:世界内的走 Pixi(ParticleContainer),
-   菜单/卡片/面板走 DOM(`#ui` 覆盖层)。
+1. **`sim/` is pure logic, never imports pixi/DOM** — in exchange for determinism, Node unit tests, and swappable rendering.
+2. **Fixed 60 Hz timestep** (`core/loop.ts`); the render layer interpolates between each entity's prev/cur positions using alpha.
+3. **Entities are plain objects from an object pool; two UI layers**: in-world UI is Pixi (ParticleContainer), menus/cards/panels are DOM (`#ui` overlay).
 
-## 目录
+## Directory
 
 ```
-src/core     循环、种子 RNG、对象池、空间哈希、输入(02 号 issue 接线)
-src/sim      世界状态与规则(纯 TS,无渲染依赖)
-src/render   Pixi 渲染、镜头、灰盒纹理
-src/ui       DOM 覆盖层:调参面板(后续:三选一卡片、结算)
-src/data     数值配置(后续:塔/敌人/波次)
-todos/       MVP issue 拆解与实施顺序
+src/core     loop, seeded RNG, object pool, spatial hash, input
+src/sim      world state & rules (pure TS, no render deps)
+src/render   Pixi rendering, camera, greybox textures
+src/ui       DOM overlay: title, pause, HUD, upgrades, refit shop, codex, game over, debug panel
+src/data     numeric content config (towers / enemies / waves / edicts / affixes / economy)
+src/i18n     locale resources & quality gates (zh-CN / en, pseudo)
+worker/      Cloudflare Worker: POST /api/logs → R2 + D1 quotas
+todos/       MVP issue breakdown & implementation order
+docs/        i18n guide, design investigations
+```
+
+## Auto-balance CLI
+
+```bash
+npm run balance              # solve the numeric tables and run the seven judge tests as the acceptance gate
+npm run balance -- --dry-run # print the solution without writing files or running tests
 ```
