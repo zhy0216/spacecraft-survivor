@@ -86,6 +86,7 @@ const LEFT_COL_CSS = 'display:flex;flex-direction:column;gap:14px;align-items:st
 /**
  * 星币读数(16 号):与残骸读数同族(同一套 PANEL/LABEL_ROW/LABEL/VALUE 样式)的独立读数,
  * 但没有进度轨道 —— 星币只有余额、没有"目标费用"可填。位置由左列纵队给,不自带偏移。
+ * 单行分两列:左列 ★ 星币余额,右列场上怪物数 —— 出怪压场这一格就是战况读数。
  */
 const STARCOINS_CSS = PANEL_CSS;
 
@@ -668,18 +669,30 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   boss.style.cssText = BOSS_CSS;
   const bossBar = createBar(boss, BOSS.name, BOSS_HP_COLOR);
 
-  // 星币读数:残骸读数的同族姊妹 —— ★ 前缀的一行数字,无进度轨道;每帧 sync 直接写余额
+  // 星币读数:残骸读数的同族姊妹 —— ★ 前缀的一行数字,无进度轨道;每帧 sync 直接写余额。
+  // 同一行分两列:左列余额、右列场上怪物数(items 就是活跃池,length 即在场数)
   const starCoins = document.createElement('div');
   starCoins.style.cssText = STARCOINS_CSS;
   starCoins.title = '星币';
   const starRow = document.createElement('div');
   starRow.style.cssText = LABEL_ROW_CSS;
+  const starGroup = document.createElement('span');
+  starGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
   const starLabel = document.createElement('span');
   starLabel.style.cssText = LABEL_CSS;
   starLabel.textContent = '★ 星币';
   const starValue = document.createElement('span');
   starValue.style.cssText = `${VALUE_CSS}color:${STAR_COLOR};`;
-  starRow.append(starLabel, starValue);
+  starGroup.append(starLabel, starValue);
+  const enemyGroup = document.createElement('span');
+  enemyGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
+  const enemyLabel = document.createElement('span');
+  enemyLabel.style.cssText = LABEL_CSS;
+  enemyLabel.textContent = '场上怪';
+  const enemyValue = document.createElement('span');
+  enemyValue.style.cssText = VALUE_CSS;
+  enemyGroup.append(enemyLabel, enemyValue);
+  starRow.append(starGroup, enemyGroup);
   starCoins.appendChild(starRow);
 
   // 法令徽记(18 号):一行"法令"标签 + 已持有名单的**逐条 chip**。节点只建一次,
@@ -924,6 +937,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
     const coins = finiteOrZero(world.starCoins);
     starValue.textContent = String(Math.max(0, Math.round(coins)));
+    // 同行的右列:场上怪物数 = 敌人活跃池长度(数组 length 恒有限,无需 finiteOrZero)
+    enemyValue.textContent = String(world.enemies.items.length);
 
     // 法令徽记:每帧按 world.edictLevels 现读已持有名单 —— 名字直取 data/edicts(ui 不抄第二份),
     // **层数 ≥ 2 的挂一个 ×N**(用户设计会:"拿过两次过热上限就显示 过热上限 ×2")。

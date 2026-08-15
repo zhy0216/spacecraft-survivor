@@ -336,17 +336,33 @@ describe('createHud', () => {
     expect(playerVitals.children[2]!.children[1]!.textContent).toBe('');
   });
 
-  it('星币读数:左列纵队第二块(血条面板正下方,不再自记偏移),显示余额且 setWorld 同步更新', () => {
-    const hud = createHud({ world: stubWorld({ starCoins: 27 }) as unknown as World });
+  it('星币读数:左列纵队第二块(血条面板正下方,不再自记偏移),单行分两列显示余额与场上怪数,setWorld 同步更新', () => {
+    const hud = createHud({
+      world: stubWorld({
+        starCoins: 27,
+        enemies: {
+          items: [
+            { affixes: 0, hp: 1, maxHp: 1 },
+            { affixes: 0, hp: 1, maxHp: 1 },
+            { affixes: 0, hp: 1, maxHp: 1 },
+          ],
+        },
+      }) as unknown as World,
+    });
     const root = dom.ui.children[0]!;
     const coins = root.children[0]!.children[0]!.children[1]!;
     expect(coins.title).toBe('星币');
     expect(findText(root, '★ 星币')).toBeDefined();
-    const value = coins.children[0]!.children[1]!;
-    expect(value.textContent).toBe('27');
+    // 单行两列:starRow.children[0] = 余额组,children[1] = 场上怪组;各组 [label, value]
+    const row = coins.children[0]!;
+    const coinValue = row.children[0]!.children[1]!;
+    const enemyValue = row.children[1]!.children[1]!;
+    expect(coinValue.textContent).toBe('27');
+    expect(enemyValue.textContent).toBe('3');
 
-    hud.setWorld(stubWorld({ starCoins: 4 }) as unknown as World);
-    expect(value.textContent).toBe('4');
+    hud.setWorld(stubWorld({ starCoins: 4, enemies: { items: [{ affixes: 0, hp: 1, maxHp: 1 }] } }) as unknown as World);
+    expect(coinValue.textContent).toBe('4');
+    expect(enemyValue.textContent).toBe('1');
   });
 
   it('法令徽记:无法令时隐藏,持有后印名字、叠层挂 ×N,setWorld 换世界同步更新', () => {
