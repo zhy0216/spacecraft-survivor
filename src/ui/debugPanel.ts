@@ -214,7 +214,7 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   const hit = pane.addFolder({ title: '受击(09)' });
   hit.addBinding(stats, 'hp', { label: '船体 HP', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 紧挨着 hp 放:这两个数只有摆在一起才读得出"还剩多少"。放一块装甲舱它当场 +15(见 DebugStats.maxHp),
-  // 而 hp 纹丝不动 —— 上限是船的规格,当前 HP 是这一局打下来的账,装甲不是治疗
+  // hp 也当场 +15 —— 上限涨的是同量,7/100 +15 → 22/115(见 syncHull)
   hit.addBinding(stats, 'maxHp', { label: 'HP 上限', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 各型的 contactDamage 在 src/data/enemies.ts,这里是全局倍率:先拖它定"贴脸掉得多快",
   // 再回数值表分配各型的相对轻重(与塔的伤害倍率同一条用法)
@@ -230,9 +230,10 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   // 判定体大小(GDD §4.4:判定小于外形)。按住 Tab 能看见那个矩形跟着这根滑杆实时变 ——
   // 那是它唯一的肉眼校准方式,拖完再去贴脸试"擦碰出火花 / 进核心才掉血"的分界对不对
   hit.addBinding(tuning, 'shipCoreScale', { label: '判定体×(按 Tab 看)', min: 0.2, max: 1.5, step: 0.02 });
-  // 只是**基础值**:真正的上限 = 它 + 每块装甲舱 +15(hullMaxHp 是甲板的派生量),
-  // 而 06 号起 World.step 每逻辑帧重刷一次 ship.maxHp —— 所以这根滑杆拖到哪儿,
-  // 上面那条只读「HP 上限」当帧就跟到哪儿(不必再放一座塔去触发),hp 则只夹不涨、不跟着回血。
+  // 只是**基础值**:真正的上限 = 它 + 每层装甲协议 +15(hullMaxHp 是法令的派生量),
+  // 而 World.step 每逻辑帧重刷一次 ship.maxHp —— 所以这根滑杆拖到哪儿,
+  // 上面那条只读「HP 上限」当帧就跟到哪儿(不必再放一座塔去触发),hp 也照 syncHull
+  // 的口径跟着上限走:拖高 +同量血量,拖低只夹不涨。
   // label 得说这个真话:写"重开生效"/"放塔后生效"都会让人以为拖了没用而白等
   hit.addBinding(tuning, 'shipHullHp', {
     label: 'HP 上限(基础)',

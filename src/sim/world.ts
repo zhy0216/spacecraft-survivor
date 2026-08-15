@@ -984,6 +984,24 @@ export class World {
   }
 
   /**
+   * 船体 HP 上限的**唯一写入口**:从 buffs 现算 maxHp,并把当前血量结算在同一处做掉。
+   *
+   * 上限涨上去时**当前血量跟着涨同量**:7/100 拿到装甲协议(+15)→ 22/115。
+   * 拿上限的那一瞬血条当场往上抬,玩家读到的因果是"船变硬了"而不是"又空了一截"
+   * (GDD:撑上限是规格升级,不是满血回复,所以涨的是**同量**而不是涨满)。
+   * 上限回落时仍把 hp 压进新上限 —— 绝不留一艘 hp > maxHp 的船(血条画出去会满出来)。
+   *
+   * 确定性:增量完全由 edictLevels 的轨迹决定(edictLevels 单独进 checksum),
+   * 同层数必然同增量,重放与读档落在同一条 hp 账上,checksum 行为不变。
+   */
+  private syncHull(): void {
+    const prevMax = this.ship.maxHp;
+    this.ship.maxHp = hullMaxHp(this.buffs);
+    if (this.ship.maxHp > prevMax) this.ship.hp += this.ship.maxHp - prevMax;
+    if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+  }
+
+  /**
    * @param cmd 本逻辑帧的输入(纯数据)。只读不缓存引用,调用方可以整局复用同一个对象;
    *   缺省 = 松手,让 world.step() 的既有调用方(单测、无头跑批)不必关心输入。
    *
@@ -1052,12 +1070,9 @@ export class World {
     // 它也是转向/巡航/磁吸/星币概率的来源 —— 帧首刷一次,后面每一处现读同一份。
     aggregateEdictBuffs(this.edictLevels, this.buffs);
     // HP 上限同理是**法令层数的派生量**(装甲协议 +15/层,damage.hullMaxHp):拿到的当帧就该生效,
-    // 每帧现算而不是记个脏标记。
-    //
-    // **只夹不涨**:上限回落时把 hp 压进新上限(否则会留下一艘 hp > maxHp 的船,
-    // 血条画出去满出来),但上限涨上去时 hp 一分不还 —— 装甲协议是船的规格,不是治疗。
-    this.ship.maxHp = hullMaxHp(this.buffs);
-    if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    // 每帧现算而不是记个脏标记。上限涨跌的当前血量结算也由 syncHull 一并在帧首做掉
+    // (拿到上限当帧血量就跟着动,见 syncHull 的注释)。
+    this.syncHull();
 
     // 加速技能(空格):触发判定在计时递减**之前** —— 触发那一帧就是加速的第一帧,
     // 玩家按下与船提速之间没有一帧的空档。冷却从触发起算(含加速窗),归零前按了也不响。
@@ -1893,15 +1908,16 @@ export class World {
    * 法令不占槽、可重复持有,每条最多 EDICT_MAX_LEVEL 层;层数 +1 即"叠一层"。
    * @returns EDICT_OK(0)= 层数 +1;EDICT_MAXED = 这条已满层;EDICT_INVALID_TYPE = 型越界。
    * 零 rng;聚合由帧首的 aggregateEdictBuffs 自动跟上,这里不用重刷任何缓存 ——
-   * 唯一要当场同步的是 HP 上限(装甲协议那一层的 +15 必须在**这一帧**就能看见,
-   * 而帧首的刷新已经过去了;晚一帧的话玩家点下卡片时血条不动,那正是最该有反馈的一瞬)。
+   * 唯一要当场同步的是船体 HP 上限(装甲协议那一层的 +15 必须在**这一帧**就能看见,
+   * 而帧首的刷新已经过去了;晚一帧的话玩家点下卡片时血条不动,那正是最该有反馈的一瞬;
+   * 上限 +15 时当前血量也当场 +15,见 syncHull)。
    */
   grantEdict(type: number): number {
     if (EDICTS[type] === undefined) return EDICT_INVALID_TYPE;
     if (!edictCanStack(this.edictLevels, type)) return EDICT_MAXED;
     this.edictLevels[type] = edictLevel(this.edictLevels, type) + 1;
     aggregateEdictBuffs(this.edictLevels, this.buffs);
-    this.ship.maxHp = hullMaxHp(this.buffs);
+    this.syncHull();
     return EDICT_OK;
   }
 
@@ -2188,8 +2204,8 @@ export class World {
    *   于是"买没买"反过来扰动不到出怪序列(同 seed 同操作序列逐位可复现);
     *   校验顺序定死(整备闸门 → 货架有货 → 星币够),失败原样返回、一个字段都不动。
     * 成功后:扣费(本格是特价位就按 shopDiscountPrice 的特价扣,否则原价)→ 货架当场下架
-    * (一卡一售)→ 置位掩码 → 同步船体上限(照旧口径:
-    * 结构加固的 +20 是派生量,现算现夹,hp 只夹不涨)。
+    * (一卡一售)→ 置位掩码 → 同步船体上限与血量(结构加固的 +20 是派生量,
+    * grantEdict → syncHull 现算:上限 +20 时当前血量也当场 +20,涨的是同量)。
    *
    * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / DOCK_EDICT_SOLD / DOCK_NO_STARCOINS)。
    */
@@ -2202,8 +2218,7 @@ export class World {
     if (this.starCoins < price) return DOCK_NO_STARCOINS;
     this.starCoins -= price;
     this.dockEdictOffers[index] = -1; // 一卡一售:当场下架,本轮不再出现
-    this.grantEdict(type); // 唯一授予入口(层数 +1 + 当帧同步 HP 上限)
-    if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    this.grantEdict(type); // 唯一授予入口(层数 +1 + 当帧同步 HP 上限与血量)
     logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_EDICT, type });
     return 0;
   }

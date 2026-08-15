@@ -178,6 +178,25 @@ describe('World 槽位制核心接线', () => {
     expect(world.ship.maxHp).toBe(130);
   });
 
+  it('上限 +15 时当前血量跟着 +15:7/100 拿装甲协议 → 22/115', () => {
+    const world = new World(3);
+    world.ship.hp = 7;
+    expect(world.ship.maxHp).toBe(100);
+    world.grantEdict(EDICT_ARMOR);
+    expect(world.ship.maxHp).toBe(115);
+    expect(world.ship.hp).toBe(22);
+    // 帧首 syncHull 不再重复涨(上限当帧已同步,增量基准已归零)
+    world.step();
+    expect(world.ship.maxHp).toBe(115);
+    expect(world.ship.hp).toBe(22);
+    // 上限回落仍只夹不涨:撤掉装甲层数,hp 被压进新上限
+    world.edictLevels[EDICT_ARMOR] = 0;
+    world.ship.hp = 200;
+    world.step();
+    expect(world.ship.maxHp).toBe(100);
+    expect(world.ship.hp).toBe(100);
+  });
+
   it('星币按概率掉落:每次击杀恒掷 1 次 rng —— 概率高低不移动随机序列', () => {
     const mk = (charts: number): World => {
       const w = new World(77);
