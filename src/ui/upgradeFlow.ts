@@ -24,12 +24,13 @@
 import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
 import { edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
-import { THR_CHARGE, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
+import { THR_AMMO, THR_CHARGE, THR_HEAT, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
 import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
 import { OFFER_NEW_WEAPON, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
 import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 import { towerName } from './presentation/contentText';
 import { edictDesc } from './presentation/edictText';
 import { optionLabel } from './presentation/upgradeText';
@@ -127,21 +128,41 @@ const PHASE_OFF = 0;
 const PHASE_PICK = 1;
 const PHASE_REPLACE = 2;
 
-/** 理由码 → 中文拒绝文案。独立成纯函数、不碰 DOM,于是能在 Node 里单测:漏码会静默退化成兜底串 */
-const DENY_MSGS: Record<number, string> = {
-  [UPGRADE_NO_OFFER]: '这一次升级已经不在了(卡片过期,已恢复战斗)',
-  [EDICT_MAXED]: `这条法令已经满层(${EDICT_MAX_LEVEL} 层封顶)—— 换一张或跳过`,
-  [ACQUIRE_REPLACE_NEEDED]: '武器槽已满 —— 从替换层选一个槽,换下旧武器',
-  [REPLACE_BAD_SLOT]: '这个槽不能替换(下标越界或空槽)',
-  [ACQUIRE_INVALID_TYPE]: '没有这种塔型(数值表里查不到)',
-  [REPLACE_INVALID_TYPE]: '没有这种塔型(数值表里查不到)',
-  [EDICT_INVALID_TYPE]: '没有这条法令(数值表里查不到)',
-  [REROLL_NO_STARCOINS]: `星币不足(重摇需要 ${REROLL_PRICE})`,
-  [REROLL_ALREADY_DONE]: '本档已经摇过一次,不能再摇',
+/**
+ * 理由码 → 拒绝文案的翻译入口(06 号迁移):从「码 → 中文字符串」改成「码 → key + vars」,
+ * t() 在调用时按当前语言取值,漏码会走 `deny.unknown` 兜底串(带原始编号,不冒充成别的理由)。
+ * 独立成纯函数、不碰 DOM,于是能在 Node 里单测。
+ */
+interface DenyEntry {
+  key: string;
+  vars?: Record<string, number>;
+}
+const DENY_MSGS: Record<number, DenyEntry> = {
+  [UPGRADE_NO_OFFER]: { key: 'ui:upgrade.deny.noOffer' },
+  // 满层是数据常量(EDICT_MAX_LEVEL),英文按 count 走 one/other 复数分支
+  [EDICT_MAXED]: { key: 'ui:upgrade.deny.edictMaxed', vars: { count: EDICT_MAX_LEVEL } },
+  [ACQUIRE_REPLACE_NEEDED]: { key: 'ui:upgrade.deny.replaceNeeded' },
+  [REPLACE_BAD_SLOT]: { key: 'ui:upgrade.deny.badSlot' },
+  // 两种"塔型越界"共用同一句(拒绝码不同,文案同源)
+  [ACQUIRE_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidTower' },
+  [REPLACE_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidTower' },
+  [EDICT_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidEdict' },
+  [REROLL_NO_STARCOINS]: { key: 'ui:upgrade.deny.noStarCoins', vars: { price: REROLL_PRICE } },
+  [REROLL_ALREADY_DONE]: { key: 'ui:upgrade.deny.alreadyRerolled' },
 };
 
+/**
+ * 动态 key 的 t() 调用:i18next 的插值参数类型按静态 key 展开,这里 key 是映射表里的字面量,
+ * 统一放宽参数类型 —— key 是否正确由上面的映射表(与 zh/en 资源)保证,编译器不再逐处重查。
+ */
+function tDynamic(key: string, vars?: Record<string, number | string>): string {
+  return (t as unknown as (key: string, vars?: Record<string, number | string>) => string)(key, vars);
+}
+
 export function denyMessage(code: number): string {
-  return DENY_MSGS[code] ?? `升级被拒绝(理由码 ${code})`;
+  const entry = DENY_MSGS[code];
+  if (!entry) return t('ui:upgrade.deny.unknown', { code });
+  return tDynamic(entry.key, entry.vars);
 }
 
 /** 卡片标题 = 候选的名字,**一律走 presentation 的 optionLabel**(它委托 towerName/edictName 查翻译),ui 不抄第二份 */
@@ -175,11 +196,18 @@ function num(v: number): string {
 }
 
 // 节流系的**手感一句话**("为什么打不响"的武器卡专属念法,不是节流系名字 ——
-// 系名走 presenter 的 throttleFamilyName,这里只是给"系名 + 括号一句手感"这格卡面配的补充文案)
-const THROTTLE_DESCS = ['弹药系(打空要装填)', '过热系(贪连射会锁死)', '充能系(攒满才放)'];
+// 系名走 presenter 的 throttleFamilyName,这里只是给"系名 + 括号一句手感"这格卡面配的补充文案)。
+// 06 号迁移:数组改成「节流码 → 翻译 key」,t() 按当前语言取整句,不缓存任何语言的字符串为常量。
+const THROTTLE_DESCS: Readonly<Record<number, string>> = {
+  [THR_AMMO]: 'ui:upgrade.card.throttleDesc.ammo',
+  [THR_HEAT]: 'ui:upgrade.card.throttleDesc.heat',
+  [THR_CHARGE]: 'ui:upgrade.card.throttleDesc.charge',
+};
 
 function throttleDesc(throttle: number): string {
-  return THROTTLE_DESCS[throttle] ?? `未知节流系(${throttle})`;
+  const key = THROTTLE_DESCS[throttle];
+  if (key === undefined) return tDynamic('ui:upgrade.card.throttleDesc.unknown', { throttle });
+  return tDynamic(key);
 }
 
 /**
@@ -198,11 +226,6 @@ export function towerDps(def: TowerDef, stars: number): number {
   return interval > 0 ? (dmg * shots) / interval : 0;
 }
 
-/** 塔卡片上的伤害读数:新武器报拿到手那一级(恒 1★)的表面 DPS */
-function dpsText(def: TowerDef, stars: number): string {
-  return `伤 ${num(towerDps(def, stars))}/s`;
-}
-
 /**
  * 卡片的一句话描述 —— **全部从数值表现生成**(见文件头)。武器卡报
  * "射界档 / 射程 / 表面 DPS(1★)/ 节流系(含系名)"四样;法令念数值表里非中性的字段
@@ -211,11 +234,16 @@ function dpsText(def: TowerDef, stars: number): string {
 export function cardDesc(opt: UpgradeOption, _world?: World): string {
   if (opt.kind === OFFER_NEW_WEAPON) {
     const def = TOWERS[opt.type];
-    if (!def) return `数值表里查不到这座塔(型号 ${opt.type})`;
-    return `射界 ${num(towerArcDeg(def, 1))}° · 射程 ${Math.round(towerRange(def, 1))} · ${dpsText(def, 1)} · ${throttleDesc(def.throttle)}`;
+    if (!def) return tDynamic('ui:upgrade.card.unknownTower', { type: opt.type });
+    // 四样分句翻译,再由 weaponDesc 的整句模板决定顺序(英文可重排),不按中文语序硬拼
+    const arc = tDynamic('ui:upgrade.card.arc', { deg: num(towerArcDeg(def, 1)) });
+    const range = tDynamic('ui:upgrade.card.range', { n: Math.round(towerRange(def, 1)) });
+    const dps = tDynamic('ui:upgrade.card.dps', { dps: num(towerDps(def, 1)) });
+    const throttle = throttleDesc(def.throttle);
+    return tDynamic('ui:upgrade.card.weaponDesc', { arc, range, dps, throttle });
   }
   const def = EDICTS[opt.type];
-  if (!def) return `数值表里查不到这条法令(型号 ${opt.type})`;
+  if (!def) return tDynamic('ui:upgrade.card.unknownEdict', { type: opt.type });
   return edictDesc(def);
 }
 
@@ -233,8 +261,10 @@ export function cardLevelText(opt: UpgradeOption, world?: World): string {
     const c3 = weapons ? slotStarCount(weapons, opt.type, 3) : 0;
     if (c1 + c2 + c3 === 0) {
       // 没给 world(纯函数兜底)时用卡面自带的 opt.level 说话,数字只会更保守
-      return opt.level > 0 ? `已有 ${'★'.repeat(opt.level)} · 三把同星合一` : '新武器 · 获得后从 ★ 起步';
+      if (opt.level > 0) return tDynamic('ui:upgrade.level.alreadyHeld', { stars: '★'.repeat(opt.level) });
+      return tDynamic('ui:upgrade.level.newWeapon');
     }
+    // ★ ×N 的持有清单是符号 + 数量,跨语言中性,不做英文复数(句子本身整句翻译)
     const parts: string[] = [];
     if (c3 > 0) parts.push(`${'★'.repeat(3)} ×${c3}`);
     if (c2 > 0) parts.push(`${'★'.repeat(2)} ×${c2}`);
@@ -244,16 +274,20 @@ export function cardLevelText(opt: UpgradeOption, world?: World): string {
     // 下一张卡 = 一把 ★。两种"当场触发"要提前说:
     //   凑满三把 ★ 合一;若这一合让 ★★ 也凑满三把,连锁合到 ★★★(有配方 = 当场变身合成武器)
     if (c1 === 2 && c2 === 2) {
-      return `已有 ${holdings} · 再来一把连合到 ${'★'.repeat(3)}${mergeable ? ' 合成' : ''}`;
+      return tDynamic('ui:upgrade.level.chainThree', {
+        holdings,
+        stars: '★'.repeat(3),
+        synthesis: mergeable ? tDynamic('ui:upgrade.level.synthesisSuffix') : '',
+      });
     }
-    if (c1 === 2) return `已有 ${holdings} · 再来一把合成 ${'★'.repeat(2)}`;
-    return `已有 ${holdings} · 三把同星合一`;
+    if (c1 === 2) return tDynamic('ui:upgrade.level.twoHoldings', { holdings, stars: '★'.repeat(2) });
+    return tDynamic('ui:upgrade.level.alreadyHeld', { stars: holdings });
   }
   // 法令:当前层 → 下一层。满层那一档正常不会出现在候选里(卡池已剔),留一句兜底文案
   const lv = Math.max(0, Math.floor(opt.level));
-  if (lv >= EDICT_MAX_LEVEL) return `法令 · 已满层(×${EDICT_MAX_LEVEL})`;
-  if (lv <= 0) return `法令 · 不占槽 · 可叠到 ×${EDICT_MAX_LEVEL}`;
-  return `法令 · 当前 ×${lv} → ×${lv + 1}(上限 ×${EDICT_MAX_LEVEL})`;
+  if (lv >= EDICT_MAX_LEVEL) return tDynamic('ui:upgrade.level.edictMaxed', { max: EDICT_MAX_LEVEL });
+  if (lv <= 0) return tDynamic('ui:upgrade.level.edictNew', { max: EDICT_MAX_LEVEL });
+  return tDynamic('ui:upgrade.level.edictProgress', { lv, lv1: lv + 1, max: EDICT_MAX_LEVEL });
 }
 
 /**
@@ -334,13 +368,18 @@ function fmtPreviewNumber(value: number | null): string {
   return value === null ? '—' : num(value);
 }
 
-/** 视觉层的一行短文案；数字仍来自 upgradeComparison 的纯结果。 */
+/** 视觉层的一行短文案；数字仍来自 upgradeComparison 的纯结果,句式按语言整句翻译。 */
 export function upgradeComparisonText(opt: UpgradeOption, world?: World): string {
   const c = upgradeComparison(opt, world);
   if (opt.kind !== OFFER_NEW_WEAPON) {
-    return `层数 ×${c.beforeStars} → ×${c.afterStars}`;
+    return tDynamic('ui:upgrade.comparison.edict', { before: c.beforeStars, after: c.afterStars });
   }
-  return `DPS ${fmtPreviewNumber(c.beforeDps)} → ${fmtPreviewNumber(c.afterDps)} · 射程 ${fmtPreviewNumber(c.beforeRange)} → ${fmtPreviewNumber(c.afterRange)}`;
+  return tDynamic('ui:upgrade.comparison.weapon', {
+    bd: fmtPreviewNumber(c.beforeDps),
+    ad: fmtPreviewNumber(c.afterDps),
+    br: fmtPreviewNumber(c.beforeRange),
+    ar: fmtPreviewNumber(c.afterRange),
+  });
 }
 
 /** 跳过返还 = cost − 手续费。**与 World.skipUpgrade 调的是同一个 skipRefundFor**:分家的话提示与到账会各走各的 */
@@ -359,6 +398,12 @@ export interface UpgradeFlowUi {
   show(): void;
   /** 收卡。**不恢复战斗、不动 loop** —— 那是 main.ts 的事(World 与 ui 都不认识"游戏流程") */
   hide(): void;
+  /**
+   * 语言切换后原地重画(06 号):候选卡 / 头部 / 按钮 / 替换层标签走当前语言。
+   * **只改 textContent,不改 phase / chosen / World** —— 不重掷候选、不消费 rng、
+   * 不自动选卡、不关面板、不恢复战斗;PHASE_OFF(面板收着)时是无操作。
+   */
+  refreshLocale(): void;
 }
 
 /** 改版后的最小契约:只剩 World 与结算回调。画布/拾格/渲染层状态随放置阶段一起删除 */
@@ -368,13 +413,16 @@ export interface UpgradeFlowOpts {
   onResolved(): void;
 }
 
-/** 一张卡的图标 + 三块文本节点。整局复用同一批元素,弹一次卡只改 textContent */
+/** 一张卡的图标 + 四块文本节点。整局复用同一批元素,弹一次卡只改 textContent */
 interface CardEls {
   root: HTMLButtonElement;
   icon: HTMLDivElement;
   title: HTMLDivElement;
   desc: HTMLDivElement;
+  /** 等级主行(新武器报持有/合成,法令报层数) */
   level: HTMLDivElement;
+  /** 升星前后数值预览副行(与主行是兄弟节点,各自 textContent —— 翻译串永不进 innerHTML) */
+  preview: HTMLDivElement;
 }
 
 export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
@@ -400,7 +448,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   headEl.className = 'starwreck-upgrade-head';
   const cardsEl = makeDiv(CARDS_CSS);
   cardsEl.className = 'starwreck-upgrade-cards';
-  const rerollBtn = makeBtn(BTN_CSS, `重摇(${REROLL_PRICE} 星币)`);
+  const rerollBtn = makeBtn(BTN_CSS, '');
   const skipBtn = makeBtn(BTN_CSS, '');
   const btnRow = makeDiv('display:flex;gap:10px;');
   rerollBtn.className = 'starwreck-upgrade-action';
@@ -413,7 +461,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
 
   const pickerTitle = makeDiv(HEAD_CSS);
   const pickerSlots = makeDiv('display:flex;flex-direction:column;gap:8px;');
-  const pickerBack = makeBtn(BTN_CSS, '返回重选(Esc / 右键)');
+  const pickerBack = makeBtn(BTN_CSS, '');
   const picker = makeDiv(PICKER_CSS);
   picker.className = 'starwreck-upgrade-picker';
   pickerSlots.className = 'starwreck-upgrade-slots';
@@ -422,7 +470,8 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
 
   const toast = makeDiv(TOAST_CSS);
   const transition = makeDiv(TRANSITION_CSS);
-  transition.textContent = '✦ 升星确认';
+  // 占位:过场只在 playUpgradeTransition 里现设文案后显示,这里不必预填任何语言
+  transition.textContent = '';
   const ui = document.getElementById('ui')!;
   const styleEl = document.createElement('style');
   styleEl.textContent = TRANSITION_STYLE;
@@ -456,10 +505,11 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     const title = makeDiv(CARD_TITLE_CSS);
     const desc = makeDiv(CARD_DESC_CSS);
     const level = makeDiv(CARD_LEVEL_CSS);
-    root.append(icon, title, desc, level);
+    const preview = makeDiv(CARD_COMPARE_CSS);
+    root.append(icon, title, desc, level, preview);
     root.addEventListener('click', () => choose(index));
     cardsEl.appendChild(root);
-    return { root, icon, title, desc, level };
+    return { root, icon, title, desc, level, preview };
   }
 
   /** 抹掉提示条并停掉它的计时器(退回选卡与重开一局共用) */
@@ -489,8 +539,14 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       : comparison.beforeStars > 0 && comparison.afterStars > comparison.beforeStars;
     if (!isStarUpgrade) return;
     const label = opt.kind === OFFER_NEW_WEAPON
-      ? `✦ 升星 · ${cardTitle(opt)} · ${'★'.repeat(comparison.afterStars)}`
-      : `✦ 法令叠层 · ${cardTitle(opt)} · ×${comparison.afterStars}`;
+      ? tDynamic('ui:upgrade.transition.starUpgrade', {
+          title: cardTitle(opt),
+          stars: '★'.repeat(comparison.afterStars),
+        })
+      : tDynamic('ui:upgrade.transition.edictUpgrade', {
+          title: cardTitle(opt),
+          lv: comparison.afterStars,
+        });
     transition.textContent = label;
     transition.style.display = 'flex';
     transition.style.animation = 'none';
@@ -511,11 +567,12 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     rerollBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
   }
 
-  /** 刷面板头:玩家模式不印残骸/花费(?debug 才印,与 main.ts 同一条判定) */
+  /** 刷面板头与按钮:玩家模式不印残骸/花费(?debug 才印,与 main.ts 同一条判定);重摇按钮文案也在这里现取 */
   function syncPanel(): void {
     headEl.textContent = DEBUG
-      ? `三选一升级 · 残骸 ${Math.round(world.scrap)} · 本次花费 ${world.upgradeCost}`
-      : '世界已暂停 · 三选一';
+      ? tDynamic('ui:upgrade.head.debug', { scrap: Math.round(world.scrap), cost: world.upgradeCost })
+      : tDynamic('ui:upgrade.head.paused');
+    rerollBtn.textContent = tDynamic('ui:upgrade.reroll', { price: REROLL_PRICE });
     syncRerollState();
   }
 
@@ -542,15 +599,14 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       card.icon.style.borderRadius = '8px';
       card.title.textContent = cardTitle(opt);
       card.desc.textContent = cardDesc(opt, world);
-      const levelText = cardLevelText(opt, world);
-      card.level.textContent = levelText;
-      // 用 innerHTML 加一个不改变旧四节点契约的视觉副行；测试桩只读 textContent，
-      // 浏览器则显示实际的“前 → 后”数字对比。
-      const preview = upgradeComparisonText(opt, world);
-      (card.level as unknown as { innerHTML: string }).innerHTML =
-        `${levelText}<span style="${CARD_COMPARE_CSS}">${preview}</span>`;
+      // 等级主行与预览副行是**两个兄弟节点**,各自 textContent —— 翻译串与预览串都不进 innerHTML
+      card.level.textContent = cardLevelText(opt, world);
+      card.preview.textContent = upgradeComparisonText(opt, world);
     }
-    skipBtn.textContent = `跳过(手续费 ${UPGRADE_SKIP_FEE} · 返还 ${skipRefund(world.upgradeCost)})`;
+    skipBtn.textContent = tDynamic('ui:upgrade.skip', {
+      fee: UPGRADE_SKIP_FEE,
+      refund: skipRefund(world.upgradeCost),
+    });
   }
 
   function hide(): void {
@@ -581,15 +637,15 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       const result = mergeResultOf(opt.type);
       const afterResult = result >= 0 ? slotStarCount(world.weapons, result, 3) : 0;
       if (afterResult > beforeResult) {
-        return `${label} 合 ${'★'.repeat(3)} 变身「${towerName(result)}」`;
+        return tDynamic('ui:upgrade.toast.transformed', { label, name: towerName(result) });
       }
       const afterMax = slotMaxStars(world.weapons, opt.type);
-      if (afterMax > beforeMax) return `${label} 合到 ${'★'.repeat(afterMax)}`;
-      return `获得:${label} ★`;
+      if (afterMax > beforeMax) return tDynamic('ui:upgrade.toast.fusedTo', { label, stars: '★'.repeat(afterMax) });
+      return tDynamic('ui:upgrade.toast.gotWeapon', { label });
     }
     // 法令:层数现读 World(grantEdict 已经加过一层)—— 这就是"拿过两次过热上限就显示 ×2"
     const lv = edictLevel(world.edictLevels, opt.type);
-    return lv >= 2 ? `${label} ×${lv}` : `法令生效:${label}`;
+    return lv >= 2 ? tDynamic('ui:upgrade.toast.edictLevel', { label, lv }) : tDynamic('ui:upgrade.toast.edictActive', { label });
   }
 
   /** 点卡前的武器快照:回执按"点前 → 点后"的差说话(见 successToast) */
@@ -636,26 +692,38 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     flash(denyMessage(code), DENY_COLOR);
   }
 
-  /** 换槽选择层:列出当前 4 槽,点某一槽 = 带着槽位把这张卡再结算一次 */
-  function showPicker(): void {
+  /** 换槽层的标题 + 槽位标签。抽成独立函数:showPicker 与 refreshLocale 共用一份当前语言的重画 */
+  function renderPickerLabels(): void {
     const opt = world.offer[chosen];
     pickerTitle.textContent = opt
-      ? `武器槽已满 —— 换下哪一把,给「${optionLabel(opt)}」让位?`
-      : '武器槽已满';
+      ? tDynamic('ui:upgrade.picker.title', { label: optionLabel(opt) })
+      : tDynamic('ui:upgrade.picker.titleFull');
+    pickerBack.textContent = tDynamic('ui:upgrade.picker.back');
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       const btn = slotBtns[i]!;
       const slot = world.weapons[i];
       if (!slot || slot.type < 0) {
         btn.disabled = true;
         btn.style.opacity = '0.4';
-        btn.textContent = `槽 ${i} · 空槽`;
+        btn.textContent = tDynamic('ui:upgrade.picker.slotEmpty', { i });
         continue;
       }
       const def = TOWERS[slot.type];
       btn.disabled = false;
       btn.style.opacity = '1';
-      btn.textContent = `槽 ${i} · ${def === undefined ? `未知塔型(${slot.type})` : towerName(slot.type)} ${'★'.repeat(slot.stars)}`;
+      btn.textContent = def === undefined
+        ? tDynamic('ui:upgrade.picker.slotUnknown', { i, type: slot.type })
+        : tDynamic('ui:upgrade.picker.slotTaken', {
+            i,
+            name: towerName(slot.type),
+            stars: '★'.repeat(slot.stars),
+          });
     }
+  }
+
+  /** 换槽选择层:列出当前 8 槽,点某一槽 = 带着槽位把这张卡再结算一次 */
+  function showPicker(): void {
+    renderPickerLabels();
     phase = PHASE_REPLACE;
     clearFlash();
     panel.style.display = 'none';
@@ -713,7 +781,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   function skip(): void {
     if (phase !== PHASE_PICK) return;
     const refund = skipRefund(world.upgradeCost);
-    if (world.skipUpgrade()) flash(`跳过这次升级 —— 手续费 ${UPGRADE_SKIP_FEE},返还 ${refund} 残骸`, OK_COLOR);
+    if (world.skipUpgrade()) flash(tDynamic('ui:upgrade.flash.skip', { fee: UPGRADE_SKIP_FEE, refund }), OK_COLOR);
     // 无待选(理论上这张卡根本不该在屏幕上)也照样放行:留在这儿就是个点什么都没用的面板
     else flash(denyMessage(UPGRADE_NO_OFFER), DENY_COLOR);
     resolve();
@@ -730,7 +798,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     if (code > 0) {
       renderCards();
       syncPanel();
-      flash(`已重摇 —— 花费 ${REROLL_PRICE} 星币`, OK_COLOR);
+      flash(tDynamic('ui:upgrade.flash.rerolled', { price: REROLL_PRICE }), OK_COLOR);
       return;
     }
     if (code === REROLL_NO_STARCOINS || code === REROLL_ALREADY_DONE) {
@@ -756,7 +824,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       } else {
         // 选卡阶段的 Esc(二轮审查):不绑"跳过" —— 误触一记 Esc 不该扣 15 残骸手续费;
         // 但也不许是静默死键(全游戏其他覆盖层都认 Esc),flash 指路即可
-        flash('选一张卡,或点「跳过」结束这次升级', OK_COLOR);
+        flash(tDynamic('ui:upgrade.flash.pickHint'), OK_COLOR);
       }
       return;
     }
@@ -793,6 +861,16 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       audioBus.playUpgrade();
     },
     hide,
+    // 语言切换后原地重画文案(06 号)。只写 textContent / 现读 t():
+    //   renderCards 只重画既有卡与跳过按钮,不新增 DOM(offer 没变,补卡循环不会跑)、
+    //   不重掷候选、不消费 rng;syncPanel 重画头部与重摇按钮;换槽层开着时槽位标签当场翻新。
+    //   **phase / chosen / World 一律不动** —— 切语言不自动选卡、不关面板、不恢复战斗。
+    refreshLocale(): void {
+      if (phase === PHASE_OFF) return;
+      renderCards();
+      syncPanel();
+      renderPickerLabels();
+    },
     setWorld(next: World): void {
       world = next;
       // 面板整个收掉、阶段回到"收着":offer 是**上一局**的候选、chosen 是它的下标 ——

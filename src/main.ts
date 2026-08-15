@@ -233,6 +233,8 @@ async function boot(): Promise<void> {
       run.paused = false;
     },
   });
+  // 语言切换成功后升级流程原地重画文案(06 号):不重掷候选、不消费 rng,阶段/选择态原地保留
+  registerLocaleAware(upgradeFlow);
 
   // 每两分钟的航段整备：改版后只逛星币商店（买武器 / 法令 / 付费修复 / 刷新货架），
   // 新增/升级模块仍只走普通升级。

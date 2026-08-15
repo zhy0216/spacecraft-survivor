@@ -30,7 +30,7 @@ import {
   EDICT_INVALID_TYPE,
   type World,
 } from '../sim/world';
-import { initI18n } from '../i18n';
+import { changeLocale, currentLocale, initI18n, t } from '../i18n';
 import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps, upgradeComparison, upgradeComparisonText } from './upgradeFlow';
 import { optionLabel } from './presentation/upgradeText';
 
@@ -78,6 +78,30 @@ describe('denyMessage', () => {
 
   it('未知码回落为带原码的兜底文案', () => {
     expect(denyMessage(-999)).toContain('-999');
+  });
+
+  it('en 下每个理由码都有英文文案,未知码仍保留原始编号', async () => {
+    await changeLocale('en');
+    const messages = DENY_CODES.map(denyMessage);
+    for (const message of messages) {
+      expect(message.length).toBeGreaterThan(0);
+      expect(message).not.toContain('理由码');
+    }
+    expect(denyMessage(UPGRADE_NO_OFFER)).toContain('upgrade');
+    expect(denyMessage(EDICT_MAXED)).toContain(String(EDICT_MAX_LEVEL));
+    expect(denyMessage(REROLL_NO_STARCOINS)).toContain(String(REROLL_PRICE));
+    expect(denyMessage(REROLL_ALREADY_DONE)).toContain('rerolled');
+    expect(denyMessage(-999)).toContain('-999');
+  });
+
+  it('满层文案英文按 count 选复数分支(one/other)', async () => {
+    await changeLocale('en');
+    expect(t('ui:upgrade.deny.edictMaxed', { count: 1 })).toBe(
+      'This edict is maxed out (1 layer cap) — pick another or skip',
+    );
+    expect(t('ui:upgrade.deny.edictMaxed', { count: 5 })).toBe(
+      'This edict is maxed out (5 layers cap) — pick another or skip',
+    );
   });
 });
 
@@ -168,6 +192,29 @@ describe('升级卡片纯文案', () => {
     expect(cardDesc(newWeaponOpt(99))).toContain('99');
     expect(cardDesc(edictOpt(99))).toContain('99');
   });
+
+  it('en 下武器卡描述按英文句式拼装,持有/合成语义不依赖中文词序', async () => {
+    await changeLocale('en');
+    const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    const asWorld = worldAsWorld(world);
+    expect(cardDesc(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toContain('Arc ');
+    expect(cardDesc(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toContain('Range ');
+    expect(cardDesc(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toContain('DPS ');
+    expect(cardDesc(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toContain('Ammo-fed');
+    expect(cardDesc(edictOpt(99))).toContain('99');
+    // 新武器从 1★ 起步
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe('New weapon · starts at ★');
+    // 两把 1★:再来一把合成 ★★
+    world.weapons[0]!.type = TOWER_AUTOCANNON;
+    world.weapons[0]!.stars = 1;
+    world.weapons[1]!.type = TOWER_AUTOCANNON;
+    world.weapons[1]!.stars = 1;
+    expect(cardLevelText(newWeaponOpt(TOWER_AUTOCANNON), asWorld)).toBe(
+      'Held ★ ×2 · get one more to fuse ★★',
+    );
+    // 法令层数进度
+    expect(cardLevelText(edictOpt(EDICT_COOLANT, 2))).toBe(`Edict · ×2 → ×3 (cap ×${EDICT_MAX_LEVEL})`);
+  });
 });
 
 describe('skipRefund', () => {
@@ -207,6 +254,13 @@ describe('upgradeComparison(升星前后预览)', () => {
   it('法令预览按当前层 → 下一层,并在满层时夹住', () => {
     expect(upgradeComparison(edictOpt(EDICT_COOLANT, 2)).afterStars).toBe(3);
     expect(upgradeComparison(edictOpt(EDICT_COOLANT, EDICT_MAX_LEVEL)).afterStars).toBe(EDICT_MAX_LEVEL);
+  });
+
+  it('en 下升星预览与法令叠层预览句式独立翻译', async () => {
+    await changeLocale('en');
+    const world = createStubWorld([newWeaponOpt(TOWER_AUTOCANNON)]);
+    expect(upgradeComparisonText(newWeaponOpt(TOWER_AUTOCANNON), worldAsWorld(world))).toContain('DPS — →');
+    expect(upgradeComparisonText(edictOpt(EDICT_COOLANT, 2))).toBe('Layers ×2 → ×3');
   });
 });
 
@@ -325,6 +379,8 @@ interface StubWorld {
   takeUpgrade(choice: number, slotIndex?: number): number;
   skipUpgrade(): boolean;
   rerollOffer(): number;
+  /** 确定性快照:offer + 武器槽 + 星币/残骸/重摇位,用于钉"refreshLocale 不改 World" */
+  checksum(): string;
 }
 
 function createStubWorld(offer: UpgradeOption[]): StubWorld {
@@ -356,6 +412,11 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
         world.offerRerolled = true;
       }
       return world.rerollCode;
+    },
+    checksum(): string {
+      const offer = world.offer.map((o) => `${o.kind}:${o.type}:${o.level}`).join('|');
+      const slots = world.weapons.map((s) => `${s.type}:${s.stars}`).join('|');
+      return [offer, slots, world.scrap, world.starCoins, world.offerRerolled ? 1 : 0].join('#');
     },
   };
   return world;
@@ -404,6 +465,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
       cardTitle(world.offer[0] as UpgradeOption),
       cardDesc(world.offer[0] as UpgradeOption, worldAsWorld(world)),
       cardLevelText(world.offer[0] as UpgradeOption, worldAsWorld(world)),
+      upgradeComparisonText(world.offer[0] as UpgradeOption, worldAsWorld(world)),
     ]);
     expect(skipOf(dom).textContent).toContain(String(skipRefund(world.upgradeCost)));
   });
@@ -511,5 +573,68 @@ describe('createUpgradeFlow 单阶段流程', () => {
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     expect(next.takeCalls).toEqual([[0, undefined]]);
     expect(world.takeCalls).toEqual([]);
+  });
+
+  it('refreshLocale 切到 en 后重画文案:候选/World/phase 原地保留,不重掷、不结算', async () => {
+    // 先进替换层(phase = REPLACE),验证切语言后替换层仍开着
+    world.replaceNeeded = true;
+    world.weapons[0] = { ...world.weapons[0] as WeaponSlot, type: TOWER_AUTOCANNON, stars: 1 };
+    const flow = setup();
+    fire(cardsOf(dom).children[0] as StubEl, 'click');
+    expect(pickerOf(dom).style.display).toBe('flex');
+
+    const beforeOffer = world.offer;
+    const beforeChecksum = world.checksum();
+    const takeCallsBefore = world.takeCalls.length;
+    expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toContain('自动机炮');
+    expect((pickerSlotsOf(dom).children[0] as StubEl).textContent).toContain('自动机炮');
+
+    await changeLocale('en');
+    flow.refreshLocale();
+
+    expect(currentLocale()).toBe('en');
+    // 世界一字未动:offer 同一份引用,星币/残骸/槽位/重摇位 checksum 不变,
+    // refreshLocale 本身不新增任何结算调用(进替换层那一次 takeUpgrade 是点卡产生的)
+    expect(world.offer).toBe(beforeOffer);
+    expect(world.checksum()).toBe(beforeChecksum);
+    expect(world.takeCalls.length).toBe(takeCallsBefore);
+    expect(world.rerollCalls).toBe(0);
+    expect(world.skipCalls).toBe(0);
+    // 仍停在替换层(面板收着、替换层开着),phase 没被切走
+    expect(pickerOf(dom).style.display).toBe('flex');
+    expect(panelOf(dom).style.display).toBe('none');
+    // 卡片与槽位文案翻成英文
+    expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toBe(
+      cardTitle(world.offer[0] as UpgradeOption),
+    );
+    const slot0 = pickerSlotsOf(dom).children[0] as StubEl;
+    expect(slot0.textContent).toContain('Auto Cannon');
+    expect(slot0.textContent).toContain('★');
+    expect(pickerBackOf(dom).textContent).toContain('Back');
+    expect(headOf(dom).textContent).toContain('Pick one');
+    flow.hide();
+  });
+
+  it('refreshLocale 在选卡阶段同样重画候选/头部/按钮,且不自动选卡', async () => {
+    const flow = setup();
+    expect(panelOf(dom).style.display).toBe('flex');
+    const beforeChecksum = world.checksum();
+    expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toContain('自动机炮');
+
+    await changeLocale('en');
+    flow.refreshLocale();
+
+    expect(world.checksum()).toBe(beforeChecksum);
+    expect(world.rerollCalls).toBe(0);
+    expect(world.takeCalls).toEqual([]);
+    expect(panelOf(dom).style.display).toBe('flex'); // 面板仍开着
+    expect(pickerOf(dom).style.display).toBe('none');
+    expect(headOf(dom).textContent).toContain('Pick one');
+    expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toBe(
+      cardTitle(world.offer[0] as UpgradeOption),
+    );
+    expect(rerollOf(dom).textContent).toContain('Reroll');
+    expect(skipOf(dom).textContent).toContain('Skip');
+    flow.hide();
   });
 });
