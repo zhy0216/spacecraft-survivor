@@ -283,6 +283,10 @@ export const ui = {
     alt: '图鉴图标',
     back: '返回({{esc}})',
     stats: '胜场 {{wins}} · 总击杀 {{kills}} · 精英击杀 {{eliteKills}}',
+    viewer: {
+      // 高清看图页的关闭提示(标题 = 条目名,武器星级图带星数)
+      close: '点击任意处或按 {{esc}} 关闭',
+    },
     star: {
       // {{stars}} 是 ★ 重复串(★/★★/★★★),句子本身照翻
       damage: '{{stars}} 伤害 {{dmg}}',
@@ -372,6 +376,8 @@ export const ui = {
       upload: '上传本局日志(U)',
       uploading: '上传中…',
       uploaded: '已上传',
+      save: '保存本局日志(U)',
+      saved: '已保存',
       epilogueContinue: '确认战报 · 查看航行结局(Enter)',
     },
     upload: {
@@ -379,6 +385,7 @@ export const ui = {
       noLog: '本局无日志',
       uploadFailed: '上传失败',
       network: '上传失败(网络错误)',
+      saveFailed: '保存失败',
       // {{code}} = 稳定错误码(可诊断);内部错误字符串永不原样上屏
       unknown: '上传失败(错误码 {{code}})',
     },

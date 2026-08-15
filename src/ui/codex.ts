@@ -9,6 +9,8 @@
  * 武器是**一行一种的纵向列表**(名称 + 三档星级缩略图,整行悬停弹 tooltip,内容区可滚动);
  * 未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
  * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
+ * **点配图弹高清看图 viewer**:原图 URL 放大展示(武器星级图带星数标题),点遮罩或 Esc 收起 ——
+ * 与 tooltip 同一条"整页只此一个"口径,开合状态走布尔量(桩 DOM 不解析 cssText)。
  * **武器行是星级三档缩略图**(同一张贴图三档**同大**,图下各标 ★/★★/★★★,星数靠标签读);敌/法令仍一张大图。
  * **星级三档数值全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
@@ -149,6 +151,20 @@ const TIP_CSS =
   'z-index:1000;pointer-events:none;background:rgba(10,16,26,.97);' +
   `border:1px solid rgba(43,74,110,.8);border-radius:6px;padding:8px 10px;` +
   `color:${VALUE_COLOR};font-size:12px;`;
+
+/**
+ * 高清看图 viewer:点配图弹出,整页只此一个(与 tooltip 同一条"只建一次"口径)。
+ * 图 = 原图 URL 原样放大(源图 128px,渲染层与图鉴共用同一份贴图,没有第二份"高清"副本),
+ * 平滑插值交给浏览器;标题 + 关闭提示挂在图下。点遮罩任意处或 Esc 收起。
+ */
+const VIEWER_CSS =
+  'position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;' +
+  'gap:12px;background:rgba(0,0,0,.88);z-index:1200;cursor:zoom-out;';
+const VIEWER_IMG_CSS =
+  'object-fit:contain;max-width:min(90vw,560px);max-height:min(76vh,560px);' +
+  'border:1px solid rgba(43,74,110,.8);border-radius:6px;background:rgba(5,7,13,.6);';
+const VIEWER_CAPTION_CSS = `color:${VALUE_COLOR};font-size:14px;letter-spacing:.1em;`;
+const VIEWER_HINT_CSS = `color:${IDLE_COLOR};font-size:11px;letter-spacing:.08em;`;
 
 const BACK_BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
@@ -531,9 +547,42 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   const tip = document.createElement('div');
   tip.style.cssText = TIP_CSS;
 
+  // 高清看图 viewer:点配图弹出(与 tooltip 同一条"整页只此一个"口径),点遮罩或 Esc 收起
+  const viewer = document.createElement('div');
+  viewer.style.cssText = VIEWER_CSS;
+  const viewerImg = document.createElement('img');
+  viewerImg.style.cssText = VIEWER_IMG_CSS;
+  viewerImg.alt = t('ui:codex.alt');
+  const viewerCaption = document.createElement('div');
+  viewerCaption.style.cssText = VIEWER_CAPTION_CSS;
+  const viewerHint = document.createElement('div');
+  viewerHint.style.cssText = VIEWER_HINT_CSS;
+  viewer.append(viewerImg, viewerCaption, viewerHint);
+
   card.append(titleEl, statsEl, filterRow, scrollEl, backBtn);
-  root.append(card, tip);
+  root.append(card, viewer, tip);
   document.getElementById('ui')!.appendChild(root);
+
+  /** 看图页开合状态:桩 DOM 不解析 cssText,display 初值 undefined,拿布尔量当唯一真相 */
+  let viewerOpen = false;
+
+  function openViewer(url: string, caption: string): void {
+    tip.style.display = 'none'; // 悬停的 tooltip 别压在遮罩上
+    viewerImg.src = url;
+    viewerCaption.textContent = caption;
+    viewerHint.textContent = t('ui:codex.viewer.close', { esc: t('common:keys.esc') });
+    viewerOpen = true;
+    viewer.style.display = 'flex';
+  }
+
+  function closeViewer(): void {
+    if (!viewerOpen) return;
+    viewerOpen = false;
+    viewer.style.display = 'none';
+    viewerImg.src = '';
+  }
+
+  viewer.addEventListener('click', closeViewer);
 
   /** 静态 chrome(返回按钮):show 与 refreshLocale 共用 —— 语言切换发生在图鉴收着时,
    * refreshLocale 会提前返回,于是 show 也要按当前语言刷它(标题/统计/网格/alt 在 render 里现读) */
@@ -567,18 +616,19 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   }
 
   /** 三档星级缩略图(武器行专用):同一张贴图三档同大(48px),每档图下各标星数 ——
-   * 星数靠标签读,不靠图的大小。 */
+   * 星数靠标签读,不靠图的大小。点开弹高清看图,标题带星数(哪一档点开看得清楚)。 */
   function appendStarThumbs(artBox: HTMLElement, url: string, name: string): void {
     for (let s = 0; s < 3; s++) {
       const col = document.createElement('div');
       col.style.cssText = STAR_THUMB_COL_CSS;
       const img = document.createElement('img');
-      img.style.cssText = CELL_IMG_CSS + `width:${STAR_THUMB_BASE_PX}px;height:${STAR_THUMB_BASE_PX}px;`;
+      img.style.cssText = CELL_IMG_CSS + `width:${STAR_THUMB_BASE_PX}px;height:${STAR_THUMB_BASE_PX}px;cursor:zoom-in;`;
       img.src = url;
       img.alt = `${name} ${'★'.repeat(s + 1)}`;
       const label = document.createElement('div');
       label.style.cssText = STAR_LABEL_CSS + `color:${STAR_LABEL_COLORS[s] ?? '#ffd479'};`;
       label.textContent = '★'.repeat(s + 1);
+      img.addEventListener('click', () => openViewer(url, `${name} ${'★'.repeat(s + 1)}`));
       col.append(img, label);
       artBox.appendChild(col);
     }
@@ -599,16 +649,18 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
         const size = row.art.urls.length > 1 ? '34px' : '56px';
         for (const url of row.art.urls) {
           const img = document.createElement('img');
-          img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};`;
+          img.style.cssText = CELL_IMG_CSS + `width:${size};height:${size};cursor:zoom-in;`;
           img.src = url;
           img.alt = t('ui:codex.alt');
+          img.addEventListener('click', () => openViewer(url, row.name));
           artBox.appendChild(img);
         }
       } else if (row.art.kind === 'svg') {
         const img = document.createElement('img');
-        img.style.cssText = CELL_IMG_CSS + 'width:56px;height:56px;';
+        img.style.cssText = CELL_IMG_CSS + 'width:56px;height:56px;cursor:zoom-in;';
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
         img.alt = t('ui:codex.alt');
+        img.addEventListener('click', () => openViewer(img.src, row.name));
         artBox.appendChild(img);
       }
       // 'stars' 只会出现在武器行(appendWeaponRow);敌人/法令卡收到它 = 数据层改坏,静默跳过配图
@@ -640,15 +692,17 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
         appendStarThumbs(artBox, row.art.url, row.name);
       } else if (row.art.kind === 'img') {
         const img = document.createElement('img');
-        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;';
+        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;cursor:zoom-in;';
         img.src = row.art.urls[0]!;
         img.alt = t('ui:codex.alt');
+        img.addEventListener('click', () => openViewer(img.src, row.name));
         artBox.appendChild(img);
       } else {
         const img = document.createElement('img');
-        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;';
+        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;cursor:zoom-in;';
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
         img.alt = t('ui:codex.alt');
+        img.addEventListener('click', () => openViewer(img.src, row.name));
         artBox.appendChild(img);
       }
       el.appendChild(artBox);
@@ -692,6 +746,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   function hide(): void {
     visible = false;
     tip.style.display = 'none'; // 悬停的 tooltip 别留到下一次打开
+    closeViewer(); // 看图页也别留到下一次打开
     root.style.display = 'none';
   }
 
@@ -699,6 +754,10 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     if (!visible || e.repeat || isTyping()) return;
     if (e.code !== 'Escape') return;
     e.preventDefault();
+    if (viewerOpen) {
+      closeViewer(); // Esc 先收看图页,再按才关图鉴
+      return;
+    }
     close();
   });
 
@@ -713,6 +772,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
    */
   function refreshLocale(): void {
     if (!visible) return;
+    closeViewer(); // 网格重排后旧图引用已不在;标题是现读 t() 的临时产物,没有跨语言保留价值
     const top = scrollEl.scrollTop;
     paintStatic();
     paintFilters();

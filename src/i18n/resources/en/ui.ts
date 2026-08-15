@@ -285,6 +285,10 @@ export const ui: DeepRecord<typeof zhUi> = {
     alt: 'Codex icon',
     back: 'Back ({{esc}})',
     stats: 'Wins {{wins}} · Total kills {{kills}} · Elite kills {{eliteKills}}',
+    viewer: {
+      // Close hint for the full-screen image viewer (caption = entry name, weapon stars get star suffix)
+      close: 'Click anywhere or press {{esc}} to close',
+    },
     star: {
       // {{stars}} is the repeated ★ string (★/★★/★★★); the sentence itself is translated
       damage: '{{stars}} Damage {{dmg}}',
@@ -374,6 +378,8 @@ export const ui: DeepRecord<typeof zhUi> = {
       upload: 'Upload Run Log (U)',
       uploading: 'Uploading…',
       uploaded: 'Uploaded',
+      save: 'Save Run Log (U)',
+      saved: 'Saved',
       epilogueContinue: 'Confirm Report · View Voyage Ending (Enter)',
     },
     upload: {
@@ -381,6 +387,7 @@ export const ui: DeepRecord<typeof zhUi> = {
       noLog: 'No run log this game',
       uploadFailed: 'Upload failed',
       network: 'Upload failed (network error)',
+      saveFailed: 'Save failed',
       // {{code}} = a stable, diagnosable code; internal error strings are never shown verbatim
       unknown: 'Upload failed (error code {{code}})',
     },

@@ -610,6 +610,11 @@ function tip(dom: StubDom): StubEl {
   )!;
 }
 
+/** 高清看图 viewer:整页唯一那个带 zoom-out 光标的遮罩层 */
+function viewerEl(dom: StubDom): StubEl {
+  return dom.created.find((el) => el.style.cssText.includes('cursor:zoom-out'))!;
+}
+
 describe('createCodexUi', () => {
   let dom: StubDom;
   let closes: number;
@@ -720,6 +725,76 @@ describe('createCodexUi', () => {
     expect(
       dom.created.some((el) => el.tagName === 'IMG' && el.src.includes('missile-nest-head')),
     ).toBe(true);
+  });
+
+  it('点配图弹高清看图:原图进 viewer、标题就位;Esc 先收看图、再按才关图鉴', () => {
+    const ui = make();
+    ui.show();
+    const swarm = findCell(dom, 'enemies', String(KIND_SWARM))!;
+    const thumb = findAll(swarm, (el) => el.tagName === 'IMG')[0]!;
+    thumb.listeners.get('click')?.({});
+    const viewer = viewerEl(dom);
+    expect(viewer.style.display).toBe('flex');
+    const big = findAll(viewer, (el) => el.tagName === 'IMG')[0]!;
+    expect(big.src).toBe(thumb.src);
+    expect(big.src.endsWith('swarm-leech.png')).toBe(true); // 原图 URL 原样放大,没有缩略副本
+    expect(findAll(viewer, (el) => el.textContent === '蜂群蛭').length).toBe(1);
+    expect(findAll(viewer, (el) => el.textContent === '点击任意处或按 Esc 关闭').length).toBe(1);
+    // Esc 先收看图页:图鉴还开着,onClose 不触发
+    dom.key(keyEvent('Escape'));
+    expect(viewer.style.display).toBe('none');
+    expect(root(dom).style.display).toBe('flex');
+    expect(closes).toBe(0);
+    // 再按 Esc 才关图鉴(与关闭按钮同一条路)
+    dom.key(keyEvent('Escape'));
+    expect(closes).toBe(1);
+    expect(root(dom).style.display).toBe('none');
+  });
+
+  it('武器星级缩略图点开:标题带星数;点遮罩收起', () => {
+    const ui = make();
+    ui.show();
+    const cell = findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!;
+    const starImgs = findAll(cell, (el) => el.tagName === 'IMG');
+    starImgs[1]!.listeners.get('click')?.({});
+    const viewer = viewerEl(dom);
+    expect(viewer.style.display).toBe('flex');
+    expect(findAll(viewer, (el) => el.textContent === '自动机炮 ★★').length).toBe(1);
+    expect(findAll(viewer, (el) => el.tagName === 'IMG')[0]!.src).toBe(starImgs[1]!.src);
+    viewer.listeners.get('click')?.({});
+    expect(viewer.style.display).toBe('none');
+  });
+
+  it('法令徽章同样点得开:data URI 原样进 viewer', () => {
+    const ui = make();
+    ui.show();
+    const edict = findCell(dom, 'edicts', String(EDICT_AMMO))!;
+    const thumb = findAll(edict, (el) => el.tagName === 'IMG')[0]!;
+    expect(thumb.src.startsWith('data:image/svg+xml')).toBe(true);
+    thumb.listeners.get('click')?.({});
+    const viewer = viewerEl(dom);
+    expect(viewer.style.display).toBe('flex');
+    expect(findAll(viewer, (el) => el.tagName === 'IMG')[0]!.src).toBe(thumb.src);
+  });
+
+  it('看图页开着时 hide/刷新语言都把它一起收掉,不留到下一次打开', async () => {
+    const ui = make();
+    ui.show();
+    const swarm = findCell(dom, 'enemies', String(KIND_SWARM))!;
+    findAll(swarm, (el) => el.tagName === 'IMG')[0]!.listeners.get('click')?.({});
+    expect(viewerEl(dom).style.display).toBe('flex');
+    ui.hide();
+    expect(viewerEl(dom).style.display).toBe('none');
+    ui.show();
+    // 再开一次看图,切语言(图鉴开着)时看图页一并收起(网格重排后旧图引用已不在)
+    findAll(findCell(dom, 'enemies', String(KIND_SWARM))!, (el) => el.tagName === 'IMG')[0]!
+      .listeners.get('click')
+      ?.({});
+    expect(viewerEl(dom).style.display).toBe('flex');
+    await changeLocale('en');
+    ui.refreshLocale();
+    expect(viewerEl(dom).style.display).toBe('none');
+    await changeLocale('zh-CN');
   });
 
   it('Esc 关页走 onClose;收着时 Esc 不认;按钮同一条路', () => {
