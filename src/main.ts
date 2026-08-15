@@ -82,7 +82,8 @@ import { createUpgradeFlow, type UpgradeFlowUi } from './ui/upgradeFlow';
 import { createVictoryEpilogue } from './ui/victoryEpilogue';
 import { unlockName } from './ui/presentation/unlockText';
 
-const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 20260801;
+const seedParam = Number(new URLSearchParams(location.search).get('seed') ?? '');
+const seed = Number.isFinite(seedParam) && seedParam > 0 ? seedParam : (Math.random() * 0xffffffff) >>> 0;
 
 /**
  * 玩家模式 / 开发模式(畅玩性):URL 带 ?debug 时挂 Tweakpane 调参面板,
