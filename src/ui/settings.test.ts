@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSettings,
+  nextLanguage,
   nextShake,
   normalizeSettings,
   parseSettings,
@@ -17,7 +18,14 @@ import {
 
 describe('设置:夹取与兜底', () => {
   it('JSON 往返后逐字段不变', () => {
-    const s = { masterVolume: 0.35, muted: true, shake: 0.5, damageNumbers: false, hitstop: false };
+    const s = {
+      masterVolume: 0.35,
+      muted: true,
+      shake: 0.5,
+      damageNumbers: false,
+      hitstop: false,
+      language: 'en' as const,
+    };
     expect(parseSettings(serializeSettings(s))).toEqual(s);
   });
 
@@ -41,13 +49,41 @@ describe('设置:夹取与兜底', () => {
     expect(normalizeSettings({ shake: 99 }).shake).toBe(1);
   });
 
-  it('出厂设置与各处原本写死的手感一致(音量 0.8、震屏/飘字/顿帧恒开)', () => {
+  it('出厂设置与各处原本写死的手感一致(音量 0.8、震屏/飘字/顿帧恒开、语言 auto)', () => {
     const d = createSettings();
     expect(d.masterVolume).toBe(0.8); // = render/audio.ts 的 masterVolume 初值
     expect(d.muted).toBe(false);
     expect(d.shake).toBe(1);
     expect(d.damageNumbers).toBe(true);
     expect(d.hitstop).toBe(true);
+    expect(d.language).toBe('auto');
+  });
+});
+
+describe('设置:语言字段的兼容与循环', () => {
+  it('老设置(02 号之前的 v1 文件)没有 language 字段 → 回落 auto,其余项原样保留', () => {
+    const s = normalizeSettings({ masterVolume: 0.5, muted: true, shake: 0.5 });
+    expect(s.language).toBe('auto');
+    expect(s.masterVolume).toBe(0.5); // 不因新字段的加入连累清空老设置
+    expect(s.muted).toBe(true);
+  });
+
+  it('非法 language 字符串逐项回落 auto,不整份判废', () => {
+    for (const bad of ['zh-Hans', 'fr-FR', '', 'auto ', 42, null]) {
+      expect(normalizeSettings({ language: bad }).language).toBe('auto');
+    }
+  });
+
+  it('合法偏好(zh-CN / en / auto)原样保留', () => {
+    expect(normalizeSettings({ language: 'zh-CN' }).language).toBe('zh-CN');
+    expect(normalizeSettings({ language: 'en' }).language).toBe('en');
+    expect(normalizeSettings({ language: 'auto' }).language).toBe('auto');
+  });
+
+  it('语言三档循环闭合(自动 → 简体中文 → English → 自动),与设置页那颗按钮同源', () => {
+    expect(nextLanguage('auto')).toBe('zh-CN');
+    expect(nextLanguage('zh-CN')).toBe('en');
+    expect(nextLanguage('en')).toBe('auto');
   });
 });
 

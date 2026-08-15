@@ -8,20 +8,23 @@
  *
  * 设置页最容易长出来的东西是装饰性开关 —— 界面上摆着、拨过去什么也不发生。
  * 于是这里的每一项都在注释里写明它落到哪一行代码上;加新项之前先找到那个落点,
- * 找不到就不该加。目前四项各有出处:
+ * 找不到就不该加。目前五项各有出处:
  *   masterVolume / muted → render/audio.ts 的 setMasterVolume / setMuted
  *   shake               → render/renderer.ts 的震屏位移(setEffects)
  *   damageNumbers       → render/renderer.ts 的伤害飘字入池(setEffects)
  *   hitstop             → main.ts 的击杀顿帧窗口
+ *   language            → main.ts 的语言解析 + i18n 初始化(i18n/locale.ts 的 resolveLanguage)
  *
  * ## 设置不是存档
  *
- * 它既不进 checksum、也不影响任何 sim 判定(全是表现与音量)——
+ * 它既不进 checksum、也不影响任何 sim 判定(全是表现与音量,语言更是界面层的事)——
  * 于是改设置绝不会让"同 seed 同输入 → 同轨迹"这条口径松动一分,
  * 也因此它单独一个存储键、与局内存档/元进度互不牵连:清了存档不该顺手把音量调回默认。
  */
+import type { LanguagePreference } from '../i18n/locale';
+import { isLanguagePreference } from '../i18n/locale';
 
-/** 一份玩家设置。全部是表现/音量,与 sim 无关(见文件头) */
+/** 一份玩家设置。全部是表现/音量/语言,与 sim 无关(见文件头) */
 export interface Settings {
   /** 主音量 0..1。落点:audioBus.setMasterVolume */
   masterVolume: number;
@@ -33,15 +36,29 @@ export interface Settings {
   damageNumbers: boolean;
   /** 击杀顿帧(hitstop)。落点:main 的冻结窗;关掉后击杀不再顿挫,画面更顺 */
   hitstop: boolean;
+  /**
+   * 界面语言偏好。'auto' = 跟随系统语言。落点:main 的 setLanguage ——
+   * 走 i18n 那条管线,不进 applySettings 的音视频分发。存的是**偏好**而不是
+   * 当时解析出的具体语言:系统语言以后变了,下次启动应重新解析。
+   */
+  language: LanguagePreference;
 }
 
 /**
  * 出厂设置。**与各处代码里原本写死的值一致**(音量 0.8 = audio.ts 的 masterVolume 初值,
  * 震屏/飘字/顿帧都是原本恒开)—— 于是"没有设置文件的新玩家"与"设置全默认的老玩家"
- * 玩到的是同一个游戏,设置系统上线不改变任何既有手感。
+ * 玩到的是同一个游戏,设置系统上线不改变任何既有手感。语言默认 auto:
+ * 没有明确说过要哪种语言的人,理应跟着系统语言走。
  */
 export function createSettings(): Settings {
-  return { masterVolume: 0.8, muted: false, shake: 1, damageNumbers: true, hitstop: true };
+  return {
+    masterVolume: 0.8,
+    muted: false,
+    shake: 1,
+    damageNumbers: true,
+    hitstop: true,
+    language: 'auto',
+  };
 }
 
 /** 0..1 夹取,非数/NaN 退回 fallback(手改过的设置文件不许把音量弄成 NaN 而让整条音频哑掉) */
@@ -51,6 +68,11 @@ function clamp01(v: unknown, fallback: number): number {
 
 function bool(v: unknown, fallback: boolean): boolean {
   return typeof v === 'boolean' ? v : fallback;
+}
+
+/** 语言偏好:只有 auto / zh-CN / en 三张合法牌,手写进去的怪字符串一律回退 fallback */
+function normalizeLanguage(v: unknown, fallback: LanguagePreference): LanguagePreference {
+  return typeof v === 'string' && isLanguagePreference(v) ? v : fallback;
 }
 
 /**
@@ -68,6 +90,9 @@ export function normalizeSettings(raw: unknown): Settings {
     shake: clamp01(o['shake'], d.shake),
     damageNumbers: bool(o['damageNumbers'], d.damageNumbers),
     hitstop: bool(o['hitstop'], d.hitstop),
+    // 老 `starwreck.settings.v1` 没有这一项:缺字段按上面的 normalizeLanguage 回落 auto ——
+    // 其余四项原样保留,不会被这一项的新增连累清空
+    language: normalizeLanguage(o['language'], d.language),
   };
 }
 
@@ -104,4 +129,11 @@ export function nextShake(v: number): number {
   if (v > 0.55) return 0.5;
   if (v > 0.01) return 0;
   return 1;
+}
+
+/** 语言三档循环:自动 → 简体中文 → English → 自动。设置页那颗按钮每点一次走一档 */
+export function nextLanguage(v: LanguagePreference): LanguagePreference {
+  if (v === 'auto') return 'zh-CN';
+  if (v === 'zh-CN') return 'en';
+  return 'auto';
 }

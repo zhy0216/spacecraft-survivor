@@ -35,6 +35,9 @@ import { isTyping } from './core/isTyping';
 import { FixedStepLoop, SIM_HZ } from './core/loop';
 import { unlockMet, UNLOCKS, type UnlockProgress } from './data/unlocks';
 import { WAVE_MAX_ALIVE, WAVE_SEGMENTS } from './data/waves';
+import { changeLocale, currentLocale, initI18n, resolveEffectiveLocale, t } from './i18n';
+import { registerLocaleAware, refreshAllLocaleAware } from './i18n/registry';
+import type { LanguagePreference } from './i18n';
 import { audioBus } from './render/audio';
 import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
 import { applyRandomStart } from './sim/loadout';
@@ -76,10 +79,21 @@ const seed = Number(new URLSearchParams(location.search).get('seed') ?? '') || 2
 /**
  * 玩家模式 / 开发模式(畅玩性):URL 带 ?debug 时挂 Tweakpane 调参面板,
  * 否则挂玩家暂停菜单(Esc)并让 HUD/罗盘用到整条屏幕 —— 默认是玩家形态。
- * 标题随之切换:正式页签 "STARWRECK 星骸",开发模式追加 "· dev" 提醒自己在调参。
+ * 标题也随之切换:正式页签印 t('ui:title.base') 的本地化标题,开发模式追加 "· dev" 提醒自己在调参。
  */
 const DEBUG = new URLSearchParams(location.search).has('debug');
-if (DEBUG) document.title = 'STARWRECK 星骸 · dev';
+
+/**
+ * 把当前生效语言同步到 document 的"浏览器级显示设置":
+ * html lang 供屏幕阅读器/拼写检查/字体选型用,dir 先把接口留好(两种语言都是 ltr),
+ * document.title 走资源里的本地化基底 + 开发模式标记。**只读当前语言,不触发切换**。
+ */
+function applyDocumentLocale(): void {
+  document.documentElement.lang = currentLocale();
+  document.documentElement.dir = 'ltr';
+  // · dev 是开发标记,不翻译
+  document.title = DEBUG ? `${t('ui:title.base')} · dev` : t('ui:title.base');
+}
 
 /** 击杀 hitstop 的冻结时长(ms):40-60ms 的一记顿挫,再长就是卡顿(占位待调) */
 const HITSTOP_MS = 45;
@@ -101,12 +115,17 @@ const CAMERA_FRACTION_DEFAULT = tuning.cameraShipHeightFraction;
 
 async function boot(): Promise<void> {
   const input = new Input();
-  // 玩家设置(音量/震屏/飘字/顿帧):**页载第一件事就读并生效** —— 静音的玩家不该
+  // 玩家设置(音量/震屏/飘字/顿帧/语言):**页载第一件事就读并生效** —— 静音的玩家不该
   // 在标题界面出现之前先被响一声。渲染层此刻还不存在,故先只灌音频那一半(applySettings
   // 收 renderer 可缺席),Renderer.create 之后再整份重灌一次(见下面那句)。
   // 它是整页唯一那一份设置(设置页与暂停菜单读的都是它),故是 let 而不是 const
   let settings: Settings = loadSettings();
   applySettings(settings);
+  // 语言:**先解析偏好、再 await initI18n,之后才轮到任何 UI 被创建** ——
+  // 不然首屏会先闪一遍默认语言再换过来(标题/暂停/设置页都只建一次,没法靠销毁重建补救)。
+  // auto 在这里现读 navigator.languages,所以"浏览器偏好英文 + 设置 auto"的第一帧就是英文
+  await initI18n(resolveEffectiveLocale(settings.language));
+  applyDocumentLocale();
   // 浏览器自动播放策略:AudioContext 只能由用户手势解锁。在首次键盘/点击的同步栈里 resume
   // 一次就摘掉监听(浏览器要求 resume 必须落在手势处理里;之后发声全靠已解锁的 ctx)。
   // 挂在 main 而不是 Input 里:输入管线不认识声音,音频只从事件出口消费(见 render/audio.ts)。
@@ -774,6 +793,7 @@ async function boot(): Promise<void> {
 
   // 设置页:**整页只建一次、标题与暂停两个入口共用**(见 ui/settingsMenu.ts 文件头)。
   // 改一项就落盘 + 整份重灌到各落点 —— 没有"改了没保存"的中间态。
+  // 语言走 onLanguage 单独一条路:切换是异步的,且只有切成功了才落盘(见 setLanguage)。
   // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):战斗中开的就弹回暂停菜单,
   // 否则回标题 —— 判据取 runActive 而不是"上次谁调的 show",少一个必须两处同步的状态位
   const settingsMenu = createSettingsMenu({
@@ -783,11 +803,40 @@ async function boot(): Promise<void> {
       saveSettings(settings);
       applySettings(settings, renderer);
     },
+    onLanguage: (next) => {
+      void setLanguage(next);
+    },
     onClose: () => {
       if (runActive) pauseMenu?.show();
       else titleScreen.show(titleDigest());
     },
   });
+  // 语言切换成功后统一重刷已注册 UI —— 现阶段只有设置页(语言行的标签要跟着变);
+  // 04-09 号把其余界面迁进 t() 时,各自在这里 registerLocaleAware 即可
+  registerLocaleAware(settingsMenu);
+
+  /**
+   * 换语言(设置页语言行的按钮回调)。**成败分家**:
+   * 成功 —— 更新 settings.language(此时才落盘,存的一定是生效过的值)、
+   *           同步 document lang/dir/title、重刷所有 LocaleAware UI;
+   * 失败(资源加载失败 / 网络错误)—— 保留当前语言、设置页当场给出可读错误,
+   *           **不落盘**:不会把一份没生效的语言偏好写进设置。
+   * 系统语言以后变了,切回 auto 时这里会重新解析(现读 navigator.languages)。
+   */
+  async function setLanguage(next: LanguagePreference): Promise<void> {
+    const target = resolveEffectiveLocale(next);
+    try {
+      await changeLocale(target);
+    } catch (err) {
+      console.warn('[i18n] 切换语言失败,保留当前语言:', err);
+      settingsMenu.showLocaleError(t('ui:language.loadFailed'));
+      return;
+    }
+    settings = { ...settings, language: next };
+    saveSettings(settings);
+    applyDocumentLocale();
+    refreshAllLocaleAware();
+  }
 
   /**
    * 图鉴页(ui/codex.ts):**整页只建一次**,只从标题进 —— 每局结算后 progress 已更新,

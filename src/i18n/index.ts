@@ -14,8 +14,8 @@
  */
 import i18next from 'i18next';
 import type { Resource } from 'i18next';
-import type { SupportedLocale } from './locale';
-import { SUPPORTED_LOCALES, normalizeLocale } from './locale';
+import type { LanguagePreference, SupportedLocale } from './locale';
+import { SUPPORTED_LOCALES, normalizeLocale, resolveLanguage } from './locale';
 
 const NAMESPACES = ['common', 'ui', 'content', 'story'] as const;
 export type NamespaceId = (typeof NAMESPACES)[number];
@@ -121,6 +121,28 @@ export function currentLocale(): SupportedLocale {
 }
 
 /**
+ * 探测浏览器系统语言列表(navigator.languages,按用户偏好降序)。
+ * Node/测试环境没有 navigator(或它没有 languages)时返回 null ——
+ * 不抛错,由 resolveLanguage 回落默认语言。留在本文件而不是 locale.ts:
+ * 那是纯函数文件、不碰 navigator,而"读环境"这一小步恰好是它和环境的唯一接缝。
+ */
+export function detectSystemLanguages(): readonly string[] | null {
+  const nav = (globalThis as { navigator?: { languages?: readonly string[] } }).navigator;
+  if (nav === undefined) return null;
+  if (nav.languages !== undefined && nav.languages.length > 0) return nav.languages;
+  return null;
+}
+
+/**
+ * 偏好 → 具体语言。`'auto'` 时现读 navigator.languages 解析 ——
+ * 所以系统语言以后变了,下次启动(或再次切回 auto)会重新解析,不缓存旧结论。
+ * 启动顺序里必须先用它拿到语言、再 await initI18n,首屏才不会是"先闪默认语言再变"。
+ */
+export function resolveEffectiveLocale(preference: LanguagePreference): SupportedLocale {
+  return resolveLanguage(preference, detectSystemLanguages());
+}
+
+/**
  * 底层实例句柄(测试与少数高级场景用)。资源装载仍走本模块的 loader map,不要绕开它。
  */
 export function getI18nInstance(): typeof i18next {
@@ -130,3 +152,4 @@ export function getI18nInstance(): typeof i18next {
 export { t } from 'i18next';
 export type { SupportedLocale, LanguagePreference } from './locale';
 export type { LocaleAware, DeepRecord } from './types';
+export { registerLocaleAware, refreshAllLocaleAware } from './registry';

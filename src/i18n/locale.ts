@@ -14,6 +14,11 @@ export function isSupportedLocale(value: string): value is SupportedLocale {
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
 }
 
+/** 语言偏好合法吗?老设置文件里可能存进任意字符串,逐项兜底时就靠它分辨"非法 → 回落 auto"。 */
+export function isLanguagePreference(value: string): value is LanguagePreference {
+  return value === 'auto' || isSupportedLocale(value);
+}
+
 /**
  * 把任意语言标签规范成 SupportedLocale。
  * 'en' / 'en-US' / 'en_GB' → 'en';'zh' / 'zh-CN' / 'zh-Hans' / 'zh-SG' → 'zh-CN';其余 → null。
@@ -26,14 +31,21 @@ export function normalizeLocale(value: string): SupportedLocale | null {
 }
 
 /**
- * 语言偏好 → 具体语言。'auto' 时用调用方探测到的系统标签(detected)解析,
- * 解析不出来返回 null,由调用方决定兜到哪个默认(通常是 fallback 的 zh-CN)。
+ * 语言偏好 → 具体语言。`'auto'` 时按优先级顺序扫描候选系统标签(detected,
+ * 即 navigator.languages 的顺序),命中第一个可支持的语言就定;一个都不命中
+ * (包括 Node 环境没有 navigator、detected 为 null)回落默认的 zh-CN。
+ * 显式 `zh-CN` / `en` 不探测系统、原样直出 —— 玩家手动选过就该听玩家的。
  */
 export function resolveLanguage(
   preference: LanguagePreference,
-  detected: string | null,
-): SupportedLocale | null {
+  detected: readonly string[] | null,
+): SupportedLocale {
   if (preference !== 'auto') return preference;
-  if (detected === null) return null;
-  return normalizeLocale(detected);
+  if (detected !== null) {
+    for (const tag of detected) {
+      const locale = normalizeLocale(tag);
+      if (locale !== null) return locale;
+    }
+  }
+  return 'zh-CN';
 }

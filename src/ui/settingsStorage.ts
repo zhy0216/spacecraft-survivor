@@ -46,6 +46,8 @@ export function saveSettings(s: Settings): void {
  * 不如在这里收下一个可选参数,渲染层就位后再整份重灌一次。
  */
 export function applySettings(s: Settings, renderer?: Renderer): void {
+  // language 不走这条分发:它由 i18n 管线生效(见 settings.ts 的落点注释),
+  // 不经过音视频层,漏在这一处反而是对的。
   audioBus.setMasterVolume(s.masterVolume);
   audioBus.setMuted(s.muted);
   renderer?.setEffects(s.shake, s.damageNumbers);
