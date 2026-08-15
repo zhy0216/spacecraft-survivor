@@ -4,7 +4,7 @@ import { TOWER_AUTOCANNON, TOWER_LASER } from '../data/towers';
 import { createWeaponSlots, type WeaponSlot } from '../sim/armory';
 import { createEdictBuffs } from '../sim/edictBuffs';
 import type { World } from '../sim/world';
-import { initI18n } from '../i18n';
+import { changeLocale, initI18n, t } from '../i18n';
 import { createArmoryPanel } from './armoryPanel';
 
 interface StubEl {
@@ -46,6 +46,15 @@ function createStubEl(tagName = 'div'): StubEl {
 
 function fire(element: StubEl, type: string): void {
   for (const handler of element.handlers.get(type) ?? []) handler();
+}
+
+/** 在桩树里找包含某段文字的节点(桩的 textContent 不聚合子节点,要递归拼) */
+function findText(root: StubEl, part: string): boolean {
+  if (root.textContent.includes(part)) return true;
+  for (const child of root.children) {
+    if (findText(child, part)) return true;
+  }
+  return false;
 }
 
 function installDom(): { ui: StubEl; restore(): void } {
@@ -120,8 +129,8 @@ describe('舰船背包面板', () => {
     expect(((head.children[0] as StubEl).children[1] as StubEl).textContent).toBe('舰船背包');
     expect(hullArt.tagName).toBe('IMG');
     expect(hullArt.src).toContain('scrapper-hull.png');
-    expect(chips[0]!.innerHTML).toContain('正前');
-    expect(chips[2]!.innerHTML).toContain('正右');
+    expect(findText(chips[0]!, '正前')).toBe(true);
+    expect(findText(chips[2]!, '正右')).toBe(true);
 
     fire(chips[0]!, 'click');
     expect(panel.selected()).toBe(0);
@@ -130,5 +139,44 @@ describe('舰船背包面板', () => {
     expect(panel.selected()).toBe(-1);
     expect(world.weapons[0]!.type).toBe(TOWER_LASER);
     expect(world.weapons[2]!.type).toBe(TOWER_AUTOCANNON);
+  });
+
+  it('refreshLocale(05 号):切到 en 后标题/槽位朝向翻新,选择态与交换态原地保留', async () => {
+    const world = createWorld();
+    const panel = createArmoryPanel({
+      canOpen: () => true,
+      onOpen: () => {},
+      onClose: () => {},
+    });
+    panel.setWorld(world);
+    panel.show();
+
+    const root = dom.ui.children[0]!;
+    const diagram = root.children[0]!;
+    const head = diagram.children[0]!;
+    const ring = diagram.children[2]!;
+    const chipLayer = ring.children[ring.children.length - 1]!;
+    const chips = chipLayer.children;
+
+    // 选中槽 0 后切语言:选择态必须保留(只重画文案,不动 picked)
+    fire(chips[0]!, 'click');
+    expect(panel.selected()).toBe(0);
+    const zhBorder = chips[0]!.style.border;
+
+    await changeLocale('en');
+    panel.refreshLocale();
+
+    // 标题与朝向翻新
+    expect(((head.children[0] as StubEl).children[1] as StubEl).textContent).toBe(t('ui:armory.title'));
+    expect(findText(chips[0]!, 'Forward')).toBe(true);
+    expect(findText(chips[2]!, 'Right')).toBe(true);
+    // 选择态保留:选中格描边原样,点另一格仍完成交换
+    expect(panel.selected()).toBe(0);
+    expect(chips[0]!.style.border).toBe(zhBorder);
+    fire(chips[2]!, 'click');
+    expect(panel.selected()).toBe(-1);
+    expect(world.weapons[0]!.type).toBe(TOWER_LASER);
+    expect(world.weapons[2]!.type).toBe(TOWER_AUTOCANNON);
+    await changeLocale('zh-CN');
   });
 });

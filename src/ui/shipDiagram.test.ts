@@ -1,21 +1,43 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { TOWER_ANNIHILATION, TOWER_KIND_COUNT, TOWER_PD, TOWERS } from '../data/towers';
 import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING } from '../sim/armory';
-import { SLOT_FACING_NAME, slotFacingDeg, towerGlyph, towerTintCss, wedgeRadius } from './shipDiagram';
+import { changeLocale, initI18n } from '../i18n';
+import { slotFacingDeg, slotFacingName, towerGlyph, towerTintCss, wedgeRadius } from './shipDiagram';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 describe('舰船图的朝向表', () => {
   it('朝向名与 WEAPON_SLOT_FACING 一一对应（错位 = 面板上写着正前的炮其实朝后）', () => {
-    expect(SLOT_FACING_NAME.length).toBe(WEAPON_SLOT_COUNT);
     expect(WEAPON_SLOT_FACING.length).toBe(WEAPON_SLOT_COUNT);
     // 四个正方向逐条对表:名字说的方向必须就是数值表里的那个角
-    expect(SLOT_FACING_NAME[0]).toBe('正前');
+    expect(slotFacingName(0)).toBe('正前');
     expect(slotFacingDeg(0)).toBeCloseTo(0);
-    expect(SLOT_FACING_NAME[2]).toBe('正右');
+    expect(slotFacingName(2)).toBe('正右');
     expect(slotFacingDeg(2)).toBeCloseTo(90);
-    expect(SLOT_FACING_NAME[4]).toBe('正后');
+    expect(slotFacingName(4)).toBe('正后');
     expect(slotFacingDeg(4)).toBeCloseTo(180);
-    expect(SLOT_FACING_NAME[6]).toBe('正左');
+    expect(slotFacingName(6)).toBe('正左');
     expect(slotFacingDeg(6)).toBeCloseTo(-90);
+  });
+
+  it('朝向名走翻译:切到 en 后八个朝向名全部换新', async () => {
+    const zh = Array.from({ length: WEAPON_SLOT_COUNT }, (_, slot) => slotFacingName(slot));
+    expect(zh.every((name) => name.length > 0)).toBe(true);
+    await changeLocale('en');
+    const en = Array.from({ length: WEAPON_SLOT_COUNT }, (_, slot) => slotFacingName(slot));
+    expect(en[0]).toBe('Forward');
+    expect(en[4]).toBe('Rear');
+    // 两套语言逐槽不重合:同一编号在两个语言里报的名字不该撞车
+    for (let slot = 0; slot < WEAPON_SLOT_COUNT; slot++) {
+      expect(en[slot]).not.toBe(zh[slot]);
+    }
+  });
+
+  it('槽位下标越界退回「槽 N」,不静默画到某个别的方向去', () => {
+    expect(slotFacingName(WEAPON_SLOT_COUNT)).toBe('槽 8');
+    expect(slotFacingName(-1)).toBe('槽 -1');
   });
 
   it('每槽 45° 一档、顺时针一圈（conic-gradient 的 from 就吃这个数，不做任何翻转）', () => {

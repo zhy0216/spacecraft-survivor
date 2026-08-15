@@ -10,9 +10,10 @@
  */
 import { TOWERS } from '../data/towers';
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 import { audioBus } from '../render/audio';
 import type { World } from '../sim/world';
-import { createShipDiagram, SLOT_FACING_NAME, type ShipDiagramUi } from './shipDiagram';
+import { createShipDiagram, slotFacingName, type ShipDiagramUi } from './shipDiagram';
 import { throttleFamilyName, towerName } from './presentation/contentText';
 
 const ROOT_CSS =
@@ -38,6 +39,12 @@ export interface ArmoryPanelUi {
   setWorld(world: World | null): void;
   /** 单测用:当前选中的槽位(-1 = 没选) */
   selected(): number;
+  /**
+   * 语言切换后原地重画(05 号):标题/副题/槽位朝向/法令区/提示走当前语言。
+   * 只重画文案,不改变 picked/visible 状态、不重注册监听 —— 由 shipDiagram.refreshLocale
+   * 用上一次的 paint 入参重画(背包与商店共用同一张图,谁也不各存一份翻译状态)。
+   */
+  refreshLocale(): void;
 }
 
 export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
@@ -47,9 +54,9 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  // 标题/副题不再由这里写死:shipDiagram 自己取 ui:armory.title / ui:armory.eyebrow 的翻译,
+  // 背包与商店(07)共用同一份默认 —— 各传一遍只会长出两套翻译状态
   const shipDiagram: ShipDiagramUi = createShipDiagram({
-    title: '舰船背包',
-    eyebrow: 'SHIP INVENTORY',
     onSlotClick: clickSlot,
   });
   root.appendChild(shipDiagram.root);
@@ -124,15 +131,17 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
       if (visible) paint();
     },
     selected: () => picked,
+    // 语言切换后重画文案:交给 shipDiagram(它用上次 paint 的入参重画,保留 picked 选择态)
+    refreshLocale: () => shipDiagram.refreshLocale(),
   };
 }
 
 /** 面板上一条槽位的可读摘要(单测与调试面板共用;不另拼一份朝向表) */
 export function slotSummary(world: World, slot: number): string {
   const s = world.weapons[slot];
-  const facing = SLOT_FACING_NAME[slot] ?? `槽${slot}`;
-  if (!s || s.type < 0) return `${facing} · 空`;
+  const facing = slotFacingName(slot);
+  if (!s || s.type < 0) return `${facing} · ${t('ui:slot.empty')}`;
   const def = TOWERS[s.type];
-  if (!def) return `${facing} · 未知塔型(${s.type})`;
+  if (!def) return `${facing} · ${t('ui:slot.unknownTower', { type: s.type })}`;
   return `${facing} · ${towerName(s.type)} ${'★'.repeat(s.stars)} · ${throttleFamilyName(def.throttle)}`;
 }

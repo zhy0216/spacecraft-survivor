@@ -72,7 +72,7 @@ import {
 } from './codex';
 import {
   createShipDiagram,
-  SLOT_FACING_NAME,
+  slotFacingName,
   type ShipDiagramState,
   type ShipDiagramUi,
 } from './shipDiagram';
@@ -482,7 +482,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     }
     const empty = firstEmptySlot();
     if (empty >= 0) {
-      notes.push(`装到「${SLOT_FACING_NAME[empty] ?? `槽${empty}`}」空槽`);
+      notes.push(`装到「${slotFacingName(empty)}」空槽`);
     } else {
       // 槽满但同型已凑两把 ★:买下走吸收合成(3 把合 1 把,不占槽),不需要替换
       notes.push(c1 === 2 ? '槽已满 · 与两把 ★ 三合一,无需替换' : '槽已满 · 需替换一把');

@@ -33,6 +33,7 @@ import {
 } from '../data/towers';
 import { EDICTS } from '../data/edicts';
 import { SHIP_HULL_ART_URL } from '../render/artUrls';
+import { t } from '../i18n';
 import { WEAPON_SLOT_COUNT, WEAPON_SLOT_FACING, type WeaponSlot } from '../sim/armory';
 import { slotSustainedDps } from '../sim/tower';
 import type { World } from '../sim/world';
@@ -47,11 +48,27 @@ const LINE_COLOR = '#2b4a6e';
 const SEL_COLOR = '#ffd479';
 
 /**
- * 槽位编号 → 朝向中文名。与 sim/armory 的 WEAPON_SLOT_FACING 一一对应,
+ * 槽位编号 → 朝向名(05 号迁进 i18n)。与 sim/armory 的 WEAPON_SLOT_FACING 一一对应,
  * **改了那张表就得改这张**(错位 = 面板上写着"正前"的那门炮其实朝后,
- * 而这种错要等玩家在战斗里被侧面咬死才发现)。ui/armoryPanel 也从这里取,不许各存一份。
+ * 而这种错要等玩家在战斗里被侧面咬死才发现)。ui/armoryPanel 与 refitFlow 都从这里取,
+ * 不许各存一份翻译状态。朝向的文案 key 在 ui:facing.*,越界退回「槽 N」。
  */
-export const SLOT_FACING_NAME: string[] = ['正前', '右前', '正右', '右后', '正后', '左后', '正左', '左前'];
+type FacingKey = 'front' | 'frontRight' | 'right' | 'backRight' | 'back' | 'backLeft' | 'left' | 'frontLeft';
+const FACING_SLOTS: Record<number, FacingKey> = {
+  0: 'front',
+  1: 'frontRight',
+  2: 'right',
+  3: 'backRight',
+  4: 'back',
+  5: 'backLeft',
+  6: 'left',
+  7: 'frontLeft',
+};
+export function slotFacingName(slot: number): string {
+  const key = FACING_SLOTS[slot];
+  if (key === undefined) return t('ui:slot.slotN', { slot });
+  return t(`ui:facing.${key}`);
+}
 
 /**
  * 武器的几何图标,与 upgradeFlow 的 cardIcon 同一套"无外部资产"口径
@@ -179,12 +196,18 @@ export interface ShipDiagramUi {
   readonly root: HTMLElement;
   /** 按当前世界重画。world = null 时画成空船(换局那一瞬不该留着上一局的读数) */
   paint(world: World | null, state: ShipDiagramState): void;
+  /**
+   * 语言切换后原地重画(05 号)。用**上一次 paint 的入参**重画(保留 hoverSlot / mode /
+   * incoming / selected),标题/副题/船体读数/法令区/提示行全走当前语言;
+   * 不重注册监听、不重建八张槽位卡片(节点是整局只建一次的)。
+   */
+  refreshLocale(): void;
 }
 
 export interface ShipDiagramOpts {
   /** 点了第 slot 格(只在 mode = 'pick' / 'swap' 时响);不传 = 纯只读面板 */
   onSlotClick?(slot: number): void;
-  /** 背包与商店默认共用同一个标题，特殊页可覆盖 */
+  /** 背包与商店默认共用同一个标题,特殊页可覆盖;不传时取 ui:armory.title 的翻译 */
   title?: string;
   eyebrow?: string;
 }
@@ -224,13 +247,28 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   const titleBox = document.createElement('div');
   const eyebrow = document.createElement('div');
   eyebrow.style.cssText = EYEBROW_CSS;
-  eyebrow.textContent = opts.eyebrow ?? 'SHIP INVENTORY';
+  eyebrow.textContent = opts.eyebrow ?? t('ui:armory.eyebrow');
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
-  title.textContent = opts.title ?? '舰船背包';
+  title.textContent = opts.title ?? t('ui:armory.title');
   titleBox.append(eyebrow, title);
+  // 船体/持续火力读数:标签与数值分开建 DOM 节点(05 号 —— 翻译只进 textContent,
+  // 绝不再往 innerHTML 里拼翻译;语言切换时只改 label 节点,数值节点照旧)
   const readout = document.createElement('div');
   readout.style.cssText = READOUT_CSS;
+  const readoutHpLabel = document.createElement('span');
+  readoutHpLabel.style.cssText = `color:${MUTED_COLOR};margin-right:4px;`;
+  const readoutHpValue = document.createElement('span');
+  readoutHpValue.style.cssText = `color:${TEXT_COLOR};`;
+  const readoutRow1 = document.createElement('div');
+  readoutRow1.append(readoutHpLabel, readoutHpValue);
+  const readoutDpsLabel = document.createElement('span');
+  readoutDpsLabel.style.cssText = `color:${MUTED_COLOR};margin-right:4px;`;
+  const readoutDpsValue = document.createElement('span');
+  readoutDpsValue.style.cssText = `color:${TEXT_COLOR};`;
+  const readoutRow2 = document.createElement('div');
+  readoutRow2.append(readoutDpsLabel, readoutDpsValue);
+  readout.append(readoutRow1, readoutRow2);
   head.append(titleBox, readout);
 
   const hpTrack = document.createElement('div');
@@ -258,7 +296,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   const hullArt = document.createElement('img');
   hullArt.style.cssText = HULL_ART_CSS;
   hullArt.src = SHIP_HULL_ART_URL;
-  hullArt.alt = '完整飞船';
+  hullArt.alt = t('ui:ship.shipAlt');
   // 资产加载失败时隐藏图片，下面的程序化船壳仍然可读。
   hullArt.addEventListener('error', () => { hullArt.style.display = 'none'; });
   ring.append(hullEdge, hull, bow, hullArt);
@@ -289,7 +327,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   foot.style.cssText = FOOT_CSS;
   const edictTitle = document.createElement('div');
   edictTitle.style.cssText = FOOT_TITLE_CSS;
-  edictTitle.textContent = '已生效法令';
+  edictTitle.textContent = t('ui:ship.edictsTitle');
   const edictWrap = document.createElement('div');
   edictWrap.style.cssText = EDICT_WRAP_CSS;
   foot.append(edictTitle, edictWrap);
@@ -363,7 +401,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       const equipped = s && s.type >= 0 ? s : undefined;
       const def = equipped ? TOWERS[equipped.type] : undefined;
       const ghost = ghostAt === slot ? state.incoming : null;
-      const facing = SLOT_FACING_NAME[slot] ?? `槽${slot}`;
+      const facing = slotFacingName(slot);
 
       if (equipped && def && world) totalDps += slotSustainedDps(equipped, def, world.buffs);
 
@@ -371,33 +409,57 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
       if (ghost) paintWedge(slot, ghost.type, ghost.stars, true);
       else paintWedge(slot, equipped?.type ?? -1, equipped?.stars ?? 1, false);
 
-      const lines: string[] = [`<div style="${FACING_CSS}">${facing}</div>`];
+      // 卡片内容一律用真实 DOM 节点 + textContent 拼装:翻译与内容名不进 innerHTML
+      // (与 05 号"翻译只进 textContent"同一条纪律 —— 标签/数值/图标分节点写)
+      chip.textContent = '';
+      const facingLine = document.createElement('div');
+      facingLine.style.cssText = FACING_CSS;
+      facingLine.textContent = facing;
+      chip.appendChild(facingLine);
       if (ghost) {
         const gdef = TOWERS[ghost.type];
-        const gname = gdef === undefined ? `未知武器(${ghost.type})` : towerName(ghost.type);
         if (equipped && def) {
           // 换装预览:旧的划掉、新的顶上 —— 玩家点下去之前就看得到自己拿什么换什么
-          lines.push(
-            `<div style="${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through">` +
-              `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}</div>`,
-          );
+          const old = document.createElement('div');
+          old.style.cssText = `${NAME_CSS}color:${MUTED_COLOR};text-decoration:line-through;`;
+          old.textContent = `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
+          chip.appendChild(old);
         }
-        lines.push(
-          `<div style="${NAME_CSS}color:${SEL_COLOR}">▸ ${gname} ${'★'.repeat(ghost.stars)}</div>`,
-        );
-        if (!equipped) lines.push(`<div style="${META_CSS}">${ghostMeta(world, ghost)}</div>`);
+        const ghostName = document.createElement('div');
+        ghostName.style.cssText = `${NAME_CSS}color:${SEL_COLOR};`;
+        ghostName.textContent =
+          (gdef === undefined ? t('ui:slot.unknownWeapon', { type: ghost.type }) : towerName(ghost.type)) +
+          ` ${'★'.repeat(ghost.stars)}`;
+        chip.appendChild(ghostName);
+        if (!equipped) {
+          const meta = document.createElement('div');
+          meta.style.cssText = META_CSS;
+          meta.textContent = ghostMeta(world, ghost);
+          chip.appendChild(meta);
+        }
       } else if (equipped && def) {
         const dps = world ? slotSustainedDps(equipped, def, world.buffs) : 0;
-        lines.push(
-          `<div style="${NAME_CSS}"><span style="color:${towerTintCss(equipped.type)}">` +
-            `${towerGlyph(equipped.type)}</span> ${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}</div>`,
-          `<div style="${META_CSS}">${throttleFamilyName(def.throttle)} · ` +
-            `${Math.round(towerArcDeg(def, equipped.stars))}° · ${Math.round(dps)}/s</div>`,
-        );
+        const name = document.createElement('div');
+        name.style.cssText = NAME_CSS;
+        const glyph = document.createElement('span');
+        glyph.style.cssText = `color:${towerTintCss(equipped.type)};`;
+        glyph.textContent = towerGlyph(equipped.type);
+        const nameText = document.createElement('span');
+        nameText.textContent = `${towerName(equipped.type)} ${'★'.repeat(equipped.stars)}`;
+        name.append(glyph, nameText);
+        chip.appendChild(name);
+        const meta = document.createElement('div');
+        meta.style.cssText = META_CSS;
+        meta.textContent =
+          `${throttleFamilyName(def.throttle)} · ${Math.round(towerArcDeg(def, equipped.stars))}° · ` +
+          `${Math.round(dps)}/s`;
+        chip.appendChild(meta);
       } else {
-        lines.push(`<div style="${NAME_CSS}color:${MUTED_COLOR}">— 空槽 —</div>`);
+        const empty = document.createElement('div');
+        empty.style.cssText = `${NAME_CSS}color:${MUTED_COLOR};`;
+        empty.textContent = t('ui:slot.emptyFull');
+        chip.appendChild(empty);
       }
-      chip.innerHTML = lines.join('');
 
       // 描边三态:待选(pick 态的可点格)/ 预览命中 / 常态。空槽走虚线,"这里还能装"是一眼的事
       const highlight = ghostAt === slot || (pick && hoverSlot === slot) || (swap && state.selected === slot);
@@ -429,38 +491,60 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
     hpFill.style.width = `${ratio * 100}%`;
     // 血条颜色只在**自己的血**上用暖色(与渲染层 FXV_HULL_HIT 的暖红同一条豁免)
     hpFill.style.background = ratio > 0.55 ? '#5ce8b4' : ratio > 0.25 ? '#ffd479' : '#ff7a6b';
-    readout.innerHTML =
-      `船体 <span style="color:${TEXT_COLOR}">${Math.round(hp)}/${Math.round(maxHp)}</span>` +
-      ` · 持续火力 <span style="color:${TEXT_COLOR}">${Math.round(totalDps)}/s</span>`;
+    // 读数只改 textContent:标签(翻译)与数值(数字)分节点写,绝不把翻译拼进 innerHTML
+    readoutHpLabel.textContent = t('ui:ship.readoutHp');
+    readoutHpValue.textContent = `${Math.round(hp)}/${Math.round(maxHp)}`;
+    readoutDpsLabel.textContent = t('ui:ship.readoutDps');
+    readoutDpsValue.textContent = `${Math.round(totalDps)}/s`;
 
     // 法令:全船被动不占任何槽位,不在这里印就整局无处可查。chip 前缀 = 作用域标签(系名/全船)
-    const owned: string[] = [];
+    // 节点现建现挂(不是 60fps 热路径);翻译与数值一律走 textContent。
+    // 清空用 textContent = ''(真实 DOM 会移除全部子节点;测试桩也能照常跑)
+    edictWrap.textContent = '';
+    let held = 0;
     for (let i = 0; i < EDICTS.length; i++) {
       const level = world?.edictLevels[i] ?? 0;
       if (level <= 0) continue;
+      held++;
       const def = EDICTS[i]!;
       const color = `#${def.tint.toString(16).padStart(6, '0')}`;
-      owned.push(
-        `<span style="padding:2px 7px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
-          `background:rgba(21,34,52,.62);font-size:11px;color:${TEXT_COLOR}">` +
-          `<span style="color:${color}">◆</span> ${edictScopeLabel(def)} ${edictName(def.type)} ×${level}</span>`,
-      );
+      const chip = document.createElement('span');
+      chip.style.cssText =
+        `padding:2px 7px;border-radius:999px;border:1px solid ${LINE_COLOR};` +
+        `background:rgba(21,34,52,.62);font-size:11px;color:${TEXT_COLOR};`;
+      const dot = document.createElement('span');
+      dot.style.cssText = `color:${color};`;
+      dot.textContent = '◆';
+      const text = document.createElement('span');
+      text.textContent = ` ${edictScopeLabel(def)} ${edictName(def.type)} ×${level}`;
+      chip.append(dot, text);
+      edictWrap.appendChild(chip);
     }
-    edictWrap.innerHTML =
-      owned.length > 0
-        ? owned.join('')
-        : `<span style="color:${MUTED_COLOR};font-size:11px">尚未持有任何法令</span>`;
+    if (held === 0) {
+      const empty = document.createElement('span');
+      empty.style.cssText = `color:${MUTED_COLOR};font-size:11px;`;
+      empty.textContent = t('ui:ship.noEdicts');
+      edictWrap.appendChild(empty);
+    }
 
     hint.textContent = pick
-      ? '点一个武器槽把它换成新武器 · 扇形 = 该槽射界与射程'
+      ? t('ui:ship.hint.pick')
       : swap
         ? state.selected !== undefined && state.selected >= 0
-          ? `已选中「${SLOT_FACING_NAME[state.selected] ?? `槽${state.selected}`}」 · 再点一个槽交换位置`
-          : '点两个武器槽交换位置 · 换位不消耗资源'
-        : '扇形 = 该槽射界与射程 · 上方为船头';
+          ? t('ui:ship.hint.swapSelected', { facing: slotFacingName(state.selected) })
+          : t('ui:ship.hint.swap')
+        : t('ui:ship.hint.view');
   }
 
-  return { root, paint };
+  /** 语言切换后原地重画(05 号):标题/副题/法令标题现刷,正文用上一次的入参重画一遍 */
+  function refreshLocale(): void {
+    eyebrow.textContent = opts.eyebrow ?? t('ui:armory.eyebrow');
+    title.textContent = opts.title ?? t('ui:armory.title');
+    edictTitle.textContent = t('ui:ship.edictsTitle');
+    paint(lastWorld, lastState);
+  }
+
+  return { root, paint, refreshLocale };
 }
 
 /**
@@ -480,7 +564,7 @@ export function previewSustainedDps(world: World | null, type: number, stars: nu
 /** 幽灵武器落在空槽上时那一行读数(系名 · 射界 · 预估 DPS);拿不到世界就只印前两项 */
 function ghostMeta(world: World | null, incoming: ShipDiagramIncoming): string {
   const def = TOWERS[incoming.type];
-  if (!def) return '未知型号';
+  if (!def) return t('ui:slot.unknown');
   const head = `${throttleFamilyName(def.throttle)} · ${Math.round(towerArcDeg(def, incoming.stars))}°`;
   if (!world) return head;
   return `${head} · ${Math.round(previewSustainedDps(world, incoming.type, incoming.stars))}/s`;

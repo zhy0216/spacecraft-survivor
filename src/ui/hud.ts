@@ -26,6 +26,8 @@ import {
   slotSustainedDps,
 } from '../sim/tower';
 import type { Enemy, World } from '../sim/world';
+import { t } from '../i18n';
+import { formatNumber } from '../i18n/format';
 import { formatDuration } from './gameOver';
 import { bossName, edictName, throttleFamilyName, towerName, waveSegmentName } from './presentation/contentText';
 import { edictDesc, edictScopeLabel } from './presentation/edictText';
@@ -161,7 +163,7 @@ function radarCss(rightGutter: number): string {
 const TOAST_CSS =
   'position:absolute;left:48px;bottom:104px;padding:8px 12px;border-radius:6px;display:none;' +
   `border:1px solid ${LINE_COLOR};background:rgba(5,7,13,.78);box-shadow:0 2px 12px rgba(0,0,0,.28);` +
-  `color:${STAR_COLOR};letter-spacing:.06em;white-space:pre;`;
+  `color:${STAR_COLOR};letter-spacing:.06em;`;
 
 /** 解锁 toast 的存留时长(ms):到点自动消失(简单口径:闪现一下,不赖到局末) */
 const UNLOCK_TOAST_MS = 2600;
@@ -175,7 +177,7 @@ const UNLOCK_TOAST_MS = 2600;
  */
 const BANNER_CSS =
   'position:absolute;left:50%;top:156px;transform:translateX(-50%);display:none;' +
-  `color:${BANNER_COLOR};font-size:28px;letter-spacing:.18em;text-align:center;white-space:pre;` +
+  `color:${BANNER_COLOR};font-size:28px;letter-spacing:.1em;text-align:center;max-width:88vw;` +
   'text-shadow:0 0 14px rgba(154,220,255,.4),0 2px 8px rgba(0,0,0,.6);';
 /** 横幅到点后的渐隐时长(ms):整秒后 500ms 渐隐,不啪地消失 */
 const BANNER_FADE_MS = 500;
@@ -306,20 +308,21 @@ export function formatDps(v: number): string {
 /**
  * 下一次发射读数排版:三种硬等待(装填/过热/充能)带状态前缀,普通冷却只印秒
  * (射速的间隙不值得占字),就绪印"就绪"。秒数一位小数 —— 与加速条同一档读数精度。
+ * 状态前缀走 t()(ui.fire.*),`{{sec}}` 的 `s` 单位是数字后缀、不分语言。
  */
 export function fireReadoutText(state: number, seconds: number): string {
   const sec = `${finiteOrZero(seconds).toFixed(1)}s`;
   switch (state) {
     case FIRE_RELOAD:
-      return `装填 ${sec}`;
+      return t('ui:fire.reloading', { sec });
     case FIRE_LOCKED:
-      return `过热 ${sec}`;
+      return t('ui:fire.overheated', { sec });
     case FIRE_CHARGING:
-      return `充能 ${sec}`;
+      return t('ui:fire.charging', { sec });
     case FIRE_COOLDOWN:
       return sec;
     default:
-      return '就绪';
+      return t('ui:fire.ready');
   }
 }
 
@@ -368,14 +371,14 @@ export function boostReadout(
 ): BoostReadout {
   const o = out ?? { text: '', ratio: 1, active: false };
   if (finiteOrZero(boostTime) > 0) {
-    o.text = '加速中';
+    o.text = t('ui:boost.active');
     o.ratio = 1;
     o.active = true;
     return o;
   }
   const cd = finiteOrZero(cooldown);
   if (cd <= 0) {
-    o.text = '就绪';
+    o.text = t('ui:boost.ready');
     o.ratio = 1;
     o.active = false;
     return o;
@@ -449,7 +452,9 @@ const radarScratch: RadarPoint = { x: 0, y: 0, clamped: false };
 export function segmentReadout(segment: number, segTime: number): SegmentReadout {
   const count = WAVE_SEGMENTS.length;
   if (count === 0) return { label: '—', ratio: 0 };
-  if (Number.isFinite(segment) && segment >= count) return { label: `${count}/${count} 全通`, ratio: 1 };
+  if (Number.isFinite(segment) && segment >= count) {
+    return { label: `${count}/${count} ${t('ui:segment.allClear')}`, ratio: 1 };
+  }
   const index = Number.isFinite(segment) && segment >= 0 ? Math.floor(segment) : 0;
   const seg = WAVE_SEGMENTS[index] ?? WAVE_SEGMENTS[0]!;
   return {
@@ -540,9 +545,16 @@ export interface HudUi {
    * 不排队、直接覆盖式显示(段落信息没有排队价值);时停跟随整层淡出,与 toast 同口径。
    */
   showBanner(text: string, seconds: number): void;
+  /**
+   * 语言切换后原地重画静态标签/状态值(05 号)。**只改文案节点**:
+   * 不重建武器槽/血条/提示节点、不清空 toast/banner 的剩余时间、
+   * 不动面板开关与 paused 状态、不重注册任何监听器。动态读数由 sync 每帧现写,无需这里碰。
+   */
+  refreshLocale(): void;
 }
 
 interface BarEls {
+  label: HTMLSpanElement;
   value: HTMLSpanElement;
   fill: HTMLDivElement;
 }
@@ -562,7 +574,7 @@ function createBar(parent: HTMLElement, labelText: string, color: string): BarEl
   fill.style.cssText = `${FILL_CSS}background:${color};`;
   track.appendChild(fill);
   parent.append(row, track);
-  return { value, fill };
+  return { label, value, fill };
 }
 
 /**
@@ -595,21 +607,21 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
   const vitals = document.createElement('div');
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
-  const hp = createBar(vitals, '船体 HP', HP_COLOR);
-  const scrap = createBar(vitals, '升级残骸', SCRAP_COLOR);
+  const hp = createBar(vitals, t('ui:hud.hull'), HP_COLOR);
+  const scrap = createBar(vitals, t('ui:hud.scrap'), SCRAP_COLOR);
   // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
-  const boost = createBar(vitals, '加速 [空格]', BOOST_COLOR);
+  const boost = createBar(vitals, t('ui:hud.boost'), BOOST_COLOR);
 
   const timer = document.createElement('div');
   timer.style.cssText = TIMER_CSS;
 
   const segment = document.createElement('div');
   segment.style.cssText = SEGMENT_CSS;
-  const segmentBar = createBar(segment, '航段进度', OK_COLOR);
+  const segmentBar = createBar(segment, t('ui:hud.segment'), OK_COLOR);
 
   const threat = document.createElement('div');
   threat.style.cssText = THREAT_CSS;
-  threat.title = '主压方向';
+  threat.title = t('ui:hud.threat');
   const shaft = document.createElement('div');
   shaft.style.cssText = THREAT_SHAFT_CSS;
   const tip = document.createElement('div');
@@ -620,7 +632,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 且闪烁 —— "要来了"与"正在来"必须一眼分得开。默认藏着,只在预警窗内亮
   const warn = document.createElement('div');
   warn.style.cssText = THREAT_CSS + 'display:none;';
-  warn.title = '即将来袭';
+  warn.title = t('ui:hud.incoming');
   const warnShaft = document.createElement('div');
   warnShaft.style.cssText = THREAT_SHAFT_CSS + 'background:none;border-top:2px dashed ' + THREAT_COLOR + ';height:0!important;';
   const warnTip = document.createElement('div');
@@ -640,12 +652,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // lastMuted 是"上一次画上去的值":sync 每帧对照 hooks —— 设置页改的静音当帧反映到按钮上。
   const muteBtn = document.createElement('div');
   muteBtn.style.cssText = MUTE_CSS;
-  muteBtn.title = '静音开关';
+  muteBtn.title = t('ui:hud.mute');
   let lastMuted: boolean | null = null;
   function paintMute(): void {
     const m = muted.get();
     lastMuted = m;
-    muteBtn.textContent = m ? '声音:关' : '声音:开';
+    muteBtn.textContent = m ? t('ui:hud.soundOff') : t('ui:hud.soundOn');
     muteBtn.style.color = m ? IDLE_COLOR : OK_COLOR;
   }
   muteBtn.addEventListener('click', () => {
@@ -658,13 +670,13 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 不特判);纯静态文本,节点只建一次、无监听、sync 不写它,时停淡出随整层自动带上
   const keyHints = document.createElement('div');
   keyHints.style.cssText = KEYS_CSS;
-  keyHints.textContent = '[I] 武器布局 · [Tab] 射界';
+  keyHints.textContent = t('ui:hud.keys');
 
   // 精英血条:屏下缘、与静音开关不抢位(一个贴左、一个居中)。填充色取威胁红,
   // 与罗盘箭头同色 —— 这一只就是当下最需要盯着的威胁
   const elite = document.createElement('div');
   elite.style.cssText = ELITE_CSS;
-  const eliteBar = createBar(elite, '精英', THREAT_COLOR);
+  const eliteBar = createBar(elite, t('ui:hud.elite'), THREAT_COLOR);
 
   // Boss 血条:常驻版(15 号),叠在精英条正上方;标签走 bossName presenter(查翻译,不读数据表)
   const boss = document.createElement('div');
@@ -675,14 +687,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 同一行分两列:左列余额、右列场上怪物数(items 就是活跃池,length 即在场数)
   const starCoins = document.createElement('div');
   starCoins.style.cssText = STARCOINS_CSS;
-  starCoins.title = '星币';
+  starCoins.title = t('ui:hud.starCoins');
   const starRow = document.createElement('div');
   starRow.style.cssText = LABEL_ROW_CSS;
   const starGroup = document.createElement('span');
   starGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
   const starLabel = document.createElement('span');
   starLabel.style.cssText = LABEL_CSS;
-  starLabel.textContent = '★ 星币';
+  starLabel.textContent = t('ui:hud.starLabel');
   const starValue = document.createElement('span');
   starValue.style.cssText = `${VALUE_CSS}color:${STAR_COLOR};`;
   starGroup.append(starLabel, starValue);
@@ -690,7 +702,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   enemyGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
   const enemyLabel = document.createElement('span');
   enemyLabel.style.cssText = LABEL_CSS;
-  enemyLabel.textContent = '场上怪';
+  enemyLabel.textContent = t('ui:hud.enemies');
   const enemyValue = document.createElement('span');
   enemyValue.style.cssText = VALUE_CSS;
   enemyGroup.append(enemyLabel, enemyValue);
@@ -703,12 +715,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 名字 ×层数 / 作用域(系名或全船)/ 一层效果 —— 战斗统计画面的法令,悬停即解释。
   const edicts = document.createElement('div');
   edicts.style.cssText = EDICTS_CSS;
-  edicts.title = '已生效法令';
+  edicts.title = t('ui:hud.edictsActive');
   const edictsRow = document.createElement('div');
   edictsRow.style.cssText = LABEL_ROW_CSS;
   const edictsLabel = document.createElement('span');
   edictsLabel.style.cssText = LABEL_CSS;
-  edictsLabel.textContent = '法令';
+  edictsLabel.textContent = t('ui:hud.edicts');
   const edictChips = document.createElement('div');
   edictChips.style.cssText = `${VALUE_CSS}color:${OK_COLOR};display:flex;flex-wrap:wrap;gap:4px 10px;`;
   edictsRow.append(edictsLabel, edictChips);
@@ -729,12 +741,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 算不出跑不跑得赢 —— 剩 8 秒、约 7 秒能到才是明摆着的"跑得赢")。
   const beacon = document.createElement('div');
   beacon.style.cssText = BEACON_CSS;
-  beacon.title = '地图商店信标';
+  beacon.title = t('ui:hud.beacon');
   const beaconRow = document.createElement('div');
   beaconRow.style.cssText = LABEL_ROW_CSS;
   const beaconLabel = document.createElement('span');
   beaconLabel.style.cssText = LABEL_CSS;
-  beaconLabel.textContent = '商店';
+  beaconLabel.textContent = t('ui:hud.shop');
   const beaconValue = document.createElement('span');
   beaconValue.style.cssText = `${VALUE_CSS}color:${STAR_COLOR};`;
   beaconRow.append(beaconLabel, beaconValue);
@@ -743,12 +755,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 图鉴读数(19 号):星币/法令同族的第三块左列面板,节点只建一次,每帧按掩码现算
   const collection = document.createElement('div');
   collection.style.cssText = COLLECTION_CSS;
-  collection.title = '图鉴';
+  collection.title = t('ui:hud.collection');
   const collectionRow = document.createElement('div');
   collectionRow.style.cssText = LABEL_ROW_CSS;
   const collectionLabel = document.createElement('span');
   collectionLabel.style.cssText = LABEL_CSS;
-  collectionLabel.textContent = '图鉴';
+  collectionLabel.textContent = t('ui:hud.collection');
   const collectionValue = document.createElement('span');
   collectionValue.style.cssText = `${VALUE_CSS}color:${OK_COLOR};`;
   collectionRow.append(collectionLabel, collectionValue);
@@ -758,7 +770,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 每帧按持有情况点亮)。格 = 一行三段(名字 | 下一次发射 | 理论 DPS)+ 一根就绪小条
   const firepower = document.createElement('div');
   firepower.style.cssText = FIREPOWER_CSS;
-  firepower.title = '火力统计';
+  firepower.title = t('ui:hud.firepower');
   function statRow(labelText: string, valueColor: string): { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement } {
     const row = document.createElement('div');
     row.style.cssText = LABEL_ROW_CSS;
@@ -771,8 +783,8 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     firepower.appendChild(row);
     return { row, value, label };
   }
-  const killsRow = statRow('击杀', VALUE_COLOR);
-  const totalDpsRow = statRow('总 DPS', OK_COLOR);
+  const killsRow = statRow(t('ui:hud.kills'), VALUE_COLOR);
+  const totalDpsRow = statRow(t('ui:hud.totalDps'), OK_COLOR);
   interface WeaponBox {
     box: HTMLDivElement;
     label: HTMLSpanElement;
@@ -863,7 +875,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 自动带上它,点击穿透继承根的 pointer-events:none
   const vignette = document.createElement('div');
   vignette.style.cssText = VIGNETTE_CSS;
-  vignette.title = '船体受损';
+  vignette.title = t('ui:hud.hullDamaged');
 
   // 战术雷达:一块圆形 canvas,布局走 gutter 口径(开发模式给 Tweakpane 让位)。
   // getContext 拿不到(测试桩 / 极端环境)就整块隐藏 —— 雷达是读数,缺了不碰主流程
@@ -871,7 +883,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   radar.width = RADAR_SIZE;
   radar.height = RADAR_SIZE;
   radar.style.cssText = radarCss(rightGutter);
-  radar.title = '战术雷达';
+  radar.title = t('ui:hud.radar');
   const radarCtx: CanvasRenderingContext2D | null =
     typeof radar.getContext === 'function' ? radar.getContext('2d') : null;
   if (!radarCtx) radar.style.display = 'none';
@@ -938,8 +950,9 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     boost.fill.style.background = br.active ? '#eafff4' : BOOST_COLOR;
 
     const coins = finiteOrZero(world.starCoins);
-    starValue.textContent = String(Math.max(0, Math.round(coins)));
-    // 同行的右列:场上怪物数 = 敌人活跃池长度(数组 length 恒有限,无需 finiteOrZero)
+    // 大数值走缓存的 locale formatter(分组符随语言,60fps 下 cache 命中零分配);
+    // 场上怪数有保险丝上限,直接 String
+    starValue.textContent = formatNumber(Math.max(0, Math.round(coins)));
     enemyValue.textContent = String(world.enemies.items.length);
 
     // 法令徽记:每帧按 world.edictLevels 现读已持有名单 —— 名字直取 data/edicts(ui 不抄第二份),
@@ -981,10 +994,10 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       const cruise = finiteOrZero(tuning.shipCruiseSpeed);
       const eta = cruise > 0 ? Math.round(Math.hypot(dx, dy) / cruise) : 0;
       beacon.style.display = 'block';
-      beaconValue.textContent = `${Math.max(0, Math.ceil(finiteOrZero(world.shopBeaconTtl)))}s · 约 ${Math.max(
-        0,
-        eta,
-      )}s 能到`;
+      beaconValue.textContent = t('ui:beacon.countdown', {
+        ttl: Math.max(0, Math.ceil(finiteOrZero(world.shopBeaconTtl))),
+        eta: Math.max(0, eta),
+      });
     } else {
       beacon.style.display = 'none';
     }
@@ -1001,7 +1014,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     // 火力统计:击杀直读;DPS 是 slotSustainedDps 的**理论固定值**(逐槽算、同型求和),
     // 下一次发射读数走 slotFireReadout,同型多把取"最快就绪那把"(下一发确实从它出膛)。
     // 同型合并成一格印 ×N;格数上限 = 武器槽数,这两层 O(4×4) 的小循环没有分配、没有排序
-    killsRow.value.textContent = String(Math.max(0, Math.round(finiteOrZero(world.kills))));
+    killsRow.value.textContent = formatNumber(Math.max(0, Math.round(finiteOrZero(world.kills))));
     const buffs = world.buffs;
     let boxCursor = 0;
     let totalDps = 0;
@@ -1251,6 +1264,40 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     }
   }
 
+  /**
+   * 语言切换后原地重画静态文案(05 号)。只改标签/标题/状态值这些**创建时定死**的节点,
+   * 动态读数(HP/残骸/计时/航段/火力/雷达)由 sync 每帧现读世界,语言切换后下一帧自然跟上,
+   * 这里不碰。**绝不重建 DOM、不重注册监听、不动 toast/banner(它们的剩余时间归计时器管)**。
+   */
+  function refreshLocale(): void {
+    hp.label.textContent = t('ui:hud.hull');
+    scrap.label.textContent = t('ui:hud.scrap');
+    boost.label.textContent = t('ui:hud.boost');
+    segmentBar.label.textContent = t('ui:hud.segment');
+    threat.title = t('ui:hud.threat');
+    warn.title = t('ui:hud.incoming');
+    muteBtn.title = t('ui:hud.mute');
+    paintMute();
+    keyHints.textContent = t('ui:hud.keys');
+    eliteBar.label.textContent = t('ui:hud.elite');
+    bossBar.label.textContent = bossName();
+    starCoins.title = t('ui:hud.starCoins');
+    starLabel.textContent = t('ui:hud.starLabel');
+    enemyLabel.textContent = t('ui:hud.enemies');
+    edicts.title = t('ui:hud.edictsActive');
+    edictsLabel.textContent = t('ui:hud.edicts');
+    beacon.title = t('ui:hud.beacon');
+    beaconLabel.textContent = t('ui:hud.shop');
+    collection.title = t('ui:hud.collection');
+    collectionLabel.textContent = t('ui:hud.collection');
+    firepower.title = t('ui:hud.firepower');
+    killsRow.label.textContent = t('ui:hud.kills');
+    totalDpsRow.label.textContent = t('ui:hud.totalDps');
+    vignette.title = t('ui:hud.hullDamaged');
+    radar.title = t('ui:hud.radar');
+  }
+
+  refreshLocale();
   sync();
 
   return {
@@ -1272,5 +1319,6 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     sync,
     toast,
     showBanner,
+    refreshLocale,
   };
 }

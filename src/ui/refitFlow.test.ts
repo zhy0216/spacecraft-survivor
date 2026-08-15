@@ -283,6 +283,24 @@ const chipOf = (dom: StubDom, slot: number): StubEl => chipLayerOf(dom).children
 const hullArtOf = (dom: StubDom): StubEl => ringOf(dom).children[ringOf(dom).children.length - 2] as StubEl;
 const tooltipOf = (dom: StubDom): StubEl => rootOf(dom).children[2] as StubEl;
 
+/** 在桩树里找包含某段文字的节点(桩的 textContent 不聚合子节点,要递归拼) */
+function findText(root: StubEl, part: string): boolean {
+  if (root.textContent.includes(part)) return true;
+  for (const child of root.children) {
+    if (findText(child, part)) return true;
+  }
+  return false;
+}
+
+/** 在桩树里找 style 含某段文字的节点(替换预览的 line-through 画在子节点上) */
+function findStyle(root: StubEl, part: string): boolean {
+  if (root.style.cssText?.includes(part)) return true;
+  for (const child of root.children) {
+    if (findStyle(child, part)) return true;
+  }
+  return false;
+}
+
 describe('createRefitFlow 纯商店流程', () => {
   let dom: StubDom;
   let world: StubWorld;
@@ -389,8 +407,8 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(pickerOf(dom).style.display).toBe('flex');
     // 提示指到左边那张船图上,槽位读数也在那儿(第 2 槽 = 正右的磁轨炮 ★★★)
     expect((pickerOf(dom).children[1] as StubEl).textContent).toContain(towerName(TOWER_AUTOCANNON));
-    expect(chipOf(dom, 2).innerHTML).toContain('正右');
-    expect(chipOf(dom, 2).innerHTML).toContain('★★★');
+    expect(findText(chipOf(dom, 2), '正右')).toBe(true);
+    expect(findText(chipOf(dom, 2), '★★★')).toBe(true);
     fire(chipOf(dom, 2), 'click');
     expect(world.weaponCalls).toEqual([[0, undefined], [0, 2]]);
     expect(world.starCoins).toBe(100 - DOCK_WEAPON_PRICE);
@@ -462,13 +480,14 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[0]!.type = TOWER_LASER;
     world.weapons[0]!.stars = 2;
     setup();
-    expect(chipOf(dom, 0).innerHTML).toContain('正前');
-    expect(chipOf(dom, 0).innerHTML).toContain(towerName(TOWER_LASER));
-    expect(chipOf(dom, 0).innerHTML).toContain('★★');
-    expect(chipOf(dom, 0).innerHTML).toContain('过热系'); // 舰船图上的武器格也标系
-    expect(chipOf(dom, 1).innerHTML).toContain('右前');
-    expect(chipOf(dom, 1).innerHTML).toContain('空槽');
-    expect((headOf(dom).children[1] as StubEl).innerHTML).toContain('60/100');
+    expect(findText(chipOf(dom, 0), '正前')).toBe(true);
+    expect(findText(chipOf(dom, 0), towerName(TOWER_LASER))).toBe(true);
+    expect(findText(chipOf(dom, 0), '★★')).toBe(true);
+    expect(findText(chipOf(dom, 0), '过热系')).toBe(true); // 舰船图上的武器格也标系
+    expect(findText(chipOf(dom, 1), '右前')).toBe(true);
+    expect(findText(chipOf(dom, 1), '空槽')).toBe(true);
+    // 船体读数 = 读数区第一行的数值节点(标签与数值分节点,05 号起不再拼 innerHTML)
+    expect(((headOf(dom).children[1] as StubEl).children[0] as StubEl).children[1]?.textContent).toContain('60/100');
     expect(((headOf(dom).children[0] as StubEl).children[1] as StubEl).textContent).toBe('舰船背包');
     expect(hullArtOf(dom).tagName).toBe('IMG');
     expect(hullArtOf(dom).src).toContain('scrapper-hull.png');
@@ -480,12 +499,12 @@ describe('createRefitFlow 纯商店流程', () => {
     world.weapons[0]!.stars = 1;
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'mouseenter');
-    expect(chipOf(dom, 1).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
-    expect(chipOf(dom, 0).innerHTML).not.toContain(towerName(TOWER_AUTOCANNON));
+    expect(findText(chipOf(dom, 1), towerName(TOWER_AUTOCANNON))).toBe(true);
+    expect(findText(chipOf(dom, 0), towerName(TOWER_AUTOCANNON))).toBe(false);
     expect(world.weaponCalls).toEqual([]);
     expect(world.starCoins).toBe(100);
     fire(cardsOf(dom).children[0] as StubEl, 'mouseleave');
-    expect(chipOf(dom, 1).innerHTML).toContain('空槽');
+    expect(findText(chipOf(dom, 1), '空槽')).toBe(true);
   });
 
   it('替换态里悬停一个槽，就地演示「换下谁、换成谁」', () => {
@@ -497,10 +516,10 @@ describe('createRefitFlow 纯商店流程', () => {
     setup();
     fire(cardsOf(dom).children[0] as StubEl, 'click');
     fire(chipOf(dom, 5), 'mouseenter');
-    expect(chipOf(dom, 5).innerHTML).toContain('line-through');
-    expect(chipOf(dom, 5).innerHTML).toContain(towerName(TOWER_RAILGUN));
-    expect(chipOf(dom, 5).innerHTML).toContain(towerName(TOWER_AUTOCANNON));
-    expect(chipOf(dom, 4).innerHTML).not.toContain(towerName(TOWER_AUTOCANNON));
+    expect(findStyle(chipOf(dom, 5), 'line-through')).toBe(true);
+    expect(findText(chipOf(dom, 5), towerName(TOWER_RAILGUN))).toBe(true);
+    expect(findText(chipOf(dom, 5), towerName(TOWER_AUTOCANNON))).toBe(true);
+    expect(findText(chipOf(dom, 4), towerName(TOWER_AUTOCANNON))).toBe(false);
   });
 
   it('替换态点到空槽不成交（真 DOM 靠 disabled 拦，这里是防桩）', () => {
@@ -518,12 +537,12 @@ describe('createRefitFlow 纯商店流程', () => {
 
   it('法令按层数印在船图上，一条都没有时明说', () => {
     setup();
-    expect(edictWrapOf(dom).innerHTML).toContain('尚未持有');
+    expect(findText(edictWrapOf(dom), '尚未持有')).toBe(true);
     world.edictLevels[EDICT_MAGNET] = 2;
     world.edictLevels[EDICT_ARMOR] = 1;
     fire(repairOf(dom), 'click'); // 任一次购买都会重画左侧
-    expect(edictWrapOf(dom).innerHTML).toContain(`${edictName(EDICT_MAGNET)} ×2`);
-    expect(edictWrapOf(dom).innerHTML).toContain(`${edictName(EDICT_ARMOR)} ×1`);
+    expect(findText(edictWrapOf(dom), `${edictName(EDICT_MAGNET)} ×2`)).toBe(true);
+    expect(findText(edictWrapOf(dom), `${edictName(EDICT_ARMOR)} ×1`)).toBe(true);
   });
 
   it('武器卡只放图片/名称/价格，悬停说明数值、落位方向与当场合成', () => {

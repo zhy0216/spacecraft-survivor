@@ -20,7 +20,7 @@ import {
   slotSustainedDps,
 } from '../sim/tower';
 import type { World } from '../sim/world';
-import { initI18n } from '../i18n';
+import { changeLocale, initI18n, t } from '../i18n';
 import {
   boostReadout,
   createHud,
@@ -60,8 +60,16 @@ describe('hudRatio / segmentReadout', () => {
 
   it('脚本走完钉在满格,不印出 5/4', () => {
     const done = segmentReadout(WAVE_SEGMENTS.length, 999);
-    expect(done.label).toBe(`${WAVE_SEGMENTS.length}/${WAVE_SEGMENTS.length} 全通`);
+    expect(done.label).toBe(`${WAVE_SEGMENTS.length}/${WAVE_SEGMENTS.length} ${t('ui:segment.allClear')}`);
     expect(done.ratio).toBe(1);
+  });
+
+  it('航段全通文案随语言翻:en 下报 All clear', async () => {
+    await changeLocale('en');
+    const done = segmentReadout(WAVE_SEGMENTS.length, 999);
+    expect(done.label).toContain(t('ui:segment.allClear'));
+    expect(done.label).toBe(`${WAVE_SEGMENTS.length}/${WAVE_SEGMENTS.length} All clear`);
+    await changeLocale('zh-CN');
   });
 });
 
@@ -826,5 +834,60 @@ describe('formatDps / boostReadout', () => {
     const colors = [FIRE_READY, FIRE_COOLDOWN, FIRE_RELOAD, FIRE_LOCKED, FIRE_CHARGING].map(fireReadoutColor);
     expect(new Set(colors).size).toBe(5);
     expect(fireReadoutColor(FIRE_LOCKED)).toBe('#ff9a5c');
+  });
+
+  it('发射/加速读数文案随语言翻:en 下状态词与数字格式一致', async () => {
+    await changeLocale('en');
+    expect(fireReadoutText(FIRE_RELOAD, 1.23)).toBe('Reloading 1.2s');
+    expect(fireReadoutText(FIRE_LOCKED, 0.8)).toBe('Overheated 0.8s');
+    expect(fireReadoutText(FIRE_CHARGING, 2.4)).toBe('Charging 2.4s');
+    expect(fireReadoutText(FIRE_COOLDOWN, 0.35)).toBe('0.3s');
+    expect(fireReadoutText(FIRE_READY, 0)).toBe('Ready');
+    expect(boostReadout(0.5, 4.4, 5)).toEqual({ text: 'Boosting', ratio: 1, active: true });
+    expect(boostReadout(0, 0, 5)).toEqual({ text: 'Ready', ratio: 1, active: false });
+    expect(boostReadout(0, 2.5, 5).text).toBe('2.5s');
+    await changeLocale('zh-CN');
+  });
+});
+
+describe('refreshLocale(05 号)', () => {
+  let dom: StubDom;
+
+  beforeEach(() => {
+    dom = installDom();
+  });
+  afterEach(() => {
+    dom.restore();
+  });
+
+  it('切换语言后静态标签与状态值原地重画,toast/banner 内容与计时不被清空', async () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const toastEl = root.children[7]!;
+    const bannerEl = root.children[8]!;
+    // 弹一条 toast + 一条 banner:它们的剩余时间由各自计时器管,refreshLocale 不许碰
+    hud.toast('解锁:导弹巢');
+    hud.showBanner('封锁线接敌', 3);
+    expect(dom.timers.size).toBe(2);
+
+    await changeLocale('en');
+    hud.refreshLocale();
+
+    // 静态标签翻新
+    expect(findText(root, t('ui:hud.hull'))).toBeDefined();
+    expect(root.children[3]!.textContent).toBe(t('ui:hud.soundOn'));
+    expect(root.children[4]!.textContent).toBe(t('ui:hud.keys'));
+    // toast/banner 原话原样、计时器还在(只重画文案,不动它们的生命周期)
+    expect(toastEl.textContent).toBe('解锁:导弹巢');
+    expect(bannerEl.textContent).toBe('封锁线接敌');
+    expect(dom.timers.size).toBe(2);
+    // 没有重建 DOM、没有新增 window 监听
+    expect(dom.ui.children.length).toBe(1);
+    expect(dom.windowListeners).toBe(0);
+
+    // 再刷一次幂等:文案保持 en,状态不变
+    hud.refreshLocale();
+    expect(root.children[4]!.textContent).toBe(t('ui:hud.keys'));
+    await changeLocale('zh-CN');
   });
 });

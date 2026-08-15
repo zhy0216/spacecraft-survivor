@@ -185,6 +185,8 @@ async function boot(): Promise<void> {
     },
   };
   const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG, muted: mutedHooks });
+  // 语言切换成功后 HUD 原地重画静态标签(05 号):切换与战斗并行,不影响 toast/banner 计时
+  registerLocaleAware(hud);
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -387,6 +389,8 @@ async function boot(): Promise<void> {
     },
     blocked: () => settingsMenu.visible() || (pauseMenu?.visible() ?? false),
   });
+  // 语言切换成功后背包(及其舰船图)原地重画文案(05 号):不重建槽位/选择态/交换态
+  registerLocaleAware(armoryPanel);
 
   /**
    * 这一局跑起来了没有。**存档的总闸**:boot 里那个预建的 World(标题界面背景里那艘
