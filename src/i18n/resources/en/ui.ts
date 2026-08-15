@@ -236,7 +236,7 @@ export const ui: DeepRecord<typeof zhUi> = {
       hint: 'Click a slot on the ship to swap in {{name}}; cancel is free',
       cancel: 'Cancel',
     },
-    repair: 'Repair hull +{{pct}}% HP · {{price}} ★',
+    repair: 'Repair hull +{{hp}} HP · {{price}} ★',
     finish: 'Finish refit · start next wave',
     refresh: 'Refresh {{price}} ★',
     deny: {
@@ -272,7 +272,7 @@ export const ui: DeepRecord<typeof zhUi> = {
       swapped: 'Swapped: {{name}}{{fusion}} → {{oldName}}',
       edict: 'Bought: {{name}}',
       edictFallback: 'Edict',
-      repaired: 'Hull repaired +{{pct}}%',
+      repaired: 'Hull repaired +{{hp}} HP',
       refreshed: 'Shelf refreshed — spent {{price}} ★',
     },
     sold: {

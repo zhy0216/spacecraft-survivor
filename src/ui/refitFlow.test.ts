@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
-  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_HP,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
@@ -290,7 +290,7 @@ function createStubWorld(): StubWorld {
       world.repairCalls++;
       if (world.repairCode < 0) return world.repairCode;
       world.starCoins -= DOCK_REPAIR_PRICE;
-      world.ship.hp = Math.min(world.ship.maxHp, world.ship.hp + Math.ceil(world.ship.maxHp * DOCK_REPAIR_FRACTION));
+      world.ship.hp = Math.min(world.ship.maxHp, world.ship.hp + DOCK_REPAIR_HP);
       return world.repairCode;
     },
     completeRefit(): boolean { world.completeCalls++; return world.completeOk; },
@@ -333,7 +333,8 @@ const edictWrapOf = (dom: StubDom): StubEl => (boardOf(dom).children[3] as StubE
 const chipLayerOf = (dom: StubDom): StubEl =>
   ringOf(dom).children[ringOf(dom).children.length - 1] as StubEl;
 const chipOf = (dom: StubDom, slot: number): StubEl => chipLayerOf(dom).children[slot] as StubEl;
-const hullArtOf = (dom: StubDom): StubEl => ringOf(dom).children[ringOf(dom).children.length - 2] as StubEl;
+// 环里最后一层是卡片、倒数第二层是炮位贴图层,再往前一层才是舰壳图(两层叠放保证可点)
+const hullArtOf = (dom: StubDom): StubEl => ringOf(dom).children[ringOf(dom).children.length - 3] as StubEl;
 const tooltipOf = (dom: StubDom): StubEl => rootOf(dom).children[2] as StubEl;
 
 /** 在桩树里找包含某段文字的节点(桩的 textContent 不聚合子节点,要递归拼) */
@@ -532,7 +533,7 @@ describe('createRefitFlow 纯商店流程', () => {
     expect(repairOf(dom).disabled).toBe(true);
     fire(repairOf(dom), 'click');
     expect(world.repairCalls).toBe(0);
-    world.ship.hp = 60;
+    world.ship.hp = 70;
     flow.show(1);
     expect(repairOf(dom).disabled).toBe(false);
     fire(repairOf(dom), 'click');
@@ -795,7 +796,7 @@ describe('整备面板英文文案(todo 07 中英双验)', () => {
     expect((starSectionOf(dom).children[0] as StubEl).textContent).toBe('Edict Cards');
     expect(pickerOf(dom).children[0]?.textContent).toBe('Weapon slots full');
     expect(pickerOf(dom).children[WEAPON_PICKER_CANCEL_INDEX]?.textContent).toBe('Cancel');
-    expect(repairOf(dom).textContent).toContain(`+${Math.round(DOCK_REPAIR_FRACTION * 100)}%`);
+    expect(repairOf(dom).textContent).toContain(`+${DOCK_REPAIR_HP} HP`);
     expect(repairOf(dom).textContent).toContain(`${DOCK_REPAIR_PRICE} ★`);
     expect(finishOf(dom).textContent).toBe('Finish refit · start next wave');
     expect(refreshOf(dom).textContent).toBe(`Refresh ${DOCK_SHOP_REFRESH_PRICE} ★`);

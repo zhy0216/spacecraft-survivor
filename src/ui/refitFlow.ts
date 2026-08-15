@@ -40,7 +40,7 @@ import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
-  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_HP,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
@@ -729,7 +729,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
         ? t('ui:refit.segment.final')
         : t('ui:refit.segment.line', { n: lastSegment + 1 });
     repairBtn.textContent = t('ui:refit.repair', {
-      pct: Math.round(DOCK_REPAIR_FRACTION * 100),
+      hp: DOCK_REPAIR_HP,
       price: DOCK_REPAIR_PRICE,
     });
     // 舰船图的标题/副题/法令标题只在这一处刷(shipDiagram.paint 不碰它们);正文由 syncPanel
@@ -882,7 +882,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
       syncPanel();
       return;
     }
-    flash(t('ui:refit.receipt.repaired', { pct: Math.round(DOCK_REPAIR_FRACTION * 100) }), OK_COLOR);
+    flash(t('ui:refit.receipt.repaired', { hp: DOCK_REPAIR_HP }), OK_COLOR);
     audioBus.playPlace();
     syncPanel();
   }

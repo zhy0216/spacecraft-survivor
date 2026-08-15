@@ -234,7 +234,7 @@ export const ui = {
       hint: '在中间舰船背包上点一个武器槽，把它换成「{{name}}」；取消不扣星币',
       cancel: '取消购买',
     },
-    repair: '修复船体 +{{pct}}% HP · {{price}} ★',
+    repair: '修复船体 +{{hp}} HP · {{price}} ★',
     finish: '完成整备 · 开始下一波',
     refresh: '刷新 {{price}} ★',
     deny: {
@@ -270,7 +270,7 @@ export const ui = {
       swapped: '已换装：{{name}}{{fusion}} → {{oldName}}',
       edict: '已购入：{{name}}',
       edictFallback: '法令',
-      repaired: '已修复船体 +{{pct}}%',
+      repaired: '已修复船体 +{{hp}} HP',
       refreshed: '已刷新货架 —— 花费 {{price}} 星币',
     },
     sold: {

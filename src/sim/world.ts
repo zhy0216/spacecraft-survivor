@@ -61,7 +61,7 @@ import {
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
-  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_HP,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
@@ -2228,9 +2228,8 @@ export class World {
    * **零 rng**、失败一个字段都不动、可重复购买、夹在 maxHp 上不溢出。
    * 满血拒绝(DOCK_HP_FULL)是"可买但没必要"的口径,与 ui 的置灰按钮互为主备
    * (置灰只是读数,真正的裁决始终以返回码为准)。
-   * 修复量 = ceil(maxHp × DOCK_REPAIR_FRACTION) —— 与 completeRefit 的免费回血同一条
-   * ceil 取整口径(见 data/economy 的 REFIT_HEAL_FRACTION 那段):比例修复不许因为舍入
-   * 变成"回了个寂寞"。
+   * 修复量 = 固定 DOCK_REPAIR_HP(30) —— 不随 maxHp 膨胀,与 completeRefit 的免费回血
+   * (maxHp × REFIT_HEAL_FRACTION)刻意分开:付费修复是全程可预期的固定止损,不是比例血泵。
    *
    * @returns 0 = 成功;负数 = 理由码(REFIT_NOT_ACTIVE / DOCK_HP_FULL / DOCK_NO_STARCOINS)。
    */
@@ -2241,7 +2240,7 @@ export class World {
     this.starCoins -= DOCK_REPAIR_PRICE;
     this.ship.hp = Math.min(
       this.ship.maxHp,
-      this.ship.hp + Math.ceil(this.ship.maxHp * DOCK_REPAIR_FRACTION),
+      this.ship.hp + DOCK_REPAIR_HP,
     );
     logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_REPAIR, type: 0 });
     return 0;

@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DOCK_EDICT_COUNT,
   DOCK_EDICT_PRICE,
-  DOCK_REPAIR_FRACTION,
+  DOCK_REPAIR_HP,
   DOCK_REPAIR_PRICE,
   DOCK_SHOP_REFRESH_PRICE,
   DOCK_WEAPON_COUNT,
@@ -24,7 +24,6 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_NEW_WEAPON,
-  REFIT_HEAL_FRACTION,
   REROLL_PRICE,
   SHOP_DISCOUNT_FRACTION,
   shopDiscountPrice,
@@ -192,10 +191,9 @@ describe('船坞商店(21 号)', () => {
     expect(DOCK_REPAIR_PRICE).toBe(DOCK_EDICT_PRICE);
   });
 
-  it('付费修复比例在 (0,1) 且严格强于免费回血(30%):花了钱不能比白送的弱', () => {
-    expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(0);
-    expect(DOCK_REPAIR_FRACTION).toBeLessThan(1);
-    expect(DOCK_REPAIR_FRACTION).toBeGreaterThan(REFIT_HEAL_FRACTION);
+  it('付费修复是固定正值 HP:全程可预期、不随 maxHp 膨胀(改版从比例 40% 改为固定 30)', () => {
+    expect(Number.isInteger(DOCK_REPAIR_HP)).toBe(true);
+    expect(DOCK_REPAIR_HP).toBeGreaterThan(0);
   });
 
   it('特价折扣(商店优化)是 (0,1) 的折扣率:打的是折不是涨价', () => {
