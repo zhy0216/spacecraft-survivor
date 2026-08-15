@@ -37,6 +37,12 @@ npm run build    # tsc 类型检查 + 产物构建
 
 每一项都接在真落点上(音量→`render/audio`、震屏与伤害飘字→`Renderer.setEffects`、击杀顿帧→`main` 的冻结窗),不摆装饰性开关。标题与暂停两个入口共用同一页。
 
+### 运行日志与上传
+
+每局从第一帧起记一卷**运行日志**(`src/sim/runLog.ts`):击杀逐只、升级/重摇/商店逐笔、跨段/Boss/受击/沉船/局终逐转折,只写不读、不进 checksum、不进存档。结算卡上「上传本局日志」(U)把时间线 + 结局读数 POST 给配置好的端点。
+
+上传后端**未定案**:接缝钉在 `src/ui/runLogUpload.ts`(负载格式 + `submitRunLog`),端点放在 localStorage 键 `starwreck.logEndpoint.v1` —— 后端落地只换端点,客户端流程不再动。端点未配置时按钮会明说「未配置上传地址」。
+
 **开发模式**:URL 加 `?debug` 恢复灰盒调参面板(实体数量、手感参数、波次读数、压测 1000 敌)与 `· dev` 页签。
 `?seed=123` 指定种子 —— 同 seed 两次运行、同 tick 的 checksum 必须一致。
 

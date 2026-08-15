@@ -198,6 +198,8 @@ interface StubEl {
   textContent: string;
   src: string;
   alt: string;
+  /** 上传按钮三态会动它(上传中置灰防重入),其余元素恒 false */
+  disabled: boolean;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
@@ -214,6 +216,7 @@ function createStubEl(tag = 'div'): StubEl {
     textContent: '',
     src: '',
     alt: '',
+    disabled: false,
     children: [],
     listeners: new Map<string, (e: unknown) => void>(),
     append(...kids: StubEl[]): void {
@@ -338,6 +341,13 @@ function reportBlock(dom: StubDom): StubEl {
 
 function button(dom: StubDom): StubEl {
   return dom.created.find((el) => el.tagName === 'BUTTON')!;
+}
+
+/** 最近一张结算卡里**实际摆出来**的按钮:createGameOverUi 恒建四颗、按 opts 挑着挂,
+ * 数按钮得数 append 进卡里的,不能数 createElement 造过的(与上面 button() 的用法正相反) */
+function panelButtons(dom: StubDom): StubEl[] {
+  const lastRoot = dom.ui.children[dom.ui.children.length - 1]!;
+  return lastRoot.children[0]!.children.filter((el) => el.tagName === 'BUTTON');
 }
 
 describe('createGameOverUi', () => {
@@ -553,5 +563,78 @@ describe('createGameOverUi', () => {
     expect(unlockBlock(dom).textContent).toBe('解锁:超载协议');
     // 失败局图鉴照常铺(未解锁灰显、计数如实),不看胜负
     expect(findEl(panel(dom), (el) => el.textContent === '导弹巢(未解锁)')).toBeDefined();
+  });
+
+  it('上传按钮:不传 onUpload 就不摆(按钮数不变),传了垫底且带 U 键提示', () => {
+    // 只传 onRestart:卡里 1 颗(主动作),没有上传那颗
+    make();
+    expect(panelButtons(dom)).toHaveLength(1);
+    // 与默认 make() 同款但带 onUpload:2 颗 = 主动作 + 上传
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onUpload: async () => null,
+    });
+    const buttons = panelButtons(dom);
+    expect(buttons).toHaveLength(2);
+    // 垫底 = 最后一颗;与「返回标题」同一档暗色,不与重开抢眼
+    const upload = buttons[1]!;
+    expect(upload.textContent).toBe('上传本局日志(U)');
+    expect(upload.style.cssText).toContain('#5f7a99');
+    ui.show(summary());
+    expect(upload.disabled).toBe(false);
+  });
+
+  it('上传三态:点击 → 上传中(置灰)→ 已上传;失败原因原样印在按钮上', async () => {
+    const outcomes: Array<string | null> = [];
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onUpload: async () => outcomes.shift() ?? null,
+    });
+    const upload = panelButtons(dom)[1]!;
+    ui.show(summary());
+    // 成功:点下去当场置灰改口,回调结算后改口「已上传」
+    outcomes.push(null);
+    upload.listeners.get('click')!(undefined);
+    expect(upload.textContent).toBe('上传中…');
+    expect(upload.disabled).toBe(true);
+    await new Promise((r) => setTimeout(r, 0)); // 等异步 onUpload 结算
+    expect(upload.textContent).toBe('已上传');
+    expect(upload.disabled).toBe(false);
+    // 失败:原因原样印出来("未配置上传地址"与"上传失败"是两种不同的下一步)
+    outcomes.push('未配置上传地址');
+    upload.listeners.get('click')!(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(upload.textContent).toBe('未配置上传地址');
+    // 新一局 show 复位回待传:上一局的结果不许赖到下一局
+    ui.show(summary());
+    expect(upload.textContent).toBe('上传本局日志(U)');
+  });
+
+  it('U 键触发上传,置灰期间不重入;收着的时候 U 不认', async () => {
+    let uploads = 0;
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onUpload: async () => {
+        uploads++;
+        return null;
+      },
+    });
+    const upload = panelButtons(dom)[1]!;
+    // 收着:U 一律不认(与 Enter/R 同一条守卫)
+    dom.key(keyEvent('KeyU'));
+    expect(uploads).toBe(0);
+
+    ui.show(summary());
+    const e = keyEvent('KeyU');
+    dom.key(e);
+    expect(e.defaultPrevented).toBe(true); // 防焦点按钮的默认行为,与 Enter 同口径
+    expect(uploads).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    // 置灰期间再按不重入:异步回调未回来前 uploadBusy 挡住
+    expect(upload.textContent).toBe('已上传');
+    expect(uploads).toBe(1);
+    // repeat 不算(长按不连发)
+    dom.key(keyEvent('KeyU', true));
+    expect(uploads).toBe(1);
   });
 });

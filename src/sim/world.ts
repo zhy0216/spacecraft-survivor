@@ -124,6 +124,16 @@ import {
   stepEnemyBullets,
 } from './enemyBullet';
 import { stepInterception, stepInterceptHits } from './intercept';
+import { START_TOWER_POOL } from './loadout';
+import {
+  createRunLog,
+  logEvent,
+  SHOP_ACT_EDICT,
+  SHOP_ACT_REFRESH,
+  SHOP_ACT_REPAIR,
+  SHOP_ACT_WEAPON,
+  type RunLog,
+} from './runLog';
 import {
   bossContactDamage,
   bossRadius,
@@ -751,6 +761,15 @@ export class World {
   peakDps = 0;
 
   /**
+   * 本局的运行日志(sim/runLog.ts)—— 局末可上传的那卷遥测时间线。
+   * **只写不读、不进 checksum、不进 runSave**:与 runDamageByType 同一条"纯记录纸"口径,
+   * 任何判定都不得读它(logEvent 只会 append,读档后从读档点重新起记,见 runLog.ts 文件头)。
+   */
+  readonly log: RunLog;
+  /** start 事件是否已落账(step 第一帧记一次起手配装;读档后日志重起记,这个闩也照常走) */
+  private logStarted = false;
+
+  /**
    * —— 齐射共振统计(24 号,v1 纯表现)—— 与 threatRate / dpsByType 同一条
    * "纯统计、只喂 fx、不参与任何判定"的口径,故**不进 checksum、不进 runSave**
    * (读档后统计清零,代价只是"读档头半秒不共振",口径全文见 RESONANCE_WINDOW 那段)。
@@ -889,6 +908,7 @@ export class World {
   constructor(seed: number, unlockMask: number = 0) {
     this.rng = new Rng(seed);
     this.unlockMask = unlockMask;
+    this.log = createRunLog(seed);
     this.wave = createWaveState(unlockMask);
     this.enemies = new Pool<Enemy>(createEnemy, resetEnemy);
     this.bullets = new Pool<Bullet>(createBullet, resetBullet);
@@ -998,6 +1018,17 @@ export class World {
    */
   step(cmd: ShipCommand = IDLE): void {
     this.tick++;
+    // 日志起手事件只记一次(第一帧):此刻槽位已由 applyRandomStart 落好(随机起手排在
+    // 构造之后、第一次 step 之前,见 main.ts),读档世界则记它**读档时**的配装 ——
+    // 都叫"本会话开局那门炮"。纯追加,零 rng,不进 checksum(见 runLog.ts 文件头)
+    if (!this.logStarted) {
+      this.logStarted = true;
+      logEvent(this.log, {
+        k: 'start',
+        t: this.elapsed,
+        weapons: this.weapons.map((s) => s.type),
+      });
+    }
     let openedRefit = false;
 
     // 威胁统计先衰减、再接本帧成功出怪的脉冲。顺序定死后，同一帧的 burst 会以完整强度出现，
@@ -1108,6 +1139,8 @@ export class World {
       // 玩家自己决定什么时候脱离战线去接信标 —— 那正是"过去拿"这条设计的代价所在。
       stepWaves(this.wave, SIM_DT, this.rng, this.waveSink, false);
       if (this.wave.segment !== segmentBefore) {
+        // 日志:跨段是节奏转折点,与信标同帧记一条(index = 新航段下标)
+        logEvent(this.log, { k: 'segment', t: this.elapsed, index: this.wave.segment });
         // 跨段那一帧一次掷定四样,**顺序定死**(信标位置 → 法令货架 → 武器货架 → 特价):
         // 与出怪同一条"帧首、定死顺序"的确定性 —— 玩家去不去、买不买都扰动不到这条随机序列
         // (接信标与购买都零 rng,见 buyDockEdict / buyShopWeapon)。
@@ -1382,8 +1415,11 @@ export class World {
 
     // 同一帧若沉船/通关，结算优先，不能在结算面板下面再弹一层商店。
     if (openedRefit) {
-      if (this.result === RESULT_RUNNING) this.onRefitOffer?.(this.shopBeaconSegment);
-      else {
+      if (this.result === RESULT_RUNNING) {
+        // 日志:玩家接上信标、整备开始(被局终吞掉的那一轮不记 —— 它没真的开成)
+        logEvent(this.log, { k: 'refit', t: this.elapsed });
+        this.onRefitOffer?.(this.shopBeaconSegment);
+      } else {
         this.refitPending = false;
         // 整备被局终吞掉:两张货架一起清空,免得下一轮(不会有)或任何读它的路径拿到过期货
         this.dockEdictOffers.length = 0;
@@ -1418,6 +1454,8 @@ export class World {
     if (this.shipDead) this.result = RESULT_LOSE;
     else if (this.wave.done && this.bossPhase === 2) this.result = RESULT_WIN;
     else return; // 还在跑:一个字段都不动,更不响回调
+    // 日志:局终结论落定的那一帧收尾记一条(只此一次,靠上面那个早返回保证)
+    logEvent(this.log, { k: 'gameOver', t: this.elapsed, result: this.result });
     this.onGameOver?.(this.result);
   }
 
@@ -1492,6 +1530,13 @@ export class World {
       if (e.affixes !== 0) {
         this.eliteKills++;
       }
+      // 日志:逐只击杀记一条(kind + 是否精英),回池前当场读走字段 —— 平衡分析最值钱的一列
+      logEvent(this.log, {
+        k: 'kill',
+        t: this.elapsed,
+        kind: e.kind,
+        elite: e.affixes !== 0,
+      });
       // 死亡爆点(畅玩性调整):坐标/半径在回池前当场读走(与 spawnDrop 同口径)。
       // 借 sink.fx 走 FxEvent 的唯一生命周期路径;towerType 一格借放敌型下标,
       // 渲染层照它取 enemyTint 配色(见 sim/fx.ts 的 FXV_KILL)。纯表现、零 rng、不进 checksum。
@@ -1519,6 +1564,8 @@ export class World {
       if (e.kind === KIND_BOSS) {
         this.bossPhase = 2;
         this.bossKilledAt = this.elapsed;
+        // 日志:Boss 击破独立成条(kind = KIND_BOSS 的 kill 事件里读得出来,但这是转折点)
+        logEvent(this.log, { k: 'boss', t: this.elapsed });
       }
       // 裂变(14 号):死亡当场分裂成 splitCount 只 —— **复用敌人池**、不带词缀、普通血量,
       // 一次 rng 都不掷(side 继承父体,见 initSplit):精英结算扰动不到出怪随机序列。
@@ -1695,12 +1742,15 @@ export class World {
 
     const dealt = amount * this.shipDamageTakenMul();
     this.ship.hp = Math.max(0, this.ship.hp - dealt);
+    // 日志:受击逐笔记实际扣血量(减伤已折算,与血条同一份账)
+    logEvent(this.log, { k: 'shipHit', t: this.elapsed, damage: dealt });
 
     if (this.ship.hp <= 0) {
       this.shipDead = true;
       // 只把"船沉了"这件事递出去。失败**结论**由帧尾的 settleOutcome 出(result + onGameOver),
       // 不在这里抢着判:受击结算发生在帧中,那时本帧的死者还没回收进 kills ——
       // 抢着判的话结算界面上的击杀数会比玩家亲眼看到的少一只
+      logEvent(this.log, { k: 'shipDestroyed', t: this.elapsed });
       this.onShipDestroyed?.();
     }
     return true;
@@ -1790,7 +1840,17 @@ export class World {
         code = this.replaceWeapon(slotIndex, opt.type);
       }
     }
-    if (code >= 0) this.completeUpgrade(0);
+    if (code >= 0) {
+      // 日志:玩家决策链逐笔记(类别 + 型 + 替换槽);opt 在 completeUpgrade 清空前读走
+      logEvent(this.log, {
+        k: 'upgrade',
+        t: this.elapsed,
+        kind: opt.kind,
+        type: opt.type,
+        slot: slotIndex,
+      });
+      this.completeUpgrade(0);
+    }
     return code;
   }
 
@@ -2126,6 +2186,7 @@ export class World {
     this.dockEdictOffers[index] = -1; // 一卡一售:当场下架,本轮不再出现
     this.grantEdict(type); // 唯一授予入口(层数 +1 + 当帧同步 HP 上限)
     if (this.ship.hp > this.ship.maxHp) this.ship.hp = this.ship.maxHp;
+    logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_EDICT, type });
     return 0;
   }
 
@@ -2149,6 +2210,7 @@ export class World {
       this.ship.maxHp,
       this.ship.hp + Math.ceil(this.ship.maxHp * DOCK_REPAIR_FRACTION),
     );
+    logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_REPAIR, type: 0 });
     return 0;
   }
 
@@ -2259,6 +2321,7 @@ export class World {
     }
     this.starCoins -= price;
     this.shopWeapons[index] = -1; // 一卡一售:当场下架,本轮不再出现
+    logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_WEAPON, type });
     return ACQUIRE_OK;
   }
 
@@ -2277,6 +2340,7 @@ export class World {
     this.starCoins -= DOCK_SHOP_REFRESH_PRICE;
     this.rollShopWeapons();
     this.rollShopDiscount();
+    logEvent(this.log, { k: 'shop', t: this.elapsed, act: SHOP_ACT_REFRESH, type: 0 });
     return 0;
   }
 
@@ -2288,6 +2352,7 @@ export class World {
   skipUpgrade(): boolean {
     if (this.offer.length === 0) return false;
     this.completeUpgrade(skipRefundFor(this.upgradeCost));
+    logEvent(this.log, { k: 'upgradeSkip', t: this.elapsed });
     return true;
   }
 
@@ -2315,7 +2380,9 @@ export class World {
     this.offerRerolled = true;
     // edictLevels 同传:重摇后的法令候选同样剔掉已满层(与首掷同一套过滤);
     // unlockMask 同传:重摇后的卡同样不出现未解锁的塔/法令(与首掷同一套过滤)
-    return rollUpgradeOffer(this.rng, this.offer, this.edictLevels, this.unlockMask, this.weapons);
+    const rolled = rollUpgradeOffer(this.rng, this.offer, this.edictLevels, this.unlockMask, this.weapons);
+    if (rolled >= 0) logEvent(this.log, { k: 'reroll', t: this.elapsed });
+    return rolled;
   }
   /**
    * 把运行器的一次"朝这个方向出一只这型的怪"落成世界里的一只敌人 —— **正式出怪的唯一落点**。

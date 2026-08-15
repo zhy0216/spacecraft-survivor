@@ -90,6 +90,12 @@ const BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.1em;`;
 
+/**
+ * 上传回调的返回口径:null = 成功(按钮改口「已上传」);非 null = 一句失败原因
+ * (按钮原样印它 —— "未配置上传地址"与"上传失败"是两种不同的下一步,不该合成一句话)。
+ */
+export type UploadOutcome = string | null;
+
 /** 一局的结算数据 —— **纯数据**,由 main.ts 从 World 上摘好递进来(见文件头) */
 export interface RunSummary {
   /** RESULT_WIN / RESULT_LOSE(sim/world.ts) */
@@ -286,12 +292,17 @@ export function collectionItemName(entry: UnlockEntry): string {
  *   想去改个设置或干脆歇一会儿都得刷新页面。
  * @param opts.onVictoryContinue 胜利局确认战报后的去处。传入时，胜利卡的主按钮不直接重开，
  *   而是进入全屏终幕；失败局仍保留再来一局 / 同种子重试 / 返回标题三条路。
+ * @param opts.onUpload 「上传本局日志」的去处(运行日志系统)。不传就不摆这个按钮。
+ *   返回 Promise<UploadOutcome>:null = 已上传,非 null = 失败原因(印在按钮上)。
+ *   上传中按钮置灰防重入,新一局 show 时状态复位 —— 这一局的上传结果不赖到下一局。
+ *   胜利局确认战报进终幕之前,上传按钮照常留着:上传不跟任何一条主流程抢路。
  */
 export function createGameOverUi(opts: {
   onRestart: () => void;
   onRetry?: () => void;
   onTitle?: () => void;
   onVictoryContinue?: () => void;
+  onUpload?: () => Promise<UploadOutcome>;
 }): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -333,9 +344,15 @@ export function createGameOverUi(opts: {
   const titleBtn = document.createElement('button');
   titleBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
   titleBtn.textContent = '返回标题';
+  // 「上传本局日志」垫底:它是遥测出口,不是玩法出口,颜色与「返回标题」同一档暗色。
+  // 状态三态:待传 → 上传中…(置灰)→ 已上传 / 失败原因(见 upload)
+  const uploadBtn = document.createElement('button');
+  uploadBtn.style.cssText = BTN_CSS + `margin-top:8px;color:${IDLE_COLOR};`;
+  uploadBtn.textContent = '上传本局日志(U)';
   card.append(titleEl, noteEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   if (opts.onTitle) card.appendChild(titleBtn);
+  if (opts.onUpload) card.appendChild(uploadBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
@@ -344,6 +361,8 @@ export function createGameOverUi(opts: {
   let visible = false;
   /** 最近一次 show 的结果码:胜利 + 有终幕钩子时,主动作从“重开”切成“确认战报” */
   let shownResult = RESULT_LOSE;
+  /** 上传进行中(置灰防重入:onUpload 是异步的,双击会发两遍同一份负载) */
+  let uploadBusy = false;
 
   function continuesToEpilogue(): boolean {
     return shownResult === RESULT_WIN && opts.onVictoryContinue !== undefined;
@@ -380,6 +399,22 @@ export function createGameOverUi(opts: {
     // 与 restart / retry 同口径:先收面板再回调
     hide();
     opts.onTitle?.();
+  }
+
+  /**
+   * 上传本局日志。三态都写在同一颗按钮上(待传 → 上传中… → 结果),不另开状态区:
+   * 它是遥测出口,不值得占结算卡一整块版面。置灰防重入的理由见 uploadBusy 的注释;
+   * 结果直接印失败原因(null = 「已上传」)—— 玩家知道下一步该去配端点还是检查网络。
+   */
+  async function upload(): Promise<void> {
+    if (uploadBusy || opts.onUpload === undefined) return;
+    uploadBusy = true;
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = '上传中…';
+    const outcome = await opts.onUpload();
+    uploadBusy = false;
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = outcome === null ? '已上传' : outcome;
   }
 
   /**
@@ -466,6 +501,9 @@ export function createGameOverUi(opts: {
   btn.addEventListener('click', primaryAction);
   retryBtn.addEventListener('click', retry);
   titleBtn.addEventListener('click', toTitle);
+  uploadBtn.addEventListener('click', () => {
+    void upload();
+  });
 
   window.addEventListener('keydown', (e) => {
     // 收着的时候一律不认:战斗中按 Enter/R 不该把正打着的一局重开掉
@@ -474,6 +512,12 @@ export function createGameOverUi(opts: {
     if (!continuesToEpilogue() && opts.onRetry && e.code === 'KeyR') {
       e.preventDefault();
       retry();
+      return;
+    }
+    // U = 上传本局日志(未传 onUpload 时没有这颗按钮,按键同样不认)
+    if (opts.onUpload !== undefined && e.code === 'KeyU') {
+      e.preventDefault();
+      void upload();
       return;
     }
     if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
@@ -501,6 +545,10 @@ export function createGameOverUi(opts: {
       btn.textContent = epilogueNext ? '确认战报 · 查看航行结局(Enter)' : '再来一局(Enter)';
       retryBtn.style.display = epilogueNext ? 'none' : 'block';
       titleBtn.style.display = epilogueNext ? 'none' : 'block';
+      // 上传状态属于"上一局的那一次 show":新一局复位回待传 —— 已上传/失败那句不许赖到下一局
+      uploadBusy = false;
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = '上传本局日志(U)';
       visible = true;
       root.style.display = 'flex';
     },

@@ -52,6 +52,12 @@ import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
 import {
+  buildRunLogPayload,
+  getLogEndpoint,
+  submitRunLog,
+  type RunLogPayload,
+} from './ui/runLogUpload';
+import {
   clearRunSnapshot,
   loadRunSnapshot,
   loadRunWorld,
@@ -231,6 +237,14 @@ async function boot(): Promise<void> {
     onRetry: retry,
     onTitle: toTitle,
     onVictoryContinue: () => victoryEpilogue.show(),
+    // 运行日志上传(后端未定案,接缝见 ui/runLogUpload.ts):端点未配置 / 本局没有日志 /
+    // 网络失败三件事各回一句原因,结算卡的按钮原样印它 —— 玩家知道下一步去配端点还是重试
+    onUpload: async (): Promise<string | null> => {
+      const endpoint = getLogEndpoint();
+      if (endpoint === null) return '未配置上传地址';
+      if (pendingLog === null) return '本局无日志';
+      return (await submitRunLog(endpoint, pendingLog)) ? null : '上传失败';
+    },
   });
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
@@ -398,6 +412,10 @@ async function boot(): Promise<void> {
   // 本局开跑的 world.elapsed 基准(秒):20s 窗口按它与当前 elapsed 的差算,
   // 读档进来的世界 elapsed 不为 0,窗口照样从"这一局开跑"起算
   let battleStartElapsed = 0;
+  // 最近一局结束时的上传负载快照(运行日志系统):onGameOver 里与世界一起冻住的那一刻构建,
+  // 结算卡上的「上传本局日志」读它 —— 世界此后不再动,这份负载与 summary 同一条"局终摘数"口径。
+  // startRun / toTitle 清空:上一局的日志不许被下一局的结算卡上传走
+  let pendingLog: RunLogPayload | null = null;
 
   /**
    * 存一次档。**只在世界冻着的那些点调用**(升级/整备时停、暂停菜单、页面隐藏) ——
@@ -427,6 +445,8 @@ async function boot(): Promise<void> {
     // 期间重开过的旧局结算直接作废,不会在"新一局"头上弹"上一局"的卡片
     runToken++;
     world = next;
+    // 上一局的上传负载作废:新一局开跑后,结算卡(还没出现的那张)只能上传它自己的日志
+    pendingLog = null;
     // 正式开局才套随机起手。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
     // 而「这一局怎么开场」是 sim/loadout.ts 的随机装配 —— 从 world.rng 派生,同 seed 必同起手。
     //
@@ -521,6 +541,18 @@ async function boot(): Promise<void> {
         weaponReport,
         peakDps: world.peakDps,
       };
+      // 上传负载快照:与 summary 同一条"局终摘数"口径 —— 世界此刻已冻、日志不再追加,
+      // 负载浅引用日志的 events 数组是安全的(buildRunLogPayload 的契约,见 runLogUpload.ts)
+      pendingLog = buildRunLogPayload(world.log, {
+        result,
+        survivedSec: world.elapsed,
+        kills: world.kills,
+        eliteKills: world.eliteKills,
+        segment: world.wave.segment,
+        bossKilledAtSec: world.bossKilledAt,
+        peakDps: world.peakDps,
+        weaponReport,
+      });
       // 失败 = 沉船:结算**推迟 SHIP_DEATH_FX_TIME** 秒再弹,让爆炸演出读得完
       // (爆炸是渲染层自持的,run.paused 冻结世界但不冻结它)。胜利没有爆炸,当场弹。
       // 延迟用墙钟 setTimeout + runToken 守卫:延迟期间玩家从调参面板重开/重试,
@@ -718,6 +750,8 @@ async function boot(): Promise<void> {
   function toTitle(): void {
     runActive = false;
     run.paused = true;
+    // 离开结算现场(回标题):那一局的上传负载一并作废 —— 结算卡已收起,不再有上传出口
+    pendingLog = null;
     gameOver.hide();
     victoryEpilogue.hide();
     upgradeFlow.hide();
