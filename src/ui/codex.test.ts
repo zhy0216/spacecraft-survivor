@@ -198,24 +198,21 @@ describe('codexRows', () => {
     expect(mortar.hover[1]).not.toContain('伤害 0');
   });
 
-  it('合成武器经 MERGES 反查底座名与底座贴图(数据表改名图鉴跟着走)', () => {
+  it('合成武器经 MERGES 反查底座名并复用血统炮头(数据表改名图鉴跟着走)', () => {
     const weapons = codexRows(progress(0))[0]!.rows;
     const aurora = weapons.find((r) => r.name === '极光阵列')!;
     expect(aurora.hover[0]).toBe('极光阵列 · 由激光棱镜合★★★变身 · 过热系');
-    // 合成塔没有独立贴图,配图回退底座塔的图 —— 与悬停里的"底座合★★★"两相印证
+    // round-8 清单给合成塔登记同一血统的真实炮头 —— 与悬停里的"底座合★★★"两相印证
     expect(aurora.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_LASER]] });
   });
 
-  it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;无贴图走字形徽章', () => {
+  it('导弹巢:未解锁悬停末条带条件,解锁后只印数值;使用真实炮头贴图', () => {
     const locked = codexRows(progress(0))[0]!.rows.find(
       (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
     )!;
     expect(locked.locked).toBe(true);
     expect(locked.hover[locked.hover.length - 1]).toBe('未解锁 · 首次胜利');
-    // 徽章 = 升级卡片同一套字形(♁)+ 数值表 tint
-    expect(locked.art?.kind).toBe('svg');
-    expect(svgOf(locked.art)).toContain('♁');
-    expect(svgOf(locked.art)).toContain(tintHex(TOWERS[TOWER_MISSILE_NEST]!.tint));
+    expect(locked.art).toEqual({ kind: 'img', urls: [TOWER_ART_URLS[TOWER_MISSILE_NEST]] });
     const unlocked = codexRows(progress(FULL_MASK))[0]!.rows.find(
       (r) => r.name === TOWERS[TOWER_MISSILE_NEST]!.name,
     )!;
@@ -516,16 +513,16 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.display).toBe('none');
   });
 
-  it('卡片配图:PNG 直摆、无贴图条目走 SVG data URI(导弹巢/法令)', () => {
+  it('卡片配图:全部武器含导弹巢直摆 PNG,法令仍走 SVG data URI', () => {
     const ui = make();
     ui.show();
     const thumbs = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
     // 武器 13 卡 + 敌人 8 卡 + 法令 10 卡,配图数必然远多于零
     expect(thumbs.length).toBeGreaterThan(20);
     expect(thumbs.some((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
+    expect(thumbs.some((el) => el.src.includes('missile-nest-head'))).toBe(true);
     const svg = thumbs.find((el) => el.src.startsWith('data:image/svg+xml'));
-    expect(svg).toBeDefined(); // 导弹巢与法令的徽章走 data URI
-    expect(svg!.src).toContain(encodeURIComponent('♁')); // 导弹巢字形
+    expect(svg).toBeDefined(); // 法令徽章仍走 data URI
   });
 
   it('Esc 关页走 onClose;收着时 Esc 不认;按钮同一条路', () => {

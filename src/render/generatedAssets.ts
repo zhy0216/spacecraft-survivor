@@ -11,8 +11,8 @@ import {
 } from './artUrls';
 
 /**
- * fal.ai 生成资源的运行时映射(round-1 首批敌/塔/支援;round-2 补孢子炮手;
- * round-7 补齐普通怪骨架并重做母巢 Boss)。
+ * fal.ai 生成资源的运行时映射(round-1 首批敌/支援;round-2 补孢子炮手;
+ * round-7 补齐普通怪骨架并重做母巢 Boss;round-8 重做全系旋转炮头)。
  *
  * URL 清单住在 ./artUrls(纯字符串、无 pixi,ui 图鉴同源引用);本文件只负责把清单装成
  * Texture。这里故意引用 assets/game 下的运行时版本,而不是 investigations 里保留的生产源图:

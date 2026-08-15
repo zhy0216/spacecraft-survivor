@@ -81,14 +81,54 @@ export const BOSS_RIG_PART_URLS = [
   new URL('../../assets/game/fal-round-7/enemies/boss-brood-carrier/head.png', import.meta.url).href,
 ] as const;
 
-/** 基础塔(0..5)的生成贴图;6..11 合成塔与 12 导弹巢没有独立贴图(见 ui/codex 的血统回退口径) */
+/**
+ * Nano Banana Pro round-8 的真实旋转炮头。基础六系各一张,合成塔复用自己的血统炮头;
+ * 导弹巢单独一张。数组下标仍与 TOWERS[type] 一一对应,所以战斗层和图鉴都不需要
+ * 再画程序化“炮管线”或为合成塔退回色块。
+ */
+const AUTOCANNON_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/autocannon-head.png',
+  import.meta.url,
+).href;
+const LASER_PRISM_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/laser-prism-head.png',
+  import.meta.url,
+).href;
+const ARC_COIL_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/arc-coil-head.png',
+  import.meta.url,
+).href;
+const RAILGUN_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/railgun-head.png',
+  import.meta.url,
+).href;
+const POINT_DEFENSE_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/point-defense-head.png',
+  import.meta.url,
+).href;
+const PLASMA_MORTAR_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/plasma-mortar-head.png',
+  import.meta.url,
+).href;
+const MISSILE_NEST_HEAD_URL = new URL(
+  '../../assets/game/fal-round-8/towers/missile-nest-head.png',
+  import.meta.url,
+).href;
+
 export const TOWER_ART_URLS = [
-  new URL('../../assets/game/fal-round-1/towers/autocannon.png', import.meta.url).href,
-  new URL('../../assets/game/fal-round-1/towers/laser-prism.png', import.meta.url).href,
-  new URL('../../assets/game/fal-round-1/towers/arc-coil.png', import.meta.url).href,
-  new URL('../../assets/game/fal-round-1/towers/railgun.png', import.meta.url).href,
-  new URL('../../assets/game/fal-round-1/towers/point-defense.png', import.meta.url).href,
-  new URL('../../assets/game/fal-round-1/towers/plasma-mortar.png', import.meta.url).href,
+  AUTOCANNON_HEAD_URL,
+  LASER_PRISM_HEAD_URL,
+  ARC_COIL_HEAD_URL,
+  RAILGUN_HEAD_URL,
+  POINT_DEFENSE_HEAD_URL,
+  PLASMA_MORTAR_HEAD_URL,
+  AUTOCANNON_HEAD_URL, // 风暴机炮
+  LASER_PRISM_HEAD_URL, // 极光阵列
+  RAILGUN_HEAD_URL, // 湮灭长矛
+  ARC_COIL_HEAD_URL, // 雷霆王冠
+  PLASMA_MORTAR_HEAD_URL, // 焦土骤雨
+  POINT_DEFENSE_HEAD_URL, // 荆棘星幕
+  MISSILE_NEST_HEAD_URL,
 ] as const;
 
 export const SUPPORT_ART_URLS = [

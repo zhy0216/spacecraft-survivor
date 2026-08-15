@@ -2133,6 +2133,22 @@ export class World {
   }
 
   /**
+   * 调试入口:立即获得一把随机基础武器(六种基础塔型里掷一把,1★ 起步,走 acquireWeapon
+   * 同一条落位 + 三合一检查)。只服务调参面板的「增加武器」按钮 —— 不必等升级三选一或商店。
+   * 与 debugSpawnShop 同一条"外部输入消费 rng"的口径:恰好 1 次 rng(型别),消耗次数进
+   * 随机序列,同 seed 同操作序列逐位可复现。
+   * 槽满且不满足吸收条件时 acquireWeapon 返回 ACQUIRE_REPLACE_NEEDED —— 调试入口不弹
+   * 替换选择,只把理由码留在控制台(与 loadout.ts 空槽不足同一条"绝不静默吞掉"的口径)。
+   */
+  debugAddWeapon(): void {
+    const type = START_TOWER_POOL[this.rng.int(0, START_TOWER_POOL.length)]!;
+    const code = this.acquireWeapon(type);
+    if (code < 0) {
+      console.warn(`调试增加武器失败(码 ${code}):槽满且不满足吸收合成`);
+    }
+  }
+
+  /**
    * 掷定本轮整备的船坞法令货架(21 号)。**只在 step 里 refitPending 置位那一帧调用**:
    * 与出怪同一条"帧首、定死顺序"的确定性 —— 同 seed 同操作序列,货架逐位可复现。
    *

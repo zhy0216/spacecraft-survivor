@@ -530,7 +530,7 @@ describe('createRefitFlow 纯商店流程', () => {
     setup();
     const card = cardsOf(dom).children[0] as StubEl;
     expect(card.innerHTML).toContain('<img');
-    expect(card.innerHTML).toContain('autocannon.png');
+    expect(card.innerHTML).toContain('autocannon-head.png');
     expect(card.innerHTML).not.toContain('射程');
     fire(card, 'mouseenter');
     expect(tooltipOf(dom).textContent).toContain('射程');

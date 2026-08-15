@@ -1,0 +1,21 @@
+{
+  "model": "fal-ai/nano-banana-pro",
+  "unit_price_usd": 0.15,
+  "successful_calls": 9,
+  "selected_outputs": 7,
+  "successful_subtotal_usd": 1.35,
+  "validation_failures": 1,
+  "validation_failures_counted_as_spend": false,
+  "jobs": [
+    { "id": "autocannon-head-01", "request_id": "01a002be-095e-7dc1-86cd-755a47dbe0fb", "cost_usd": 0.15, "selected": true },
+    { "id": "laser-prism-head-01", "request_id": "01a002bf-7b02-7201-9ee6-7035665214d5", "cost_usd": 0.15, "selected": false, "verdict": "斜向 X 构图，炮口轴线不合格" },
+    { "id": "arc-coil-head-01", "request_id": "01a002bf-7b02-7c03-a01c-4a49b6bf3653", "cost_usd": 0.15, "selected": true },
+    { "id": "railgun-head-01", "request_id": "01a002bf-7b23-7442-9f7e-4d93f80b48fc", "cost_usd": 0.15, "selected": true },
+    { "id": "point-defense-head-01", "request_id": "01a002bf-7b3f-7bc3-a83f-028cf94372c4", "cost_usd": 0.15, "selected": true },
+    { "id": "plasma-mortar-head-01", "request_id": "01a002bf-7b28-71d0-a616-df907b825cde", "cost_usd": 0.15, "selected": true },
+    { "id": "laser-prism-head-02", "request_id": "01a002c0-c699-76f2-bfc5-91466eaf466a", "cost_usd": 0.15, "selected": true },
+    { "id": "missile-nest-head-01", "request_id": "01a002c3-9d8d-7bd0-9b23-cc13e8b20771", "cost_usd": 0.15, "selected": false, "verdict": "发射筒圆孔朝相机，带微小标签" },
+    { "id": "missile-nest-head-02", "request_id": "01a002c4-dcfd-7783-a70b-3d1f57e04b55", "cost_usd": 0.15, "selected": true }
+  ],
+  "rejected_validation_request": "01a002bd-c446-77c1-905d-3c69771596e0"
+}

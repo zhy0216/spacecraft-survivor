@@ -1,0 +1,70 @@
+{
+  "endpoint": "fal-ai/nano-banana-pro",
+  "aspect_ratio": "1:1",
+  "resolution": "1K",
+  "output_format": "png",
+  "system_prompt": "You are the senior game-asset artist for a top-down science-fiction survivors game. Produce exactly one isolated production-ready rotating turret-head sprite. The camera is locked directly overhead with orthographic projection. The weapon's forward direction must point exactly to the top edge. Obey the flat chroma-key background and never add a pedestal, floor, text, border, shadow, projectile, beam, electric arc, or muzzle flash.",
+  "shared_prompt_suffix": "Scene/backdrop: perfectly flat solid #ff00ff chroma-key background for local removal. Style/medium: premium painterly science-fiction game sprite, grounded industrial salvage machinery, crisp controlled material rendering, strong silhouette readable at 32 pixels. Composition/framing: one isolated full rotating turret head centered, front points exactly toward the top edge, centered rotation pivot in the lower-middle, 14 percent clean padding, strict orthographic top-down view, no perspective foreshortening, no cropped parts. Materials/colors: welded blue-gray steel, exposed bolts, dark mechanical gaps, tiny cold-cyan status lights, subtle worn orange hazard marks. Constraints: exactly one rotating turret head; no stationary pedestal, no circular floor base, no deck plate; perfectly uniform #ff00ff background with no shadow, gradient, texture, floor, reflection, smoke or glow spill; do not use magenta or purple in the turret; no projectile, effect, aiming line, text, letters, numbers, logo, border, HUD or watermark. Avoid: entire tank, humanoid robot, side view, three-quarter view, clean white sci-fi product, generic icon.",
+  "selected_jobs": [
+    {
+      "id": "autocannon-head-01",
+      "seed": 68101,
+      "request_id": "01a002be-095e-7dc1-86cd-755a47dbe0fb",
+      "source": "assets/generated/fal/round-8/towers/autocannon-head-source.png",
+      "runtime": "assets/game/fal-round-8/towers/autocannon-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating weapon mount in STARWRECK. Primary request: one complete autocannon turret head only, with two unmistakable long physical gun barrels and compact ammunition feed housings. This is the real visible weapon head that will rotate in combat, replacing a fake programmatic barrel line. Subject: rugged salvage-built twin autocannon turret head; both barrels point exactly toward the top edge."
+    },
+    {
+      "id": "laser-prism-head-02",
+      "seed": 68112,
+      "request_id": "01a002c0-c699-76f2-bfc5-91466eaf466a",
+      "source": "assets/generated/fal/round-8/towers/laser-prism-head-v2-source.png",
+      "runtime": "assets/game/fal-round-8/towers/laser-prism-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating laser weapon mount in STARWRECK. Primary request: one complete laser-prism turret head only, with an unmistakable straight vertical firing axis. Subject: one centered cyan optical prism locked inside a rugged symmetrical focusing cradle, with exactly two short parallel armored emitter rails placed on the left and right; both rails and the crystal point exactly to twelve o'clock. The whole weapon must be vertically symmetrical and never diagonal."
+    },
+    {
+      "id": "arc-coil-head-01",
+      "seed": 68103,
+      "request_id": "01a002bf-7b02-7c03-a01c-4a49b6bf3653",
+      "source": "assets/generated/fal/round-8/towers/arc-coil-head-source.png",
+      "runtime": "assets/game/fal-round-8/towers/arc-coil-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating weapon mount in STARWRECK. Primary request: one complete arc-coil turret head only. Subject: a rugged electromagnetic weapon with three distinct forward fork electrodes, insulated ceramic collars, a compact exposed induction coil and heavy conductor cables; all three metal prongs point toward the top edge and show no electricity."
+    },
+    {
+      "id": "railgun-head-01",
+      "seed": 68104,
+      "request_id": "01a002bf-7b23-7442-9f7e-4d93f80b48fc",
+      "source": "assets/generated/fal/round-8/towers/railgun-head-source.png",
+      "runtime": "assets/game/fal-round-8/towers/railgun-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating weapon mount in STARWRECK. Primary request: one complete railgun turret head only. Subject: a long narrow high-energy railgun with two thick parallel accelerator rails, a clear open channel between them, reinforced breech block, side capacitor housings and a small centered cyan chamber light; the rails extend toward the top edge."
+    },
+    {
+      "id": "point-defense-head-01",
+      "seed": 68105,
+      "request_id": "01a002bf-7b3f-7bc3-a83f-028cf94372c4",
+      "source": "assets/generated/fal/round-8/towers/point-defense-head-source.png",
+      "runtime": "assets/game/fal-round-8/towers/point-defense-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating weapon mount in STARWRECK. Primary request: one complete point-defense turret head only. Subject: a compact rapid-tracking interceptor head with six clearly visible short physical gun barrels in two tight banks, a small central tracking sensor, armored feed housings and lightweight swivel mechanics; all barrels point toward the top edge."
+    },
+    {
+      "id": "plasma-mortar-head-01",
+      "seed": 68106,
+      "request_id": "01a002bf-7b28-71d0-a616-df907b825cde",
+      "source": "assets/generated/fal/round-8/towers/plasma-mortar-head-source.png",
+      "runtime": "assets/game/fal-round-8/towers/plasma-mortar-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production game sprite for a rotating weapon mount in STARWRECK. Primary request: one complete plasma-mortar turret head only. Subject: a heavy plasma mortar with one large wide-bore physical launch tube aimed toward the top edge, thick heat-shielded barrel jacket, bulky recoil block, paired plasma containment canisters and a dim cyan chamber inside the bore."
+    },
+    {
+      "id": "missile-nest-head-02",
+      "seed": 68117,
+      "request_id": "01a002c4-dcfd-7783-a70b-3d1f57e04b55",
+      "source": "assets/generated/fal/round-8/towers/missile-nest-head-v2-source.png",
+      "runtime": "assets/game/fal-round-8/towers/missile-nest-head.png",
+      "subject_prompt": "Use case: stylized-concept. Asset type: production top-down game sprite for a rotating missile weapon in STARWRECK. Primary request: one compact missile-rack turret head only. Subject: exactly six long narrow armored missile canisters arranged as two parallel banks of three, all lying in the deck plane and extending straight upward; show rectangular side bodies and pointed armored nose caps, not circular tube openings facing the camera."
+    }
+  ],
+  "rejected_jobs": [
+    { "id": "laser-prism-head-01", "seed": 68102, "request_id": "01a002bf-7b02-7201-9ee6-7035665214d5", "source": "assets/generated/fal/round-8/towers/laser-prism-head-source.png", "reason": "diagonal X composition" },
+    { "id": "missile-nest-head-01", "seed": 68107, "request_id": "01a002c3-9d8d-7bd0-9b23-cc13e8b20771", "source": "assets/generated/fal/round-8/towers/missile-nest-head-source.png", "reason": "tube openings face camera and a tiny label is present" }
+  ]
+}

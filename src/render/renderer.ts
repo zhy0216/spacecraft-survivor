@@ -11,9 +11,9 @@
  *   几何全部画在船体局部空间(硬点一律问 sim/armory 的 WEAPON_HARDPOINTS,
  *   射界中心一律问 sim/arc 的 slotArc,渲染层一行几何数学都不自己推),
  *   容器每帧只吃插值后的 position/rotation —— 于是"炮口与船体一同旋转"是结构上必然成立的。
- * 炮位贴图(TOWERS[type].tint 冷色)挂在硬点上,炮管每帧按"局部射界中心 + turretOffset"转
+ * 真实炮头贴图挂在硬点上,炮头每帧按"局部射界中心 + turretOffset"转
  * (与旧 syncDeckModuleRotations 同一套做法,只是格子换成了固定槽位);
- * 战斗态常驻一条炮口线;按住 Tab(setArcOverlay)补上 4 个射界扇形、判定圆与节流读数。
+ * 炮管方向直接由生成贴图的实体结构表达;按住 Tab(setArcOverlay)补上射界扇形、判定圆与节流读数。
  * 扇形角度/半径**一律问 sim / 数值表**(slotArc + towerArcDeg/towerRange),渲染层一行
  * 射界数学都不许自己写 —— 04 号的验收标准是"可视化与实际可命中区域一致"。
  *
@@ -210,19 +210,18 @@ const STRAFER_SHAPE_TARGET_FACING: RigTargetFacing = {
 };
 
 // —— 炮位(改版:4 个固定硬点,不再有格子)——硬点坐标只来自 sim/armory 的 WEAPON_HARDPOINTS ——
-/** 炮位贴图/兜底色块的边长(× CELL)。留出硬点周围的炮口线与读数呼吸空间 */
+/** 炮位贴图/兜底色块的边长(× CELL)。留出硬点周围的读数呼吸空间 */
 const SLOT_GLYPH = CELL * 0.88;
+/** round-8 炮头把机械转轴画在画布下部;锚点对准它,瞄准时炮身才不会绕硬点公转。 */
+const TOWER_HEAD_ANCHOR_Y = 0.72;
 // —— 射界叠加层(按住 Tab):我方冷色域(GDD §12),与弹道同一支蓝 ——
 // 扇形是"这一片我打得到"的读数而不是实体,填充压到极淡、边界靠描边交代
 const SLOT_ARC_COLOR = 0x9adcff;
 const SLOT_ARC_FILL_ALPHA = 0.1;
 const SLOT_ARC_STROKE_ALPHA = 0.45;
 const SLOT_ARC_WIDTH = 1.2;
-/** 炮口线取比扇形更亮一档的冷白(与船头标识同色):"炮管归位"在画面上唯一看得见的东西 */
-const SLOT_MUZZLE_COLOR = 0xdff2ff;
-const SLOT_MUZZLE_WIDTH = 1.4;
-/** 炮口线长度(× CELL):够伸出炮位一档,不至于整条埋在炮位自己的贴图里 */
-const SLOT_MUZZLE_LEN = CELL;
+/** 充能读数落在真实炮头前方的一档位置,不再用它画常驻假炮管。 */
+const SLOT_EFFECT_TIP_LEN = CELL;
 /** 判定体轮廓(按住 Tab,与射界扇形同开同关):受击 = 船心圆(damage.shipRadius 唯一口径) */
 const HULL_CORE_WIDTH = 1.2;
 const HULL_CORE_ALPHA = 0.7;
@@ -598,7 +597,7 @@ interface Interpolatable {
 
 /**
  * 取硬点 / 屏幕点的暂存。模块级复用而不是每次现造(照 sim/world.ts 的 desired 写法):
- * 四个武器槽每帧要问好几遍硬点与扇形,现造就是每秒上千次分配(铁律 3)。用完即弃,绝不跨函数存活。
+ * 八个武器槽每帧要问好几遍硬点与扇形,现造就是每秒上千次分配(铁律 3)。用完即弃,绝不跨函数存活。
  */
 const screenPos: Vec2 = { x: 0, y: 0 };
 /** 射界暂存:同理,叠加层每帧要向 sim 问一遍全部槽的扇形,现造就是每秒上千次分配(铁律 3) */
@@ -1162,8 +1161,8 @@ export class Renderer {
    */
   private beaconG: Graphics;
   /**
-   * 船体容器:壳图 / 程序化船身 / 炮位贴图 / 炮口线 / 射界扇形 / 节流读数全部画在
-   * 船体局部空间,它自己每帧只吃插值位姿(见文件头)——"炮口与船体一同旋转"由此在结构上成立。
+   * 船体容器:壳图 / 程序化船身 / 真实炮头 / 炮位状态 / 射界扇形 / 节流读数全部画在
+   * 船体局部空间,它自己每帧只吃插值位姿(见文件头)——"炮头与船体一同旋转"由此在结构上成立。
    */
   private shipG = new Container();
   /** 固定核心舰壳图(生成图):承载装甲侧裙/推进器,整局一张 Sprite */
@@ -1172,7 +1171,7 @@ export class Renderer {
   private hullG = new Graphics();
   /** 舰壳图是否加载成功:失败时用 hullG 的程序化船身兜底(generatedAssets 的兜底契约) */
   private hasHullArt = false;
-  /** 炮位贴图层:随槽位内容重建(Sprite/色块只在装填那一下增删),炮管旋转每帧只改已有精灵 */
+  /** 炮头贴图层:随槽位内容重建(Sprite/色块只在装填那一下增删),瞄准每帧只改已有精灵 */
   private weaponG = new Container();
   /** 常驻星级徽记层:2★/3★ 不只在开火瞬间才可读。 */
   private starG = new Graphics();
@@ -1185,12 +1184,12 @@ export class Renderer {
   /** 射界扇形 + 判定圆(按住 Tab):压在船体之下 —— 它是底衬,不许糊住船身与炮位 */
   private arcG = new Graphics();
   /**
-   * 炮口线。与扇形分开一层,是因为两者的寿命不同:扇形只在 Tab 时画,
-   * 炮管却每帧都在转 —— 同一个 Graphics 里没法只 clear 一半,合在一起就等于扇形也每帧重建。
+   * 炮位状态层:点防扫描环与 3★ 充能聚焦。真实炮管已经在贴图里,这里不再画常驻方向线。
+   * 它与扇形分层,因为扇形只在 Tab 时画,状态读数却需要随炮头每帧更新。
    */
-  private muzzleG = new Graphics();
+  private weaponStateG = new Graphics();
   /**
-   * 节流读数(05 号 T5)。与炮口线分开一层的理由同源:弹夹/热量/充能**每一逻辑帧都在变**。
+   * 节流读数(05 号 T5)。与炮位状态分开一层的理由同源:弹夹/热量/充能**每一逻辑帧都在变**。
    */
   private throttleG = new Graphics();
   /** 射界叠加层开关:main.ts 每渲染帧灌 input.isDown('Tab') */
@@ -1460,10 +1459,10 @@ export class Renderer {
 
     // 船体 = shipG 一个容器:七个子层装进一个容器,容器负责"跟着船走",子层只管局部几何。
     // 子层序:射界扇形(底衬)→ 加速尾焰(长在船尾、压不住船身)→ 舰壳图 → 程序化船身兜底
-    // → 炮位贴图 → 炮口线 → 节流读数。
-    // 扇形画在船体之下:它是底衬,不许糊住船身与炮位;炮口线与读数长在炮位上,理应压住贴图。
+    // → 炮位贴图 → 炮位状态读数 → 节流读数。
+    // 扇形画在船体之下:它是底衬,不许糊住船身与炮位;状态读数长在炮位上,理应压住贴图。
     // 这里不建炮位几何 —— 槽位内容要等 sync() 的签名检查在首帧补上(weaponSig = -1)。
-    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.muzzleG, this.starG, this.throttleG);
+    this.shipG.addChild(this.arcG, this.boostFlameG, this.hullArtG, this.hullG, this.weaponG, this.weaponStateG, this.starG, this.throttleG);
     // 拖尾环形缓冲一次建齐(铁律 3):life ≤ 0 = 空闲槽,运行期只改字段
     for (let i = 0; i < BOOST_TRAIL_MAX; i++) this.boostTrail.push({ x: 0, y: 0, life: 0 });
 
@@ -1472,7 +1471,7 @@ export class Renderer {
     // → 残骸 → 弹 → 开火光效 → 船体 → 炮口闪。
     // 指示层压在敌人之下:锁定线不该糊住甲虫自己的剪影。
     // 光效排在弹之后、船体之前:它是"这一发打出去了"的读数,压住敌人才看得见命中在谁身上,
-    // 但绝不许盖住船身与炮位(节流读数与炮口线在那上面)。
+    // 但绝不许盖住船身与炮位(节流读数与炮位状态在那上面)。
     // 船体压在敌与弹之上,千敌贴脸时自己的船不会被糊掉;
     // 残骸排在**敌之上、弹之下**:压在敌之下的话,残骸一掉出来就被它自己那堆虫子埋了,
     // 而"残骸正往船上飞"是这一局经济在转的唯一读数。
@@ -1757,12 +1756,12 @@ export class Renderer {
     // 开火光效:瞬时判定的四类全在这一层。**不插值**(见 drawFx)
     this.drawFx(sh);
 
-    // 船体:炮位只在槽位内容变化时重建(签名检查),炮管旋转与炮口线每帧同步(它们跟着炮管转),
+    // 船体:炮位只在槽位内容变化时重建(签名检查),炮头旋转与炮位状态每帧同步,
     // 容器只吃插值位姿,子层几何一律是局部坐标 —— 船与炮位一同旋转由此成立(见文件头)
     this.drawShopBeacon(sx, sy);
     this.syncWeaponSprites();
     this.syncWeaponRotations();
-    this.drawSlotMuzzles();
+    this.drawSlotWeaponState();
     this.drawSlotStars();
     if (this.arcOverlay) {
       // 按住 Tab:射界扇形 + 判定圆 + 节流读数一起出现(全部读同一个 arcOverlay,
@@ -1877,7 +1876,7 @@ export class Renderer {
   }
 
   /**
-   * 炮位贴图:只随槽位内容变化重建(4 槽 type 的签名检查)。获得/替换/合成时才分配 Sprite;
+   * 炮位贴图:只随槽位内容变化重建(8 槽 type 的签名检查)。获得/替换/合成时才分配 Sprite;
    * 平常战斗帧只由 syncWeaponRotations 改已有精灵的 rotation,兜底色块完全静态。
    * 某一型贴图没加载到时,在同一位置画一块按型色块兜底(generatedAssets 的契约:坏一张图
    * 不该让那个炮位在画面上消失)。
@@ -1910,11 +1909,13 @@ export class Renderer {
       let g: Sprite | Graphics;
       if (tex) {
         const s = new Sprite(tex);
-        s.anchor.set(0.5);
+        s.anchor.set(0.5, TOWER_HEAD_ANCHOR_Y);
         const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
         const starScale = stars === 1 ? 1 : stars === 2 ? 1.16 : 1.32;
         s.scale.set((size * starScale) / Math.max(tex.width, tex.height));
-        s.tint = def.tint; // 冷色域(GDD §12):炮位贴图与它的弹和光效同色,"这门炮是谁"不用猜
+        // round-8 是带材质与功能色的完整炮头,再乘 tint 会吃掉钢蓝层次和橙色警示纹。
+        // 武器身份色仍由弹道、射界与节流读数取 def.tint 表达。
+        s.tint = 0xffffff;
         s.position.set(hp.x, hp.y);
         g = s;
       } else {
@@ -1930,7 +1931,7 @@ export class Renderer {
 
   /**
    * 炮位贴图正面跟随 sim 的真实局部炮口角;世界朝向仍由 shipG.rotation 统一叠加。
-   * 只遍历已存在的炮位(最多 4 项),不创建临时对象、不重算硬点。
+   * 只遍历已存在的炮位(最多 8 项),不创建临时对象、不重算硬点。
    * 局部射界中心问 slotArc(heading 传 0):sim 存的是**相对射界中心**的偏角(slot.turretOffset),
    * 这里加一下就是船体局部朝向 —— 与 sim/armory 的 slotArcCenter 同一条算术,不必去追
    * ship.heading(那是 shipG 的 rotation 已经替我们做完的事)。
@@ -1945,14 +1946,6 @@ export class Renderer {
     }
   }
 
-  /**
-   * 炮口线:起点硬点、长一档,方向 = 局部射界中心 + slot.turretOffset ——
-   * sim 存的是**相对射界中心**的偏角(见 armory.ts 的字段注释),所以这里加一下就是局部朝向,
-   * 不必再去追船体 heading(那是 shipG 的 rotation 已经替我们做完的事)。
-   * 有它,"射界内无目标 → 炮管归位"才在画面上看得见:没有它,叠加层只能证明扇形画对了,
-   * 证不出炮真的在转、真的会回中(而这正是 04 号里唯一需要肉眼抽查的一条)。
-   * 战斗态常驻(与旧"炮口线压住底板"同一条层序:它长在炮位上,理应压住炮位贴图)。
-   */
   /**
    * 商店信标:世界里的一枚脉冲菱形 + 接触环;**船离得远时在屏边画一枚指向箭头**。
    * 箭头是这套设计成立的关键 —— 信标只活 30 秒且生成在 600..1400px 外,
@@ -2022,40 +2015,11 @@ export class Renderer {
       .fill({ color: BEACON_COLOR, alpha: 0.85 * pulse });
   }
 
-  private drawSlotMuzzles(): void {
-    const g = this.muzzleG;
+  private drawSlotWeaponState(): void {
+    const g = this.weaponStateG;
     g.clear();
     const w = this.world.weapons;
-    let drawn = 0;
-    for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
-      const slot = w[i]!;
-      if (slot.type < 0) continue;
-      const def = TOWERS[slot.type];
-      const hp = WEAPON_HARDPOINTS[i];
-      if (!def || !hp) continue;
-      slotArc(i, 0, towerArcDeg(def, slot.stars), arcTmp);
-      // 不必 wrapAngle:cos/sin 对超出 ±π 的角一样正确,折回只是白算两次三角函数
-      const a = arcTmp.center + slot.turretOffset;
-      const stars = visualStarTier(slot.stars);
-      const multiBarrel = stars >= 2 && (isAutocannonFamily(def.type) || isPointDefenseFamily(def.type));
-      if (multiBarrel) {
-        const nx = -Math.sin(a);
-        const ny = Math.cos(a);
-        const spread = isPointDefenseFamily(def.type) ? 1.6 : def.bulletRadius;
-        for (let side = -1; side <= 1; side += 2) {
-          const x0 = hp.x + nx * spread * side;
-          const y0 = hp.y + ny * spread * side;
-          g.moveTo(x0, y0).lineTo(x0 + Math.cos(a) * SLOT_MUZZLE_LEN, y0 + Math.sin(a) * SLOT_MUZZLE_LEN);
-          drawn++;
-        }
-      } else {
-        g.moveTo(hp.x, hp.y).lineTo(hp.x + Math.cos(a) * SLOT_MUZZLE_LEN, hp.y + Math.sin(a) * SLOT_MUZZLE_LEN);
-        drawn++;
-      }
-    }
-    if (drawn > 0) g.stroke({ width: SLOT_MUZZLE_WIDTH, color: SLOT_MUZZLE_COLOR });
-
-    // 第二趟只画少量逐星常驻读数,避免把圆环/扫描扇混进上面那批炮口线路径里一起描边。
+    // 真实炮管已经烤进 round-8 贴图;这里只保留少量逐星状态读数。
     for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
       const slot = w[i]!;
       const def = TOWERS[slot.type];
@@ -2081,8 +2045,8 @@ export class Renderer {
       // 3★ 充能重武器在最后约 28% 充能段出现"向炮口收缩"的读数,不延迟真实开火。
       if (stars === 3 && def.throttle === THR_CHARGE && slot.charge > 0.72) {
         const q = clamp01((slot.charge - 0.72) / 0.28);
-        const tipX = hp.x + Math.cos(a) * SLOT_MUZZLE_LEN;
-        const tipY = hp.y + Math.sin(a) * SLOT_MUZZLE_LEN;
+        const tipX = hp.x + Math.cos(a) * SLOT_EFFECT_TIP_LEN;
+        const tipY = hp.y + Math.sin(a) * SLOT_EFFECT_TIP_LEN;
         const r = 11 - q * 7;
         g.circle(tipX, tipY, r).stroke({ width: 1.2 + q * 1.8, color: def.tint, alpha: 0.28 + q * 0.55 });
         for (let k = 0; k < 3; k++) {
@@ -2317,7 +2281,7 @@ export class Renderer {
   /**
    * 该塔当前节流压力(0..1),喂给 playShoot 的 throttle —— 热量越高"嘶"声越亮越绵长。
    * FxEvent 不背这个数(见 sim/fx.ts 的字段表),只能顺着 towerType 在武器槽里反查;
-   * 最多 4 个槽,逐事件扫一遍的开销可忽略。查不到(槽已换装/表被改坏)退回 1:
+   * 最多 8 个槽,逐事件扫一遍的开销可忽略。查不到(槽已换装/表被改坏)退回 1:
    * 音频宁可恒常也不哑火。
    * 分母与节流读数同一条口径(slotHeatMax,含法令倍率;充能直接读 slot.charge)。
    */

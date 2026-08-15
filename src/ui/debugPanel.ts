@@ -98,6 +98,8 @@ export interface RunHooks {
   retry?(): void;
   /** 调试入口(可选):立即投放商店信标并掷定货架,见 World.debugSpawnShop */
   spawnShop?(): void;
+  /** 调试入口(可选):立即获得一把随机基础武器(1★),见 World.debugAddWeapon */
+  addWeapon?(): void;
 }
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
@@ -143,6 +145,12 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   if (hooks.spawnShop) {
     const spawnShop = hooks.spawnShop.bind(hooks);
     runF.addButton({ title: '投放商店(信标 + 掷货架)' }).on('click', spawnShop);
+  }
+  // 调试入口:跳过升级三选一与商店,直接获得一把随机基础武器(World.debugAddWeapon)。
+  // 与正式获得同一条落位 + 三合一检查,想验合成链(3× 1★ → 2★ → 3★ 变身)就按住它连点。
+  if (hooks.addWeapon) {
+    const addWeapon = hooks.addWeapon.bind(hooks);
+    runF.addButton({ title: '增加武器(随机 1★)' }).on('click', addWeapon);
   }
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏

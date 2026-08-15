@@ -11,9 +11,9 @@
  * **星级三档全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
  *
- * 配图口径:有生成贴图的用真实 PNG(6 基础塔 / 5 敌型 + Boss,URL 清单与渲染层
+ * 配图口径:有生成贴图的用真实 PNG(13 武器型号 / 5 敌型 + Boss,URL 清单与渲染层
  * 同源,见 render/artUrls.ts —— 本文件不 import pixi,但可以 import 纯字符串清单);没贴图的
- * 画程序化 SVG 徽章(合成武器回退底座塔贴图、导弹巢与法令用升级卡片同一套字形 + 数值表 tint)。
+ * 未知新型号与法令画程序化 SVG 徽章(升级卡片同一套字形 + 数值表 tint)。
  *
  * 「图鉴到底显示了什么」全部走纯函数(codexRows 那一层),Node 里可直接数出来 ——
  * 与 gameOver.summaryText 同一条口径:锁定判定、悬停行、每行配了哪张图,哪一条错
@@ -268,9 +268,8 @@ function imgArt(...urls: Array<string | undefined>): CodexArt | null {
 }
 
 /**
- * 武器配图:基础塔(0..5)用本塔贴图;合成塔(6..11)回退**底座塔贴图**
- * (它们由底座 3★ 变身而来,悬停里标"底座合3★"两相印证 —— 渲染层对它们也只有 tint 色块兜底,
- * 图鉴给底座图反而比游戏里更易认);导弹巢与未知型画字形徽章。
+ * 武器配图:round-8 清单已覆盖全部 13 个型号(合成塔条目复用对应血统炮头);
+ * 以后数据表先加了新型、贴图还没补上时,再按 MERGES 回退底座或画字形徽章。
  */
 export function towerArt(type: number): CodexArt | null {
   if (type >= 0 && type < TOWER_ART_URLS.length) return imgArt(TOWER_ART_URLS[type]);
