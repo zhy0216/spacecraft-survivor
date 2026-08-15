@@ -13,8 +13,8 @@
 - `assets/game/fal-round-8/towers/laser-prism-head-star2.png`
 - `assets/game/fal-round-8/towers/laser-prism-head-star3.png`
 
-四张运行时图均为 128×128 RGBA PNG。当前只用于图鉴三档缩略图；战斗层仍使用 round-8
-基础炮头和既有的星级缩放/弹道 FX。
+四张运行时图均为 128×128 RGBA PNG。它们现在与 round-10 的其余星级图一起由渲染器按
+槽位星级加载；战斗层仍沿用既有的星级缩放、炮口旋转和弹道 FX。
 
 ## 3★ 生成与后处理
 

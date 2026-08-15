@@ -32,7 +32,7 @@ import {
   towerRange,
 } from '../data/towers';
 import { EDICTS } from '../data/edicts';
-import { SHIP_HULL_ART_URL, TOWER_ART_URLS } from '../render/artUrls';
+import { SHIP_HULL_ART_URL, TOWER_STAR_ART_URLS } from '../render/artUrls';
 import { t } from '../i18n';
 import {
   WEAPON_HARDPOINTS,
@@ -455,7 +455,8 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   function paintTurret(index: number, type: number, stars: number, ghost: boolean): void {
     const img = turrets[index]!;
     const def = type >= 0 ? TOWERS[type] : undefined;
-    const url = def !== undefined && type >= 0 && type < TOWER_ART_URLS.length ? TOWER_ART_URLS[type] : undefined;
+    const starUrls = def !== undefined && type >= 0 ? TOWER_STAR_ART_URLS[type] : undefined;
+    const url = starUrls?.[Math.max(1, Math.min(3, Math.floor(stars))) - 1] ?? starUrls?.[0];
     if (url === undefined) {
       img.style.display = 'none';
       img.src = ''; // 清掉旧 src:隐藏的炮头不该还指着一把已经不在这格的炮

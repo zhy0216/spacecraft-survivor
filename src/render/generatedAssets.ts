@@ -8,6 +8,7 @@ import {
   SHIP_HULL_ART_URL,
   SUPPORT_ART_URLS,
   TOWER_ART_URLS,
+  TOWER_STAR_ART_URLS,
 } from './artUrls';
 
 /**
@@ -36,6 +37,8 @@ export interface GeneratedArtTextures {
   /** Boss 专属骨架部件(round-7);任一缺件 = 整套 null,渲染层回退 boss 整图 */
   readonly bossRigParts: readonly Texture[] | null;
   readonly towers: readonly (Texture | null)[];
+  /** 星级炮头:下标 === towerType,内层 0..2 === 1★..3★;战斗炮位与图鉴同源。 */
+  readonly towerStars: readonly (readonly (Texture | null)[])[];
   readonly supports: readonly (Texture | null)[];
 }
 
@@ -68,7 +71,7 @@ async function loadRigParts(
 }
 
 export async function loadGeneratedArt(): Promise<GeneratedArtTextures> {
-  const [background, shipHull, enemies, enemyRigParts, boss, bossRigParts, towers, supports] = await Promise.all([
+  const [background, shipHull, enemies, enemyRigParts, boss, bossRigParts, towers, towerStars, supports] = await Promise.all([
     loadTexture(BACKGROUND_ART_URL, 'background'),
     loadTexture(SHIP_HULL_ART_URL, 'ship-hull'),
     loadTextureSet(ENEMY_ART_URLS, 'enemy'),
@@ -76,7 +79,8 @@ export async function loadGeneratedArt(): Promise<GeneratedArtTextures> {
     loadTexture(BOSS_ART_URL, 'boss'),
     loadRigParts(BOSS_RIG_PART_URLS, 'boss'),
     loadTextureSet(TOWER_ART_URLS, 'tower'),
+    Promise.all(TOWER_STAR_ART_URLS.map((urls, type) => loadTextureSet(urls, `tower-${type}-star`))),
     loadTextureSet(SUPPORT_ART_URLS, 'support'),
   ]);
-  return { background, shipHull, enemies, enemyRigParts, boss, bossRigParts, towers, supports };
+  return { background, shipHull, enemies, enemyRigParts, boss, bossRigParts, towers, towerStars, supports };
 }

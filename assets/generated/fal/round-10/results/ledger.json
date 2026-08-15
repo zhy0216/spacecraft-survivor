@@ -1,0 +1,17 @@
+{
+  "model": "fal-ai/nano-banana-pro/edit",
+  "unit_price_usd": 0.15,
+  "successful_generations": 11,
+  "selected_generations": 5,
+  "selected_cost_usd": 0.75,
+  "total_generation_cost_usd": 1.65,
+  "note": "The first batch produced duplicate candidates while the requests were being parallelized. Only the five selected assets in jobs.json are connected to the game.",
+  "discarded_candidates": [
+    "01a005f3-3980-78a0-8ceb-994a887ad495",
+    "01a005f4-4be2-7461-8f30-a11b2c24b57d",
+    "01a005f4-4be2-7a61-89b8-63f06ff37417",
+    "01a005f4-4ba7-79f2-b7a8-ea01b737e2ee",
+    "01a005f5-4858-7570-aba1-7d24e1bd5872",
+    "01a005f5-e146-73d1-99a8-6b325ba2105f"
+  ]
+}

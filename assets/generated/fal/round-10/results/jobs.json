@@ -1,0 +1,59 @@
+{
+  "endpoint": "fal-ai/nano-banana-pro/edit",
+  "resolution": "1K",
+  "aspect_ratio": "1:1",
+  "output_format": "png",
+  "system_prompt": "You are the senior game-asset artist for a top-down science-fiction survivors game. Produce exactly one isolated production-ready turret-head sprite. Strict orthographic top-down view, forward direction exactly to the top edge, lower-middle rotation pivot. Preserve the reference bloodline while making a genuinely higher-tier weapon. Use a perfectly flat #ff00ff chroma-key background with no shadow, floor, pedestal, text, beam, projectile, or UI.",
+  "jobs": [
+    {
+      "id": "thunder-crown-star3-01",
+      "seed": 69201,
+      "request_id": "01a005f2-dc09-72e0-aa1e-28d9ac3f6ccd",
+      "input": "assets/game/fal-round-8/towers/arc-coil-head.png",
+      "source": "assets/generated/fal/round-10/towers/thunder-crown-star3-source.png",
+      "alpha": "assets/generated/fal/round-10/towers/thunder-crown-star3-alpha.png",
+      "runtime": "assets/game/fal-round-10/towers/arc-coil-head-star3.png",
+      "prompt": "Redesign the reference Arc Coil as the evolved 3-star Thunder Crown chain-lightning turret. Keep a clear central circular coil and compact lower breech, but transform the top half into a symmetric crown of exactly six insulated lightning emitter prongs with branching conductor bridges and a bright cyan-white central capacitor. Make it visibly heavier and more advanced, readable at 48 pixels."
+    },
+    {
+      "id": "annihilation-lance-star3-01",
+      "seed": 69202,
+      "request_id": "01a005f3-7b72-7943-8fba-e1941775fde2",
+      "input": "assets/game/fal-round-8/towers/railgun-head.png",
+      "source": "assets/generated/fal/round-10/towers/annihilation-lance-star3-source.png",
+      "alpha": "assets/generated/fal/round-10/towers/annihilation-lance-star3-alpha.png",
+      "runtime": "assets/game/fal-round-10/towers/railgun-head-star3.png",
+      "prompt": "Redesign the reference Railgun as the evolved 3-star Annihilation Lance. Keep one dominant long central forward rail, extend it into a reinforced segmented lance with two parallel superconducting side rails, a large rear capacitor spine, magnetic focusing rings, and a bright cyan-white charge core."
+    },
+    {
+      "id": "thorn-curtain-star3-01",
+      "seed": 69203,
+      "request_id": "01a005f4-175c-7d63-829f-b1c9c1d81090",
+      "input": "assets/game/fal-round-8/towers/point-defense-head.png",
+      "source": "assets/generated/fal/round-10/towers/thorn-curtain-star3-source.png",
+      "alpha": "assets/generated/fal/round-10/towers/thorn-curtain-star3-alpha.png",
+      "runtime": "assets/game/fal-round-10/towers/point-defense-head-star3.png",
+      "prompt": "Redesign the reference Point Defense Array as the evolved 3-star Thorn Curtain. Keep the compact central targeting core and lower pivot, but add a symmetric curtain of exactly eight small interceptor barrels arranged as two armored fans, thorn-like guard fins, a rotating sensor crown, and a bright cyan tracking core."
+    },
+    {
+      "id": "deluge-rain-star3-02-selected",
+      "seed": 69204,
+      "request_id": "01a005f4-af1d-7a22-bdb3-45b80a012d98",
+      "input": "assets/game/fal-round-8/towers/plasma-mortar-head.png",
+      "source": "assets/generated/fal/round-10/towers/deluge-rain-star3-source_1.png",
+      "alpha": "assets/generated/fal/round-10/towers/deluge-rain-star3-alpha.png",
+      "runtime": "assets/game/fal-round-10/towers/plasma-mortar-head-star3.png",
+      "prompt": "Redesign the reference Plasma Mortar as the evolved 3-star Deluge Rain triple-mortar. Keep the central heavy plasma chamber and lower pivot, but add exactly three aligned forward mortar tubes, a broader armored recoil cradle, three feed drums, reinforced shell guides, and a large cyan plasma reservoir."
+    },
+    {
+      "id": "citadel-missile-nest-star3-01",
+      "seed": 69205,
+      "request_id": "01a005f4-4cda-7710-90c2-96625c0f1e8c",
+      "input": "assets/game/fal-round-8/towers/missile-nest-head.png",
+      "source": "assets/generated/fal/round-10/towers/citadel-missile-nest-star3-source.png",
+      "alpha": "assets/generated/fal/round-10/towers/citadel-missile-nest-star3-alpha.png",
+      "runtime": "assets/game/fal-round-10/towers/missile-nest-head-star3.png",
+      "prompt": "Redesign the reference Missile Nest as the evolved 3-star Citadel Missile Nest. Keep the central targeting spine and lower pivot, but expand it into a dense symmetric fortress of exactly twelve recessed missile cells, armored blast doors, paired ammunition elevators, a reinforced command sensor, and a bright cyan guidance core."
+    }
+  ]
+}

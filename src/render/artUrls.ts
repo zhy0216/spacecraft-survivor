@@ -115,9 +115,8 @@ const MISSILE_NEST_HEAD_URL = new URL(
   import.meta.url,
 ).href;
 
-// 星级图鉴试点:自动机炮与激光棱镜先接入独立的 2★/3★ 变体。2★ 是基础炮头的青色描边强化,
-// 3★ 则由 Nano Banana Pro 按合成形态重画成风暴机炮 / 极光阵列；其余型号继续复用基础炮头。
-// 这些变体只服务图鉴预览,战斗层仍使用下方 TOWER_ART_URLS 的常驻炮头。
+// 星级炮头：2★ 是基础炮头的青色描边强化；3★ 按合成/高阶形态重新生成。
+// 图鉴与战斗层共用下面的 TOWER_STAR_ART_URLS，避免预览和实战各走一套资源。
 const AUTOCANNON_HEAD_STAR2_URL = new URL(
   '../../assets/game/fal-round-8/towers/autocannon-head-star2.png',
   import.meta.url,
@@ -132,6 +131,46 @@ const LASER_PRISM_HEAD_STAR2_URL = new URL(
 ).href;
 const LASER_PRISM_HEAD_STAR3_URL = new URL(
   '../../assets/game/fal-round-8/towers/laser-prism-head-star3.png',
+  import.meta.url,
+).href;
+const ARC_COIL_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-10/towers/arc-coil-head-star2.png',
+  import.meta.url,
+).href;
+const ARC_COIL_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-10/towers/arc-coil-head-star3.png',
+  import.meta.url,
+).href;
+const RAILGUN_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-10/towers/railgun-head-star2.png',
+  import.meta.url,
+).href;
+const RAILGUN_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-10/towers/railgun-head-star3.png',
+  import.meta.url,
+).href;
+const POINT_DEFENSE_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-10/towers/point-defense-head-star2.png',
+  import.meta.url,
+).href;
+const POINT_DEFENSE_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-10/towers/point-defense-head-star3.png',
+  import.meta.url,
+).href;
+const PLASMA_MORTAR_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-10/towers/plasma-mortar-head-star2.png',
+  import.meta.url,
+).href;
+const PLASMA_MORTAR_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-10/towers/plasma-mortar-head-star3.png',
+  import.meta.url,
+).href;
+const MISSILE_NEST_HEAD_STAR2_URL = new URL(
+  '../../assets/game/fal-round-10/towers/missile-nest-head-star2.png',
+  import.meta.url,
+).href;
+const MISSILE_NEST_HEAD_STAR3_URL = new URL(
+  '../../assets/game/fal-round-10/towers/missile-nest-head-star3.png',
   import.meta.url,
 ).href;
 
@@ -168,22 +207,46 @@ const LASER_PRISM_STAR_ART_URLS = [
   LASER_PRISM_HEAD_STAR2_URL,
   LASER_PRISM_HEAD_STAR3_URL,
 ] as const;
-const SAME_STAR_ART = (url: string): readonly [string, string, string] => [url, url, url];
+const ARC_COIL_STAR_ART_URLS = [
+  ARC_COIL_HEAD_URL,
+  ARC_COIL_HEAD_STAR2_URL,
+  ARC_COIL_HEAD_STAR3_URL,
+] as const;
+const RAILGUN_STAR_ART_URLS = [
+  RAILGUN_HEAD_URL,
+  RAILGUN_HEAD_STAR2_URL,
+  RAILGUN_HEAD_STAR3_URL,
+] as const;
+const POINT_DEFENSE_STAR_ART_URLS = [
+  POINT_DEFENSE_HEAD_URL,
+  POINT_DEFENSE_HEAD_STAR2_URL,
+  POINT_DEFENSE_HEAD_STAR3_URL,
+] as const;
+const PLASMA_MORTAR_STAR_ART_URLS = [
+  PLASMA_MORTAR_HEAD_URL,
+  PLASMA_MORTAR_HEAD_STAR2_URL,
+  PLASMA_MORTAR_HEAD_STAR3_URL,
+] as const;
+const MISSILE_NEST_STAR_ART_URLS = [
+  MISSILE_NEST_HEAD_URL,
+  MISSILE_NEST_HEAD_STAR2_URL,
+  MISSILE_NEST_HEAD_STAR3_URL,
+] as const;
 
 export const TOWER_STAR_ART_URLS = [
   AUTOCANNON_STAR_ART_URLS,
   LASER_PRISM_STAR_ART_URLS,
-  SAME_STAR_ART(ARC_COIL_HEAD_URL),
-  SAME_STAR_ART(RAILGUN_HEAD_URL),
-  SAME_STAR_ART(POINT_DEFENSE_HEAD_URL),
-  SAME_STAR_ART(PLASMA_MORTAR_HEAD_URL),
+  ARC_COIL_STAR_ART_URLS,
+  RAILGUN_STAR_ART_URLS,
+  POINT_DEFENSE_STAR_ART_URLS,
+  PLASMA_MORTAR_STAR_ART_URLS,
   AUTOCANNON_STAR_ART_URLS, // 风暴机炮(合成型号复用血统炮头)
   LASER_PRISM_STAR_ART_URLS, // 极光阵列
-  SAME_STAR_ART(RAILGUN_HEAD_URL), // 湮灭长矛
-  SAME_STAR_ART(ARC_COIL_HEAD_URL), // 雷霆王冠
-  SAME_STAR_ART(PLASMA_MORTAR_HEAD_URL), // 焦土骤雨
-  SAME_STAR_ART(POINT_DEFENSE_HEAD_URL), // 荆棘星幕
-  SAME_STAR_ART(MISSILE_NEST_HEAD_URL),
+  RAILGUN_STAR_ART_URLS, // 湮灭长矛(复用磁轨血统)
+  ARC_COIL_STAR_ART_URLS, // 雷霆王冠(复用电弧血统)
+  PLASMA_MORTAR_STAR_ART_URLS, // 焦土骤雨(复用迫击炮血统)
+  POINT_DEFENSE_STAR_ART_URLS, // 荆棘星幕(复用点防血统)
+  MISSILE_NEST_STAR_ART_URLS,
 ] as const;
 
 export const SUPPORT_ART_URLS = [

@@ -1099,6 +1099,8 @@ export class Renderer {
   private bulletTextures: Texture[] = [];
   /** 炮位贴图(下标 === towerType):装填/重建时按 type 直取,与敌人纹理同一套加载契约 */
   private towerTextures: readonly (Texture | null)[] = [];
+  /** 星级炮位贴图(下标 === towerType,内层 0..2 === 1★..3★),与图鉴同源。 */
+  private towerStarTextures: readonly (readonly (Texture | null)[])[] = [];
   /** 下标 = slot,取 tint 用(冷色域,GDD §12) */
   private bulletDefs: TowerDef[] = [];
   private bulletBuckets: Bullet[][] = [];
@@ -1276,6 +1278,7 @@ export class Renderer {
     this.world = world;
     this.backgroundSprite = generatedArt.background ? new Sprite(generatedArt.background) : null;
     this.towerTextures = generatedArt.towers;
+    this.towerStarTextures = generatedArt.towerStars;
 
     if (this.backgroundSprite) {
       this.backgroundSprite.anchor.set(0.5);
@@ -1903,12 +1906,13 @@ export class Renderer {
       // 数值表/硬点表写坏:这一个槽不画,不炸掉整局(noUncheckedIndexedAccess 也逼着判)
       if (!def || !hp) continue;
       const size = SLOT_GLYPH;
-      const tex = this.towerTextures[slot.type];
+      const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
+      const starSet = this.towerStarTextures[slot.type];
+      const tex = starSet?.[stars - 1] ?? this.towerTextures[slot.type];
       let g: Sprite | Graphics;
       if (tex) {
         const s = new Sprite(tex);
         s.anchor.set(0.5, TOWER_HEAD_ANCHOR_Y);
-        const stars = Math.max(1, Math.min(STAR_MAX, Math.floor(slot.stars)));
         const starScale = TOWER_STAR_HEAD_SCALES[stars - 1] ?? 1;
         s.scale.set((size * starScale) / Math.max(tex.width, tex.height));
         // round-8 是带材质与功能色的完整炮头,再乘 tint 会吃掉钢蓝层次和橙色警示纹。

@@ -218,6 +218,14 @@ describe('codexRows', () => {
     expect(auto.hover[2]).not.toContain(`★★ 伤害 ${formatMul(def.damage)}`);
   });
 
+  it('全部塔型都有独立的三档星级贴图,合成塔沿用对应血统清单', () => {
+    expect(TOWER_STAR_ART_URLS).toHaveLength(TOWERS.length);
+    for (const urls of TOWER_STAR_ART_URLS) {
+      expect(urls).toHaveLength(3);
+      expect(new Set(urls).size).toBe(3);
+    }
+  });
+
   it('迫击炮类:落点伤害 + 充能节奏(直击伤害恒 0,不印误导性的 0)', () => {
     const mortar = codexRows(progress(0))[0]!.rows.find(
       (r) => r.id === String(TOWER_MORTAR),
