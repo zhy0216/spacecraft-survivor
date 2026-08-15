@@ -22,6 +22,7 @@
 import type { RunSaveDigest } from '../sim/runSave';
 import { formatDuration, segmentLabel } from './gameOver';
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -59,20 +60,27 @@ const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spac
  * 存档摘要那一行小字。**四个读数缺一不可**:航段说明打到哪、时长说明投入了多少、
  * 击杀说明战果、血量说明接手的是什么处境 —— 少了最后一样,玩家会在毫不知情的
  * 情况下接手一艘残血船,而"继续"这个词承诺的是接着打,不是接着送。
+ * 句子整体由翻译决定(ui:menu.continueLine),字段顺序跟语言资源走。
  */
 export function continueLineText(d: RunSaveDigest): string {
   const seg = segmentLabel(d.segment, d.segmentCount);
   const hp = `${Math.round(d.hp)}/${Math.round(d.maxHp)}`;
-  return `航段 ${seg} · ${formatDuration(d.elapsedSec)} · 击杀 ${d.kills} · 船体 ${hp}`;
+  return t('ui:menu.continueLine', {
+    segment: seg,
+    duration: formatDuration(d.elapsedSec),
+    kills: d.kills,
+    hp,
+  });
 }
 
 /**
  * 「新航行」按钮的文案。有存档时先问一句 —— 措辞里必须出现"放弃存档",
  * 不能只写"确定?":玩家点第一下时未必意识到代价,而第二下就没有回头路了。
+ * 文案按状态挑 key(ui.menu.newRun / newRunWithSave / abandonSave),由翻译决定。
  */
 export function newRunLabel(hasSave: boolean, confirming: boolean): string {
-  if (!hasSave) return '开始航行';
-  return confirming ? '确定?这会放弃存档进度' : '开始新航行';
+  if (!hasSave) return t('ui:menu.newRun');
+  return confirming ? t('ui:menu.abandonSave') : t('ui:menu.newRunWithSave');
 }
 
 export interface TitleScreenHooks {
@@ -91,6 +99,8 @@ export interface TitleScreenUi {
   show(digest: RunSaveDigest | null): void;
   hide(): void;
   visible(): boolean;
+  /** 语言切换成功后由 main 统一触发:全量重画文案,保留二段确认/可见等业务状态 */
+  refreshLocale(): void;
 }
 
 export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
@@ -109,11 +119,11 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   title.textContent = 'STARWRECK';
   const sub = document.createElement('div');
   sub.style.cssText = SUB_CSS;
-  sub.textContent = '星 骸';
+  sub.textContent = t('story:title.subtitle');
 
   const continueBtn = document.createElement('button');
   continueBtn.style.cssText = PRIMARY_CSS;
-  continueBtn.textContent = '继续上次航行';
+  continueBtn.dataset.action = 'title-continue';
   continueBtn.addEventListener('click', () => {
     if (!hasSave) return;
     hide();
@@ -125,6 +135,7 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
 
   const newBtn = document.createElement('button');
   newBtn.style.cssText = BTN_CSS;
+  newBtn.dataset.action = 'title-new-run';
   newBtn.addEventListener('click', () => {
     // 没有存档 = 没有代价,直接走;有存档则第一下只是把话问出来
     if (hasSave && !confirming) {
@@ -138,14 +149,14 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
 
   const settingsBtn = document.createElement('button');
   settingsBtn.style.cssText = QUIET_CSS;
-  settingsBtn.textContent = '设置';
+  settingsBtn.dataset.action = 'title-settings';
   settingsBtn.addEventListener('click', () => {
     hooks.onSettings();
   });
 
   const codexBtn = document.createElement('button');
   codexBtn.style.cssText = QUIET_CSS;
-  codexBtn.textContent = '图鉴';
+  codexBtn.dataset.action = 'title-codex';
   codexBtn.addEventListener('click', () => {
     hide();
     hooks.onCodex();
@@ -172,7 +183,15 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
     // 没有存档时它就是这一页唯一的主按钮,故用 PRIMARY;有存档时主按钮是「继续」
     newBtn.style.cssText =
       (hasSave ? BTN_CSS : PRIMARY_CSS) + (confirming ? `color:${WARN_COLOR};` : '');
-    hint.textContent = hasSave ? 'Enter 继续 · Esc 取消确认' : 'Enter 开始';
+    // 键位 token 与句子分开:Enter/Esc 从 common.keys 取,句子整体由翻译决定
+    hint.textContent = hasSave
+      ? t('ui:menu.hintContinue', { enter: t('common:keys.enter'), esc: t('common:keys.esc') })
+      : t('ui:menu.hintStart', { enter: t('common:keys.enter') });
+    // 品牌副标题 / 各动作按钮文案随语言重刷(品牌名 STARWRECK 保持不译)
+    sub.textContent = t('story:title.subtitle');
+    continueBtn.textContent = t('ui:menu.continueRun');
+    settingsBtn.textContent = t('ui:menu.settings');
+    codexBtn.textContent = t('ui:menu.codex');
   }
 
   function hide(): void {
@@ -210,5 +229,10 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
     },
     hide,
     visible: () => visible,
+    // 语言切换成功后由 main 触发:paint 全量重画文案,不注册监听器、
+    // 不动 visible/confirming/hasSave —— 二段确认问话在切换后照常挂着、照新语言重说一遍
+    refreshLocale(): void {
+      paint();
+    },
   };
 }

@@ -257,14 +257,14 @@ async function boot(): Promise<void> {
     onRetry: retry,
     onTitle: toTitle,
     onVictoryContinue: () => victoryEpilogue.show(),
-    // 运行日志上传(后端未定案,接缝见 ui/runLogUpload.ts):端点未配置 / 本局没有日志 /
-    // 网络失败三件事各回一句原因,结算卡的按钮原样印它 —— 玩家知道下一步去配端点还是重试
-    onUpload: async (): Promise<string | null> => {
-      const endpoint = getLogEndpoint();
-      if (endpoint === null) return '未配置上传地址';
-      if (pendingLog === null) return '本局无日志';
-      return (await submitRunLog(endpoint, pendingLog)) ? null : '上传失败';
-    },
+      // 运行日志上传(后端未定案,接缝见 ui/runLogUpload.ts):端点未配置 / 本局没有日志 /
+      // 网络失败三件事各回一句原因,结算卡的按钮原样印它 —— 玩家知道下一步去配端点还是重试
+      onUpload: async (): Promise<string | null> => {
+        const endpoint = getLogEndpoint();
+        if (endpoint === null) return t('ui:upload.noEndpoint');
+        if (pendingLog === null) return t('ui:upload.noLog');
+        return (await submitRunLog(endpoint, pendingLog)) ? null : t('ui:upload.failed');
+      },
   });
 
   // 调参面板/暂停菜单也只建一次:它们绑的是 stats/run/tuning 这几个**跨局复用**的对象,
@@ -322,6 +322,8 @@ async function boot(): Promise<void> {
         return true;
       },
     });
+    // 暂停菜单只在玩家形态存在;语言切换后它自己重画文案(见 refreshLocale 契约)
+    registerLocaleAware(pauseMenu);
   }
 
   // 连按三次 ~ (Backquote)呼出/收起调参面板(畅玩性):玩家形态下它是面板唯一的入口,
@@ -614,7 +616,7 @@ async function boot(): Promise<void> {
       // 最后一跨(第 4 段走完,wave.done)信标照常投放,横幅由 Boss 战那条**合并播报**
       // (见 ticker 的「封锁线接敌 · 补给信标已投放」),这里不重复抢横幅。
       if (world.wave.done) return;
-      hud.showBanner(`航段 ${segment} 肃清 · 补给信标已投放`, BANNER_SECONDS);
+      hud.showBanner(t('ui:banner.segmentCleared', { segment }), BANNER_SECONDS);
     };
 
     world.onRefitOffer = (segmentIndex) => {
@@ -812,8 +814,8 @@ async function boot(): Promise<void> {
       else titleScreen.show(titleDigest());
     },
   });
-  // 语言切换成功后统一重刷已注册 UI —— 现阶段只有设置页(语言行的标签要跟着变);
-  // 04-09 号把其余界面迁进 t() 时,各自在这里 registerLocaleAware 即可
+  // 语言切换成功后统一重刷已注册 UI —— 标题 / 暂停 / 设置页各自在这里 registerLocaleAware:
+  // 它们都只建一次,切换靠 refreshLocale 重画文案(04 号);后建的页面在各自创建后注册
   registerLocaleAware(settingsMenu);
 
   /**
@@ -890,6 +892,8 @@ async function boot(): Promise<void> {
       codex.show();
     },
   });
+  // 标题界面是整页最早的一屏,语言切换后全量重画文案(含二段确认状态,见 refreshLocale)
+  registerLocaleAware(titleScreen);
 
   // 进游戏第一屏:标题界面(继续 / 新航行 / 设置),而不是直接开打。
   // 「新航行」直接开新局(随机起手在 startRun 落地),不再有独立的起手选择一步。
@@ -998,7 +1002,7 @@ async function boot(): Promise<void> {
         const entry = UNLOCKS[i]!;
         if (!unlockMet(entry, live)) continue;
         announcedMask |= 1 << i;
-        hud.toast(`解锁:${unlockName(entry)}`);
+        hud.toast(t('ui:toast.unlock', { name: unlockName(entry) }));
       }
       // I 键首局提示(28 号):战斗开始 20s 内,从未按过 I 且本局还没飘过 → 走解锁 toast
       // 通道飘一条「按 I 可调整武器朝向」。窗口按 world.elapsed 与开跑基准的差算
@@ -1009,7 +1013,7 @@ async function boot(): Promise<void> {
         world.elapsed - battleStartElapsed <= I_HINT_WINDOW_SECONDS
       ) {
         keyHintShown = true;
-        hud.toast('按 I 可调整武器朝向');
+        hud.toast(t('ui:toast.keyHint'));
       }
     }
     // 加速技能触发:boostTime 从 0 变正的那一帧响推进器点火(沿检测,窗内不重复响)
@@ -1020,7 +1024,7 @@ async function boot(): Promise<void> {
     // 金色宝物,走解锁 toast 通道解释一次"这是什么" —— 时停中世界不动,不会误触发
     if (!magnetToastShown && world.magnetSurgeTime > 0) {
       magnetToastShown = true;
-      hud.toast('磁吸风暴:残骸自动飞向你 2 秒');
+      hud.toast(t('ui:toast.magnet'));
     }
     // Boss 战横幅(26 号):bossPhase 翻进 1 的那一帧弹「封锁线接敌」,与出场音同一套
     // bossWarnOnEnter 判据;基准在 startRun 按新世界现值对齐。
@@ -1029,7 +1033,7 @@ async function boot(): Promise<void> {
     if (world.bossPhase !== bossPhaseSeen) {
       if (bossWarnOnEnter(bossPhaseSeen, world.bossPhase)) {
         hud.showBanner(
-          world.shopBeaconActive ? '封锁线接敌 · 补给信标已投放' : '封锁线接敌',
+          world.shopBeaconActive ? t('ui:banner.bossSupply') : t('ui:banner.boss'),
           BANNER_SECONDS,
         );
       }

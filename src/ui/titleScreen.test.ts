@@ -5,15 +5,22 @@
  * ② 「新航行」在有存档时必须把代价说出来 —— 二段确认的措辞里没有"放弃存档"四个字,
  *    这个二段确认就等于没有。
  *
- * 文件末尾破一次例去测「图鉴」按钮的接线(照 gameOver.test 的先例):
- * 它是四条出口里唯一"先收本页再弹别的页"的那一类 —— 点下去该收起自己并把去向
- * 交给 onCodex,漏一句 hide 就会叠两层遮罩。桩只提供 createTitleScreen 真的会碰的
- * 那几样(createElement/getElementById/append + window.addEventListener + HTMLElement),
+ * 04 号起两句纯函数走 t()(ui:menu.continueLine / newRun / newRunWithSave / abandonSave),
+ * 故在 zh-CN 与 en 下各钉一遍;行为测试按 data-action 找按钮,不靠中文按钮文本。
+ *
+ * 文件末尾破一次例去测「图鉴」按钮的接线与 refreshLocale 保留二段确认状态
+ * (照 gameOver.test 的先例)。桩只提供 createTitleScreen 真的会碰的那几样
+ * (createElement/getElementById/append + window.addEventListener + HTMLElement),
  * 不装 jsdom。
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { changeLocale, initI18n, t } from '../i18n';
 import type { RunSaveDigest } from '../sim/runSave';
 import { createTitleScreen, continueLineText, newRunLabel } from './titleScreen';
+
+beforeEach(async () => {
+  await initI18n('zh-CN');
+});
 
 const DIGEST: RunSaveDigest = {
   elapsedSec: 754,
@@ -24,7 +31,7 @@ const DIGEST: RunSaveDigest = {
   maxHp: 115,
 };
 
-describe('标题界面:存档摘要那一行', () => {
+describe('标题界面:存档摘要那一行(zh-CN)', () => {
   it('四个读数齐全:航段 / 时长 / 击杀 / 船体', () => {
     const line = continueLineText(DIGEST);
     expect(line).toContain('3/4'); // segment 是下标,玩家读的是第几段
@@ -44,28 +51,53 @@ describe('标题界面:存档摘要那一行', () => {
   });
 });
 
-describe('标题界面:「新航行」的二段确认', () => {
+describe('标题界面:存档摘要那一行(en)', () => {
+  it('句子结构由翻译决定:措辞与字段顺序跟 en 资源走', async () => {
+    await changeLocale('en');
+    const line = continueLineText(DIGEST);
+    expect(line).toContain('Segment 3/4');
+    expect(line).toContain('12:34');
+    expect(line).toContain('Kills 318');
+    expect(line).toContain('Hull 63/115');
+  });
+});
+
+describe('标题界面:「新航行」的二段确认(zh-CN)', () => {
   it('没有存档 = 没有代价,一句话直说', () => {
-    expect(newRunLabel(false, false)).toBe('开始航行');
+    expect(newRunLabel(false, false)).toBe(t('ui:menu.newRun'));
   });
 
   it('有存档时第一下只是问话,且措辞里点明"放弃存档"', () => {
-    expect(newRunLabel(true, false)).toBe('开始新航行');
+    expect(newRunLabel(true, false)).toBe(t('ui:menu.newRunWithSave'));
     expect(newRunLabel(true, true)).toContain('放弃存档');
   });
 
   it('没有存档时不会问出一句无意义的确认', () => {
     // hasSave = false 时无论 confirming 是什么,文案都不该冒出"放弃存档"
-    expect(newRunLabel(false, true)).toBe('开始航行');
+    expect(newRunLabel(false, true)).toBe(t('ui:menu.newRun'));
   });
 });
 
-// —— 「图鉴」按钮接线(不装 jsdom,见文件头)——
+describe('标题界面:「新航行」的二段确认(en)', () => {
+  it('有存档时的有损确认在英文下也把"放弃存档"说清楚', async () => {
+    await changeLocale('en');
+    expect(newRunLabel(true, false)).toBe(t('ui:menu.newRunWithSave'));
+    expect(newRunLabel(true, true)).toContain('abandon');
+  });
+
+  it('没有存档 = 一句话直说(Start Voyage)', async () => {
+    await changeLocale('en');
+    expect(newRunLabel(false, false)).toBe(t('ui:menu.newRun'));
+  });
+});
+
+// —— 「图鉴」按钮接线 / refreshLocale(不装 jsdom,见文件头)——
 
 interface StubEl {
   tagName: string;
   style: { cssText: string; display: string };
   textContent: string;
+  dataset: Record<string, string>;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
@@ -78,6 +110,7 @@ function createStubEl(tag = 'div'): StubEl {
     tagName: tag.toUpperCase(),
     style: { cssText: '', display: '' },
     textContent: '',
+    dataset: {},
     children: [],
     listeners: new Map<string, (e: unknown) => void>(),
     append(...kids: StubEl[]): void {
@@ -132,8 +165,13 @@ function installDom(): {
   return dom;
 }
 
-describe('标题界面:「图鉴」按钮', () => {
-  it('四颗按钮都在;点图鉴收起本页并把去向交给 onCodex', () => {
+/** 按 data-action 找按钮(04 号:行为测试不靠中文按钮文本) */
+function findAction(created: StubEl[], action: string): StubEl | undefined {
+  return created.find((el) => el.tagName === 'BUTTON' && el.dataset.action === action);
+}
+
+describe('标题界面:按钮接线与语言切换', () => {
+  it('四颗动作按钮都在(data-action);点图鉴收起本页并把去向交给 onCodex', () => {
     const dom = installDom();
     try {
       let codexCalls = 0;
@@ -146,13 +184,63 @@ describe('标题界面:「图鉴」按钮', () => {
         },
       });
       ui.show(null);
-      const buttons = dom.created.filter((el) => el.tagName === 'BUTTON');
-      const labels = buttons.map((b) => b.textContent);
-      expect(labels).toEqual(['继续上次航行', '开始航行', '设置', '图鉴']);
-      const codexBtn = buttons.find((b) => b.textContent === '图鉴')!;
+      const actions = dom.created
+        .filter((el) => el.tagName === 'BUTTON')
+        .map((b) => b.dataset.action);
+      expect(actions).toEqual(['title-continue', 'title-new-run', 'title-settings', 'title-codex']);
+      const codexBtn = findAction(dom.created, 'title-codex')!;
       codexBtn.listeners.get('click')?.({});
       expect(codexCalls).toBe(1);
       expect(ui.visible()).toBe(false); // 收起本页 —— 漏这一句就叠两层遮罩
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it('refreshLocale 保留二段确认状态:切到 en 后问话重说、按钮不重建、下一击仍开新局', async () => {
+    const dom = installDom();
+    try {
+      let newRuns = 0;
+      const ui = createTitleScreen({
+        onContinue() {},
+        onNewRun() {
+          newRuns++;
+        },
+        onSettings() {},
+        onCodex() {},
+      });
+      ui.show(DIGEST);
+      const newBtn = findAction(dom.created, 'title-new-run')!;
+      newBtn.listeners.get('click')?.({}); // 第一下:进入二段确认
+      expect(newBtn.textContent).toBe(t('ui:menu.abandonSave'));
+      expect(ui.visible()).toBe(true);
+
+      await changeLocale('en');
+      ui.refreshLocale();
+      // confirming 状态保持、文案翻成 en,且还是同一颗按钮(只改文案,不重建)
+      expect(findAction(dom.created, 'title-new-run')).toBe(newBtn);
+      expect(newBtn.textContent).toContain('abandon');
+      expect(ui.visible()).toBe(true);
+      // 二段确认的第二下仍然生效:点下去就真的开新局
+      newBtn.listeners.get('click')?.({});
+      expect(newRuns).toBe(1);
+      expect(ui.visible()).toBe(false);
+    } finally {
+      dom.restore();
+    }
+  });
+
+  it('有存档时按钮主次不随语言变:主按钮仍是「继续」,新航行保持二段确认', async () => {
+    const dom = installDom();
+    try {
+      const ui = createTitleScreen({ onContinue() {}, onNewRun() {}, onSettings() {}, onCodex() {} });
+      ui.show(DIGEST);
+      const continueBtn = findAction(dom.created, 'title-continue')!;
+      expect(continueBtn.style.cssText).toContain('rgba(43,74,110,.6)'); // PRIMARY_CSS 底色更实
+      await changeLocale('en');
+      ui.refreshLocale();
+      expect(continueBtn.style.cssText).toContain('rgba(43,74,110,.6)'); // 主按钮地位不变
+      expect(continueBtn.textContent).toBe(t('ui:menu.continueRun'));
     } finally {
       dom.restore();
     }

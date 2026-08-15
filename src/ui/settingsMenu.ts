@@ -16,14 +16,8 @@
 import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
 import type { LanguagePreference } from '../i18n';
-import {
-  createSettings,
-  nextLanguage,
-  nextShake,
-  shakeText,
-  volumeText,
-  type Settings,
-} from './settings';
+import { createSettings, nextLanguage, nextShake, type Settings } from './settings';
+import { shakeText, volumeText } from './presentation/settingsText';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -81,6 +75,13 @@ const ERROR_CSS = `color:${WARN_COLOR};font-size:11px;margin-top:-4px;text-align
 /** 音量每点一次走 10%:够细(10 档)又够快(一路点到底 10 下) */
 const VOLUME_STEP = 0.1;
 
+/** 四行"标签 + 切换按钮"的标签 key:编译期可枚尽,addToggleRow 才敢把 string 喂给 t() */
+type SettingsRowKey =
+  | 'ui:settings.sound'
+  | 'ui:settings.shake'
+  | 'ui:settings.damageNumbers'
+  | 'ui:settings.hitstop';
+
 export interface SettingsMenuHooks {
   /** 当前设置(main 持有唯一那一份;设置页不自己存,每次 show 现读) */
   get(): Settings;
@@ -115,7 +116,7 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   card.style.cssText = CARD_CSS;
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
-  title.textContent = '设置';
+  title.textContent = t('ui:settings.title');
   card.appendChild(title);
 
   /** 改一项:就地取一份新设置交给 main,再照 main 那一份重画(**不信自己算出来的值**) */
@@ -124,19 +125,24 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
     paint();
   }
 
-  /** 一行"标题 + 单颗切换按钮"(声音/飘字/顿帧/震屏都是这个形状) */
-  function addToggleRow(label: string, onClick: () => void): HTMLButtonElement {
+  /** 一行"标题 + 单颗切换按钮"(声音/飘字/顿帧/震屏都是这个形状)。返回标签与按钮,供 paint 重画 */
+  function addToggleRow(
+    labelKey: SettingsRowKey,
+    action: string,
+    onClick: () => void,
+  ): { name: HTMLElement; btn: HTMLButtonElement } {
     const row = document.createElement('div');
     row.style.cssText = ROW_CSS;
     const name = document.createElement('div');
     name.style.cssText = LABEL_CSS;
-    name.textContent = label;
+    name.textContent = t(labelKey);
     const btn = document.createElement('button');
     btn.style.cssText = BTN_CSS;
+    btn.dataset.action = action;
     btn.addEventListener('click', onClick);
     row.append(name, btn);
     card.appendChild(row);
-    return btn;
+    return { name, btn };
   }
 
   // —— 主音量:− / 读数 / + ——
@@ -144,11 +150,12 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   volRow.style.cssText = ROW_CSS;
   const volName = document.createElement('div');
   volName.style.cssText = LABEL_CSS;
-  volName.textContent = '主音量';
+  volName.textContent = t('ui:settings.volume');
   const volCtrl = document.createElement('div');
   volCtrl.style.cssText = CTRL_CSS;
   const volDown = document.createElement('button');
   volDown.style.cssText = STEP_CSS;
+  volDown.dataset.action = 'settings-volume-down';
   volDown.textContent = '−';
   volDown.addEventListener('click', () => {
     patch({ masterVolume: hooks.get().masterVolume - VOLUME_STEP });
@@ -157,6 +164,7 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   volRead.style.cssText = READOUT_CSS;
   const volUp = document.createElement('button');
   volUp.style.cssText = STEP_CSS;
+  volUp.dataset.action = 'settings-volume-up';
   volUp.textContent = '+';
   volUp.addEventListener('click', () => {
     patch({ masterVolume: hooks.get().masterVolume + VOLUME_STEP });
@@ -165,16 +173,16 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   volRow.append(volName, volCtrl);
   card.appendChild(volRow);
 
-  const muteBtn = addToggleRow('声音', () => {
+  const mute = addToggleRow('ui:settings.sound', 'settings-mute', () => {
     patch({ muted: !hooks.get().muted });
   });
-  const shakeBtn = addToggleRow('画面震动', () => {
+  const shake = addToggleRow('ui:settings.shake', 'settings-shake', () => {
     patch({ shake: nextShake(hooks.get().shake) });
   });
-  const dmgBtn = addToggleRow('伤害飘字', () => {
+  const dmg = addToggleRow('ui:settings.damageNumbers', 'settings-damage-numbers', () => {
     patch({ damageNumbers: !hooks.get().damageNumbers });
   });
-  const hitstopBtn = addToggleRow('击杀顿帧', () => {
+  const hitstop = addToggleRow('ui:settings.hitstop', 'settings-hitstop', () => {
     patch({ hitstop: !hooks.get().hitstop });
   });
 
@@ -187,6 +195,7 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   langName.style.cssText = LABEL_CSS;
   const langBtn = document.createElement('button');
   langBtn.style.cssText = BTN_CSS;
+  langBtn.dataset.action = 'settings-language';
   langBtn.addEventListener('click', () => {
     hooks.onLanguage(nextLanguage(hooks.get().language));
   });
@@ -205,12 +214,12 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
 
   const backBtn = document.createElement('button');
   backBtn.style.cssText = WIDE_BTN_CSS;
-  backBtn.textContent = '返回(Esc)';
+  backBtn.dataset.action = 'settings-back';
   backBtn.addEventListener('click', close);
 
   const resetBtn = document.createElement('button');
   resetBtn.style.cssText = RESET_CSS;
-  resetBtn.textContent = '恢复默认';
+  resetBtn.dataset.action = 'settings-reset';
   resetBtn.addEventListener('click', () => {
     // 恢复默认 = 五项全回出厂。但语言那项不能走 onChange 直接落盘:
     // 切换是异步的、且只有切成功才该持久化(见 main.ts 的 setLanguage 口径)——
@@ -224,7 +233,7 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
 
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
-  hint.textContent = '设置即时生效并自动保存';
+  hint.textContent = t('ui:settings.instantSaveHint');
 
   card.append(backBtn, resetBtn, hint);
   root.appendChild(card);
@@ -234,8 +243,8 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   let localeError: string | null = null;
 
   /**
-   * 语言行(唯一要走 t() 的行)。self 名固定:简体中文 / English 不随语言翻,
-   * 「自动」随语言翻(Auto),auto 档额外挂一句解释 —— 其余行的硬编码中文留给 04 号迁移。
+   * 语言行(唯一一行有"自称"的行)。self 名固定:简体中文 / English 不随语言翻,
+   * 「自动」随语言翻(Auto),auto 档额外挂一句解释。
    */
   function paintLanguage(): void {
     const pref = hooks.get().language;
@@ -246,14 +255,28 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
     langError.style.display = localeError === null ? 'none' : 'block';
   }
 
-  /** 照 main 那一份设置重画全部读数。**只读不算**:显示的就是真正生效的那一份 */
+  /**
+   * 照 main 那一份设置重画全部读数与文案。**只读不算**:显示的就是真正生效的那一份。
+   * 语言切换成功后(paintLanguage)与迁移后的整页文案一起走这里 ——
+   * 只改 textContent,不动 visible / 任何业务状态。
+   */
   function paint(): void {
     const s = hooks.get();
+    title.textContent = t('ui:settings.title');
+    volName.textContent = t('ui:settings.volume');
     volRead.textContent = volumeText(s.masterVolume);
-    muteBtn.textContent = s.muted ? '关' : '开';
-    shakeBtn.textContent = shakeText(s.shake);
-    dmgBtn.textContent = s.damageNumbers ? '开' : '关';
-    hitstopBtn.textContent = s.hitstop ? '开' : '关';
+    mute.name.textContent = t('ui:settings.sound');
+    mute.btn.textContent = s.muted ? t('common:off') : t('common:on');
+    shake.name.textContent = t('ui:settings.shake');
+    shake.btn.textContent = shakeText(s.shake);
+    dmg.name.textContent = t('ui:settings.damageNumbers');
+    dmg.btn.textContent = s.damageNumbers ? t('common:on') : t('common:off');
+    hitstop.name.textContent = t('ui:settings.hitstop');
+    hitstop.btn.textContent = s.hitstop ? t('common:on') : t('common:off');
+    // 键位 token(Esc)与动作文本分开:键名从 common.keys 取,句子整体由翻译决定
+    backBtn.textContent = t('ui:settings.back', { esc: t('common:keys.esc') });
+    resetBtn.textContent = t('ui:settings.reset');
+    hint.textContent = t('ui:settings.instantSaveHint');
     // 静音时把音量读数压暗:调了半天音量却没声音是设置页最常见的一次迷惑
     volRead.style.color = s.muted ? IDLE_COLOR : VALUE_COLOR;
     paintLanguage();
@@ -291,9 +314,9 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
     },
     hide,
     visible: () => visible,
-    // 语言切换成功后 main 触发:重画语言行文案(语言变了 → 行标签与 auto 档说明跟着变)。
-    // 只重画,不注册监听器、不动 visible/paused/confirming 等业务状态
-    refreshLocale: paintLanguage,
+    // 语言切换成功后 main 触发:整页文案跟着语言重刷(paint 会顺带重画语言行)。
+    // 只重画,不注册监听器、不动 visible 等业务状态
+    refreshLocale: paint,
     showLocaleError(message: string): void {
       localeError = message;
       paintLanguage();

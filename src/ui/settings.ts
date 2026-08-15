@@ -109,22 +109,12 @@ export function parseSettings(json: string): Settings {
   }
 }
 
-/** 音量百分比文案(设置页与将来的 HUD 共用一处口径,免得一个印 80% 一个印 0.8) */
-export function volumeText(v: number): string {
-  return `${Math.round(clamp01(v, 0) * 100)}%`;
-}
+/** 音量百分比文案等**显示文案**随语言迁移后移出本纯数据层(见 ui/presentation/settingsText.ts)。 */
 
 /**
- * 震屏强度的三档文案。做成"档"而不是连续滑杆:震屏是晕动症开关,
+ * 震屏强度的三档循环。做成"档"而不是连续滑杆:震屏是晕动症开关,
  * 玩家要的是"关掉 / 小一点 / 原样",没人需要 37% 的震屏。
  */
-export function shakeText(v: number): string {
-  if (v <= 0.01) return '关闭';
-  if (v <= 0.55) return '轻微';
-  return '标准';
-}
-
-/** 三档循环:标准 → 轻微 → 关闭 → 标准。设置页那颗按钮每点一次走一档 */
 export function nextShake(v: number): number {
   if (v > 0.55) return 0.5;
   if (v > 0.01) return 0;

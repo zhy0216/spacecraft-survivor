@@ -74,7 +74,7 @@ describe('i18n:插值与复数', () => {
   it('插值参数正常替换(含复数 count)', async () => {
     await initI18n('zh-CN');
     expect(
-      t('ui:menu.saveLine', { segment: '2/4', duration: '1:05', kills: 12, hp: '45/100' }),
+      t('ui:menu.continueLine', { segment: '2/4', duration: '1:05', kills: 12, hp: '45/100' }),
     ).toBe('航段 2/4 · 1:05 · 击杀 12 · 船体 45/100');
     expect(t('common:enemiesLeft', { count: 3 })).toBe('还剩 3 只敌舰');
   });
@@ -91,7 +91,7 @@ describe('i18n:插值与复数', () => {
       key: string,
       options: Record<string, unknown>,
     ) => string;
-    expect(rawT('ui:menu.saveLine', {})).toBe(
+    expect(rawT('ui:menu.continueLine', {})).toBe(
       '航段 {{segment}} · {{duration}} · 击杀 {{kills}} · 船体 {{hp}}',
     );
   });
@@ -103,9 +103,9 @@ describe('i18n:编译期拦截(@ts-expect-error 由 tsc 验证)', () => {
     // @ts-expect-error 不存在的 key 会被 tsc 拦下
     void t('common:noSuchKey');
     // @ts-expect-error 插值变量缺 segment 等会被 tsc 拦下
-    void t('ui:menu.saveLine', {});
+    void t('ui:menu.continueLine', {});
     // @ts-expect-error 写错插值变量名会被 tsc 拦下
-    void t('ui:menu.saveLine', { segment: '2/4', duration: '1:05', kills: 1, bogus: 2 });
+    void t('ui:menu.continueLine', { segment: '2/4', duration: '1:05', kills: 1, bogus: 2 });
     warn.mockRestore();
   });
 });

@@ -13,6 +13,7 @@
  */
 import { audioBus } from '../render/audio';
 import { isTyping } from '../core/isTyping';
+import { t } from '../i18n';
 
 const OK_COLOR = '#9adcff';
 const IDLE_COLOR = '#5f7a99';
@@ -82,10 +83,14 @@ export interface PauseMenuUi {
   show(): void;
   hide(): void;
   visible(): boolean;
+  /** 语言切换成功后由 main 统一触发:全量重画文案,保留可见性与「保存失败」状态 */
+  refreshLocale(): void;
 }
 
 export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   let visible = false;
+  /** 「保存并退出」这次存得上吗。存不上当场改口;每次 show 复位(那是那一次的结论) */
+  let saveFailed = false;
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
@@ -95,16 +100,15 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
 
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
-  title.textContent = '已暂停';
 
   const resumeBtn = document.createElement('button');
   resumeBtn.style.cssText = BTN_CSS;
-  resumeBtn.textContent = '继续(Esc)';
+  resumeBtn.dataset.action = 'pause-resume';
   resumeBtn.addEventListener('click', resume);
 
   const restartBtn = document.createElement('button');
   restartBtn.style.cssText = BTN_CSS;
-  restartBtn.textContent = '再来一局(换种子)';
+  restartBtn.dataset.action = 'pause-restart';
   restartBtn.addEventListener('click', () => {
     hide();
     hooks.onRestart();
@@ -112,7 +116,7 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
 
   const retryBtn = document.createElement('button');
   retryBtn.style.cssText = BTN_CSS;
-  retryBtn.textContent = '再试一局(同种子)';
+  retryBtn.dataset.action = 'pause-retry';
   retryBtn.addEventListener('click', () => {
     hide();
     hooks.onRetry();
@@ -122,48 +126,55 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   // 相邻两颗按钮一个保住半小时、一个抹掉半小时,先摆保住的那颗
   const saveQuitBtn = document.createElement('button');
   saveQuitBtn.style.cssText = BTN_CSS;
-  saveQuitBtn.textContent = '保存并退出到标题';
+  saveQuitBtn.dataset.action = 'pause-save-quit';
   saveQuitBtn.addEventListener('click', () => {
     // 存不上就**留在菜单里**并当场改口:此时退出会静默丢掉这一局,
     // 而玩家点这颗按钮的全部意图恰恰是"别丢"(见 onSaveAndQuit 的返回值口径)
     if (hooks.onSaveAndQuit()) return;
-    saveQuitBtn.textContent = '保存失败(存储不可用)';
+    saveFailed = true;
+    paint();
   });
 
-  // 静态键位表:暂停菜单就是"我还能干什么"的求助页,键位放这里最顺(非按钮、不可点)
-  const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
-    ['WASD', '航向'],
-    ['空格', '加速'],
-    ['I', '武器布局'],
-    ['按住 Tab', '射界'],
-    ['Esc', '暂停'],
-  ];
+  // 静态键位表:暂停菜单就是"我还能干什么"的求助页,键位放这里最顺(非按钮、不可点)。
+  // **键名列是键位 token(WASD/空格/I/按住 Tab/Esc),不随语言翻**;说明列走 ui.keys 翻译
+  const KEY_ROWS = [
+    ['WASD', 'ui:keys.wasd'],
+    ['空格', 'ui:keys.space'],
+    ['I', 'ui:keys.layout'],
+    ['按住 Tab', 'ui:keys.firingArc'],
+    ['Esc', 'ui:keys.pause'],
+  ] as const;
+  const keyDescEls: HTMLSpanElement[] = [];
   const keyTable = document.createElement('div');
   keyTable.style.cssText = KEYS_CSS;
-  for (const [key, desc] of KEY_ROWS) {
+  // 说明列文本由 paint() 统一写入(t(KEY_ROWS[i][1])),构造时只摆空 span 占位
+  for (const [key] of KEY_ROWS) {
     const row = document.createElement('div');
     const keySpan = document.createElement('span');
     keySpan.style.cssText = KEY_CSS;
     keySpan.textContent = key;
     const descSpan = document.createElement('span');
     descSpan.style.cssText = KEYDESC_CSS;
-    descSpan.textContent = desc;
+    keyDescEls.push(descSpan);
     row.append(keySpan, descSpan);
     keyTable.appendChild(row);
   }
 
   const settingsBtn = document.createElement('button');
   settingsBtn.style.cssText = BTN_CSS;
-  settingsBtn.textContent = '设置';
+  settingsBtn.dataset.action = 'pause-settings';
   settingsBtn.addEventListener('click', () => {
     hooks.onSettings();
   });
 
   const muteBtn = document.createElement('button');
   muteBtn.style.cssText = MUTE_CSS;
+  muteBtn.dataset.action = 'pause-mute';
   // 真相源 = hooks(main 注入 settings.muted);缺省退回 audioBus(单测旧口径)
   function paintMute(): void {
-    muteBtn.textContent = (hooks.muted ? hooks.muted.get() : audioBus.isMuted()) ? '声音:关' : '声音:开';
+    muteBtn.textContent = (hooks.muted ? hooks.muted.get() : audioBus.isMuted())
+      ? t('ui:pause.soundOff')
+      : t('ui:pause.soundOn');
   }
   muteBtn.addEventListener('click', () => {
     if (hooks.muted) {
@@ -173,11 +184,9 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     }
     paintMute();
   });
-  paintMute();
 
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
-  hint.textContent = '战斗中按 Esc 随时暂停';
 
   card.append(
     title,
@@ -193,13 +202,34 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
+  /**
+   * 全量重画文案。语言切换(refreshLocale)与状态变化(保存失败)都走这里:
+   * 只改 textContent,不注册监听器、不动 visible/paused/saveFailed 等业务状态。
+   * 键位 token(Esc)与动作文本分开:键名从 common.keys 取,句子整体由翻译决定。
+   */
+  function paint(): void {
+    title.textContent = t('ui:pause.title');
+    resumeBtn.textContent = t('ui:pause.resume', { esc: t('common:keys.esc') });
+    restartBtn.textContent = t('ui:pause.restart');
+    retryBtn.textContent = t('ui:pause.retry');
+    // 保存失败是**状态**:失败时照旧挂着"保存失败",只是措辞随语言重刷
+    saveQuitBtn.textContent = saveFailed
+      ? t('ui:pause.saveFailed')
+      : t('ui:pause.saveAndQuit');
+    settingsBtn.textContent = t('ui:pause.settings');
+    hint.textContent = t('ui:pause.hint', { esc: t('common:keys.esc') });
+    for (let i = 0; i < keyDescEls.length; i++) {
+      keyDescEls[i]!.textContent = t(KEY_ROWS[i]![1]);
+    }
+    paintMute();
+  }
+  paint();
+
   function pause(): void {
     visible = true;
     root.style.display = 'flex';
-    paintMute();
-    // 「保存并退出」的文案每次弹出都复位:上一次的"保存失败"是**那一次**的结论,
-    // 留着它会让下一次暂停一进来就挂着一句吓人的错误(而此刻可能根本没试过存)
-    saveQuitBtn.textContent = '保存并退出到标题';
+    saveFailed = false; // 上一次"保存失败"的结论不留到这一次(见 saveFailed 注释)
+    paint();
     hooks.onPause();
   }
 
@@ -232,5 +262,7 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
     show: pause,
     hide,
     visible: () => visible,
+    // 语言切换成功后 main 触发:paint 全量重画,保留可见性与保存失败状态(见 paint)
+    refreshLocale: paint,
   };
 }

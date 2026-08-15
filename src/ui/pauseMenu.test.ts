@@ -4,11 +4,14 @@
  *    按 Esc 不该弹菜单,否则时停里 Esc 会同时被流程与菜单抢着消费;
  * ② hide() 是纯收起、不触发 onResume —— restart/retry 换局时 main 用它关菜单,
  *    若 hide 把 run.paused 翻回 false,时停期间世界就还在跑。
+ * 04 号起整页文案走 t(),行为测试按 data-action 找按钮,不靠中文按钮文本;
+ * refreshLocale 需保留「保存失败」状态与可见性。
  * 与 createGameOverUi 同一条破例理由:这两条错都要等真人开第二局才看得见。
  * 桩只提供 createPauseMenu 真的会碰的那几样(createElement/getElementById/append +
  * window.addEventListener + activeElement),绝不发展成半个 jsdom。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { changeLocale, initI18n, t } from '../i18n';
 import { createPauseMenu, type PauseMenuHooks } from './pauseMenu';
 
 interface StubEl {
@@ -16,6 +19,7 @@ interface StubEl {
   style: { cssText: string; color: string; display: string };
   textContent: string;
   title: string;
+  dataset: Record<string, string>;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
@@ -29,6 +33,7 @@ function createStubEl(tag = 'div'): StubEl {
     style: { cssText: '', color: '', display: '' },
     textContent: '',
     title: '',
+    dataset: {},
     children: [],
     listeners: new Map(),
     append(...kids: StubEl[]): void {
@@ -112,10 +117,10 @@ function card(dom: StubDom): StubEl {
   return dom.ui.children[0]!.children[0]!;
 }
 
-/** 按钮 = 卡里 textContent 匹配的那枚(标题/4 按钮/提示,构造顺序见 createPauseMenu) */
-function findButton(dom: StubDom, text: string): StubEl | undefined {
+/** 按 data-action 找按钮(04 号:行为测试不靠中文按钮文本) */
+function findAction(dom: StubDom, action: string): StubEl | undefined {
   const walk = (el: StubEl): StubEl | undefined => {
-    if (el.tagName === 'BUTTON' && el.textContent === text) return el;
+    if (el.tagName === 'BUTTON' && el.dataset.action === action) return el;
     for (const kid of el.children) {
       const hit = walk(kid);
       if (hit) return hit;
@@ -164,7 +169,7 @@ describe('createPauseMenu', () => {
     return createPauseMenu(hooks);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dom = installDom();
     paused = false;
     restarts = 0;
@@ -173,6 +178,7 @@ describe('createPauseMenu', () => {
     saveAttempts = 0;
     saveOk = true;
     settingsVisible = false;
+    await initI18n('zh-CN');
   });
   afterEach(() => {
     dom.restore();
@@ -222,7 +228,7 @@ describe('createPauseMenu', () => {
   it('「继续」按钮:收起 + onResume', () => {
     const menu = make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '继续(Esc)')!.listeners.get('click')!({});
+    findAction(dom, 'pause-resume')!.listeners.get('click')!({});
     expect(menu.visible()).toBe(false);
     expect(paused).toBe(false);
   });
@@ -230,7 +236,7 @@ describe('createPauseMenu', () => {
   it('「再来一局」按钮:先收起再 restart,不把世界留在暂停态', () => {
     const menu = make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '再来一局(换种子)')!.listeners.get('click')!({});
+    findAction(dom, 'pause-restart')!.listeners.get('click')!({});
     expect(menu.visible()).toBe(false);
     expect(restarts).toBe(1);
   });
@@ -238,7 +244,7 @@ describe('createPauseMenu', () => {
   it('「再试一局」按钮:先收起再 retry', () => {
     const menu = make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '再试一局(同种子)')!.listeners.get('click')!({});
+    findAction(dom, 'pause-retry')!.listeners.get('click')!({});
     expect(menu.visible()).toBe(false);
     expect(retries).toBe(1);
   });
@@ -246,7 +252,7 @@ describe('createPauseMenu', () => {
   it('「保存并退出」存上了:调一次 onSaveAndQuit,退出由 main 接手', () => {
     make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
+    findAction(dom, 'pause-save-quit')!.listeners.get('click')!({});
     expect(saveAttempts).toBe(1);
     // 收菜单/回标题都是 main 那一侧的事(onSaveAndQuit 里做),菜单自己不擅自收起
     expect(paused).toBe(true);
@@ -256,30 +262,29 @@ describe('createPauseMenu', () => {
     saveOk = false;
     const menu = make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
+    findAction(dom, 'pause-save-quit')!.listeners.get('click')!({});
     // 这是这颗按钮唯一不能出错的地方:此刻退出会静默丢掉整整一局,
     // 而玩家点它的全部意图恰恰是"别丢"
     expect(menu.visible()).toBe(true);
-    expect(findButton(dom, '保存失败(存储不可用)')).toBeDefined();
+    expect(findAction(dom, 'pause-save-quit')!.textContent).toBe(t('ui:pause.saveFailed'));
   });
 
   it('上一次的"保存失败"不留到下一次暂停(那是那一次的结论)', () => {
     saveOk = false;
     const menu = make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '保存并退出到标题')!.listeners.get('click')!({});
-    expect(findButton(dom, '保存失败(存储不可用)')).toBeDefined();
+    findAction(dom, 'pause-save-quit')!.listeners.get('click')!({});
+    expect(findAction(dom, 'pause-save-quit')!.textContent).toBe(t('ui:pause.saveFailed'));
     menu.hide();
     menu.show();
     // 重新弹出时按钮已复位:不然玩家一进暂停就挂着一句吓人的错误,而此刻根本没试过存
-    expect(findButton(dom, '保存并退出到标题')).toBeDefined();
-    expect(findButton(dom, '保存失败(存储不可用)')).toBeUndefined();
+    expect(findAction(dom, 'pause-save-quit')!.textContent).toBe(t('ui:pause.saveAndQuit'));
   });
 
   it('「设置」按钮:只说一声,收菜单与弹设置页都归 main(两个入口共用一页设置)', () => {
     make();
     dom.key(keyEvent('Escape'));
-    findButton(dom, '设置')!.listeners.get('click')!({});
+    findAction(dom, 'pause-settings')!.listeners.get('click')!({});
     expect(settingsOpened).toBe(1);
     expect(paused).toBe(true); // 世界继续冻着
   });
@@ -292,16 +297,16 @@ describe('createPauseMenu', () => {
     const settingsBtn = cardEl.children[6]!;
     expect(keyTable.tagName).toBe('DIV');
     expect(settingsBtn.tagName).toBe('BUTTON');
-    expect(settingsBtn.textContent).toBe('设置');
+    expect(settingsBtn.textContent).toBe(t('ui:pause.settings'));
     // 键位表排在设置按钮之前:暂停菜单按"求助页"顺序读下去,键位先于出口
     expect(cardEl.children.indexOf(keyTable)).toBeLessThan(cardEl.children.indexOf(settingsBtn));
-    // 五行五对:键名列右对齐、说明列左对齐,顺序与实现 KEY_ROWS 一致
-    const pairs = [
-      ['WASD', '航向'],
-      ['空格', '加速'],
-      ['I', '武器布局'],
-      ['按住 Tab', '射界'],
-      ['Esc', '暂停'],
+    // 五行五对:键名列是**键位 token**(不翻),说明列走 ui.keys 翻译,顺序与 KEY_ROWS 一致
+    const pairs: Array<[string, string]> = [
+      ['WASD', t('ui:keys.wasd')],
+      ['空格', t('ui:keys.space')],
+      ['I', t('ui:keys.layout')],
+      ['按住 Tab', t('ui:keys.firingArc')],
+      ['Esc', t('ui:keys.pause')],
     ];
     expect(keyTable.children.length).toBe(5);
     pairs.forEach(([key, desc], i) => {
@@ -314,8 +319,22 @@ describe('createPauseMenu', () => {
     // 纯文本:整表不挂任何监听(不是按钮,不可点),菜单收起/重开原样复用
     expect(keyTable.listeners.size).toBe(0);
     menu.show();
-    expect(findButton(dom, '设置')).toBeDefined();
+    expect(findAction(dom, 'pause-settings')).toBeDefined();
     expect(keyTable.children.length).toBe(5);
+  });
+
+  it('键位表说明列随语言翻:refreshLocale 后(en)键名照旧、说明变英文', async () => {
+    const menu = make();
+    const keyTable = card(dom).children[5]!;
+    expect(keyTable.children[0]!.children[0]!.textContent).toBe('WASD');
+    expect(keyTable.children[0]!.children[1]!.textContent).toBe(t('ui:keys.wasd'));
+    await changeLocale('en');
+    menu.refreshLocale();
+    // 键位 token 不翻:第一列还是 WASD / 空格 / I / 按住 Tab / Esc
+    expect(keyTable.children[0]!.children[0]!.textContent).toBe('WASD');
+    expect(keyTable.children[0]!.children[1]!.textContent).toBe(t('ui:keys.wasd'));
+    expect(keyTable.children[1]!.children[0]!.textContent).toBe('空格');
+    expect(keyTable.children[1]!.children[1]!.textContent).toBe(t('ui:keys.space'));
   });
 
   it('设置页开着时 Esc 归它:暂停菜单主动让路,不会一键摔回战斗', () => {
@@ -346,17 +365,35 @@ describe('createPauseMenu', () => {
     expect(paused).toBe(true); // 保持冻结 —— restart 会自己置 paused,轮不到这里翻
   });
 
+  it('refreshLocale 保留「保存失败」状态:切到 en 后失败提示翻新、菜单仍开着', async () => {
+    saveOk = false;
+    const menu = make();
+    dom.key(keyEvent('Escape')); // 暂停
+    findAction(dom, 'pause-save-quit')!.listeners.get('click')!({});
+    expect(findAction(dom, 'pause-save-quit')!.textContent).toBe(t('ui:pause.saveFailed'));
+    await changeLocale('en');
+    menu.refreshLocale();
+    expect(menu.visible()).toBe(true); // 可见性保持
+    const btn = findAction(dom, 'pause-save-quit')!;
+    expect(btn.textContent).toContain('Save failed');
+    // 下一次暂停仍复位回"保存并退出"(en)
+    menu.hide();
+    menu.show();
+    expect(btn.textContent).toBe(t('ui:pause.saveAndQuit'));
+  });
+
   it('声音按钮:点击切 audioBus 静音并同步按钮文字', async () => {
     // audioBus 是 module 单例,Node 下直接可用(ensureCtx 懒建,点击只是切布尔)
     const audio = (await import('../render/audio')).audioBus;
     audio.setMuted(false);
     make();
     dom.key(keyEvent('Escape'));
-    const btn = findButton(dom, '声音:开')!;
+    const btn = findAction(dom, 'pause-mute')!;
+    expect(btn.textContent).toBe(t('ui:pause.soundOn'));
     btn.listeners.get('click')!({});
     expect(audio.isMuted()).toBe(true);
-    expect(findButton(dom, '声音:关')).toBeDefined();
-    // 菜单开着时静音状态改,重开菜单也要画对(show 里 paintMute)
+    expect(btn.textContent).toBe(t('ui:pause.soundOff'));
+    // 菜单开着时静音状态改,重开菜单也要画对(show 里 paint)
     audio.setMuted(false);
   });
 
@@ -385,15 +422,16 @@ describe('createPauseMenu', () => {
     };
     const menu = createPauseMenu(hooks);
     menu.show();
-    expect(findButton(dom, '声音:开')).toBeDefined();
-    findButton(dom, '声音:开')!.listeners.get('click')!({});
+    const btn = findAction(dom, 'pause-mute')!;
+    expect(btn.textContent).toBe(t('ui:pause.soundOn'));
+    btn.listeners.get('click')!({});
     expect(setCalls).toBe(1);
     expect(muted).toBe(true);
-    expect(findButton(dom, '声音:关')).toBeDefined();
+    expect(btn.textContent).toBe(t('ui:pause.soundOff'));
     // 外部(设置页)改真相源后重开菜单,画对
     muted = false;
     menu.hide();
     menu.show();
-    expect(findButton(dom, '声音:开')).toBeDefined();
+    expect(btn.textContent).toBe(t('ui:pause.soundOn'));
   });
 });
