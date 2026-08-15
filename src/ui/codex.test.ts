@@ -588,11 +588,11 @@ function findCell(dom: StubDom, kind: string, id: string): StubEl | undefined {
 }
 
 /** 格子的可见文本:名称挂在子 div 上(桩的 textContent 不随子节点派生),取子树最后一个有字的叶子 ——
- * 武器卡的艺术框里有星数标签(★/★★/★★★)先于名称,取第一个会把星数标签当成卡片名 */
+ * 武器行的艺术框里有星数标签(★/★★/★★★),纯星串的叶子一律跳过,别把标签当成卡片名 */
 function cellText(cell: StubEl): string {
   let last = '';
   const walk = (el: StubEl): void => {
-    if (el.textContent.length > 0) last = el.textContent;
+    if (el.textContent.length > 0 && !/^★+$/.test(el.textContent)) last = el.textContent;
     for (const kid of el.children) walk(kid);
   };
   walk(cell);
@@ -686,18 +686,20 @@ describe('createCodexUi', () => {
     expect(tip(dom).style.display).toBe('none');
   });
 
-  it('卡片配图:武器卡三档星级缩略图(同图放大 + 图下各标星数),敌/法令仍单图', () => {
+  it('卡片配图:武器 = 一行一种的星级三档缩略图(同图放大 + 图下各标星数),敌/法令仍单图网格', () => {
     const ui = make();
     ui.show();
     const cell = findCell(dom, 'weapons', String(TOWER_AUTOCANNON))!;
+    // 武器行是 flex 横排(一行一种),不再是网格格子
+    expect(cell.style.cssText).toContain('display:flex');
     const starImgs = findAll(cell, (el) => el.tagName === 'IMG');
     expect(starImgs.length).toBe(3);
     expect(starImgs.map((el) => el.alt)).toEqual(['自动机炮 ★', '自动机炮 ★★', '自动机炮 ★★★']);
     expect(starImgs.every((el) => el.src.endsWith('.png'))).toBe(true); // 生成贴图直摆
-    // 放大倍率与战斗同源(TOWER_STAR_HEAD_SCALES × 26px 基准):1★ 26 / 2★ 30 / 3★ 34
-    expect(starImgs[0]!.style.cssText).toContain('width:26px;height:26px;');
-    expect(starImgs[1]!.style.cssText).toContain('width:30px;height:30px;');
-    expect(starImgs[2]!.style.cssText).toContain('width:34px;height:34px;');
+    // 放大倍率与战斗同源(TOWER_STAR_HEAD_SCALES × 36px 基准):1★ 36 / 2★ 42 / 3★ 48
+    expect(starImgs[0]!.style.cssText).toContain('width:36px;height:36px;');
+    expect(starImgs[1]!.style.cssText).toContain('width:42px;height:42px;');
+    expect(starImgs[2]!.style.cssText).toContain('width:48px;height:48px;');
     // 图下各标 ★/★★/★★★,标签色与 renderer 的 FX_STAR_COLORS 同一份(冷蓝/金/亮金)
     const labels = findAll(cell, (el) => ['★', '★★', '★★★'].includes(el.textContent));
     expect(labels.map((l) => l.textContent)).toEqual(['★', '★★', '★★★']);
@@ -708,7 +710,7 @@ describe('createCodexUi', () => {
     const storm = findCell(dom, 'weapons', String(TOWER_STORM_CANNON))!;
     const stormImgs = findAll(storm, (el) => el.tagName === 'IMG');
     expect(stormImgs.every((el) => el.src.includes('autocannon-head'))).toBe(true);
-    // 敌/法令单图不变:图鉴图标 alt 的 PNG 与 SVG data URI 各在其位
+    // 敌/法令单图网格不变:图鉴图标 alt 的 PNG 与 SVG data URI 各在其位
     const plain = dom.created.filter((el) => el.tagName === 'IMG' && el.alt === '图鉴图标');
     expect(plain.some((el) => el.src.endsWith('.png'))).toBe(true);
     expect(plain.some((el) => el.src.startsWith('data:image/svg+xml'))).toBe(true);

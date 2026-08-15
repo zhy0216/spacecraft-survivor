@@ -5,10 +5,11 @@
  * **整页只建一次**(与 settingsMenu 同一条纪律):DOM 与 window 监听器都在 createCodexUi 里挂,
  * 反复 show/hide 不重建 —— 建两份就是两份 Esc 监听器、两块遮罩。
  *
- * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令),内容是卡片网格 ——
- * 每张卡配图 + 名称,未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
+ * 布局 = **以图为主**:顶部一行过滤器(全部/武器/敌人/法令),敌人/法令是卡片网格,
+ * 武器是**一行一种的纵向列表**(名称 + 三档星级缩略图,整行悬停弹 tooltip,内容区可滚动);
+ * 未解锁灰显;具体数值不在网格里占行,悬停弹 tooltip 展示
  * (tooltip 与 HUD 法令悬停同一条"整页只此一个"的口径,pointer-events:none 永不抢鼠标)。
- * **武器卡是星级三档缩略图**(同一张贴图按战斗倍率放大三张,图下各标 ★/★★/★★★ ——
+ * **武器行是星级三档缩略图**(同一张贴图按战斗倍率放大三张,图下各标 ★/★★/★★★ ——
  * 游戏里 2★/3★ 的炮头就是放大件,不标星数玩家认不出图上画的是几星的枪);敌/法令仍一张大图。
  * **星级三档数值全部印在悬停里**:1★/2★/3★ 各一行伤害 · 射程 · 射速/充能 —— 旧版只印
  * 数值表 1★ 的底值,2★/3★ 的成长(starLevel 曲线)图上没有数字,玩家还以为高星不涨伤。
@@ -107,9 +108,6 @@ const CATEGORY_CSS = `color:${IDLE_COLOR};font-size:12px;letter-spacing:.12em;ma
 
 /** 卡片网格:每格 76px 起,列数随卡片宽度自适应(敌人/法令 ≈ 6-7 列) */
 const GRID_CSS = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:8px;';
-/** 武器网格:星级三档缩略图并排 ≈ 96px + 卡片内边距,最小列宽放宽到 108px,别把三档图挤溢出 */
-const GRID_WEAPONS_CSS =
-  'display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px;';
 /** 图鉴卡片:图上名下;锁定卡整卡降透明度(图跟着一起压暗,与结算图鉴同一套灰显) */
 const CELL_CSS =
   'display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 2px 5px;' +
@@ -123,15 +121,27 @@ const CELL_NAME_CSS =
   `font-size:11px;color:${VALUE_COLOR};text-align:center;line-height:1.3;letter-spacing:.02em;`;
 
 /**
- * 星级三档缩略图:每档一列(图 + 星数标签),三列并排,1★ 基准 26px、
- * 2★/3★ 按 TOWER_STAR_HEAD_SCALES 放大(26/30/34px) —— 与战斗里的炮位放大同一份倍率。
+ * 星级三档缩略图:每档一列(图 + 星数标签),三列并排,1★ 基准 36px、
+ * 2★/3★ 按 TOWER_STAR_HEAD_SCALES 放大(36/42/48px) —— 与战斗里的炮位放大同一份倍率。
  * 标签色与 renderer 的 FX_STAR_COLORS 同一份(1★ 冷蓝/2★ 金/3★ 亮金):金色留给星级徽记,
  * 与 docs/weapon-star-fire-patterns「金色只用于星级徽记」同一条口径。
  */
 const STAR_THUMB_COL_CSS = 'display:flex;flex-direction:column;align-items:center;gap:2px;';
-const STAR_LABEL_CSS = 'font-size:10px;line-height:1;letter-spacing:.02em;';
+const STAR_LABEL_CSS = 'font-size:11px;line-height:1;letter-spacing:.02em;';
 const STAR_LABEL_COLORS = ['#9adcff', '#ffd479', '#fff1a8'] as const;
-const STAR_THUMB_BASE_PX = 26;
+const STAR_THUMB_BASE_PX = 36;
+
+/**
+ * 武器行(一行一种):名称 + 三档星级缩略图,整行悬停弹 tooltip,纵向列表靠 scrollEl 滚动。
+ * 比网格卡大一档 —— 三档图并排能看清放大差异,名称不再缩在 76px 格子里换行。
+ */
+const WEAPON_ROW_CSS =
+  'display:flex;align-items:center;gap:14px;padding:9px 10px;margin-bottom:6px;' +
+  'border-radius:6px;border:1px solid rgba(43,74,110,.45);background:rgba(10,16,26,.5);';
+const WEAPON_ROW_LOCKED_CSS = WEAPON_ROW_CSS + 'opacity:.45;';
+const WEAPON_ROW_NAME_CSS =
+  `width:104px;flex:0 0 104px;font-size:13px;color:${VALUE_COLOR};line-height:1.35;letter-spacing:.02em;`;
+const WEAPON_ROW_ART_CSS = 'display:flex;gap:12px;align-items:center;';
 
 /** 悬停 tooltip:整页只此一个,pointer-events:none 永不抢鼠标(与 HUD 法令悬停同一条口径) */
 const TIP_CSS =
@@ -544,6 +554,41 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     }
   }
 
+  /** 悬停接线(网格卡与武器行共用):进卡弹 tooltip 定位在下方,贴屏边时夹回 ——
+   * 与 HUD tooltip 同一条"永远可读"的口径;移开即隐。 */
+  function wireHover(host: HTMLElement, row: CodexRow): void {
+    host.addEventListener('mouseenter', () => {
+      tip.textContent = row.hover.join('\n');
+      tip.style.display = 'block';
+      const rect = host.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 316));
+      tip.style.left = `${left}px`;
+      tip.style.top = `${rect.bottom + 6}px`;
+    });
+    host.addEventListener('mouseleave', () => {
+      tip.style.display = 'none';
+    });
+  }
+
+  /** 三档星级缩略图(武器行专用):同一张贴图按战斗倍率放大三张,每档图下各标星数 ——
+   * 不标的话 2★/3★ 只是同图变大小,玩家认不出图上画的是几星的枪。 */
+  function appendStarThumbs(artBox: HTMLElement, url: string, name: string): void {
+    for (let s = 0; s < 3; s++) {
+      const col = document.createElement('div');
+      col.style.cssText = STAR_THUMB_COL_CSS;
+      const img = document.createElement('img');
+      const px = Math.round(STAR_THUMB_BASE_PX * (TOWER_STAR_HEAD_SCALES[s] ?? 1));
+      img.style.cssText = CELL_IMG_CSS + `width:${px}px;height:${px}px;`;
+      img.src = url;
+      img.alt = `${name} ${'★'.repeat(s + 1)}`;
+      const label = document.createElement('div');
+      label.style.cssText = STAR_LABEL_CSS + `color:${STAR_LABEL_COLORS[s] ?? '#ffd479'};`;
+      label.textContent = '★'.repeat(s + 1);
+      col.append(img, label);
+      artBox.appendChild(col);
+    }
+  }
+
   /** 一张卡:配图容器 + 名称;悬停点亮 tooltip(定位在卡下方,贴屏边时夹回)。
    * data-content-kind = 分区键、data-content-id = 行 id(见 CodexRow.id)——
    * 测试与自动化用它们定位行,不拿本地化名称当唯一身份。 */
@@ -555,24 +600,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
     if (row.art !== null) {
       const artBox = document.createElement('div');
       artBox.style.cssText = CELL_ART_CSS;
-      if (row.art.kind === 'stars') {
-        // 星级三档缩略图:同一张贴图按战斗倍率放大,每档图下各标星数 ——
-        // 不标的话 2★/3★ 只是同图变大小,玩家认不出图上画的是几星的枪
-        for (let s = 0; s < 3; s++) {
-          const col = document.createElement('div');
-          col.style.cssText = STAR_THUMB_COL_CSS;
-          const img = document.createElement('img');
-          const px = Math.round(STAR_THUMB_BASE_PX * (TOWER_STAR_HEAD_SCALES[s] ?? 1));
-          img.style.cssText = CELL_IMG_CSS + `width:${px}px;height:${px}px;`;
-          img.src = row.art.url;
-          img.alt = `${row.name} ${'★'.repeat(s + 1)}`;
-          const label = document.createElement('div');
-          label.style.cssText = STAR_LABEL_CSS + `color:${STAR_LABEL_COLORS[s] ?? '#ffd479'};`;
-          label.textContent = '★'.repeat(s + 1);
-          col.append(img, label);
-          artBox.appendChild(col);
-        }
-      } else if (row.art.kind === 'img') {
+      if (row.art.kind === 'img') {
         const size = row.art.urls.length > 1 ? '34px' : '56px';
         for (const url of row.art.urls) {
           const img = document.createElement('img');
@@ -581,32 +609,57 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
           img.alt = t('ui:codex.alt');
           artBox.appendChild(img);
         }
-      } else {
+      } else if (row.art.kind === 'svg') {
         const img = document.createElement('img');
         img.style.cssText = CELL_IMG_CSS + 'width:56px;height:56px;';
         img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
         img.alt = t('ui:codex.alt');
         artBox.appendChild(img);
       }
+      // 'stars' 只会出现在武器行(appendWeaponRow);敌人/法令卡收到它 = 数据层改坏,静默跳过配图
       cell.appendChild(artBox);
     }
     const name = document.createElement('div');
     name.style.cssText = CELL_NAME_CSS;
     name.textContent = row.name;
     cell.appendChild(name);
-    cell.addEventListener('mouseenter', () => {
-      tip.textContent = row.hover.join('\n');
-      tip.style.display = 'block';
-      const rect = cell.getBoundingClientRect();
-      // 贴卡片下沿;右缘会越出视口时夹回(与 HUD tooltip 同一条"永远可读"的口径)
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 316));
-      tip.style.left = `${left}px`;
-      tip.style.top = `${rect.bottom + 6}px`;
-    });
-    cell.addEventListener('mouseleave', () => {
-      tip.style.display = 'none';
-    });
+    wireHover(cell, row);
     grid.appendChild(cell);
+  }
+
+  /** 一行一种武器:名称 + 三档星级缩略图(整行悬停,与网格卡同一条接线)。
+   * data-content-kind/content-id 与网格卡同口径,测试与自动化照旧定位。 */
+  function appendWeaponRow(list: HTMLElement, row: CodexRow): void {
+    const el = document.createElement('div');
+    el.style.cssText = row.locked ? WEAPON_ROW_LOCKED_CSS : WEAPON_ROW_CSS;
+    el.dataset.contentKind = 'weapons';
+    el.dataset.contentId = row.id ?? '';
+    const name = document.createElement('div');
+    name.style.cssText = WEAPON_ROW_NAME_CSS;
+    name.textContent = row.name;
+    el.appendChild(name);
+    if (row.art !== null) {
+      const artBox = document.createElement('div');
+      artBox.style.cssText = WEAPON_ROW_ART_CSS;
+      if (row.art.kind === 'stars') {
+        appendStarThumbs(artBox, row.art.url, row.name);
+      } else if (row.art.kind === 'img') {
+        const img = document.createElement('img');
+        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;';
+        img.src = row.art.urls[0]!;
+        img.alt = t('ui:codex.alt');
+        artBox.appendChild(img);
+      } else {
+        const img = document.createElement('img');
+        img.style.cssText = CELL_IMG_CSS + 'width:48px;height:48px;';
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(row.art.svg)}`;
+        img.alt = t('ui:codex.alt');
+        artBox.appendChild(img);
+      }
+      el.appendChild(artBox);
+    }
+    wireHover(el, row);
+    list.appendChild(el);
   }
 
   /** 整块重排:标题/统计照 getProgress 现读,网格整块 replaceChildren 重建 —— 与
@@ -623,10 +676,15 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       label.style.cssText = CATEGORY_CSS;
       label.textContent = section.title;
       scrollEl.appendChild(label);
-      const grid = document.createElement('div');
-      grid.style.cssText = section.key === 'weapons' ? GRID_WEAPONS_CSS : GRID_CSS;
-      for (const row of section.rows) appendCell(grid, row, section.key);
-      scrollEl.appendChild(grid);
+      if (section.key === 'weapons') {
+        // 武器 = 一行一种的纵向列表,直接排在滚动区里
+        for (const row of section.rows) appendWeaponRow(scrollEl, row);
+      } else {
+        const grid = document.createElement('div');
+        grid.style.cssText = GRID_CSS;
+        for (const row of section.rows) appendCell(grid, row, section.key);
+        scrollEl.appendChild(grid);
+      }
     }
   }
 
