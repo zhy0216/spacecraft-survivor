@@ -1,9 +1,12 @@
 /**
- * 移动端驾驶层：底部固定摇杆 + 加速键。
+ * 移动端驾驶层：底部固定摇杆 + 加速键 + 背包键。
  *
  * UI 只把手势翻译成 Input 的虚拟航向/虚拟 Space，sim 仍然只消费 ShipCommand，
  * 因此键盘和触控共用同一条确定性输入管线。节点整页只创建一次；暂停、商店、
  * 升级时只收起并释放输入，绝不重挂 pointer 监听器。
+ *
+ * 背包键不是驾驶输入：它只是按 I 打开舰船背包的触控入口，动作由 main 通过
+ * setArmoryAction 注入（mobileControls 建得比 armoryPanel 早，故走注入而非构造参数）。
  */
 import type { Input } from '../core/input';
 import { t } from '../i18n';
@@ -16,6 +19,8 @@ export interface MobileControlsUi {
   sync(runVisible: boolean, enabled: boolean): void;
   /** false = 左航向右加速；true = 左加速右航向。 */
   setSwapped(swapped: boolean): void;
+  /** 背包键点下时回调（main 接 armoryPanel.toggle，与按 I 同一条路径）。 */
+  setArmoryAction(action: () => void): void;
   refreshLocale(): void;
 }
 
@@ -55,13 +60,27 @@ export function createMobileControls(input: Input): MobileControlsUi {
   boost.appendChild(boostCore);
   boostWrap.append(boostLabel, boost);
 
-  root.append(steer, boostWrap);
+  const armoryWrap = document.createElement('div');
+  armoryWrap.className = 'sw-mobile-armory-wrap';
+  const armoryLabel = document.createElement('div');
+  armoryLabel.className = 'sw-mobile-control-label';
+  const armory = document.createElement('button');
+  armory.type = 'button';
+  armory.className = 'sw-mobile-armory';
+  armory.setAttribute('aria-label', t('ui:keys.layout'));
+  const armoryIcon = document.createElement('span');
+  armoryIcon.className = 'sw-mobile-armory-icon';
+  armory.appendChild(armoryIcon);
+  armoryWrap.append(armoryLabel, armory);
+
+  root.append(steer, armoryWrap, boostWrap);
   document.getElementById('ui')!.appendChild(root);
 
   let steerPointer = -1;
   let boostPointer = -1;
   let lastRunVisible = false;
   let lastEnabled = false;
+  let armoryAction: (() => void) | null = null;
 
   function resetStick(): void {
     steerPointer = -1;
@@ -132,6 +151,11 @@ export function createMobileControls(input: Input): MobileControlsUi {
   boost.addEventListener('pointercancel', releaseBoost);
   boost.addEventListener('lostpointercapture', releaseBoost);
 
+  // 背包键只在控件可见（runActive 且未暂停）时响应；动作留给 main 注入，本层不认面板。
+  armory.addEventListener('click', () => {
+    if (lastEnabled) armoryAction?.();
+  });
+
   // 长按不弹系统菜单；这块区域只负责驾驶。
   root.addEventListener('contextmenu', (event) => event.preventDefault());
 
@@ -139,6 +163,8 @@ export function createMobileControls(input: Input): MobileControlsUi {
     steerLabel.textContent = t('ui:keys.wasd');
     boostLabel.textContent = t('ui:keys.space');
     boost.setAttribute('aria-label', t('ui:keys.space'));
+    armoryLabel.textContent = t('ui:keys.layout');
+    armory.setAttribute('aria-label', t('ui:keys.layout'));
   }
 
   function requestGameResize(): void {
@@ -166,6 +192,9 @@ export function createMobileControls(input: Input): MobileControlsUi {
     },
     setSwapped(swapped: boolean): void {
       root.classList.toggle('sw-mobile-controls-swapped', swapped);
+    },
+    setArmoryAction(action: () => void): void {
+      armoryAction = action;
     },
     refreshLocale,
   };

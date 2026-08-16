@@ -272,4 +272,41 @@ describe('舰船背包面板', () => {
     expect(world.weapons[2]!.type).toBe(TOWER_AUTOCANNON);
     await changeLocale('zh-CN');
   });
+
+  it('toggle(移动端背包键入口):blocked 让路、开着就关、能开才开', () => {
+    const world = createWorld();
+    let blocked = false;
+    let canOpen = true;
+    let opened = 0;
+    let closed = 0;
+    const panel = createArmoryPanel({
+      canOpen: () => canOpen,
+      onOpen: () => { opened++; },
+      onClose: () => { closed++; },
+      blocked: () => blocked,
+    });
+    panel.setWorld(world);
+
+    // 能开:toggle 打开并触发 onOpen
+    panel.toggle();
+    expect(panel.visible()).toBe(true);
+    expect(opened).toBe(1);
+
+    // 开着:toggle 关闭并触发 onClose
+    panel.toggle();
+    expect(panel.visible()).toBe(false);
+    expect(closed).toBe(1);
+
+    // 覆盖层占用(blocked):toggle 一记都不响,面板保持关
+    blocked = true;
+    panel.toggle();
+    expect(panel.visible()).toBe(false);
+    expect(opened).toBe(1);
+
+    // canOpen 说不行:toggle 同样不响
+    blocked = false;
+    canOpen = false;
+    panel.toggle();
+    expect(panel.visible()).toBe(false);
+  });
 });

@@ -35,6 +35,8 @@ export interface ArmoryPanelHooks {
 export interface ArmoryPanelUi {
   show(): void;
   hide(): void;
+  /** 按 I / 移动端背包键的同一入口：被上层覆盖(blocked)时不响应,开着的就关,能开就开。 */
+  toggle(): void;
   visible(): boolean;
   setWorld(world: World | null): void;
   /** 单测用:当前选中的槽位(-1 = 没选) */
@@ -112,6 +114,13 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
     hooks.onClose();
   }
 
+  /** I 键与移动端背包键共用：blocked 让路 → 开着就关 → 能开就开（Escape 只负责关，不经这里）。 */
+  function toggle(): void {
+    if (hooks.blocked?.()) return;
+    if (visible) close();
+    else if (hooks.canOpen()) show();
+  }
+
   window.addEventListener('keydown', (e) => {
     if (e.repeat || isTyping()) return;
     if (hooks.blocked?.()) return;
@@ -119,12 +128,13 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
       if (e.code === 'KeyI' || e.code === 'Escape') close();
       return;
     }
-    if (e.code === 'KeyI' && hooks.canOpen()) show();
+    if (e.code === 'KeyI') toggle();
   });
 
   return {
     show,
     hide,
+    toggle,
     visible: () => visible,
     setWorld: (next) => {
       world = next;

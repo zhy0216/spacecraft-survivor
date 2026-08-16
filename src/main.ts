@@ -651,6 +651,9 @@ async function boot(): Promise<void> {
   });
   // 语言切换成功后背包(及其舰船图)原地重画文案(05 号):不重建槽位/选择态/交换态
   registerLocaleAware(armoryPanel);
+  // 移动端背包键 = 按 I 的同一条入口(blocked/canOpen/时停全套裁决都在 toggle 里);
+  // 控件只在 runActive 且未暂停时可见,但动作本身再走一遍裁决,键盘与触控同口径。
+  mobileControls.setArmoryAction(() => armoryPanel.toggle());
 
   /**
    * 这一局跑起来了没有。**存档的总闸**:boot 里那个预建的 World(标题界面背景里那艘
