@@ -397,6 +397,12 @@ export const ui: DeepRecord<typeof zhUi> = {
       saved: 'Saved',
       epilogueContinue: 'Confirm Report · View Voyage Ending (Enter)',
     },
+    remind: {
+      message: "This run's log hasn't been saved yet — it can't be saved after leaving",
+      saveNow: 'Save Log',
+      leaveAnyway: 'Leave Anyway',
+      dismiss: "Don't ask again",
+    },
     upload: {
       noEndpoint: 'No upload endpoint configured',
       noLog: 'No run log this game',

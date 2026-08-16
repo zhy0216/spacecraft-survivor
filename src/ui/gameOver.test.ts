@@ -492,6 +492,13 @@ function panelButtons(dom: StubDom): StubEl[] {
   return lastRoot.children[0]!.children.filter((el) => el.tagName === 'BUTTON');
 }
 
+/** 漏存提醒块 = 卡里唯一一个 REMIND_CSS 开头的 div(默认 display:none,弹提醒时改成 block) */
+function remindBlock(dom: StubDom): StubEl {
+  return panel(dom).children.find((k) =>
+    k.style.cssText.startsWith('display:none;margin-top:10px'),
+  )!;
+}
+
 describe('createGameOverUi', () => {
   let dom: StubDom;
   let restarts: number;
@@ -711,7 +718,7 @@ describe('createGameOverUi', () => {
     expect(findEl(panel(dom), (el) => el.textContent === '导弹巢(未解锁)')).toBeDefined();
   });
 
-  it('上传按钮:不传 onUpload 就不摆(按钮数不变),传了垫底且带 U 键提示', () => {
+  it('上传按钮:不传 onUpload 就不摆(按钮数不变),传了排在返回标题之上且带 U 键提示', () => {
     // 只传 onRestart:卡里 1 颗(主动作),没有上传那颗
     make();
     expect(panelButtons(dom)).toHaveLength(1);
@@ -722,12 +729,35 @@ describe('createGameOverUi', () => {
     });
     const buttons = panelButtons(dom);
     expect(buttons).toHaveLength(2);
-    // 垫底 = 最后一颗;与「返回标题」同一档暗色,不与重开抢眼
+    // 动作档配色(可点击状态),不再与「返回标题」同一档暗色
     const upload = buttons[1]!;
     expect(upload.textContent).toBe('上传本局日志(U)');
-    expect(upload.style.cssText).toContain('#5f7a99');
+    expect(upload.style.cssText).toContain('#9adcff');
     ui.show(summary());
     expect(upload.disabled).toBe(false);
+  });
+
+  it('按钮顺序:再来一局 → 再试 → 保存/上传日志 → 返回标题(漏存提醒藏在上传与标题之间)', () => {
+    createGameOverUi({
+      onRestart: () => restarts++,
+      onRetry() {},
+      onTitle() {},
+      onUpload: async () => ({ status: 'done' }),
+    });
+    const buttons = panelButtons(dom);
+    expect(buttons).toHaveLength(4);
+    expect(buttons[0]!.textContent).toBe('再来一局(Enter)');
+    expect(buttons[1]!.textContent).toContain('再试这一局');
+    expect(buttons[2]!.textContent).toBe('上传本局日志(U)');
+    expect(buttons[3]!.textContent).toBe('返回标题');
+    // 提醒块 = 卡里最后一个 div 子节点,位于上传按钮与返回标题之间
+    const cardKids = panel(dom).children;
+    const uploadIdx = cardKids.indexOf(buttons[2]!);
+    const titleIdx = cardKids.indexOf(buttons[3]!);
+    const remind = remindBlock(dom);
+    const remindIdx = cardKids.indexOf(remind);
+    expect(uploadIdx).toBeLessThan(remindIdx);
+    expect(remindIdx).toBeLessThan(titleIdx);
   });
 
   it('uploadLocal(本机开发):按钮改口「保存本局日志」,done = 已保存、save-failed = 保存失败', async () => {
@@ -814,6 +844,121 @@ describe('createGameOverUi', () => {
     expect(uploads).toBe(1);
   });
 
+  it('漏存提醒:日志没保存点返回标题先弹提醒;「保存日志」走同一条上传流程,成功后提醒收起', async () => {
+    let titles = 0;
+    const outcomes: UploadOutcome[] = [];
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onTitle: () => titles++,
+      onUpload: async () => outcomes.shift() ?? { status: 'done' },
+    });
+    // 按钮顺序:再来一局 / 上传 / 返回标题
+    const title = panelButtons(dom)[2]!;
+    ui.show(summary());
+    // 提醒块默认藏着;没保存就点返回:弹提醒,不离开
+    const remind = remindBlock(dom);
+    expect(remind.style.display).toBe('none');
+    title.listeners.get('click')!(undefined);
+    expect(titles).toBe(0);
+    expect(root(dom).style.display).toBe('flex');
+    expect(remind.style.display).toBe('block');
+    expect(remind.children[0]!.textContent).toBe('本局日志还没有保存,返回标题后将无法再保存');
+    // 「保存日志」= 同一条上传流程:成功(done)后提醒自动收起
+    const saveNow = remind.children[1]!.children[0]!;
+    expect(saveNow.textContent).toBe('保存日志');
+    outcomes.push({ status: 'done' });
+    saveNow.listeners.get('click')!(undefined);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(remind.style.display).toBe('none');
+    // 已保存:再点返回直接离开
+    title.listeners.get('click')!(undefined);
+    expect(titles).toBe(1);
+    expect(root(dom).style.display).toBe('none');
+  });
+
+  it('漏存提醒:保存失败提醒留着;「仍要返回」放行;「以后不再提醒」写 localStorage 永久关闭', async () => {
+    // localStorage 桩:Node 里没有,而永久关闭靠它记(与 installDom 同一条装桩口径)
+    const store = new Map<string, string>();
+    const g = globalThis as unknown as Record<string, unknown>;
+    const prevLocalStorage = g.localStorage;
+    g.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: (k: string) => {
+        store.delete(k);
+      },
+    };
+    try {
+      let titles = 0;
+      const outcomes: UploadOutcome[] = [];
+      const ui = createGameOverUi({
+        onRestart: () => restarts++,
+        onTitle: () => titles++,
+        onUpload: async () => outcomes.shift() ?? { status: 'done' },
+      });
+      const title = panelButtons(dom)[2]!;
+      ui.show(summary());
+      const remind = remindBlock(dom);
+      title.listeners.get('click')!(undefined);
+      expect(remind.style.display).toBe('block');
+      // 保存失败:提醒留着 —— 玩家仍可选「仍要返回」或永久关闭
+      const saveNow = remind.children[1]!.children[0]!;
+      outcomes.push({ status: 'error', code: 'upload-failed' });
+      saveNow.listeners.get('click')!(undefined);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(remind.style.display).toBe('block');
+      // 「仍要返回」:不经过保存直接放行
+      const leave = remind.children[1]!.children[1]!;
+      expect(leave.textContent).toBe('仍要返回');
+      leave.listeners.get('click')!(undefined);
+      expect(titles).toBe(1);
+      expect(root(dom).style.display).toBe('none');
+      // 新一局再点:仍会弹(还没永久关闭),这次点「以后不再提醒」
+      ui.show(summary());
+      title.listeners.get('click')!(undefined);
+      expect(remind.style.display).toBe('block');
+      const dismiss = remind.children[2]!;
+      expect(dismiss.textContent).toBe('以后不再提醒');
+      dismiss.listeners.get('click')!(undefined);
+      expect(remind.style.display).toBe('none');
+      expect(store.get('starwreck.runLogRemind.v1')).toBe('off');
+      // 之后每局点返回都直接放行,提醒永远不再弹
+      ui.show(summary());
+      title.listeners.get('click')!(undefined);
+      expect(titles).toBe(2);
+      expect(remind.style.display).toBe('none');
+      expect(root(dom).style.display).toBe('none');
+    } finally {
+      g.localStorage = prevLocalStorage;
+    }
+  });
+
+  it('漏存提醒英文:refreshLocale 按当前语言重画提醒文案', async () => {
+    let titles = 0;
+    const ui = createGameOverUi({
+      onRestart: () => restarts++,
+      onTitle: () => titles++,
+      onUpload: async () => ({ status: 'done' }),
+    });
+    const title = panelButtons(dom)[2]!;
+    ui.show(summary());
+    title.listeners.get('click')!(undefined);
+    const remind = remindBlock(dom);
+    expect(remind.children[0]!.textContent).toBe('本局日志还没有保存,返回标题后将无法再保存');
+    await changeLocale('en');
+    ui.refreshLocale();
+    expect(remind.children[0]!.textContent).toBe(
+      "This run's log hasn't been saved yet — it can't be saved after leaving",
+    );
+    expect(remind.children[1]!.children[0]!.textContent).toBe('Save Log');
+    expect(remind.children[1]!.children[1]!.textContent).toBe('Leave Anyway');
+    expect(remind.children[2]!.textContent).toBe("Don't ask again");
+    expect(remind.style.display).toBe('block');
+    expect(titles).toBe(0);
+  });
+
   it('refreshLocale:切换语言重画文案,不重触发上传/重开/回标题;上传中状态保留', async () => {
     let uploads = 0;
     let resolveUpload!: (v: UploadOutcome) => void;
@@ -828,9 +973,9 @@ describe('createGameOverUi', () => {
       },
     });
     ui.show(summary({ result: RESULT_LOSE, survivedSec: 61, kills: 3, segment: 1 }));
-    // 上传按钮 = 卡里最后一颗(restart/retry/title 之后垫底)
+    // 按钮顺序:再来一局 / 上传 / 返回标题 —— 上传是第 2 颗
     const buttons = panelButtons(dom);
-    const upload = buttons[buttons.length - 1]!;
+    const upload = buttons[1]!;
     // 上传中:点击后 onUpload 挂着不结算,状态停在"上传中…"(同步断言,微任务还没跑)
     upload.listeners.get('click')!(undefined);
     expect(upload.textContent).toBe('上传中…');

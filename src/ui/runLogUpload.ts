@@ -22,6 +22,9 @@ import type { RunLog } from '../sim/runLog';
 /** 上传端点键(调试覆盖,不进设置存档) */
 export const RUN_LOG_ENDPOINT_KEY = 'starwreck.logEndpoint.v1';
 
+/** 漏存提醒的永久关闭键(见 ui/gameOver.ts 的「返回标题」守卫) */
+export const RUN_LOG_REMIND_KEY = 'starwreck.runLogRemind.v1';
+
 /** Cloudflare Worker 上的生产上传入口；同源部署不需要 CORS 或玩家配置。 */
 export const DEFAULT_RUN_LOG_ENDPOINT = '/api/logs';
 
@@ -102,6 +105,24 @@ export function getLogEndpoint(): string {
 export function setLogEndpoint(url: string): void {
   try {
     localStorage.setItem(RUN_LOG_ENDPOINT_KEY, url);
+  } catch {
+    // 静默失败:见文件头兜底口径
+  }
+}
+
+/** 玩家是否永久关掉了「日志还没保存」的漏存提醒。localStorage 不可用一律视为没关(照常提醒)。 */
+export function isRunLogRemindDismissed(): boolean {
+  try {
+    return localStorage.getItem(RUN_LOG_REMIND_KEY) === 'off';
+  } catch {
+    return false;
+  }
+}
+
+/** 永久关闭漏存提醒(写失败静默:这次偏好丢就丢了,不值得打断流程,见文件头兜底口径) */
+export function dismissRunLogRemind(): void {
+  try {
+    localStorage.setItem(RUN_LOG_REMIND_KEY, 'off');
   } catch {
     // 静默失败:见文件头兜底口径
   }

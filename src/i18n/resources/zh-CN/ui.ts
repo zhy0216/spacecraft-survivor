@@ -394,6 +394,12 @@ export const ui = {
       saved: '已保存',
       epilogueContinue: '确认战报 · 查看航行结局(Enter)',
     },
+    remind: {
+      message: '本局日志还没有保存,返回标题后将无法再保存',
+      saveNow: '保存日志',
+      leaveAnyway: '仍要返回',
+      dismiss: '以后不再提醒',
+    },
     upload: {
       noEndpoint: '未配置上传地址',
       noLog: '本局无日志',
