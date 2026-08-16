@@ -197,6 +197,12 @@ describe('createSettingsMenu:语言行', () => {
     expect(rowButton(dom, 'Sound')).toBeDefined();
     expect(findAction(dom, 'settings-mute')!.textContent).toBe(t('common:on'));
     expect(findAction(dom, 'settings-shake')!.textContent).toBe(t('ui:settings.shakeLevels.standard'));
+    expect(rowButton(dom, 'Stats Panel')).toBeDefined();
+    expect(findAction(dom, 'settings-stats-panel')!.textContent).toBe(t('common:off'));
+    expect(rowButton(dom, 'Mobile Controls')).toBeDefined();
+    expect(findAction(dom, 'settings-mobile-controls')!.textContent).toBe(
+      t('ui:settings.controlLayouts.steerLeft'),
+    );
     expect(findAction(dom, 'settings-back')!.textContent).toBe('Back (Esc)');
     expect(findAction(dom, 'settings-reset')!.textContent).toBe('Restore Defaults');
     expect(
@@ -265,11 +271,17 @@ describe('createSettingsMenu:迁移后的整页文案(04 号)', () => {
     expect(rowButton(dom, t('ui:settings.shake'))).toBeDefined();
     expect(rowButton(dom, t('ui:settings.damageNumbers'))).toBeDefined();
     expect(rowButton(dom, t('ui:settings.hitstop'))).toBeDefined();
+    expect(rowButton(dom, t('ui:settings.statsPanel'))).toBeDefined();
+    expect(rowButton(dom, t('ui:settings.mobileControls'))).toBeDefined();
     // 控件值:开关 开/关、震屏档位、返回/恢复默认/自动保存提示
     expect(findAction(dom, 'settings-mute')!.textContent).toBe(t('common:on'));
     expect(findAction(dom, 'settings-shake')!.textContent).toBe(t('ui:settings.shakeLevels.standard'));
     expect(findAction(dom, 'settings-damage-numbers')!.textContent).toBe(t('common:on'));
     expect(findAction(dom, 'settings-hitstop')!.textContent).toBe(t('common:on'));
+    expect(findAction(dom, 'settings-stats-panel')!.textContent).toBe(t('common:off'));
+    expect(findAction(dom, 'settings-mobile-controls')!.textContent).toBe(
+      t('ui:settings.controlLayouts.steerLeft'),
+    );
     expect(findAction(dom, 'settings-back')!.textContent).toBe('返回(Esc)');
     expect(findAction(dom, 'settings-reset')!.textContent).toBe(t('ui:settings.reset'));
     expect(card(dom).children.some((k) => k.textContent === t('ui:settings.instantSaveHint'))).toBe(true);
@@ -289,5 +301,20 @@ describe('createSettingsMenu:迁移后的整页文案(04 号)', () => {
     expect(current.masterVolume).toBe(0.6);
     findAction(dom, 'settings-volume-down')!.listeners.get('click')!({});
     expect(current.masterVolume).toBe(0.5);
+  });
+
+  it('统计面板与移动控制位置点击后即时写回并重画', () => {
+    const menu = make();
+    menu.show();
+
+    findAction(dom, 'settings-stats-panel')!.listeners.get('click')!({});
+    expect(current.showStatsPanel).toBe(true);
+    expect(findAction(dom, 'settings-stats-panel')!.textContent).toBe(t('common:on'));
+
+    findAction(dom, 'settings-mobile-controls')!.listeners.get('click')!({});
+    expect(current.swapMobileControls).toBe(true);
+    expect(findAction(dom, 'settings-mobile-controls')!.textContent).toBe(
+      t('ui:settings.controlLayouts.boostLeft'),
+    );
   });
 });

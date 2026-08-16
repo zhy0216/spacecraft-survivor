@@ -240,6 +240,9 @@ async function boot(): Promise<void> {
   function getRenderer(): Renderer | undefined {
     return rendererReady ? renderer : undefined;
   }
+  // HUD/触控层在阶段 B 才创建；阶段 A 设置页已经能修改偏好，因此先放一个空分发器，
+  // 等节点就位后再替换并把“当前整份设置”补灌一次。
+  let applyUiSettings = (): void => {};
 
   // —— 阶段 A:标题先行。下面这三页只依赖 sim 世界 + DOM,渲染层缺席不影响 ——
 
@@ -254,6 +257,7 @@ async function boot(): Promise<void> {
       settings = next;
       saveSettings(settings);
       applySettings(settings, getRenderer());
+      applyUiSettings();
     },
     onLanguage: (next) => {
       void setLanguage(next);
@@ -389,6 +393,11 @@ async function boot(): Promise<void> {
   // 暂停/商店/升级期间由 ticker 收起并释放，避免手指离开控件后留下“还在转/还在加速”。
   const mobileControls = createMobileControls(input);
   registerLocaleAware(mobileControls);
+  applyUiSettings = (): void => {
+    hud.setStatsVisible(settings.showStatsPanel);
+    mobileControls.setSwapped(settings.swapMobileControls);
+  };
+  applyUiSettings();
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -629,6 +638,15 @@ async function boot(): Promise<void> {
    * startRun 置真,局终与回标题置假。
    */
   let runActive = false;
+
+  // 统计面板快捷键(P):与设置页的“统计面板”共用 settings.showStatsPanel 这一份真相源。
+  // 只在一局已经开始后响应；设置页打开时让按键归前景界面，避免按钮文案与后台状态暂时错位。
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyP' || e.repeat || isTyping() || !runActive || settingsMenu.visible()) return;
+    settings = { ...settings, showStatsPanel: !settings.showStatsPanel };
+    saveSettings(settings);
+    applyUiSettings();
+  });
 
   /**
    * 商店面板(整备)此刻是否开着。**HUD 淡出按它豁免**:商店优化后星币余额从店头挪回

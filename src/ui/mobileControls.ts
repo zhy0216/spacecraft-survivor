@@ -14,6 +14,8 @@ const KNOB_TRAVEL_RATIO = 0.3;
 export interface MobileControlsUi {
   /** runVisible 决定是否为战场预留底带；enabled 决定控件是否显示并接受手势。 */
   sync(runVisible: boolean, enabled: boolean): void;
+  /** false = 左航向右加速；true = 左加速右航向。 */
+  setSwapped(swapped: boolean): void;
   refreshLocale(): void;
 }
 
@@ -161,6 +163,9 @@ export function createMobileControls(input: Input): MobileControlsUi {
         resetBoost();
       }
       lastEnabled = controlsVisible;
+    },
+    setSwapped(swapped: boolean): void {
+      root.classList.toggle('sw-mobile-controls-swapped', swapped);
     },
     refreshLocale,
   };

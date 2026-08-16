@@ -24,6 +24,8 @@ describe('设置:夹取与兜底', () => {
       shake: 0.5,
       damageNumbers: false,
       hitstop: false,
+      showStatsPanel: true,
+      swapMobileControls: true,
       language: 'en' as const,
     };
     expect(parseSettings(serializeSettings(s))).toEqual(s);
@@ -49,13 +51,15 @@ describe('设置:夹取与兜底', () => {
     expect(normalizeSettings({ shake: 99 }).shake).toBe(1);
   });
 
-  it('出厂设置与各处原本写死的手感一致(音量 0.8、震屏/飘字/顿帧恒开、语言 auto)', () => {
+  it('出厂设置:原有手感不变，统计默认关，移动控制默认左航向右加速', () => {
     const d = createSettings();
     expect(d.masterVolume).toBe(0.8); // = render/audio.ts 的 masterVolume 初值
     expect(d.muted).toBe(false);
     expect(d.shake).toBe(1);
     expect(d.damageNumbers).toBe(true);
     expect(d.hitstop).toBe(true);
+    expect(d.showStatsPanel).toBe(false);
+    expect(d.swapMobileControls).toBe(false);
     expect(d.language).toBe('auto');
   });
 });
@@ -66,6 +70,19 @@ describe('设置:语言字段的兼容与循环', () => {
     expect(s.language).toBe('auto');
     expect(s.masterVolume).toBe(0.5); // 不因新字段的加入连累清空老设置
     expect(s.muted).toBe(true);
+    expect(s.showStatsPanel).toBe(false);
+    expect(s.swapMobileControls).toBe(false);
+  });
+
+  it('新开关合法布尔值保留，坏值逐项回落默认', () => {
+    expect(normalizeSettings({ showStatsPanel: true, swapMobileControls: true })).toMatchObject({
+      showStatsPanel: true,
+      swapMobileControls: true,
+    });
+    expect(normalizeSettings({ showStatsPanel: 'yes', swapMobileControls: 1 })).toMatchObject({
+      showStatsPanel: false,
+      swapMobileControls: false,
+    });
   });
 
   it('非法 language 字符串逐项回落 auto,不整份判废', () => {

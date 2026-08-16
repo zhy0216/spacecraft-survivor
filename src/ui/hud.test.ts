@@ -514,12 +514,12 @@ describe('createHud', () => {
     expect(mute.textContent).toBe('声音:开');
   });
 
-  it('键位提示行(28 号):常驻小字印出 I/Tab 玩法键,纯静态、鼠标穿透、加速不重复进这行', () => {
+  it('键位提示行(28 号):常驻小字印出 I/P/Tab 玩法键,纯静态、鼠标穿透、加速不重复进这行', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
     // 静音开关(下标 3)正上方、精英血条(下标 5)之前 —— 与实现构造顺序一字同源
     const keyHints = root.children[4]!;
-    expect(keyHints.textContent).toBe('[I] 武器布局 · [Tab] 射界');
+    expect(keyHints.textContent).toBe('[I] 武器布局 · [P] 统计面板 · [Tab] 射界');
     // 加速有自己的条标签(「加速 [空格]」),不重复进这行
     expect(keyHints.textContent).not.toContain('加速');
     // 常驻小字:pointer-events 穿透、贴 48px 罗盘通道同套边距(不新开档位)、无监听不可点
@@ -533,7 +533,7 @@ describe('createHud', () => {
     // 纯静态:换局(setWorld)节点原样复用、文案不变、不重复挂 DOM
     hud.setWorld(stubWorld() as unknown as World);
     expect(dom.ui.children.length).toBe(1);
-    expect(keyHints.textContent).toBe('[I] 武器布局 · [Tab] 射界');
+    expect(keyHints.textContent).toBe('[I] 武器布局 · [P] 统计面板 · [Tab] 射界');
   });
 
   it('精英血条:无精英隐藏,有精英亮出并反映 hp/maxHp', () => {
@@ -751,6 +751,17 @@ describe('createHud', () => {
     expect(rows[2]!.style.display).toBe('none');
     expect(findText(firepower, `${towerName(TOWER_AUTOCANNON)}`)).toBeUndefined();
     expect(findText(firepower, '过热')).toBeUndefined();
+  });
+
+  it('统计面板整组关闭再开启，顶栏所有读数一起收起', () => {
+    const hud = createHud({ world: stubWorld() as unknown as World });
+    const root = dom.ui.children[0]!;
+    const top = root.children[0]! as StubEl & { className: string };
+
+    hud.setStatsVisible(false);
+    expect(top.className).toContain('sw-hud-stats-hidden');
+    hud.setStatsVisible(true);
+    expect(top.className).not.toContain('sw-hud-stats-hidden');
   });
 
   it('加速冷却条:窗内印"加速中",冷却回充印剩余秒,归零印"就绪"', () => {

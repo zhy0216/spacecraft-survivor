@@ -80,7 +80,9 @@ type SettingsRowKey =
   | 'ui:settings.sound'
   | 'ui:settings.shake'
   | 'ui:settings.damageNumbers'
-  | 'ui:settings.hitstop';
+  | 'ui:settings.hitstop'
+  | 'ui:settings.statsPanel'
+  | 'ui:settings.mobileControls';
 
 export interface SettingsMenuHooks {
   /** 当前设置(main 持有唯一那一份;设置页不自己存,每次 show 现读) */
@@ -192,6 +194,12 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   const hitstop = addToggleRow('ui:settings.hitstop', 'settings-hitstop', () => {
     patch({ hitstop: !hooks.get().hitstop });
   });
+  const statsPanel = addToggleRow('ui:settings.statsPanel', 'settings-stats-panel', () => {
+    patch({ showStatsPanel: !hooks.get().showStatsPanel });
+  });
+  const mobileControls = addToggleRow('ui:settings.mobileControls', 'settings-mobile-controls', () => {
+    patch({ swapMobileControls: !hooks.get().swapMobileControls });
+  });
 
   // —— 语言:单颗循环按钮(自动 → 简体中文 → English)。与音量/震屏同一种"点一下走一档"
   // 的形状,不碰会吃方向键的原生 select —— 键盘是战斗输入,方向键必须留给战斗。
@@ -230,9 +238,9 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   resetBtn.style.cssText = RESET_CSS;
   resetBtn.dataset.action = 'settings-reset';
   resetBtn.addEventListener('click', () => {
-    // 恢复默认 = 五项全回出厂。但语言那项不能走 onChange 直接落盘:
+    // 恢复默认 = 全部设置回出厂。但语言那项不能走 onChange 直接落盘:
     // 切换是异步的、且只有切成功才该持久化(见 main.ts 的 setLanguage 口径)——
-    // 于是这里**先把当前语言扣住**经 onChange 落盘的只是其余四项,
+    // 于是这里**先把当前语言扣住**经 onChange 落盘的只是其余表现/控制项,
     // 若语言确实要变,单独走 onLanguage,由 main 决定成不成、要不要存
     const next = createSettings();
     hooks.onChange({ ...hooks.get(), ...next, language: hooks.get().language });
@@ -288,6 +296,12 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
     dmg.btn.textContent = s.damageNumbers ? t('common:on') : t('common:off');
     hitstop.name.textContent = t('ui:settings.hitstop');
     hitstop.btn.textContent = s.hitstop ? t('common:on') : t('common:off');
+    statsPanel.name.textContent = t('ui:settings.statsPanel');
+    statsPanel.btn.textContent = s.showStatsPanel ? t('common:on') : t('common:off');
+    mobileControls.name.textContent = t('ui:settings.mobileControls');
+    mobileControls.btn.textContent = s.swapMobileControls
+      ? t('ui:settings.controlLayouts.boostLeft')
+      : t('ui:settings.controlLayouts.steerLeft');
     // 键位 token(Esc)与动作文本分开:键名从 common.keys 取,句子整体由翻译决定
     backBtn.textContent = t('ui:settings.back', { esc: t('common:keys.esc') });
     resetBtn.textContent = t('ui:settings.reset');

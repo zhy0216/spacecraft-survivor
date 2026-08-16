@@ -533,6 +533,8 @@ export interface HudUi {
   setWorld(world: World): void;
   /** 升级时停 / 结算时淡出,不与卡片或放大甲板抢焦点 */
   setPaused(paused: boolean): void;
+  /** 玩家设置里的统计面板开关；整组顶栏读数一起显示/隐藏。 */
+  setStatsVisible(visible: boolean): void;
   /** 每渲染帧同步现有节点 */
   sync(): void;
   /**
@@ -592,6 +594,7 @@ export interface MuteHooks {
 export function createHud(opts: { world: World; rightGutter?: number; debug?: boolean; muted?: MuteHooks }): HudUi {
   let world = opts.world;
   let paused = false;
+  let statsVisible = true;
   const rightGutter = opts.rightGutter ?? HUD_RIGHT_GUTTER;
   // debug 由 main 注入(URL 口径只解析一次),HUD 不自己摸 location:sync 是 60fps 热路径,
   // 且测试桩里根本没有 location。唯一用途 = 经验读数的玩家/调试两形态
@@ -1326,6 +1329,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   refreshLocale();
   sync();
 
+  function setStatsVisible(next: boolean): void {
+    if (statsVisible === next) return;
+    statsVisible = next;
+    // 顶栏包含血量/残骸/加速、星币/敌人、图鉴、计时、航段与火力读数。
+    // class 用 !important 覆盖移动端 grid 布局，确保横竖屏都能整组收起。
+    top.className = next ? 'sw-hud-top' : 'sw-hud-top sw-hud-stats-hidden';
+  }
+
   return {
     setWorld(next: World): void {
       world = next;
@@ -1342,6 +1353,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
       paused = next;
       root.style.opacity = paused ? '0.06' : '1';
     },
+    setStatsVisible,
     sync,
     toast,
     showBanner,

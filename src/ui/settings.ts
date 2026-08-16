@@ -8,11 +8,13 @@
  *
  * 设置页最容易长出来的东西是装饰性开关 —— 界面上摆着、拨过去什么也不发生。
  * 于是这里的每一项都在注释里写明它落到哪一行代码上;加新项之前先找到那个落点,
- * 找不到就不该加。目前五项各有出处:
+ * 找不到就不该加。目前各项各有出处:
  *   masterVolume / muted → render/audio.ts 的 setMasterVolume / setMuted
  *   shake               → render/renderer.ts 的震屏位移(setEffects)
  *   damageNumbers       → render/renderer.ts 的伤害飘字入池(setEffects)
  *   hitstop             → main.ts 的击杀顿帧窗口
+ *   showStatsPanel      → ui/hud.ts 的火力统计面板显隐
+ *   swapMobileControls  → ui/mobileControls.ts 的左右控制布局
  *   language            → main.ts 的语言解析 + i18n 初始化(i18n/locale.ts 的 resolveLanguage)
  *
  * ## 设置不是存档
@@ -36,6 +38,10 @@ export interface Settings {
   damageNumbers: boolean;
   /** 击杀顿帧(hitstop)。落点:main 的冻结窗;关掉后击杀不再顿挫,画面更顺 */
   hitstop: boolean;
+  /** 火力统计面板。默认关闭；落点:HUD 的 sw-hud-firepower 显隐。 */
+  showStatsPanel: boolean;
+  /** 移动端左右手布局。false = 左航向右加速；true = 左加速右航向。 */
+  swapMobileControls: boolean;
   /**
    * 界面语言偏好。'auto' = 跟随系统语言。落点:main 的 setLanguage ——
    * 走 i18n 那条管线,不进 applySettings 的音视频分发。存的是**偏好**而不是
@@ -58,6 +64,8 @@ export function createSettings(): Settings {
     shake: 1,
     damageNumbers: true,
     hitstop: true,
+    showStatsPanel: false,
+    swapMobileControls: false,
     language: 'auto',
   };
 }
@@ -91,6 +99,9 @@ export function normalizeSettings(raw: unknown): Settings {
     shake: clamp01(o['shake'], d.shake),
     damageNumbers: bool(o['damageNumbers'], d.damageNumbers),
     hitstop: bool(o['hitstop'], d.hitstop),
+    // 旧 v1 设置没有这两项：逐项补默认，不连累音量/语言等既有偏好。
+    showStatsPanel: bool(o['showStatsPanel'], d.showStatsPanel),
+    swapMobileControls: bool(o['swapMobileControls'], d.swapMobileControls),
     // 老 `starwreck.settings.v1` 没有这一项:缺字段按上面的 normalizeLanguage 回落 auto ——
     // 其余四项原样保留,不会被这一项的新增连累清空
     language: normalizeLanguage(o['language'], d.language),
