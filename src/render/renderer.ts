@@ -134,6 +134,40 @@ import { Starfield } from './starfield';
 /** 未使用粒子的"停车位":粒子只增不删,多余的挪出视野(避免运行期增删 GPU 缓冲) */
 const OFFSCREEN = 1e6;
 
+// —— 屏外剔除 ——
+// 地图无限、镜头只看一小块:视图矩形反向变换回世界系后外扩一圈缓冲带,
+// 怪落在带外就整只跳过 —— 不进分桶 → 粒子不写位姿(留在 OFFSCREEN 停车位),
+// 骨架那条路(RigLayer)同桶同口径,每帧省掉屏外上千只的位姿解算与缓冲上传。
+// 缓冲带必须兜住:最大视觉外延(radius 14 × 精英 1.5 × 视觉 1.18 ≈ 25px)+
+// 单帧插值位移(冲刺 ≤ 380px/s → 每帧 < 8px)。64 两倍有余;
+// 震屏不是靠余量兜的 —— position 含震屏,反向变换把它精确吸收。
+const CULL_MARGIN = 64;
+/** 剔除矩形的模块级 scratch:每帧重写,绝不 new(与 animFrameScratch 同一条零分配纪律) */
+const cullRectScratch = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+
+/**
+ * 屏幕视图矩形 → 世界系剔除矩形(外扩 margin)。
+ * worldLayer 无旋转:世界 = pivot + (屏幕 - position) / scale。
+ * 纯函数,拆出来就是为了 Node 单测(renderer.test.ts 钉反向变换口径)。
+ */
+export function viewCullRect(
+  scale: number,
+  pivotX: number,
+  pivotY: number,
+  posX: number,
+  posY: number,
+  width: number,
+  height: number,
+  margin: number,
+  out: { minX: number; minY: number; maxX: number; maxY: number },
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  out.minX = pivotX + (0 - posX) / scale - margin;
+  out.maxX = pivotX + (width - posX) / scale + margin;
+  out.minY = pivotY + (0 - posY) / scale - margin;
+  out.maxY = pivotY + (height - posY) / scale + margin;
+  return out;
+}
+
 // 敌人纹理一律画成浅灰阶(明面 + 亮边),真正的颜色靠粒子 tint 相乘出来:
 // tint 是逐粒子的静态属性,建粒子时上传一次就不再动,于是"按型上色"零每帧开销。
 const ENEMY_EDGE = 0xffffff;
@@ -1601,6 +1635,20 @@ export class Renderer {
     // 震屏直接加在镜头的屏幕位置上:worldLayer 无旋转,世界系的方向向量与屏幕系一一对应
     this.worldLayer.position.set(screen.width / 2 + this.shakeX, screen.height / 2 + this.shakeY);
 
+    // 屏外剔除的视图矩形(世界系,含缓冲带):分桶前算一次,热循环里每只怪只付 4 个比较。
+    // 前摇中的怪不受此限(见分桶循环):锁定线是屏外可读性承诺,不随距离熄灭。
+    viewCullRect(
+      scale,
+      pivotX,
+      pivotY,
+      screen.width / 2 + this.shakeX,
+      screen.height / 2 + this.shakeY,
+      screen.width,
+      screen.height,
+      CULL_MARGIN,
+      cullRectScratch,
+    );
+
     // 星野与镜头同一帧同一组变换(含震屏):它是世界锚定的背景,镜头动它就得动
     this.starfield.sync(
       scale,
@@ -1625,6 +1673,18 @@ export class Renderer {
       //(kind 越界在普通桶是"不画这一只"的兜底,Boss 必须画 —— 见 bossPc 字段注释)
       if (e.kind === KIND_BOSS) {
         this.bossBucket.push(e);
+        continue;
+      }
+      // 屏外剔除:怪在视图缓冲带外就不画(不进桶 → 粒子留在 OFFSCREEN 停车位)。
+      // 前摇中的怪除外:它的锁定线是"待会儿只撞这条线上"的屏外承诺(GDD §6 前摇必须可读),
+      // 怪在屏外、冲刺线却照常压进屏 —— 把前摇怪也剔了,线会在怪进屏前凭空消失。
+      if (
+        e.state !== ST_WINDUP &&
+        (e.x < cullRectScratch.minX ||
+          e.x > cullRectScratch.maxX ||
+          e.y < cullRectScratch.minY ||
+          e.y > cullRectScratch.maxY)
+      ) {
         continue;
       }
       // 精英(affixes ≠ 0)不进普通桶:它们走各自的精英容器(体型 ×ELITE.scale,见字段注释)

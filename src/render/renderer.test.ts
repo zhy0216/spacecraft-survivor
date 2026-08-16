@@ -17,6 +17,7 @@ import {
   hitFlashMix,
   type EnemyAnim,
   lerpColor,
+  viewCullRect,
   visualStarTier,
 } from './renderer';
 
@@ -238,5 +239,55 @@ describe('hitFlashMix(受击闪白强度)', () => {
     expect(hitFlashMix(0)).toBe(0);
     expect(hitFlashMix(0.04)).toBeCloseTo(0.5, 12);
     expect(hitFlashMix(-1)).toBe(0); // 防御:负数夹 0
+  });
+});
+
+/**
+ * 屏外剔除矩形的反向变换是纯函数(见 renderer.ts 的导出),在这里钉口径:
+ * 世界 = pivot + (屏幕 - position) / scale(worldLayer 无旋转,position 含震屏)。
+ * 分桶循环的剔除判断与热循环本身需要 WebGL,不在这里测。
+ */
+const rect = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+
+describe('viewCullRect(屏外剔除矩形)', () => {
+  it('margin=0:屏幕矩形经缩放/平移/pivot 反变换回世界系', () => {
+    const r = viewCullRect(2, 1000, 800, 400, 300, 800, 600, 0, rect);
+    expect(r.minX).toBe(800); // 1000 + (0 - 400) / 2
+    expect(r.maxX).toBe(1200); // 1000 + (800 - 400) / 2
+    expect(r.minY).toBe(650); // 800 + (0 - 300) / 2
+    expect(r.maxY).toBe(950); // 800 + (600 - 300) / 2
+  });
+
+  it('margin 四边外扩同值,内部点不受扰动', () => {
+    const m = 64;
+    const r = viewCullRect(2, 1000, 800, 400, 300, 800, 600, m, rect);
+    expect(r.minX).toBe(800 - m);
+    expect(r.maxX).toBe(1200 + m);
+    expect(r.minY).toBe(650 - m);
+    expect(r.maxY).toBe(950 + m);
+  });
+
+  it('position 含震屏:镜头右移 +20,世界系剔除矩形左移 -10(反向吸收)', () => {
+    const ra = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    const rb = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    const a = viewCullRect(2, 1000, 800, 400, 300, 800, 600, 0, ra);
+    const b = viewCullRect(2, 1000, 800, 420, 300, 800, 600, 0, rb);
+    expect(b.minX).toBe(a.minX - 10);
+    expect(b.maxX).toBe(a.maxX - 10);
+    expect(b.minY).toBe(a.minY);
+  });
+
+  it('scale=1 且 pivot 在原点的退化情形:矩形 = 屏幕尺寸直接平移', () => {
+    const r = viewCullRect(1, 0, 0, 0, 0, 800, 600, 0, rect);
+    expect(r.minX).toBe(0);
+    expect(r.maxX).toBe(800);
+    expect(r.minY).toBe(0);
+    expect(r.maxY).toBe(600);
+  });
+
+  it('同参数同输出:确定性 —— 分桶剔除不掺每帧抖动', () => {
+    expect(viewCullRect(1.92, -123.4, 55.5, 960, 540, 1920, 1080, 64, rect)).toEqual(
+      viewCullRect(1.92, -123.4, 55.5, 960, 540, 1920, 1080, 64, rect),
+    );
   });
 });
