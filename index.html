@@ -104,7 +104,9 @@
       .sw-mobile-controls {
         display: none;
       }
-      .sw-hud-top.sw-hud-stats-hidden {
+      /* 统计面板开关只收统计组(信标/法令/图鉴/火力);血/残骸/加速 cd/星币是
+         战斗常驻读数,不归统计面板管,关掉面板照样留在顶栏 */
+      .sw-hud-stats.sw-hud-stats-hidden {
         display: none !important;
       }
 
@@ -258,7 +260,8 @@
           top: max(10px, env(safe-area-inset-top)) !important;
           display: grid !important;
           grid-template-columns: minmax(0, 1fr) auto !important;
-          grid-template-areas: 'left timer' 'segment segment';
+          /* 航段条只占左列,与血量面板同宽(用户设计:两行长度对齐,不在计时器下方铺满) */
+          grid-template-areas: 'left timer' 'segment .';
           gap: 4px !important;
           align-items: start !important;
           /* 右上角让给「设置」齿轮(44px 定宽 + 8px 呼吸):计时器与航段条都止步于此 */
@@ -309,13 +312,79 @@
         }
         .sw-hud-left {
           grid-area: left;
-          width: min(100%, 190px);
+          min-width: 0;
           max-height: calc(100dvh - var(--sw-mobile-control-height) - 94px);
           overflow-y: auto;
           overflow-x: hidden;
           overscroll-behavior: contain;
           gap: 4px !important;
           scrollbar-width: thin;
+        }
+        /* 常驻读数(移动端):残骸/加速/星币缩成一行 9px 小格(「加速 [空格]」标签收起、
+           「场上怪」副读数收起,「升级残骸」标签保留);血量面板从行里拿出来,
+           整宽一条排在行下方 —— 即统计组里图鉴原来的位置(用户设计:图鉴不留在战斗 HUD) */
+        .sw-hud-essentials {
+          flex-direction: row !important;
+          flex-wrap: wrap;
+          gap: 4px !important;
+          align-items: stretch;
+          min-width: 0;
+          font-size: 9px !important;
+        }
+        .sw-hud-hp {
+          order: 3;
+          flex-basis: 100%;
+        }
+        .sw-hud-hp .sw-hud-row {
+          gap: 5px !important;
+        }
+        .sw-hud-vitals {
+          flex: 1 1 auto;
+          min-width: 0;
+          display: grid !important;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-rows: auto auto;
+          column-gap: 4px;
+        }
+        /* 组内顺序是 [残骸行, 残骸轨, 加速行, 加速轨]:两列各钉一对,不依赖自动排布 */
+        .sw-hud-vitals > :nth-child(1) {
+          grid-column: 1;
+          grid-row: 1;
+        }
+        .sw-hud-vitals > :nth-child(2) {
+          grid-column: 1;
+          grid-row: 2;
+        }
+        .sw-hud-vitals > :nth-child(3) {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .sw-hud-vitals > :nth-child(4) {
+          grid-column: 2;
+          grid-row: 2;
+        }
+        .sw-hud-vitals .sw-hud-row {
+          gap: 3px !important;
+          overflow: hidden;
+        }
+        /* 只收「加速 [空格]」的标签(触屏上空格提示没有意义,状态词已自明);
+           「升级残骸」标签照常显示 —— 裸进度条没有名字,玩家认不出它是什么 */
+        .sw-hud-vitals > :nth-child(3) > :first-child {
+          display: none;
+        }
+        .sw-hud-vitals .sw-hud-row span {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .sw-hud-starcoins {
+          flex: 0 0 auto;
+        }
+        .sw-hud-starcoins .sw-hud-enemy-group {
+          display: none !important;
+        }
+        .sw-hud-stats {
+          gap: 4px !important;
         }
         .sw-hud-panel {
           padding: 4px 6px !important;
@@ -425,9 +494,6 @@
         .sw-modal {
           padding-left: 12px !important;
           padding-right: 12px !important;
-        }
-        .sw-hud-left {
-          width: min(100%, 172px);
         }
         .sw-ship-ring {
           transform: scale(.62) !important;

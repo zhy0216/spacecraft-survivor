@@ -9,7 +9,6 @@
 import { KIND_BOSS } from '../data/enemies';
 import { edictLevel, EDICTS } from '../data/edicts';
 import { TOWERS } from '../data/towers';
-import { UNLOCKS } from '../data/unlocks';
 import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
 import { audioBus } from '../render/audio';
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
@@ -105,13 +104,6 @@ const STARCOINS_CSS = PANEL_CSS;
  */
 const EDICTS_CSS = `${PANEL_CSS}display:none;`;
 
-/**
- * 图鉴读数(19 号):左列第三块。一行"图鉴 n/总":已解锁计数 = world.unlockMask 的置位数
- * (位 i = UNLOCKS[i],与 World 构造时喂进来的 progress.unlockMask 同编码),
- * 总数直取 UNLOCKS.length —— 每帧 sync 现算,重开换世界(setWorld → sync)当帧跟上,
- * HUD 不需要单独接进度引用。
- */
-const COLLECTION_CSS = PANEL_CSS;
 /**
  * 商店信标倒计时(用户设计会):与法令徽记同一条"没有就整块隐藏"的口径 ——
  * 信标一局只在四个航段边界各亮 30 秒,常驻一块空面板等于把最该被注意到的那一行稀释掉。
@@ -552,7 +544,7 @@ export interface HudUi {
   setWorld(world: World): void;
   /** 升级时停 / 结算时淡出,不与卡片或放大甲板抢焦点 */
   setPaused(paused: boolean): void;
-  /** 玩家设置里的统计面板开关；整组顶栏读数一起显示/隐藏。 */
+  /** 玩家设置里的统计面板开关；只收统计组(信标/法令/图鉴/火力),常驻读数(血/残骸/加速/星币)不动。 */
   setStatsVisible(visible: boolean): void;
   /** 每渲染帧同步现有节点 */
   sync(): void;
@@ -638,12 +630,19 @@ export function createHud(opts: {
   top.style.cssText = topCss(rightGutter);
   top.className = 'sw-hud-top';
 
+  // 血量(用户设计):独立一块面板,不与残骸/加速挤同一个盒子 —— 移动端它不缩进
+  // 一行小格,而是放到统计组图鉴**原来的位置**(常驻行下方整宽一条,见 index.html)。
+  // 常驻组的顺序:血量面板 → 残骸/加速面板 → 星币。
+  const hpPanel = document.createElement('div');
+  hpPanel.style.cssText = PANEL_CSS;
+  hpPanel.className = 'sw-hud-panel sw-hud-hp';
+  const hp = createBar(hpPanel, t('ui:hud.hull'), HP_COLOR);
+
   const vitals = document.createElement('div');
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
   vitals.className = 'sw-hud-panel sw-hud-vitals';
-  const hp = createBar(vitals, t('ui:hud.hull'), HP_COLOR);
   const scrap = createBar(vitals, t('ui:hud.scrap'), SCRAP_COLOR);
-  // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
+  // 加速技能(空格):第二根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
   const boost = createBar(vitals, t('ui:hud.boost'), BOOST_COLOR);
 
   const timer = document.createElement('div');
@@ -807,21 +806,6 @@ export function createHud(opts: {
   beaconRow.append(beaconLabel, beaconValue);
   beacon.appendChild(beaconRow);
 
-  // 图鉴读数(19 号):星币/法令同族的第三块左列面板,节点只建一次,每帧按掩码现算
-  const collection = document.createElement('div');
-  collection.style.cssText = COLLECTION_CSS;
-  collection.className = 'sw-hud-panel';
-  collection.title = t('ui:hud.collection');
-  const collectionRow = document.createElement('div');
-  collectionRow.style.cssText = LABEL_ROW_CSS;
-  const collectionLabel = document.createElement('span');
-  collectionLabel.style.cssText = LABEL_CSS;
-  collectionLabel.textContent = t('ui:hud.collection');
-  const collectionValue = document.createElement('span');
-  collectionValue.style.cssText = `${VALUE_CSS}color:${OK_COLOR};`;
-  collectionRow.append(collectionLabel, collectionValue);
-  collection.appendChild(collectionRow);
-
   // 火力统计面板:击杀 + 总 DPS 两行常驻,加上按武器槽上限预建的武器格(初始全藏,
   // 每帧按持有情况点亮)。格 = 一行三段(名字 | 下一次发射 | 理论 DPS)+ 一根就绪小条
   const firepower = document.createElement('div');
@@ -955,12 +939,23 @@ export function createHud(opts: {
     typeof radar.getContext === 'function' ? radar.getContext('2d') : null;
   if (!radarCtx) radar.style.display = 'none';
 
-  // 左列纵队进顶栏 grid 第一格:vitals 在头,四块读数按序堆下去 —— 位置全交给 flex,
-  // 不再有任何一块自记 top 偏移(星币压血条那类失配从结构上消灭)
+  // 左列纵队进顶栏 grid 第一格:常驻组(血量面板 + 残骸/加速面板 + 星币)在头,
+  // 统计组(信标/法令/火力)按序堆下去 —— 位置全交给 flex,不再有任何一块自记 top 偏移
+  // (星币压血条那类失配从结构上消灭)。
+  // 分组是给统计面板开关(setStatsVisible)留的把手:关掉统计面板只收统计组,
+  // 血/残骸/加速/星币这几件战斗常驻读数照样留在顶栏(移动端再缩行,见 index.html)。
   const leftCol = document.createElement('div');
   leftCol.style.cssText = LEFT_COL_CSS;
   leftCol.className = 'sw-hud-left';
-  leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
+  const essentials = document.createElement('div');
+  essentials.style.cssText = LEFT_COL_CSS;
+  essentials.className = 'sw-hud-essentials';
+  essentials.append(hpPanel, vitals, starCoins);
+  const statsWrap = document.createElement('div');
+  statsWrap.style.cssText = LEFT_COL_CSS;
+  statsWrap.className = 'sw-hud-stats';
+  statsWrap.append(beacon, edicts, firepower);
+  leftCol.append(essentials, statsWrap);
   top.append(leftCol, timer, segment);
 
   root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette, edictTip, settingsBtn);
@@ -1069,15 +1064,6 @@ export function createHud(opts: {
     } else {
       beacon.style.display = 'none';
     }
-
-    // 图鉴读数(19 号):已解锁计数 = world.unlockMask 置位数 / UNLOCKS 总数。
-    // World 的掩码就是开局时喂进来的 progress.unlockMask(同编码,world.ts 字段注释),
-    // 局内只增不减、重开换世界当帧跟上 —— HUD 不另接进度引用
-    let unlocked = 0;
-    for (let i = 0; i < UNLOCKS.length; i++) {
-      if ((world.unlockMask & (1 << i)) !== 0) unlocked++;
-    }
-    collectionValue.textContent = `${unlocked}/${UNLOCKS.length}`;
 
     // 火力统计:击杀直读;DPS 是 slotSustainedDps 的**理论固定值**(逐槽算、同型求和),
     // 下一次发射读数走 slotFireReadout,同型多把取"最快就绪那把"(下一发确实从它出膛)。
@@ -1357,8 +1343,6 @@ export function createHud(opts: {
     edictsLabel.textContent = t('ui:hud.edicts');
     beacon.title = t('ui:hud.beacon');
     beaconLabel.textContent = t('ui:hud.shop');
-    collection.title = t('ui:hud.collection');
-    collectionLabel.textContent = t('ui:hud.collection');
     firepower.title = t('ui:hud.firepower');
     killsRow.label.textContent = t('ui:hud.kills');
     totalDpsRow.label.textContent = t('ui:hud.totalDps');
@@ -1372,9 +1356,9 @@ export function createHud(opts: {
   function setStatsVisible(next: boolean): void {
     if (statsVisible === next) return;
     statsVisible = next;
-    // 顶栏包含血量/残骸/加速、星币/敌人、图鉴、计时、航段与火力读数。
-    // class 用 !important 覆盖移动端 grid 布局，确保横竖屏都能整组收起。
-    top.className = next ? 'sw-hud-top' : 'sw-hud-top sw-hud-stats-hidden';
+    // 只收统计组(信标/法令/火力):血/残骸/加速/星币是战斗常驻读数,不归统计面板管。
+    // class 用 !important 覆盖移动端 grid 布局,确保横竖屏都能整组收起。
+    statsWrap.className = next ? 'sw-hud-stats' : 'sw-hud-stats sw-hud-stats-hidden';
   }
 
   return {

@@ -93,7 +93,6 @@ export const ui = {
     edictsActive: '已生效法令',
     shop: '商店',
     beacon: '地图商店信标',
-    collection: '图鉴',
     firepower: '火力统计',
     kills: '击杀',
     totalDps: '总 DPS',

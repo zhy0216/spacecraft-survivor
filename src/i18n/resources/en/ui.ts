@@ -97,7 +97,6 @@ export const ui: DeepRecord<typeof zhUi> = {
     edictsActive: 'Active edicts',
     shop: 'Shop',
     beacon: 'Map shop beacon',
-    collection: 'Codex',
     firepower: 'Firepower',
     kills: 'Kills',
     totalDps: 'Total DPS',

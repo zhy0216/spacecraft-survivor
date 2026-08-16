@@ -7,9 +7,7 @@ import { createEdictLevels, EDICT_AMMO, EDICT_ARMOR, EDICT_GYRO, EDICTS } from '
 import { WEAPON_SLOT_COUNT } from '../sim/armory';
 import { KIND_BOSS } from '../data/enemies';
 import { TOWER_AUTOCANNON, TOWER_LASER, TOWERS } from '../data/towers';
-import { UNLOCKS } from '../data/unlocks';
-import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';
-import type { WeaponSlot } from '../sim/armory';
+import { WAVE_SEGMENTS, BURST_PATTERN_RING } from '../data/waves';import type { WeaponSlot } from '../sim/armory';
 import { createEdictBuffs, type EdictBuffs } from '../sim/edictBuffs';
 import {
   FIRE_CHARGING,
@@ -230,8 +228,6 @@ interface StubWorld {
   shopBeaconX: number;
   shopBeaconY: number;
   shopBeaconTtl: number;
-  /** 解锁状态掩码(19 号):位 i = UNLOCKS[i] 开没开;图鉴计数按它数置位 */
-  unlockMask: number;
   /** 火力统计面板:击杀数 + 武器槽(名字/等级/节流状态出格)+ 支援聚合(理论 DPS 的倍率来源) */
   kills: number;
   weapons: WeaponSlot[];
@@ -274,7 +270,6 @@ function stubWorld(over: Partial<StubWorld> = {}): StubWorld {
     shopBeaconX: 0,
     shopBeaconY: 0,
     shopBeaconTtl: 0,
-    unlockMask: 0,
     kills: 0,
     weapons: [],
     buffs: createEdictBuffs(),
@@ -309,7 +304,7 @@ describe('createHud', () => {
     const root = dom.ui.children[0]!;
     expect(root.style.cssText).toContain('position:fixed');
     expect(root.style.cssText).toContain('pointer-events:none');
-    // 只含上沿读数(左列纵队:vitals/星币/法令/图鉴/火力全在 grid 第一格里)、
+    // 只含上沿读数(左列纵队:常驻组 vitals/星币 + 统计组信标/法令/图鉴/火力全在 grid 第一格里)、
     // 两支边缘箭头(实况罗盘 + burst 预警)、左下角静音开关、静音开关正上方的键位提示行
     // (28 号新增节点 —— 计数 10 → 11,它插在 muteBtn 之后、精英血条之前)、
     // 屏下缘两根血条(精英 + Boss)、解锁 toast、段落横幅(26 号,display:none 的常驻节点)、
@@ -327,10 +322,11 @@ describe('createHud', () => {
     expect(findText(root, '75 / 100')).toBeDefined();
     // 玩家形态(默认)不亮经验数值:读数留空,升级进度只靠进度条比例(10/40 → 25%)
     expect(findText(root, '10 / 40')).toBeUndefined();
-    // 顶栏 grid 第一格是左列纵队,vitals 是纵队第一块
-    const vitals = root.children[0]!.children[0]!.children[0]!;
-    expect(vitals.children[2]!.children[1]!.textContent).toBe('');
-    expect(vitals.children[3]!.children[0]!.style.width).toBe('25%');
+    // 顶栏 grid 第一格是左列纵队;纵队再分常驻组(血量面板 → 残骸/加速面板 → 星币)与统计组,
+    // vitals 是常驻组第二块,组内 [残骸行, 残骸轨, 加速行, 加速轨]
+    const vitals = root.children[0]!.children[0]!.children[0]!.children[1]!;
+    expect(vitals.children[0]!.children[1]!.textContent).toBe('');
+    expect(vitals.children[1]!.children[0]!.style.width).toBe('25%');
     expect(findText(root, '1:05')).toBeDefined();
     expect(findText(root, waveSegmentName(0))).toBeDefined();
     const threat = root.children[1]!;
@@ -348,11 +344,11 @@ describe('createHud', () => {
 
     // 玩家形态(默认不传 debug):同一世界的数值区是空字符串
     createHud({ world: stubWorld() as unknown as World });
-    const playerVitals = dom.ui.children[1]!.children[0]!.children[0]!.children[0]!;
-    expect(playerVitals.children[2]!.children[1]!.textContent).toBe('');
+    const playerVitals = dom.ui.children[1]!.children[0]!.children[0]!.children[0]!.children[1]!;
+    expect(playerVitals.children[0]!.children[1]!.textContent).toBe('');
   });
 
-  it('星币读数:左列纵队第二块(血条面板正下方,不再自记偏移),单行分两列显示余额与场上怪数,setWorld 同步更新', () => {
+  it('星币读数:常驻组第三块(血条面板旁,不再自记偏移),单行分两列显示余额与场上怪数,setWorld 同步更新', () => {
     const hud = createHud({
       world: stubWorld({
         starCoins: 27,
@@ -366,7 +362,7 @@ describe('createHud', () => {
       }) as unknown as World,
     });
     const root = dom.ui.children[0]!;
-    const coins = root.children[0]!.children[0]!.children[1]!;
+    const coins = root.children[0]!.children[0]!.children[0]!.children[2]!;
     expect(coins.title).toBe('星币');
     expect(findText(root, '★ 星币')).toBeDefined();
     // 单行两列:starRow.children[0] = 余额组,children[1] = 场上怪组;各组 [label, value]
@@ -384,7 +380,7 @@ describe('createHud', () => {
   it('法令徽记:无法令时隐藏,持有后印名字、叠层挂 ×N,setWorld 换世界同步更新', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const edicts = root.children[0]!.children[0]!.children[3]!;
+    const edicts = root.children[0]!.children[0]!.children[1]!.children[1]!;
     expect(edicts.title).toBe('已生效法令');
     // 简单口径:无法令整体隐藏(display:none),持有才亮
     expect(edicts.style.display).toBe('none');
@@ -416,7 +412,7 @@ describe('createHud', () => {
     // 玩家悬停只见一个空面板(真机复现过的回归,这里是那道防线的钉子)
     expect(tip.style.cssText).toContain('color:');
 
-    const edicts = root.children[0]!.children[0]!.children[3]!;
+    const edicts = root.children[0]!.children[0]!.children[1]!.children[1]!;
     const chip = edicts.children[0]!.children[1]!.children[0]!;
     chip.listeners.get('mouseenter')!();
     expect(tip.style.display).toBe('block');
@@ -426,23 +422,12 @@ describe('createHud', () => {
     expect(tip.style.display).toBe('none');
   });
 
-  it('图鉴读数:按 world.unlockMask 置位数显示已解锁数/总数,setWorld 换世界当帧跟上', () => {
-    const hud = createHud({ world: stubWorld({ unlockMask: 0b011 }) as unknown as World });
+  it('图鉴面板已从战斗 HUD 移除(用户设计):整棵树里没有图鉴读数,stats 组只剩信标/法令/火力', () => {
+    createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const collection = root.children[0]!.children[0]!.children[4]!;
-    expect(collection.title).toBe('图鉴');
-    expect(findText(root, '图鉴')).toBeDefined();
-    const value = collection.children[0]!.children[1]!;
-    // 位 0 + 位 1 置位 = 已解锁 2 条;总数直取 UNLOCKS.length(与 World 掩码同编码)
-    expect(value.textContent).toBe(`2/${UNLOCKS.length}`);
-
-    // 全解锁掩码:计数当帧跟上
-    hud.setWorld(stubWorld({ unlockMask: (1 << UNLOCKS.length) - 1 }) as unknown as World);
-    expect(value.textContent).toBe(`${UNLOCKS.length}/${UNLOCKS.length}`);
-
-    // 空掩码(新档):归零
-    hud.setWorld(stubWorld() as unknown as World);
-    expect(value.textContent).toBe(`0/${UNLOCKS.length}`);
+    expect(findText(root, '图鉴')).toBeUndefined();
+    const statsWrap = root.children[0]!.children[0]!.children[1]!;
+    expect(statsWrap.children.length).toBe(3);
   });
 
   it('解锁 toast:toast() 亮出"解锁 XX",到点自动消失;setWorld 换局清掉上一局的提示', () => {
@@ -744,7 +729,7 @@ describe('createHud', () => {
     });
     const hud = createHud({ world: world as unknown as World });
     const root = dom.ui.children[0]!;
-    const firepower = root.children[0]!.children[0]!.children[5]!;
+    const firepower = root.children[0]!.children[0]!.children[1]!.children[2]!;
     expect(firepower.title).toBe('火力统计');
     expect(findText(firepower, '击杀')).toBeDefined();
     expect(findText(firepower, '42')).toBeDefined();
@@ -781,31 +766,41 @@ describe('createHud', () => {
     expect(findText(firepower, '过热')).toBeUndefined();
   });
 
-  it('统计面板整组关闭再开启，顶栏所有读数一起收起', () => {
+  it('统计面板开关只收统计组(信标/法令/火力);血/残骸/加速/星币常驻不受它管', () => {
     const hud = createHud({ world: stubWorld() as unknown as World });
     const root = dom.ui.children[0]!;
-    const top = root.children[0]! as StubEl & { className: string };
+    const leftCol = root.children[0]!.children[0]!;
+    const essentials = leftCol.children[0]! as StubEl & { className: string };
+    const statsWrap = leftCol.children[1]! as StubEl & { className: string };
+    // 常驻组 = 血量面板 + 残骸/加速面板 + 星币,统计组 = 信标/法令/火力,分组即开关边界
+    expect(essentials.children.length).toBe(3);
+    expect(statsWrap.children.length).toBe(3);
 
     hud.setStatsVisible(false);
-    expect(top.className).toContain('sw-hud-stats-hidden');
+    expect(statsWrap.className).toContain('sw-hud-stats-hidden');
+    // 常驻读数不挂隐藏 class:顶栏照旧,血条/残骸/加速/星币一块都不收
+    expect(essentials.className).toBe('sw-hud-essentials');
+    expect(findText(root, '75 / 100')).toBeDefined();
+    expect(findText(root, '★ 星币')).toBeDefined();
+
     hud.setStatsVisible(true);
-    expect(top.className).not.toContain('sw-hud-stats-hidden');
+    expect(statsWrap.className).not.toContain('sw-hud-stats-hidden');
   });
 
   it('加速冷却条:窗内印"加速中",冷却回充印剩余秒,归零印"就绪"', () => {
     const hud = createHud({ world: stubWorld({ boostCooldown: 2.5 }) as unknown as World });
     const root = dom.ui.children[0]!;
-    const vitals = root.children[0]!.children[0]!.children[0]!;
-    // 第三根条(下标 4/5 = 行/轨道):回充中印剩余秒
-    expect(vitals.children[4]!.children[1]!.textContent).toBe('2.5s');
+    const vitals = root.children[0]!.children[0]!.children[0]!.children[1]!;
+    // 组内第二根条(下标 2/3 = 行/轨道):回充中印剩余秒
+    expect(vitals.children[2]!.children[1]!.textContent).toBe('2.5s');
 
     hud.setWorld(stubWorld({ boostTime: 0.8, boostCooldown: 4.9 }) as unknown as World);
-    expect(vitals.children[4]!.children[1]!.textContent).toBe('加速中');
-    expect(vitals.children[5]!.children[0]!.style.width).toBe('100%');
+    expect(vitals.children[2]!.children[1]!.textContent).toBe('加速中');
+    expect(vitals.children[3]!.children[0]!.style.width).toBe('100%');
 
     hud.setWorld(stubWorld() as unknown as World);
-    expect(vitals.children[4]!.children[1]!.textContent).toBe('就绪');
-    expect(vitals.children[5]!.children[0]!.style.width).toBe('100%');
+    expect(vitals.children[2]!.children[1]!.textContent).toBe('就绪');
+    expect(vitals.children[3]!.children[0]!.style.width).toBe('100%');
   });
 });
 
