@@ -46,8 +46,9 @@ export interface EnemyBullet {
   vx: number;
   vy: number;
   /**
-   * 来源敌型(KIND_*):现在恒 KIND_SPORE,渲染层据此取 enemyTint 配色。
-   * 将来新的远程敌型直接换号,渲染层一行都不用改(与 Bullet.towerType 同一条口径)。
+   * 来源敌型(KIND_*):普通远程敌人使用 KIND_SPORE,Boss 巨大激光球使用 KIND_BOSS;
+   * 渲染层据此分流尺寸与配色。将来新的远程敌型直接换号,渲染层一行都不用改
+   * (与 Bullet.towerType 同一条口径)。
    */
   kind: number;
   /** 单发伤害。**发射那一刻定死,飞行途中不回查敌人**(与 Bullet.damage 同口径) */

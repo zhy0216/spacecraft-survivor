@@ -68,8 +68,9 @@ import { RESULT_RUNNING, World } from './world';
  *   但决定弹尾、命中与迫击炮落点的星级外观;读档后旧弹不能集体变成当前槽位的星级。
  * v10(增压校准):法令层数表长度 10→11(EDICT_KIND_COUNT)。数组长度进存档格式,
  *   旧档缺第 11 个值会把后面的字段整行读串 —— 升版本判废而不是做补齐迁移。
- * v11(冲刺弹射):boss 快照新增 ejectDone 游标(数组长度 4→5)。游标是"到点即消费"
- *   的真状态(它决定弹射批次何时进池)—— 漏了它,读档后冲刺弹射整批重发,池内容
+ * v11(冲刺弹射 + Boss 激光球):boss 快照保存 ejectDone 游标与 laserCooldown(数组长度
+ * 4→6)。前者是"到点即消费"的真状态,后者决定巨大慢速球的预警/发射时刻;漏任一项
+ *   都会让读档后的弹射或远程威胁与未存档轨迹分叉,池内容
  *   从读档帧起与"没存过档"的局分叉。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
@@ -157,7 +158,7 @@ export interface RunSnapshot {
    * 与两张货架同一条定性(消耗了 rng、决定玩家这轮花多少钱),进 checksum,必须存。
    */
   shopDiscount: number;
-  /** Boss:phase, summonN, summonCooldown, killedAt, ejectDone */
+  /** Boss:phase, summonN, summonCooldown, laserCooldown, killedAt, ejectDone */
   boss: number[];
   /**
    * 局内统计:kills, eliteKills, peakDps。
@@ -309,7 +310,14 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     dockEdicts: world.dockEdictOffers.slice(),
     shopWeapons: world.shopWeapons.slice(),
     shopDiscount: world.shopDiscountIndex,
-    boss: [world.bossPhase, world.bossSummonN, world.bossSummonCooldown, world.bossKilledAt, world.bossEjectDone],
+    boss: [
+      world.bossPhase,
+      world.bossSummonN,
+      world.bossSummonCooldown,
+      world.bossLaserCooldown,
+      world.bossKilledAt,
+      world.bossEjectDone,
+    ],
     tally: [world.kills, world.eliteKills, world.peakDps],
     damageByType: Array.from(world.runDamageByType),
     enemies,
@@ -389,8 +397,9 @@ export function restoreRun(snap: RunSnapshot): World {
   world.bossPhase = snap.boss[0]!;
   world.bossSummonN = snap.boss[1]!;
   world.bossSummonCooldown = snap.boss[2]!;
-  world.bossKilledAt = snap.boss[3]!;
-  world.bossEjectDone = snap.boss[4]!;
+  world.bossLaserCooldown = snap.boss[3]!;
+  world.bossKilledAt = snap.boss[4]!;
+  world.bossEjectDone = snap.boss[5]!;
 
   world.kills = snap.tally[0]!;
   world.eliteKills = snap.tally[1]!;
@@ -558,7 +567,7 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   const offer = nums('offer', -1, OF_STRIDE);
   const dockEdicts = nums('dockEdicts', -1);
   const shopWeapons = nums('shopWeapons', -1);
-  const boss = nums('boss', 5);
+  const boss = nums('boss', 6);
   const tally = nums('tally', 3);
   const damageByType = nums('damageByType', TOWER_KIND_COUNT);
   const enemies = nums('enemies', -1, EN_STRIDE);

@@ -191,6 +191,16 @@ describe('敌人数值表', () => {
     expect(BOSS.summonCounts.length).toBe(ENEMY_KIND_COUNT);
   });
 
+  it('Boss 巨大慢速激光球参数自洽:有预警、低速、大碰撞体、有限射程', () => {
+    expect(BOSS.laserInterval).toBeGreaterThan(BOSS.laserWarnTime);
+    expect(BOSS.laserWarnTime).toBeGreaterThan(0);
+    expect(BOSS.laserSpeed).toBeGreaterThan(0);
+    expect(BOSS.laserSpeed).toBeLessThan(ENEMIES[KIND_SPORE]!.sporeSpeed);
+    expect(BOSS.laserDamage).toBeGreaterThan(0);
+    expect(BOSS.laserRadius).toBeGreaterThan(ENEMIES[KIND_SPORE]!.radius);
+    expect(BOSS.laserLife).toBeGreaterThan(0);
+  });
+
   it('孢子炮手:远程字段自洽 —— 行为是 BH_SPORE、不冲锋、弹幕参数齐全且为正', () => {
     const spore = ENEMIES[KIND_SPORE]!;
     expect(spore.behavior).toBe(BH_SPORE);

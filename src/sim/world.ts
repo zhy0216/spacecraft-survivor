@@ -566,6 +566,12 @@ export class World {
   bossSummonCooldown = 0;
 
   /**
+   * 距离 Boss 下一颗巨大激光球的剩余秒数。它是独立于召唤/冲刺的真状态:
+   * 预警窗口读这个字段,到点发射后重置,因此同 seed / 存档恢复都能逐帧接上。
+   */
+  bossLaserCooldown = 0;
+
+  /**
    * 冲刺弹射的"到点即消费"游标(16 号弹射):本冲刺内已弹射的批次数。
    * 批次时刻由 Boss 的 DASH timer 闭式折出,游标只记消费 —— 照 bossSummonN 的
    * eliteNext 先例进 checksum:它决定"这批弹射怪进不进池",池内容已进 checksum,
@@ -1194,6 +1200,7 @@ export class World {
     else if (this.bossPhase === 1) {
       this.stepBossSummon();
       this.stepBossEject();
+      this.stepBossLaser();
     }
 
     // 重建空间哈希
@@ -2495,6 +2502,7 @@ export class World {
     this.bossPhase = 1;
     this.bossSummonN = 0;
     this.bossSummonCooldown = BOSS.summonInterval;
+    this.bossLaserCooldown = BOSS.laserInterval;
     this.bossEjectDone = 0;
     const a = this.wave.dirRad;
     const r = SPAWN_RADIUS + SPAWN_RADIUS_BAND / 2;
@@ -2622,6 +2630,35 @@ export class World {
         this.onEnemySpawn?.(e);
       }
     }
+  }
+
+  /**
+   * Boss 巨大慢速激光球(用户请求):每轮独立倒计时,预警结束后朝船当前方位发射一颗
+   * 大半径、低速、长寿命的能量球。方向在发射瞬间锁定,飞行途中不追踪,因此它是
+   * "占位 + 走位"威胁而不是不可躲的追踪弹;EnemyBullet 的通用命中/拦截链路继续复用。
+   * 零 rng:时刻由 cooldown、方向由船当前坐标,不影响出怪/召唤随机序列。
+   */
+  private stepBossLaser(): void {
+    const boss = this.resolveBoss();
+    if (!boss) return;
+    this.bossLaserCooldown -= SIM_DT;
+    if (this.bossLaserCooldown > 0) return;
+
+    // 到点即消费:即使弹丸池触顶也重置计时,不把一次发射拖成下一帧重复吐弹。
+    this.bossLaserCooldown = BOSS.laserInterval;
+    if (this.enemyBullets.size >= ENEMY_BULLET_MAX_ALIVE) return;
+
+    const angle = Math.atan2(this.ship.y - boss.y, this.ship.x - boss.x);
+    const b = this.enemyBullets.spawn();
+    b.kind = KIND_BOSS;
+    b.x = b.px = boss.x;
+    b.y = b.py = boss.y;
+    b.vx = Math.cos(angle) * BOSS.laserSpeed;
+    b.vy = Math.sin(angle) * BOSS.laserSpeed;
+    const scale = tuning.enemySporeDamageScale;
+    b.damage = BOSS.laserDamage * (scale > 0 ? scale : 0);
+    b.life = BOSS.laserLife;
+    b.radius = BOSS.laserRadius;
   }
 
   /**
@@ -2803,6 +2840,7 @@ export class World {
     acc(this.bossPhase);
     acc(this.bossSummonN);
     acc(this.bossSummonCooldown * 100);
+    acc(this.bossLaserCooldown * 100);
     // 弹射游标与召唤游标同一条"到点即消费"定性:它决定弹射怪何时进池(池内容已进
     // checksum),游标差一 = 整批弹射错位,漏了它重放时"这批弹射怪出没出过"无从对账
     acc(this.bossEjectDone);

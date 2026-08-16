@@ -105,6 +105,18 @@ export interface BossDef {
    * 型号/数量直给、不掷随机 —— 只有每只召唤怪的出生角掷一次(见 sim/world 的召唤)。
    */
   summonCounts: number[];
+  /** 巨型激光球两次发射之间的间隔(s)。Boss 自己的慢速远程压迫,与召唤/冲刺互不抢游标。 */
+  laserInterval: number;
+  /** 激光球发射前的预警窗口(s):渲染层会画出从 Boss 指向船的蓄能线。 */
+  laserWarnTime: number;
+  /** 激光球速度(px/s):刻意很慢,让玩家能读懂并绕开这颗大威胁。 */
+  laserSpeed: number;
+  /** 激光球单发伤害:命中仍走 EnemyBulletSink → damageShip。 */
+  laserDamage: number;
+  /** 激光球碰撞半径(px):同时是渲染尺寸的基准,必须明显大于孢子球。 */
+  laserRadius: number;
+  /** 激光球最长飞行时间(s),作为射程上限的唯一表达。 */
+  laserLife: number;
   /** Boss 必掉星币面额(16 号):击杀当场进账 world.starCoins,零 rng、固定面额、掉的就是"这一只"的。
    *  旧口径"底座 scrap × scrapMul 的 4× 残骸"整体替换为它(16 号星币落地);占位待调 */
   starCoins: number;
@@ -136,6 +148,12 @@ export const BOSS: BossDef = {
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调
   summonCounts: [8, 2, 0, 0, 0], // 8 蜂群蛭 + 2 侧掠者(原 6+2):清场需求 25.6 DPS,贴在闸门 2× 余量线(28.2)以内且保两侧舷交替
+  laserInterval: 6.5, // 巨大慢速球:让 Boss 的召唤/冲锋之间始终有一颗可读的远程威胁
+  laserWarnTime: 1.35, // 蓄能预警比孢子炮手更长,给玩家绕开大球的时间
+  laserSpeed: 92, // 慢速飞行:大球不是瞬移伤害,而是持续占位压力
+  laserDamage: 22, // 大球命中很痛,但可被躲避/点防拦截
+  laserRadius: 32, // 明显大于孢子球半径 5,渲染层以同值生成发光球
+  laserLife: 14, // 远距离 Boss 战也不会因为玩家移动太快而无限留弹
   starCoins: 30, // 3 次重摇的价(10 × 3),占位待调
 };
 

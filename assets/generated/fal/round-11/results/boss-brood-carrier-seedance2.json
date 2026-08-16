@@ -1,0 +1,10 @@
+{
+  "endpoint_id": "bytedance/seedance-2.0/image-to-video",
+  "request_id": "01a008ce-d324-7c81-8c9c-62c753d29b51",
+  "seed": 1399665951,
+  "duration_seconds": 4,
+  "resolution": "480p",
+  "output_path": "assets/generated/fal/round-11/boss-brood-carrier-seedance2-vivid.mp4",
+  "source": "assets/game/fal-round-7/enemies/boss-brood-carrier.png",
+  "generate_audio": false
+}

@@ -482,31 +482,35 @@ const BOSS_RIGHT_LEG_AXIS = 55;
  */
 export const RIG_BOSS: RigDef = {
   textureCount: 6, // 0 left leg → 1 right leg → 2 body → 3 egg → 4 iris → 5 head
-  freq: 1.35,
+  // Seedance 2 的动作参考显示的是"重心呼吸 + 延迟踏步",而不是整只 Boss 同步摆动;
+  // 提高基础频率后仍由每个部件的 phase 错开,不会回到机械齐步。
+  freq: 1.55,
   fixedRootAngle: null,
   targetFacing: null,
   spin: 0,
   parts: [
-    part({ tex: 2, parent: -1, dy: 18, scale: 0.44, swing: 0.012, pumpX: 0.018, pumpY: 0.018 }),
-    part({ tex: 5, parent: 0, ax: 0.5, ay: 0.82, dy: -112, scale: 0.34, swing: 0.028, phase: Math.PI * 0.5 }),
+    // 腹腔不是一块静态贴纸:轻微反相挤压让体积读作"在呼吸"。
+    part({ tex: 2, parent: -1, dy: 18, scale: 0.44, swing: 0.045, pumpX: 0.04, pumpY: -0.025 }),
+    // 头甲有独立的迟滞点头,相位与腹腔错开半拍。
+    part({ tex: 5, parent: 0, ax: 0.5, ay: 0.82, dy: -112, scale: 0.34, swing: 0.06, phase: Math.PI * 0.5, pumpX: 0.018, pumpY: -0.012 }),
     ...[
       { dx: -112, dy: -62, axis: -155, phase: 0 },
       { dx: -128, dy: 8, axis: 180, phase: (Math.PI * 2) / 3 },
       { dx: -102, dy: 78, axis: 145, phase: (Math.PI * 4) / 3 },
-    ].map((p) => part({ tex: 0, parent: 0, ax: 0.9, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_LEFT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.13, phase: p.phase })),
+    ].map((p) => part({ tex: 0, parent: 0, ax: 0.9, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_LEFT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.2, phase: p.phase, pumpX: 0.05, pumpY: -0.025 })),
     ...[
       { dx: 112, dy: -62, axis: -25, phase: Math.PI },
       { dx: 128, dy: 8, axis: 0, phase: Math.PI / 3 },
       { dx: 102, dy: 78, axis: 35, phase: (Math.PI * 5) / 3 },
-    ].map((p) => part({ tex: 1, parent: 0, ax: 0.1, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_RIGHT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.13, phase: p.phase })),
+    ].map((p) => part({ tex: 1, parent: 0, ax: 0.1, ay: 0.08, dx: p.dx, dy: p.dy, rest: (p.axis - BOSS_RIGHT_LEG_AXIS) * D2R, scale: 0.24, swing: 0.2, phase: p.phase, pumpX: 0.05, pumpY: -0.025 })),
     ...[
       { dx: -72, dy: 5, phase: 0 },
       { dx: 72, dy: 5, phase: Math.PI },
       { dx: -62, dy: 78, phase: Math.PI * 0.5 },
       { dx: 62, dy: 78, phase: Math.PI * 1.5 },
-    ].map((p) => part({ tex: 3, parent: 0, dx: p.dx, dy: p.dy, scale: 0.12, phase: p.phase, pumpX: 0.12, pumpY: 0.12 })),
+    ].map((p) => part({ tex: 3, parent: 0, dx: p.dx, dy: p.dy, scale: 0.12, phase: p.phase, swing: 0.035, pumpX: 0.18, pumpY: 0.13 })),
     // 虹膜盖在腹腔正中最前层；召唤前摇时由 Boss 专属 driver 提频放大,像一扇正在开的门。
-    part({ tex: 4, parent: 0, dx: 0, dy: 66, scale: 0.14, phase: Math.PI * 0.25, pumpX: 0.1, pumpY: 0.1 }),
+    part({ tex: 4, parent: 0, dx: 0, dy: 66, scale: 0.14, swing: 0.08, phase: Math.PI * 0.25, pumpX: 0.17, pumpY: 0.12 }),
   ],
 };
 

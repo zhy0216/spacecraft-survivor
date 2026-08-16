@@ -264,6 +264,24 @@ describe('Boss 行为状态机(纯函数,可脱离世界)', () => {
 });
 
 describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)', () => {
+  it('巨大慢速激光球:独立倒计时到点发射、方向锁定、尺寸/速度走 Boss 数据', () => {
+    const w = bossWorld(13);
+    // 关掉玩家火力,避免点防在同一帧把大球拦截掉;本用例只看 Boss 发射侧。
+    for (const slot of w.weapons) slot.type = -1;
+    expect(w.bossLaserCooldown).toBe(BOSS.laserInterval);
+
+    const frames = Math.ceil(BOSS.laserInterval * SIM_HZ) + 2;
+    for (let f = 0; f < frames; f++) w.step();
+    const laser = w.enemyBullets.items.find((b) => b.kind === KIND_BOSS);
+    expect(laser).toBeDefined();
+    expect(laser!.radius).toBe(BOSS.laserRadius);
+    expect(laser!.damage).toBeCloseTo(BOSS.laserDamage * tuning.enemySporeDamageScale, 9);
+    expect(Math.hypot(laser!.vx, laser!.vy)).toBeCloseTo(BOSS.laserSpeed, 9);
+    expect(laser!.life).toBeLessThanOrEqual(BOSS.laserLife);
+    // 发射后倒计时重置,下一颗不会在同一帧重复生成。
+    expect(w.bossLaserCooldown).toBeGreaterThan(BOSS.laserInterval - SIM_DT * 2);
+  });
+
   it('脚本走完那一帧进入 Boss 战:生成 Boss 一只(与敌人同池、专用 kind 标记、零 rng)', () => {
     const w = bossWorld(5);
     expect(w.wave.done).toBe(true);

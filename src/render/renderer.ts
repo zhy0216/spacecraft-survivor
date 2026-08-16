@@ -174,6 +174,8 @@ const ENEMY_EDGE = 0xffffff;
 // —— 残骸掉落物(10 号 issue T4)——GDD §12 的"拾荒焊接美学:船是冷色废铁拼焊的" ——
 // 残骸 = 低饱和钢白:与六塔那批高饱和冷色差的是饱和度、与敌人的红紫暖色差的是整个色域。
 const DROP_TINT = 0xb9cfe0;
+/** Boss 巨大慢速激光球的专属高热橙紫,与孢子炮手小弹丸保持明显层级差。 */
+const BOSS_LASER_TINT = 0xff6b45;
 /** 纹理一律灰阶(暗面 + 亮边),真正的颜色靠粒子 tint 相乘 —— 与敌人/子弹纹理同一套做法 */
 const DROP_FILL = 0x8f959c;
 const DROP_EDGE = 0xffffff;
@@ -849,24 +851,24 @@ const bossRigDriver: RigDriver = {
   drive(e: RigEntity, out: RigDrive): void {
     switch (e.state) {
       case BOSS_CHASE:
-        out.freqMul = 0.7;
-        out.swingMul = 1;
+        out.freqMul = 0.88;
+        out.swingMul = 1.08;
         break;
       case BOSS_WINDUP:
-        out.freqMul = 2.1;
-        out.swingMul = 0.55;
+        out.freqMul = 2.45;
+        out.swingMul = 0.72;
         break;
       case BOSS_DASH:
-        out.freqMul = 1.55;
-        out.swingMul = 1.4;
+        out.freqMul = 1.85;
+        out.swingMul = 1.65;
         break;
       case BOSS_RECOVER:
-        out.freqMul = 0.42;
-        out.swingMul = 0.65;
+        out.freqMul = 0.5;
+        out.swingMul = 0.84;
         break;
       default:
-        out.freqMul = 0.7;
-        out.swingMul = 1;
+        out.freqMul = 0.88;
+        out.swingMul = 1.08;
     }
   },
   tint: rigDriver.tint,
@@ -925,6 +927,28 @@ function buildSporeBulletShape(): Graphics {
     .circle(0, 0, r)
     .fill(0xffffff)
     .stroke({ width: 2, color: 0xffffff, alpha: 0.45 });
+}
+
+/**
+ * Boss 激光球剪影:大实心能量核 + 双层轨道 + 四道短促放射刺。
+ * 纹理以 32px 碰撞半径烘焙,运行时不再逐粒子缩放;碰撞体与视觉体因此一一对齐。
+ */
+function buildBossLaserBallShape(): Graphics {
+  const r = 32;
+  const g = new Graphics();
+  g.circle(0, 0, r).fill({ color: 0xffffff, alpha: 0.18 });
+  g.circle(0, 0, r * 0.82).stroke({ width: 3.5, color: 0xffffff, alpha: 0.78 });
+  g.circle(0, 0, r * 0.54).fill(0xffffff);
+  g.circle(0, 0, r * 0.23).fill({ color: 0xffffff, alpha: 0.95 });
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    const inner = r * 0.84;
+    const outer = r * 1.16;
+    g.moveTo(Math.cos(a) * inner, Math.sin(a) * inner)
+      .lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
+  }
+  g.stroke({ width: 2.4, color: 0xffffff, alpha: 0.68 });
+  return g;
 }
 
 /**
@@ -1159,6 +1183,15 @@ export class Renderer {
   private sporeBulletPc: ParticleContainer;
   private sporeBulletParticles: Particle[] = [];
   private sporeBulletTexture: Texture;
+  /** Boss 巨大慢速激光球:独立纹理/容器,否则同一张 5px 孢子球无法表达它的体量。 */
+  private bossLaserPc: ParticleContainer;
+  private bossLaserParticles: Particle[] = [];
+  private bossLaserTexture: Texture;
+  /** 敌方弹丸分桶暂存,数组整帧复用避免每帧分配。 */
+  private sporeBulletBucket: EnemyBullet[] = [];
+  private bossLaserBucket: EnemyBullet[] = [];
+  /** 巨大球的短能量尾迹,挂在球体之下,让“激光球”而不是普通大圆点一眼成立。 */
+  private bossLaserTrailG = new Graphics();
   /**
    * 开火光效层(05 号 T5)。挂在 **worldLayer** 而不是 shipG:FxEvent 的坐标是**世界坐标**
    * (命中点在敌人身上,不在船上),挂进船体局部空间会让整条光束跟着船转 —— 船一转,
@@ -1488,6 +1521,16 @@ export class Renderer {
       boundsArea: bounds,
       texture: this.sporeBulletTexture,
     });
+    this.bossLaserTexture = app.renderer.generateTexture({
+      target: buildBossLaserBallShape(),
+      resolution: 2,
+      antialias: true,
+    });
+    this.bossLaserPc = new ParticleContainer({
+      dynamicProperties: dyn,
+      boundsArea: bounds,
+      texture: this.bossLaserTexture,
+    });
 
     // 冲锋前摇的指示层:每帧 clear 后重画(几何逐帧变)
     this.telegraphG = new Graphics();
@@ -1540,6 +1583,8 @@ export class Renderer {
     // 磁吸宝物(26 号改)紧跟经验残骸:同一层带,宝物压在上——"特别的那一颗"读得出来
     this.worldLayer.addChild(this.dropOrbPc);
     this.worldLayer.addChild(this.sporeBulletPc);
+    this.worldLayer.addChild(this.bossLaserTrailG);
+    this.worldLayer.addChild(this.bossLaserPc);
     this.worldLayer.addChild(this.bulletTrailG);
     for (let s = 0; s < this.bulletPcs.length; s++) this.worldLayer.addChild(this.bulletPcs[s]!);
     // 加速拖尾压在开火光效之下、弹之上:它是船自己的航迹,不该糊住"这一发打中了"的读数
@@ -1765,7 +1810,7 @@ export class Renderer {
         flashBase: this.bossTextureTint,
       });
     }
-    this.drawBossTelegraph(alpha);
+    this.drawBossTelegraph(alpha, sx, sy);
 
     // 子弹按 towerType 分桶,写法与上面的敌人分型一字不差(复用数组 + length = 0,零分配)。
     // 越界或非弹道塔(bulletSlot 为 -1)的弹只是不画,不炸掉整局 —— 与 kind 越界同一条兜底口径
@@ -1786,13 +1831,28 @@ export class Renderer {
       });
     }
 
-    // 敌方弹丸(22 号):整池直接喂(池的 items 是致密数组,不必分桶,与残骸同款)。
-    // 与敌人粒子同一套 alpha 插值:弹丸 220px/s,60Hz 逻辑帧在 144Hz 屏上不插值就是顿挫
-    this.syncParticles(this.sporeBulletParticles, this.sporeBulletPc, this.world.enemyBullets.items, {
+    // 敌方弹丸(22 号):按来源分桶。普通孢子仍走 5px 小球;Boss 的 KIND_BOSS
+    // 单独走 32px 巨型激光球纹理,避免用同一粒子纹理把两种威胁画成同一个尺寸。
+    this.sporeBulletBucket.length = 0;
+    this.bossLaserBucket.length = 0;
+    const enemyBullets = this.world.enemyBullets.items;
+    for (let i = 0; i < enemyBullets.length; i++) {
+      const bullet = enemyBullets[i]!;
+      if (bullet.kind === KIND_BOSS) this.bossLaserBucket.push(bullet);
+      else this.sporeBulletBucket.push(bullet);
+    }
+    // 与敌人粒子同一套 alpha 插值:普通弹丸 220px/s,60Hz 逻辑帧在 144Hz 屏上不插值就是顿挫
+    this.syncParticles(this.sporeBulletParticles, this.sporeBulletPc, this.sporeBulletBucket, {
       texture: this.sporeBulletTexture,
       tint: enemyTint(KIND_SPORE), // 暖红紫:与冷色我方弹道一眼分家(GDD §12)
       alpha,
     });
+    this.syncParticles(this.bossLaserParticles, this.bossLaserPc, this.bossLaserBucket, {
+      texture: this.bossLaserTexture,
+      tint: BOSS_LASER_TINT,
+      alpha,
+    });
+    this.drawBossLaserTrails(alpha);
 
     // 掉落物按 kind 分桶后整桶喂(磁吸宝物与经验残骸纹理/tint/个头都不同):
     // 与它们同一套 syncParticles ⇒ 一并吃 alpha 插值:磁吸段每秒 300px,不插值就是一串跳点
@@ -2522,6 +2582,40 @@ export class Renderer {
         if (motes > 0) g.fill({ color: FX_CORE_COLOR, alpha: tier === 3 ? 0.9 : 0.65 });
         if (rings > 0) g.stroke({ width: 1.2, color: def.tint, alpha: 0.52 });
       }
+    }
+  }
+
+  /** Boss 巨大慢速球的能量尾迹:只画表现,位置/命中仍完全由 sim 的 EnemyBullet 决定。 */
+  private drawBossLaserTrails(alpha: number): void {
+    const g = this.bossLaserTrailG;
+    g.clear();
+    const bucket = this.bossLaserBucket;
+    for (let i = 0; i < bucket.length; i++) {
+      const b = bucket[i]!;
+      const x = b.px + (b.x - b.px) * alpha;
+      const y = b.py + (b.y - b.py) * alpha;
+      const speed = Math.hypot(b.vx, b.vy);
+      if (speed <= 1e-6) continue;
+      const ux = b.vx / speed;
+      const uy = b.vy / speed;
+      const len = 42 + Math.min(28, speed * 0.12);
+      g.moveTo(x - ux * len, y - uy * len).lineTo(x, y);
+    }
+    if (bucket.length > 0) {
+      g.stroke({ width: 7, color: BOSS_LASER_TINT, alpha: 0.22 });
+      // 细白芯与大球的中心高光同源,不把尾迹画成一条纯色实线。
+      for (let i = 0; i < bucket.length; i++) {
+        const b = bucket[i]!;
+        const x = b.px + (b.x - b.px) * alpha;
+        const y = b.py + (b.y - b.py) * alpha;
+        const speed = Math.hypot(b.vx, b.vy);
+        if (speed <= 1e-6) continue;
+        const ux = b.vx / speed;
+        const uy = b.vy / speed;
+        const len = 30 + Math.min(18, speed * 0.08);
+        g.moveTo(x - ux * len, y - uy * len).lineTo(x, y);
+      }
+      g.stroke({ width: 1.8, color: 0xffffff, alpha: 0.58 });
     }
   }
 
@@ -3343,7 +3437,7 @@ export class Renderer {
    * 只是承诺对象从一条直线扩成一条 Z 形走廊。
    * Boss 全场只有一只,不占 TELEGRAPH_MAX_PER_KIND 配额。
    */
-  private drawBossTelegraph(alpha: number): void {
+  private drawBossTelegraph(alpha: number, shipX: number, shipY: number): void {
     const g = this.telegraphG;
     const base = ENEMIES[BOSS.baseKind]!;
     const reach = (base.chargeSpeed * BOSS.chargeSpeedMul * tuning.enemySpeedScale * BOSS.chargeDuration) / BOSS_Z_LEGS;
@@ -3378,6 +3472,31 @@ export class Renderer {
     if (drawn > 0) {
       g.stroke({ width: TELEGRAPH_WIDTH, color: tint, alpha: TELEGRAPH_ALPHA });
     }
+
+    // 巨大慢速激光球的蓄能线:只在预警窗口内画,颜色/节奏与冲锋线分开,
+    // 让玩家明确知道 Boss 正在朝当前船位锁定一颗大球。发射后 cooldown 被重置,
+    // 线自然熄灭;方向只用于预警,实际弹道仍由 sim 在发射帧锁定。
+    const laserLeft = this.world.bossLaserCooldown;
+    if (laserLeft <= 0 || laserLeft > BOSS.laserWarnTime || bucket.length === 0) return;
+    const boss = bucket[0]!;
+    const bx = boss.px + (boss.x - boss.px) * alpha;
+    const by = boss.py + (boss.y - boss.py) * alpha;
+    const dx = shipX - bx;
+    const dy = shipY - by;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= 1e-6) return;
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const t = Math.max(0, Math.min(1, laserLeft / BOSS.laserWarnTime));
+    const pulse = 0.45 + 0.55 * Math.abs(Math.sin(this.animClock * 7.5));
+    g.moveTo(bx + ux * (bossRadius() * 0.7), by + uy * (bossRadius() * 0.7))
+      .lineTo(shipX - ux * 10, shipY - uy * 10);
+    g.circle(bx, by, bossRadius() * BOSS_VISUAL_SCALE + 5 + t * 10);
+    g.stroke({
+      width: 2.2 + (1 - t) * 2.2,
+      color: BOSS_LASER_TINT,
+      alpha: (0.22 + (1 - t) * 0.5) * pulse,
+    });
   }
 
   /**
