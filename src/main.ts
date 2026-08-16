@@ -247,11 +247,17 @@ async function boot(): Promise<void> {
 
   // —— 阶段 A:标题先行。下面这三页只依赖 sim 世界 + DOM,渲染层缺席不影响 ——
 
+  // 移动端 HUD 齿轮弹设置页的来路标记:关掉设置页后**直接回战斗**,不弹暂停菜单 ——
+  // 触屏上没有 Esc,多一层菜单只是多一次点按。世界在齿轮按下的那一刻已经暂停,
+  // 这里只需放行;从暂停菜单进的设置页不受影响(标记恒 false 时走原路径)
+  let settingsFromHud = false;
+
   // 设置页:**整页只建一次、标题与暂停两个入口共用**(见 ui/settingsMenu.ts 文件头)。
   // 改一项就落盘 + 整份重灌到各落点 —— 没有"改了没保存"的中间态。
   // 语言走 onLanguage 单独一条路:切换是异步的,且只有切成功了才落盘(见 setLanguage)。
-  // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):战斗中开的就弹回暂停菜单,
-  // 否则回标题 —— 判据取 runActive 而不是"上次谁调的 show",少一个必须两处同步的状态位
+  // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):移动端齿轮来的直接回战斗,
+  // 战斗中(暂停菜单)开的就弹回暂停菜单,否则回标题 —— 判据取 runActive 而不是
+  // "上次谁调的 show",少一个必须两处同步的状态位
   const settingsMenu = createSettingsMenu({
     get: () => settings,
     onChange: (next) => {
@@ -264,6 +270,11 @@ async function boot(): Promise<void> {
       void setLanguage(next);
     },
     onClose: () => {
+      if (settingsFromHud) {
+        settingsFromHud = false;
+        run.paused = false; // 恢复战斗:玩家改完设置,直接回到刚才的战场
+        return;
+      }
       if (runActive) pauseMenu?.show();
       else titleScreen.show(titleDigest());
     },
@@ -386,7 +397,22 @@ async function boot(): Promise<void> {
       applySettings(settings, renderer);
     },
   };
-  const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG, muted: mutedHooks });
+  const hud = createHud({
+    world,
+    rightGutter: DEBUG ? undefined : 0,
+    debug: DEBUG,
+    muted: mutedHooks,
+    // 移动端右上角「设置」入口:点下 = 暂停 + 自动存档 + 弹设置页,关掉后由
+    // settingsMenu.onClose 按 settingsFromHud 标记直接回战斗(见上面的注释)。
+    // 桌面不显示这颗按钮 —— 那边走 Esc 暂停菜单 → 设置,两条路共用同一份设置页
+    onSettings: () => {
+      if (!runActive || run.paused) return;
+      run.paused = true;
+      saveRun();
+      settingsFromHud = true;
+      settingsMenu.show();
+    },
+  });
   // 语言切换成功后 HUD 原地重画静态标签(05 号):切换与战斗并行,不影响 toast/banner 计时
   registerLocaleAware(hud);
 

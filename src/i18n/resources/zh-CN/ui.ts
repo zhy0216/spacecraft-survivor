@@ -81,6 +81,7 @@ export const ui = {
     threat: '主压方向',
     incoming: '即将来袭',
     mute: '静音开关',
+    settings: '设置',
     soundOn: '声音:开',
     soundOff: '声音:关',
     keys: '[I] 武器布局 · [P] 统计面板 · [Tab] 射界',

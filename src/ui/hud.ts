@@ -84,6 +84,9 @@ const SEGMENT_CSS = `${PANEL_CSS}justify-self:end;width:min(280px,100%);`;
  * 一根 flex 纵列自动堆叠(间距 14px)。此前四块各自 absolute 记 top 偏移,vitals 加一行
  * 就要手改整串数字 —— 加速条上线时那笔账没跟上,星币面板直接压进了血条面板;
  * 法令隐藏时中段还留一个空洞。flex 纵列把这两类失配一并消灭:增行/隐藏,下面的自动跟上。
+ *
+ * 纵队再分两组(同一套纵列样式):**常驻组** = vitals + 星币,战斗必需读数,不归统计面板管;
+ * **统计组** = 信标/法令/图鉴/火力,由 setStatsVisible(设置项 showStatsPanel)整组显隐。
  */
 const LEFT_COL_CSS = 'display:flex;flex-direction:column;gap:14px;align-items:stretch;';
 
@@ -228,6 +231,22 @@ const BOSS_HP_COLOR = '#ff1f4b';
  */
 const MUTE_CSS =
   'position:absolute;left:48px;bottom:48px;padding:6px 12px;' +
+  `border:1px solid ${LINE_COLOR};border-radius:7px;` +
+  'background:rgba(5,7,13,.68);box-shadow:0 2px 12px rgba(0,0,0,.28);' +
+  'font:inherit;letter-spacing:.08em;cursor:pointer;user-select:none;' +
+  'pointer-events:auto!important;';
+
+/**
+ * 移动端设置入口:战斗画面右上角的「设置」按钮。桌面默认整体隐藏(display:none,
+ * 那边走 Esc 暂停菜单 → 设置),移动布局由 index.html 的媒体查询点亮并重定位到
+ * 右上角(顶栏同时让出右侧通道,不与计时器重叠)。图标是纯 CSS 滑杆(pseudo-element,
+ * 与背包键的纯 CSS 图标同一条"不依赖字体字形"的口径),点击动作由 main 注入 ——
+ * HUD 不认识流程,只把"玩家点了设置"说出去。放 root 而不是顶栏里:统计面板开关
+ * 会把整条顶栏收起,而设置入口必须**常驻** —— 否则关掉统计面板的玩家在战斗里
+ * 就再也找不到设置(移动端没有 P 键也没有 Esc)。
+ */
+const SETTINGS_CSS =
+  'position:fixed;right:48px;top:48px;display:none;padding:8px 12px;' +
   `border:1px solid ${LINE_COLOR};border-radius:7px;` +
   'background:rgba(5,7,13,.68);box-shadow:0 2px 12px rgba(0,0,0,.28);' +
   'font:inherit;letter-spacing:.08em;cursor:pointer;user-select:none;' +
@@ -591,7 +610,14 @@ export interface MuteHooks {
   set(m: boolean): void;
 }
 
-export function createHud(opts: { world: World; rightGutter?: number; debug?: boolean; muted?: MuteHooks }): HudUi {
+export function createHud(opts: {
+  world: World;
+  rightGutter?: number;
+  debug?: boolean;
+  muted?: MuteHooks;
+  /** 移动端右上角「设置」按钮点下时回调(main 注入:暂停 + 存档 + 弹设置页) */
+  onSettings?: () => void;
+}): HudUi {
   let world = opts.world;
   let paused = false;
   let statsVisible = true;
@@ -614,7 +640,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
   const vitals = document.createElement('div');
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
-  vitals.className = 'sw-hud-panel';
+  vitals.className = 'sw-hud-panel sw-hud-vitals';
   const hp = createBar(vitals, t('ui:hud.hull'), HP_COLOR);
   const scrap = createBar(vitals, t('ui:hud.scrap'), SCRAP_COLOR);
   // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
@@ -684,6 +710,16 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   keyHints.className = 'sw-hud-keys';
   keyHints.textContent = t('ui:hud.keys');
 
+  // 移动端设置入口:图标按钮(纯 CSS 滑杆,见 SETTINGS_CSS 注释),动作由 main 注入。
+  // 桌面默认藏着,移动布局由 index.html 点亮;标题/悬停提示走翻译,图标本身没有文字
+  const settingsBtn = document.createElement('div');
+  settingsBtn.style.cssText = SETTINGS_CSS;
+  settingsBtn.className = 'sw-hud-settings';
+  settingsBtn.title = t('ui:hud.settings');
+  settingsBtn.addEventListener('click', () => {
+    opts.onSettings?.();
+  });
+
   // 精英血条:屏下缘、与静音开关不抢位(一个贴左、一个居中)。填充色取威胁红,
   // 与罗盘箭头同色 —— 这一只就是当下最需要盯着的威胁
   const elite = document.createElement('div');
@@ -701,12 +737,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 同一行分两列:左列余额、右列场上怪物数(items 就是活跃池,length 即在场数)
   const starCoins = document.createElement('div');
   starCoins.style.cssText = STARCOINS_CSS;
-  starCoins.className = 'sw-hud-panel';
+  starCoins.className = 'sw-hud-panel sw-hud-starcoins';
   starCoins.title = t('ui:hud.starCoins');
   const starRow = document.createElement('div');
   starRow.style.cssText = LABEL_ROW_CSS;
+  starRow.className = 'sw-hud-row';
   const starGroup = document.createElement('span');
   starGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
+  starGroup.className = 'sw-hud-star-group';
   const starLabel = document.createElement('span');
   starLabel.style.cssText = LABEL_CSS;
   starLabel.textContent = t('ui:hud.starLabel');
@@ -715,6 +753,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   starGroup.append(starLabel, starValue);
   const enemyGroup = document.createElement('span');
   enemyGroup.style.cssText = 'display:flex;align-items:baseline;gap:6px;';
+  enemyGroup.className = 'sw-hud-enemy-group';
   const enemyLabel = document.createElement('span');
   enemyLabel.style.cssText = LABEL_CSS;
   enemyLabel.textContent = t('ui:hud.enemies');
@@ -924,7 +963,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 
-  root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette, edictTip);
+  root.append(top, threat, warn, muteBtn, keyHints, elite, boss, unlockToast, banner, radar, vignette, edictTip, settingsBtn);
   document.getElementById('ui')!.appendChild(root);
 
   /** 悬停一条法令 chip:在法令面板正下方点亮描述(名字 ×层 / 作用域 / 一层效果) */
@@ -1308,6 +1347,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
     muteBtn.title = t('ui:hud.mute');
     paintMute();
     keyHints.textContent = t('ui:hud.keys');
+    settingsBtn.title = t('ui:hud.settings');
     eliteBar.label.textContent = t('ui:hud.elite');
     bossBar.label.textContent = bossName();
     starCoins.title = t('ui:hud.starCoins');

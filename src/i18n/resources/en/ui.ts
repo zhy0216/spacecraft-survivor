@@ -85,6 +85,7 @@ export const ui: DeepRecord<typeof zhUi> = {
     threat: 'Threat direction',
     incoming: 'Incoming',
     mute: 'Mute',
+    settings: 'Settings',
     soundOn: 'Sound: On',
     soundOff: 'Sound: Off',
     keys: '[I] Weapon layout · [P] Stats panel · [Tab] Firing arcs',

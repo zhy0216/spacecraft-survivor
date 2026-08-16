@@ -261,6 +261,48 @@
           grid-template-areas: 'left timer' 'segment segment';
           gap: 4px !important;
           align-items: start !important;
+          /* 右上角让给「设置」齿轮(44px 定宽 + 8px 呼吸):计时器与航段条都止步于此 */
+          padding-right: 52px;
+        }
+        /* 战斗右上角的「设置」入口:桌面默认隐藏(display:none 写在 hud.ts 的内联样式里,
+           走 Esc 暂停菜单),移动布局点亮 —— !important 顶掉内联的 display 与定位。
+           图标是纯 CSS 滑杆(::before 三条横杆、::after 三个旋钮),不依赖字体字形 */
+        .sw-hud-settings {
+          display: flex !important;
+          align-items: center;
+          justify-content: center;
+          position: fixed !important;
+          top: max(10px, env(safe-area-inset-top)) !important;
+          right: max(10px, env(safe-area-inset-right)) !important;
+          width: 44px;
+          height: 44px;
+          padding: 0 !important;
+          border-radius: 50% !important;
+          z-index: 12;
+        }
+        .sw-hud-settings::before {
+          content: '';
+          position: relative;
+          width: 20px;
+          height: 14px;
+          background:
+            linear-gradient(#9adcff, #9adcff) 0 1px / 20px 2px no-repeat,
+            linear-gradient(#9adcff, #9adcff) 0 7px / 20px 2px no-repeat,
+            linear-gradient(#9adcff, #9adcff) 0 13px / 20px 2px no-repeat;
+        }
+        .sw-hud-settings::after {
+          content: '';
+          position: absolute;
+          left: 14px;
+          top: 14px;
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #c8dcf0;
+          box-shadow: 10px 6px 0 #c8dcf0, 0 12px 0 #c8dcf0;
+        }
+        .sw-hud-settings:active {
+          filter: brightness(1.3);
         }
         .sw-hud {
           font-size: 10px !important;

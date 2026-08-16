@@ -315,8 +315,9 @@ describe('createHud', () => {
     // 屏下缘两根血条(精英 + Boss)、解锁 toast、段落横幅(26 号,display:none 的常驻节点)、
     // 战术雷达以及低血量红晕(畅玩性),
     // 没有按敌人数增长的节点或中央遮罩 —— 雷达把几百个点画在一块 canvas 里,不铺 DOM
-    // (法令悬停 tooltip 是第 12 个根节点:常驻隐藏,悬停法令 chip 才点亮)
-    expect(root.children.length).toBe(12);
+    // (法令悬停 tooltip 是第 12 个根节点:常驻隐藏,悬停法令 chip 才点亮;
+    //  移动端设置入口是第 13 个:排在最后,桌面形态 display:none)
+    expect(root.children.length).toBe(13);
     expect(dom.windowListeners).toBe(0);
   });
 
@@ -512,6 +513,33 @@ describe('createHud', () => {
     muted = false;
     hud.sync();
     expect(mute.textContent).toBe('声音:开');
+  });
+
+  it('移动端设置入口:右上角齿轮默认藏着(桌面走 Esc),点击走注入的 onSettings,语言切换重画提示', async () => {
+    let opened = 0;
+    const hud = createHud({
+      world: stubWorld() as unknown as World,
+      onSettings: () => {
+        opened++;
+      },
+    });
+    const root = dom.ui.children[0]!;
+    // 齿轮是最后一个根节点(第 13 枚,0 起 12):桌面形态 display:none,移动布局由 CSS 点亮
+    const gear = root.children[12]!;
+    expect(gear.title).toBe(t('ui:hud.settings'));
+    expect(gear.style.cssText).toContain('display:none');
+    // 与静音开关同一手:整棵 HUD 是 pointer-events:none,可交互的小块自己开回来
+    expect(gear.style.cssText).toContain('pointer-events:auto');
+
+    // 点下去:动作由 main 注入,HUD 自己不认识流程(不注入时点下去什么也不发生)
+    gear.listeners.get('click')!(undefined);
+    expect(opened).toBe(1);
+
+    // 语言切换:图标没有文字,只有 title 随语言重画
+    await changeLocale('en');
+    hud.refreshLocale();
+    expect(gear.title).toBe(t('ui:hud.settings'));
+    await changeLocale('zh-CN');
   });
 
   it('键位提示行(28 号):常驻小字印出 I/P/Tab 玩法键,纯静态、鼠标穿透、加速不重复进这行', () => {
