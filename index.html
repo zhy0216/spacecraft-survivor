@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>STARWRECK 星骸</title>
+    <!-- 中性占位:JS 起来后由 main.ts 按当前语言改写(见 applyDocumentLocale) -->
+    <title>STARWRECK</title>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛸</text></svg>"
@@ -102,6 +103,9 @@
       /* 触控驾驶层默认不参与桌面布局；窄屏或粗指针设备进入战斗后才由 JS 点亮。 */
       .sw-mobile-controls {
         display: none;
+      }
+      .sw-hud-top.sw-hud-stats-hidden {
+        display: none !important;
       }
 
       @media (max-width: 900px), (hover: none) and (pointer: coarse) {
@@ -431,6 +435,7 @@
         }
         .sw-mobile-steer,
         .sw-mobile-boost-wrap {
+          grid-row: 1;
           min-width: 0;
           height: 100%;
           display: flex;
@@ -441,12 +446,22 @@
           pointer-events: none;
         }
         .sw-mobile-steer {
+          grid-column: 1;
           justify-self: start;
           width: min(44vw, 170px);
         }
         .sw-mobile-boost-wrap {
+          grid-column: 2;
           justify-self: end;
           width: min(34vw, 130px);
+        }
+        .sw-mobile-controls-swapped .sw-mobile-steer {
+          grid-column: 2;
+          justify-self: end;
+        }
+        .sw-mobile-controls-swapped .sw-mobile-boost-wrap {
+          grid-column: 1;
+          justify-self: start;
         }
         .sw-mobile-control-label {
           color: #627f9d;

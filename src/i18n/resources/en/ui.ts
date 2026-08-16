@@ -38,9 +38,13 @@ export const ui: DeepRecord<typeof zhUi> = {
     },
   },
   language: {
-    // auto 档自称随语言翻;简体中文 / English 两个 self 名不翻
+    // The auto label translates with the language; the zh-CN / en self-names come from the
+    // resource but keep the same value in both languages (self-name convention: an English UI
+    // still says 「简体中文」 so Chinese-speaking players can spot their own language)
     auto: 'Auto',
     autoSystem: 'Auto: follows your system language',
+    zhCN: '简体中文',
+    en: 'English',
     loadFailed: 'Failed to load language, keeping current language',
   },
   pause: {
@@ -61,6 +65,10 @@ export const ui: DeepRecord<typeof zhUi> = {
     layout: 'Weapon layout',
     firingArc: 'Firing arc',
     pause: 'Pause',
+    // Key-name tokens in the pause menu key table: Space / Hold Tab follow the language;
+    // WASD / I / Esc are universal tokens and stay literals (see KEY_ROWS in pauseMenu.ts)
+    spaceKey: 'Space',
+    firingArcKey: 'Hold Tab',
   },
   // —— Battle HUD (todo 05): static labels + state values. ★ and key tokens are literals, not translated ——
   hud: {
@@ -391,6 +399,91 @@ export const ui: DeepRecord<typeof zhUi> = {
       saveFailed: 'Save failed',
       // {{code}} = a stable, diagnosable code; internal error strings are never shown verbatim
       unknown: 'Upload failed (error code {{code}})',
+    },
+  },
+  // —— Debug tuning panel (dev tool, reachable in player mode via ~~~): i18n'd after the 10th gate ——
+  debug: {
+    title: 'STARWRECK · Gray-box Tuning',
+    perf: {
+      title: 'Performance / Determinism',
+      fps: 'fps (1s avg)',
+      frameMs: 'Frame ms',
+      worstMs: 'Worst frame ms (1s)',
+      enemies: 'Enemies (alive)',
+      bullets: 'Bullets (alive)',
+      speed: 'Ship speed px/s',
+      turnRate: 'Actual turn °/s',
+    },
+    run: {
+      title: 'Run',
+      paused: 'Paused',
+      timeScale: 'Time scale',
+      stressSpawn: 'Stress spawn (bypasses wave script, no victory)',
+      restart: 'Restart run (new seed)',
+      retry: 'Retry run (same seed)',
+      spawnShop: 'Drop shop (beacon + shelf)',
+      addWeapon: 'Add weapon (random 1★)',
+      spawnBoss: 'Spawn Boss (enter Boss fight)',
+    },
+    wave: {
+      title: 'Waves (08)',
+      segment: 'Segment',
+      segTime: 'In-segment s',
+      threatDeg: 'Threat direction °',
+      threatRate: 'Threat rate /s',
+      kills: 'Kills',
+    },
+    stress: {
+      title: 'Stress (acceptance 1000 enemies)',
+      enemies: 'Enemy count (stress only)',
+      speedScale: 'Enemy speed ×',
+      separation: 'Separation radius',
+    },
+    enemy: {
+      title: 'Enemies (07)',
+      swarm: 'Swarm Leech % (stress only)',
+      strafer: 'Side Raider % (stress only)',
+      trailer: 'Tail Maggot % (stress only)',
+      beetle: 'Ram Beetle % (stress only)',
+      hpPerMinute: 'HP/min',
+    },
+    ship: {
+      title: 'Ship feel',
+      turnRate: 'Turn °/s',
+      steeringGrip: 'Steering grip /s',
+      cruiseSpeed: 'Cruise px/s',
+      accel: 'Accel px/s²',
+      damping: 'Damping s',
+    },
+    hit: {
+      title: 'Hits (09)',
+      hp: 'Hull HP',
+      maxHp: 'HP max',
+      contactScale: 'Contact damage ×',
+      hitInterval: 'Invuln frames s',
+      fireRateMul: 'Hit fire-rate ×',
+      penaltyTime: 'Penalty s',
+      coreScale: 'Core × (hold Tab)',
+      hullHp: 'HP max (base)',
+    },
+    economy: {
+      title: 'Salvage economy (10)',
+      scrap: 'Salvage',
+      upgrades: 'Upgrades',
+      nextCost: 'Next cost',
+      magnetRadius: 'Magnet radius px',
+      magnetSpeed: 'Magnet speed px/s',
+      collectRadius: 'Collect radius px',
+    },
+    tower: {
+      title: 'Towers (05)',
+      damageScale: 'Damage ×',
+      fireRateScale: 'Fire rate ×',
+    },
+    camera: {
+      title: 'Camera (GDD §3.3)',
+      shipHeight: 'Ship screen height',
+      lookAhead: 'Look-ahead',
     },
   },
 };

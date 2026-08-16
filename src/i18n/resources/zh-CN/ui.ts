@@ -35,9 +35,12 @@ export const ui = {
     },
   },
   language: {
-    // auto 档的自称随语言翻(Auto);简体中文 / English 两个 self 名不翻
+    // auto 档的自称随语言翻(Auto);zh-CN / en 两个 self 名从资源取、但**值不随语言翻**
+    // (语言自称惯例:英文界面里也写「简体中文」,中文玩家才认得出自己的语言)
     auto: '自动',
     autoSystem: '自动:跟随系统语言',
+    zhCN: '简体中文',
+    en: 'English',
     loadFailed: '语言资源加载失败,已保留当前语言',
   },
   pause: {
@@ -58,6 +61,10 @@ export const ui = {
     layout: '武器布局',
     firingArc: '射界',
     pause: '暂停',
+    // 键位表的**键名** token:空格 / 按住 Tab 的键名随语言走(英文玩家读到 Space / Hold Tab);
+    // WASD / I / Esc 是国际通用 token,仍是字面量(见 pauseMenu.ts 的 KEY_ROWS)
+    spaceKey: '空格',
+    firingArcKey: '按住 Tab',
   },
   // —— 战斗 HUD(05 号):静态标签 + 状态值。★ 与键位 token 是字面量,不参与翻译 ——
   hud: {
@@ -389,6 +396,91 @@ export const ui = {
       saveFailed: '保存失败',
       // {{code}} = 稳定错误码(可诊断);内部错误字符串永不原样上屏
       unknown: '上传失败(错误码 {{code}})',
+    },
+  },
+  // —— 调参面板(dev 工具,玩家模式连按三次 ~ 可呼出):10 号门禁后也纳入无硬编码中文 ——
+  debug: {
+    title: 'STARWRECK · 灰盒调参',
+    perf: {
+      title: '性能 / 确定性',
+      fps: 'fps(1s 均)',
+      frameMs: '帧时 ms',
+      worstMs: '最差帧 ms(1s 内)',
+      enemies: '敌(存活)',
+      bullets: '弹(存活)',
+      speed: '船速 px/s',
+      turnRate: '实际转向 °/s',
+    },
+    run: {
+      title: '运行',
+      paused: '暂停',
+      timeScale: '时间倍率',
+      stressSpawn: '压测出怪(旁路波次脚本,本局无胜利)',
+      restart: '重开本局(换种子)',
+      retry: '重试本局(同种子)',
+      spawnShop: '投放商店(信标 + 掷货架)',
+      addWeapon: '增加武器(随机 1★)',
+      spawnBoss: '出现 Boss(进入 Boss 战)',
+    },
+    wave: {
+      title: '波次(08)',
+      segment: '航段',
+      segTime: '段内 s',
+      threatDeg: '主压方向 °',
+      threatRate: '强度 只/s',
+      kills: '击杀',
+    },
+    stress: {
+      title: '压测(验收 1000 敌)',
+      enemies: '敌数量(仅压测模式)',
+      speedScale: '敌速倍率',
+      separation: '分离半径',
+    },
+    enemy: {
+      title: '敌人(07)',
+      swarm: '蜂群蛭 %(仅压测)',
+      strafer: '侧掠者 %(仅压测)',
+      trailer: '尾随蛆 %(仅压测)',
+      beetle: '冲撞甲虫 %(仅压测)',
+      hpPerMinute: 'HP/分钟',
+    },
+    ship: {
+      title: '船体手感',
+      turnRate: '转向 °/s',
+      steeringGrip: '转向抓力 /s',
+      cruiseSpeed: '巡航 px/s',
+      accel: '加速 px/s²',
+      damping: '阻尼 s',
+    },
+    hit: {
+      title: '受击(09)',
+      hp: '船体 HP',
+      maxHp: 'HP 上限',
+      contactScale: '撞击伤害倍率',
+      hitInterval: '无敌帧 s',
+      fireRateMul: '受击射速×',
+      penaltyTime: '惩罚时长 s',
+      coreScale: '判定体×(按 Tab 看)',
+      hullHp: 'HP 上限(基础)',
+    },
+    economy: {
+      title: '残骸经济(10)',
+      scrap: '残骸',
+      upgrades: '升级次数',
+      nextCost: '下次所需',
+      magnetRadius: '起吸半径 px',
+      magnetSpeed: '磁吸速度 px/s',
+      collectRadius: '收取半径 px',
+    },
+    tower: {
+      title: '塔(05)',
+      damageScale: '伤害倍率',
+      fireRateScale: '射速倍率',
+    },
+    camera: {
+      title: '镜头(GDD §3.3)',
+      shipHeight: '船占屏高',
+      lookAhead: '前视偏移',
     },
   },
 } as const;

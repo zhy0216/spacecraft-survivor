@@ -15,6 +15,7 @@
  */
 import type { Pane } from 'tweakpane';
 import { WAVE_SEGMENTS } from '../data/waves';
+import { t } from '../i18n';
 import { tuning } from '../sim/config';
 import { segmentLabel } from './gameOver';
 
@@ -90,6 +91,8 @@ export interface DebugPanelUi {
   hide(): void;
   toggle(): void;
   visible(): boolean;
+  /** 语言切换成功后按当前语言重建面板(10 号门禁:调参面板文案也走 i18n) */
+  refreshLocale(): void;
 }
 
 /**
@@ -112,6 +115,8 @@ export interface RunHooks {
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
   let pane: Pane | null = null;
   let building = false;
+  // 收起状态自己记一份:重建(语言切换)后新 Pane 默认可见,要按它恢复显隐
+  let collapsed = false;
   // 第一次 show/toggle 才触发:下载 tweakpane → 建面板。building 闩防止连按三次 ~
   // 的两次快速 toggle 撞出两座面板;构建完成后 show 那句的 pane.hidden = false
   // 已经来不及落到这座新面板上 —— 新面板默认可见,正好等于"呼出"这一下
@@ -119,24 +124,37 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
     if (pane !== null || building) return;
     building = true;
     void import('tweakpane').then(({ Pane }) => {
-      pane = buildPane(new Pane({ title: 'STARWRECK · 灰盒调参' }), stats, run, hooks);
+      pane = buildPane(new Pane({ title: t('ui:debug.title') }), stats, run, hooks);
+      pane.hidden = collapsed;
       building = false;
     });
   };
   return {
     show: () => {
+      collapsed = false;
       ensure();
       if (pane) pane.hidden = false;
     },
     hide: () => {
+      collapsed = true;
       if (pane) pane.hidden = true;
     },
     toggle: () => {
       ensure();
-      if (pane) pane.hidden = !pane.hidden;
+      if (pane) {
+        pane.hidden = !pane.hidden;
+        collapsed = pane.hidden;
+      }
     },
     // pane 未就位(还在下载 tweakpane)一律按不可见答:main 的连按三次 ~ 靠它判断收起
     visible: () => pane !== null && !pane.hidden,
+    refreshLocale: () => {
+      // 面板还没建(玩家形态没按过 ~):下次建时自然用当前语言,无事可做
+      if (pane === null) return;
+      pane.dispose();
+      pane = null;
+      ensure(); // 按当前语言重建;显隐由 collapsed 恢复
+    },
   };
 }
 
@@ -152,80 +170,80 @@ function buildPane(pane: Pane, stats: DebugStats, run: RunState, hooks: RunHooks
     wrapper.style.overflowY = 'auto';
   }
 
-  const perf = pane.addFolder({ title: '性能 / 确定性' });
+  const perf = pane.addFolder({ title: t('ui:debug.perf.title') });
   // 帧率三读数摆在一起才有意义:平均帧率好看、帧时对预算、最差帧报卡顿(见 DebugStats)。
   // 标签把窗口写进去(1s 均):不写的话它与 Pixi 的瞬时 FPS 长得一模一样,而两者读法完全不同
-  perf.addBinding(stats, 'fps', { label: 'fps(1s 均)', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
-  perf.addBinding(stats, 'frameMs', { label: '帧时 ms', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
+  perf.addBinding(stats, 'fps', { label: t('ui:debug.perf.fps'), readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  perf.addBinding(stats, 'frameMs', { label: t('ui:debug.perf.frameMs'), readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
   // 盯着它:60fps 的预算是 16.7ms,这个数一跳到 30+ 就是真掉了一帧(平均值上看不出来)
-  perf.addBinding(stats, 'worstMs', { label: '最差帧 ms(1s 内)', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
-  perf.addBinding(stats, 'enemies', { label: '敌(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  perf.addBinding(stats, 'worstMs', { label: t('ui:debug.perf.worstMs'), readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
+  perf.addBinding(stats, 'enemies', { label: t('ui:debug.perf.enemies'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 05 号起这是**塔真的打出来的弹**(不再有凭空重生的压测哑弹),故它同时是"500 弹不掉帧"
   // 那条验收的读数:它爬到 500 上下时 fps 还稳,才算数
-  perf.addBinding(stats, 'bullets', { label: '弹(存活)', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  perf.addBinding(stats, 'bullets', { label: t('ui:debug.perf.bullets'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 拖巡航滑杆时盯这个数:它爬到新的上限,才算"参数改动无需重启即可体感对比"落实了
-  perf.addBinding(stats, 'speed', { label: '船速 px/s', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
-  perf.addBinding(stats, 'turnRate', { label: '实际转向 °/s', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  perf.addBinding(stats, 'speed', { label: t('ui:debug.perf.speed'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  perf.addBinding(stats, 'turnRate', { label: t('ui:debug.perf.turnRate'), readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
   perf.addBinding(stats, 'tick', { readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   perf.addBinding(stats, 'checksum', { readonly: true, interval: 500 });
   perf.addBinding(stats, 'seed', { readonly: true, format: (v: number) => String(v) });
 
-  const runF = pane.addFolder({ title: '运行' });
-  runF.addBinding(run, 'paused', { label: '暂停' });
-  runF.addBinding(run, 'timeScale', { label: '时间倍率', min: 0.1, max: 3, step: 0.1 });
+  const runF = pane.addFolder({ title: t('ui:debug.run.title') });
+  runF.addBinding(run, 'paused', { label: t('ui:debug.run.paused') });
+  runF.addBinding(run, 'timeScale', { label: t('ui:debug.run.timeScale'), min: 0.1, max: 3, step: 0.1 });
   // 出怪走哪条路(08 号 issue):关 = 正式的波次脚本(有航段、有主压方向、走完就是胜利),
   // 开 = 回到 01 号那条"场上恒定 N 只"的压测路 —— 那条路**整段旁路波次运行器**:
   // 方向不转、脚本不推进、永远走不完,故本局也就不再有胜利条件。
   // label 得把这两件事都说出来:只写"压测出怪"的话,打开它等一局的人会以为脚本卡住了
-  runF.addBinding(tuning, 'stressSpawn', { label: '压测出怪(旁路波次脚本,本局无胜利)' });
+  runF.addBinding(tuning, 'stressSpawn', { label: t('ui:debug.run.stressSpawn') });
   // 重开与结算界面的「再来一局」是同一个入口(见 RunHooks):打歪了想重来时,
   // 不必先把自己撞沉一次。注意它**换种子**(seed + runIndex)。
-  runF.addButton({ title: '重开本局(换种子)' }).on('click', () => hooks.restart());
+  runF.addButton({ title: t('ui:debug.run.restart') }).on('click', () => hooks.restart());
   // 同 seed 重试与结算界面的「再试这一局」同一个入口:这才是能验"同 seed 可复现"的那个按钮
   if (hooks.retry) {
     const retry = hooks.retry.bind(hooks);
-    runF.addButton({ title: '重试本局(同种子)' }).on('click', retry);
+    runF.addButton({ title: t('ui:debug.run.retry') }).on('click', retry);
   }
   // 调试入口:不必等两分钟的跨段边界,当场投一枚商店信标并掷定货架(World.debugSpawnShop)。
   // 正式出怪器每跨一段自动投放;压测路旁路波次脚本、永不跨段,没有它永远开不了商店 ——
   // 想在那条路上验商店(货架 / 购买 / 付费修复)就按它,再看 HUD 的信标倒计时读数。
   if (hooks.spawnShop) {
     const spawnShop = hooks.spawnShop.bind(hooks);
-    runF.addButton({ title: '投放商店(信标 + 掷货架)' }).on('click', spawnShop);
+    runF.addButton({ title: t('ui:debug.run.spawnShop') }).on('click', spawnShop);
   }
   // 调试入口:跳过升级三选一与商店,直接获得一把随机基础武器(World.debugAddWeapon)。
   // 与正式获得同一条落位 + 三合一检查,想验合成链(3× 1★ → 2★ → 3★ 变身)就按住它连点。
   if (hooks.addWeapon) {
     const addWeapon = hooks.addWeapon.bind(hooks);
-    runF.addButton({ title: '增加武器(随机 1★)' }).on('click', addWeapon);
+    runF.addButton({ title: t('ui:debug.run.addWeapon') }).on('click', addWeapon);
   }
   // 调试入口:跳过整段波次脚本,当场生成 Boss 一只进入 Boss 战(World.debugSpawnBoss)。
   // 与脚本走完那一帧同一条 enterBossPhase(同池、专用 kind、零 rng)—— 压测路旁路波次脚本
   // 永不走完,没有它那条路上永远没有 Boss 战;想验 Boss 战 / 召唤 / 掉落不必等 8 分钟。
   if (hooks.spawnBoss) {
     const spawnBoss = hooks.spawnBoss.bind(hooks);
-    runF.addButton({ title: '出现 Boss(进入 Boss 战)' }).on('click', spawnBoss);
+    runF.addButton({ title: t('ui:debug.run.spawnBoss') }).on('click', spawnBoss);
   }
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏
   //(08 号验收:改数据文件就能调,不改代码)—— 面板不该开第二个入口去改这一局的进度。
   // 默认展开:与常驻 HUD 同源，但保留小数精度，便于核对脚本与实际生成是否一致。
-  const wave = pane.addFolder({ title: '波次(08)', expanded: true });
+  const wave = pane.addFolder({ title: t('ui:debug.wave.title'), expanded: true });
   // 与结算界面共用 segmentLabel:走完时它报的是 "4/4(全通)" 而不是 "5/4"(segment 是越界值)
   wave.addBinding(stats, 'segment', {
-    label: '航段',
+    label: t('ui:debug.wave.segment'),
     readonly: true,
     interval: 200,
     format: (v: number) => segmentLabel(Math.round(v), WAVE_SEGMENTS.length),
   });
-  wave.addBinding(stats, 'segTime', { label: '段内 s', readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
+  wave.addBinding(stats, 'segTime', { label: t('ui:debug.wave.segTime'), readonly: true, interval: 200, format: (v: number) => v.toFixed(1) });
   // 盯着它一路涨(而不是在某个角度上停住),就是"主压方向持续漂移、玩家不能固定角度挂机"的读数。
   // 度数与 src/data/waves.ts 里写的起止角同一套(世界系绝对角,0 = +X,顺时针为正)——
   // 只是这里折回了 [0,360),数据表里写的则是不折回的累积角(如 320→480,折回会让它倒着转)
-  wave.addBinding(stats, 'threatDeg', { label: '主压方向 °', readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
-  wave.addBinding(stats, 'threatRate', { label: '强度 只/s', readonly: true, interval: 200, format: (v: number) => v.toFixed(2) });
+  wave.addBinding(stats, 'threatDeg', { label: t('ui:debug.wave.threatDeg'), readonly: true, interval: 200, format: (v: number) => v.toFixed(0) });
+  wave.addBinding(stats, 'threatRate', { label: t('ui:debug.wave.threatRate'), readonly: true, interval: 200, format: (v: number) => v.toFixed(2) });
   // 与结算界面报的是同一个数;放这儿是因为"打到第几段"与"打死了多少"合起来才是这一局的进度
-  wave.addBinding(stats, 'kills', { label: '击杀', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  wave.addBinding(stats, 'kills', { label: t('ui:debug.wave.kills'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
 
   // 压测只剩敌人这一半:子弹那一半(stressBullets / bulletSpeed)在 05 号 issue 整段删除 ——
   // 凭空重生的哑弹与真弹共用一个池,"500 弹不掉帧"测的就是假东西。500 弹现在由塔真的打出来,
@@ -233,64 +251,64 @@ function buildPane(pane: Pane, stats: DebugStats, run: RunState, hooks: RunHooks
   //
   // **整个抽屉只在「运行 · 压测出怪」打开时生效**(敌速倍率与分离半径除外:那两根管的是
   // 全场敌人的行为,与谁把它们放出来无关)—— 正式出怪器的数量由脚本的速率曲线定,不看这根滑杆。
-  const stress = pane.addFolder({ title: '压测(验收 1000 敌)' });
-  stress.addBinding(tuning, 'stressEnemies', { label: '敌数量(仅压测模式)', min: 0, max: 5000, step: 100 });
+  const stress = pane.addFolder({ title: t('ui:debug.stress.title') });
+  stress.addBinding(tuning, 'stressEnemies', { label: t('ui:debug.stress.enemies'), min: 0, max: 5000, step: 100 });
   // 各型敌人的基础速度在 src/data/enemies.ts,这里只剩全局倍率;拖到 0 = 全场定格,
   // 想看清某一型的走位(尤其冲锋前摇)时比暂停好用 —— 船还能开,敌人不动
-  stress.addBinding(tuning, 'enemySpeedScale', { label: '敌速倍率', min: 0, max: 3, step: 0.1 });
-  stress.addBinding(tuning, 'enemySeparation', { label: '分离半径', min: 0, max: 40, step: 1 });
+  stress.addBinding(tuning, 'enemySpeedScale', { label: t('ui:debug.stress.speedScale'), min: 0, max: 3, step: 0.1 });
+  stress.addBinding(tuning, 'enemySeparation', { label: t('ui:debug.stress.separation'), min: 0, max: 40, step: 1 });
 
   // 敌人(07 号 issue):四条占比是轮盘赌权重,不必凑成 100。
   // **四条一律仅在「运行 · 压测出怪」打开时生效**:正式出怪器(08 号)的型号由
   // src/data/waves.ts 的波次脚本逐条流给死,一次随机都不掷 —— 改平衡请去改那张表。
   // 注意:改占比只影响**新生成**的敌人,已在场的不会变型 —— 想只看某一型做肉眼验收,
   // 把其余三个调 0,再把上面的「敌数量(仅压测模式)」拖到 0 再拖回来即可清场重出。
-  const enemy = pane.addFolder({ title: '敌人(07)' });
-  enemy.addBinding(tuning, 'enemyMixSwarm', { label: '蜂群蛭 %(仅压测)', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixStrafer', { label: '侧掠者 %(仅压测)', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixTrailer', { label: '尾随蛆 %(仅压测)', min: 0, max: 100, step: 5 });
-  enemy.addBinding(tuning, 'enemyMixBeetle', { label: '冲撞甲虫 %(仅压测)', min: 0, max: 100, step: 5 });
+  const enemy = pane.addFolder({ title: t('ui:debug.enemy.title') });
+  enemy.addBinding(tuning, 'enemyMixSwarm', { label: t('ui:debug.enemy.swarm'), min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixStrafer', { label: t('ui:debug.enemy.strafer'), min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixTrailer', { label: t('ui:debug.enemy.trailer'), min: 0, max: 100, step: 5 });
+  enemy.addBinding(tuning, 'enemyMixBeetle', { label: t('ui:debug.enemy.beetle'), min: 0, max: 100, step: 5 });
   // 同样只作用于新生成的敌人:HP 在生成那一刻按世界已过时间定死(GDD §14)
-  enemy.addBinding(tuning, 'enemyHpScalePerMinute', { label: 'HP/分钟', min: 0, max: 0.5, step: 0.01 });
+  enemy.addBinding(tuning, 'enemyHpScalePerMinute', { label: t('ui:debug.enemy.hpPerMinute'), min: 0, max: 0.5, step: 0.01 });
 
   // 默认展开:M0 门就是靠这批滑杆边玩边调出来的,不该让人先点开一层
-  const ship = pane.addFolder({ title: '船体手感', expanded: true });
-  ship.addBinding(tuning, 'shipTurnRate', { label: '转向 °/s', min: 20, max: 300, step: 5 });
-  ship.addBinding(tuning, 'shipSteeringGrip', { label: '转向抓力 /s', min: 0, max: 12, step: 0.5 });
-  ship.addBinding(tuning, 'shipCruiseSpeed', { label: '巡航 px/s', min: 40, max: 400, step: 5 });
-  ship.addBinding(tuning, 'shipAccel', { label: '加速 px/s²', min: 60, max: 800, step: 10 });
-  ship.addBinding(tuning, 'shipDamping', { label: '阻尼 s', min: 0.2, max: 3, step: 0.1 });
+  const ship = pane.addFolder({ title: t('ui:debug.ship.title'), expanded: true });
+  ship.addBinding(tuning, 'shipTurnRate', { label: t('ui:debug.ship.turnRate'), min: 20, max: 300, step: 5 });
+  ship.addBinding(tuning, 'shipSteeringGrip', { label: t('ui:debug.ship.steeringGrip'), min: 0, max: 12, step: 0.5 });
+  ship.addBinding(tuning, 'shipCruiseSpeed', { label: t('ui:debug.ship.cruiseSpeed'), min: 40, max: 400, step: 5 });
+  ship.addBinding(tuning, 'shipAccel', { label: t('ui:debug.ship.accel'), min: 60, max: 800, step: 10 });
+  ship.addBinding(tuning, 'shipDamping', { label: t('ui:debug.ship.damping'), min: 0.2, max: 3, step: 0.1 });
 
   // 受击(09 号 issue):HP 读数与五根旋钮放在同一个抽屉里 —— 调"蜂群贴脸掉血速率"时要盯的
   // 就是这个数掉得多快,读数与旋钮分家的话得在面板上来回找两个位置。
   // 五根旋钮全部由 sim 现读,故拖动即时生效、无需重开(shipHullHp 稍特殊,见它自己那段);
   // 判定体那根还能按住 Tab 边拖边看轮廓变。
-  const hit = pane.addFolder({ title: '受击(09)' });
-  hit.addBinding(stats, 'hp', { label: '船体 HP', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  const hit = pane.addFolder({ title: t('ui:debug.hit.title') });
+  hit.addBinding(stats, 'hp', { label: t('ui:debug.hit.hp'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 紧挨着 hp 放:这两个数只有摆在一起才读得出"还剩多少"。放一块装甲舱它当场 +15(见 DebugStats.maxHp),
   // hp 也当场 +15 —— 上限涨的是同量,7/100 +15 → 22/115(见 syncHull)
-  hit.addBinding(stats, 'maxHp', { label: 'HP 上限', readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
+  hit.addBinding(stats, 'maxHp', { label: t('ui:debug.hit.maxHp'), readonly: true, interval: 200, format: (v: number) => String(Math.round(v)) });
   // 各型的 contactDamage 在 src/data/enemies.ts,这里是全局倍率:先拖它定"贴脸掉得多快",
   // 再回数值表分配各型的相对轻重(与塔的伤害倍率同一条用法)
-  hit.addBinding(tuning, 'enemyContactDamageScale', { label: '撞击伤害倍率', min: 0, max: 5, step: 0.1 });
+  hit.addBinding(tuning, 'enemyContactDamageScale', { label: t('ui:debug.hit.contactScale'), min: 0, max: 5, step: 0.1 });
   // 同一只敌人两次结算之间的间隔。下限不给 0:那等于每逻辑帧咬一口,贴脸就是 60 倍速瞬杀,
   // 拖到那儿只会以为是 bug 而不是"调到了极端"
-  hit.addBinding(tuning, 'enemyHitInterval', { label: '无敌帧 s', min: 0.1, max: 3, step: 0.05 });
+  hit.addBinding(tuning, 'enemyHitInterval', { label: t('ui:debug.hit.hitInterval'), min: 0.1, max: 3, step: 0.05 });
   // <1 = 被撞舷的塔变慢。下限同样不给 0:0 = 那一舷彻底哑火,而"不制造死亡螺旋"正是这条设计的前提
-  hit.addBinding(tuning, 'hitFireRateMul', { label: '受击射速×', min: 0.2, max: 1, step: 0.05 });
+  hit.addBinding(tuning, 'hitFireRateMul', { label: t('ui:debug.hit.fireRateMul'), min: 0.2, max: 1, step: 0.05 });
   // 闪红与射速惩罚共用这一个计时器(GDD §4.6 锁定 0.5s),拖它等于同时改两件事的时长 ——
   // 想验"惩罚不可叠加延长"就把它拖长,连续撞击时它也只会从**第一次**受击起算
-  hit.addBinding(tuning, 'hitPenaltyTime', { label: '惩罚时长 s', min: 0.1, max: 3, step: 0.1 });
+  hit.addBinding(tuning, 'hitPenaltyTime', { label: t('ui:debug.hit.penaltyTime'), min: 0.1, max: 3, step: 0.1 });
   // 判定体大小(GDD §4.4:判定小于外形)。按住 Tab 能看见那个矩形跟着这根滑杆实时变 ——
   // 那是它唯一的肉眼校准方式,拖完再去贴脸试"擦碰出火花 / 进核心才掉血"的分界对不对
-  hit.addBinding(tuning, 'shipCoreScale', { label: '判定体×(按 Tab 看)', min: 0.2, max: 1.5, step: 0.02 });
+  hit.addBinding(tuning, 'shipCoreScale', { label: t('ui:debug.hit.coreScale'), min: 0.2, max: 1.5, step: 0.02 });
   // 只是**基础值**:真正的上限 = 它 + 每层装甲协议 +15(hullMaxHp 是法令的派生量),
   // 而 World.step 每逻辑帧重刷一次 ship.maxHp —— 所以这根滑杆拖到哪儿,
   // 上面那条只读「HP 上限」当帧就跟到哪儿(不必再放一座塔去触发),hp 也照 syncHull
   // 的口径跟着上限走:拖高 +同量血量,拖低只夹不涨。
   // label 得说这个真话:写"重开生效"/"放塔后生效"都会让人以为拖了没用而白等
   hit.addBinding(tuning, 'shipHullHp', {
-    label: 'HP 上限(基础)',
+    label: t('ui:debug.hit.hullHp'),
     min: 20,
     max: 500,
     step: 10,
@@ -299,39 +317,39 @@ function buildPane(pane: Pane, stats: DebugStats, run: RunState, hooks: RunHooks
   // 残骸经济(10 号):三根**手感旋钮**与三条只读账摆在同一个抽屉里。
   // 面额归 data/enemies、曲线/权重/返还归 data/economy,它们不是运行中随手拖的东西;
   // 这里只放 sim/drop 每帧现读的三根,于是拖一下立刻就能看「残骸开始飞 / 追不追得上 / 何时到账」。
-  const economy = pane.addFolder({ title: '残骸经济(10)', expanded: true });
+  const economy = pane.addFolder({ title: t('ui:debug.economy.title'), expanded: true });
   economy.addBinding(stats, 'scrap', {
-    label: '残骸',
+    label: t('ui:debug.economy.scrap'),
     readonly: true,
     interval: 100,
     format: (v: number) => String(Math.round(v)),
   });
   economy.addBinding(stats, 'upgrades', {
-    label: '升级次数',
+    label: t('ui:debug.economy.upgrades'),
     readonly: true,
     interval: 100,
     format: (v: number) => String(Math.round(v)),
   });
   economy.addBinding(stats, 'upgradeCost', {
-    label: '下次所需',
+    label: t('ui:debug.economy.nextCost'),
     readonly: true,
     interval: 100,
     format: (v: number) => String(Math.round(v)),
   });
   economy.addBinding(tuning, 'dropMagnetRadius', {
-    label: '起吸半径 px',
+    label: t('ui:debug.economy.magnetRadius'),
     min: 20,
     max: 600,
     step: 5,
   });
   economy.addBinding(tuning, 'dropMagnetSpeed', {
-    label: '磁吸速度 px/s',
+    label: t('ui:debug.economy.magnetSpeed'),
     min: 20,
     max: 800,
     step: 10,
   });
   economy.addBinding(tuning, 'dropCollectRadius', {
-    label: '收取半径 px',
+    label: t('ui:debug.economy.collectRadius'),
     min: 0,
     max: 100,
     step: 1,
@@ -343,18 +361,18 @@ function buildPane(pane: Pane, stats: DebugStats, run: RunState, hooks: RunHooks
   // 面板能改的数与数值表里的数一旦分家,调出来的手感就落不回文件里。
   // 两根倍率由 sim/tower.ts 每逻辑帧现读(与 enemySpeedScale 同口径),故拖动即时生效;
   // 用法是"整体拖一下看体感":想知道六塔的相对强弱够不够开,把伤害倍率拖一半再打一波最快。
-  const tower = pane.addFolder({ title: '塔(05)' });
-  tower.addBinding(tuning, 'towerDamageScale', { label: '伤害倍率', min: 0, max: 5, step: 0.1 });
+  const tower = pane.addFolder({ title: t('ui:debug.tower.title') });
+  tower.addBinding(tuning, 'towerDamageScale', { label: t('ui:debug.tower.damageScale'), min: 0, max: 5, step: 0.1 });
   // >1 = 全塔射得更快(实际 fireInterval = 表里的值 ÷ 它);充能系不受它影响(那类塔的节奏在 chargeTime)
-  tower.addBinding(tuning, 'towerFireRateScale', { label: '射速倍率', min: 0.1, max: 5, step: 0.1 });
+  tower.addBinding(tuning, 'towerFireRateScale', { label: t('ui:debug.tower.fireRateScale'), min: 0.1, max: 5, step: 0.1 });
 
   // 镜头(GDD §3.3):两项都是屏高比例,故与分辨率无关;渲染层每帧现读,拖动即时生效。
   // 范围必须罩得住默认值 0.064(船与敌人同尺度那次改的,见 config.ts):Tweakpane 对带
   // min/max 的绑定**写入时就夹取**,min 高于默认值的话,一碰滑杆值就被永久顶到 min 上、
   // 再也拖不回来;step 也得让 0.064 落在网格上(0.002 × 32),否则同样回不去
-  const camera = pane.addFolder({ title: '镜头(GDD §3.3)' });
-  camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.03, max: 0.3, step: 0.002 });
-  camera.addBinding(tuning, 'cameraLookAhead', { label: '前视偏移', min: 0, max: 0.4, step: 0.01 });
+  const camera = pane.addFolder({ title: t('ui:debug.camera.title') });
+  camera.addBinding(tuning, 'cameraShipHeightFraction', { label: t('ui:debug.camera.shipHeight'), min: 0.03, max: 0.3, step: 0.002 });
+  camera.addBinding(tuning, 'cameraLookAhead', { label: t('ui:debug.camera.lookAhead'), min: 0, max: 0.4, step: 0.01 });
 
   return pane;
 }

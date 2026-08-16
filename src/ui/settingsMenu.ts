@@ -252,13 +252,19 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   let localeError: string | null = null;
 
   /**
-   * 语言行(唯一一行有"自称"的行)。self 名固定:简体中文 / English 不随语言翻,
+   * 语言行(唯一一行有"自称"的行)。self 名从资源取(ui:language.zhCN / en),**值不随语言翻**
+   * (语言自称惯例:英文界面里也写「简体中文」,中文玩家才认得出自己的语言);
    * 「自动」随语言翻(Auto),auto 档额外挂一句解释。
    */
   function paintLanguage(): void {
     const pref = hooks.get().language;
     langName.textContent = t('ui:settings.language');
-    langBtn.textContent = pref === 'auto' ? t('ui:language.auto') : pref === 'zh-CN' ? '简体中文' : 'English';
+    langBtn.textContent =
+      pref === 'auto'
+        ? t('ui:language.auto')
+        : pref === 'zh-CN'
+          ? t('ui:language.zhCN')
+          : t('ui:language.en');
     langHint.textContent = pref === 'auto' ? t('ui:language.autoSystem') : '';
     langError.textContent = localeError ?? '';
     langError.style.display = localeError === null ? 'none' : 'block';

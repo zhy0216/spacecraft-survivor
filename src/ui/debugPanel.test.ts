@@ -5,7 +5,7 @@
  * ② 显隐句柄 show/hide/toggle/visible 收敛在 pane.hidden 上(main.ts 的连按三次 ~ 靠它)。
  * tweakpane 在 node 环境建不起来(要 document),整模块 vi.mock 成最小桩。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakeStyle {
   maxHeight?: string;
@@ -29,17 +29,22 @@ const { FakePane } = vi.hoisted(() => {
 
   class FakePane {
     static last: FakePane | null = null;
+    static built = 0;
     element: { parentElement: { style: FakeStyle } };
     hidden = false;
     folders: FakeFolder[] = [];
     constructor() {
       FakePane.last = this;
+      FakePane.built++;
       this.element = { parentElement: { style: {} } };
     }
     addFolder(params: { title?: string }): FakeFolder {
       const folder = new FakeFolder(params);
       this.folders.push(folder);
       return folder;
+    }
+    dispose(): void {
+      FakePane.last = null;
     }
   }
 
@@ -48,7 +53,14 @@ const { FakePane } = vi.hoisted(() => {
 
 vi.mock('tweakpane', () => ({ Pane: FakePane }));
 
+import { initI18n, changeLocale } from '../i18n';
 import { createDebugPanel, type DebugStats, type RunHooks } from './debugPanel';
+
+beforeEach(async () => {
+  FakePane.last = null;
+  FakePane.built = 0;
+  await initI18n('zh-CN');
+});
 
 function makeStats(): DebugStats {
   return {
@@ -100,5 +112,25 @@ describe('createDebugPanel', () => {
     expect(panel.visible()).toBe(true);
     panel.show();
     expect(panel.visible()).toBe(true);
+  });
+
+  it('语言切换:面板未建时无事可做,已建时按当前语言重建并保持收起态', async () => {
+    const panel = createDebugPanel(makeStats(), { paused: false, timeScale: 1 }, makeHooks());
+    panel.refreshLocale(); // 还没建:不该碰 tweakpane
+    expect(FakePane.built).toBe(0);
+    panel.show();
+    await vi.waitFor(() => expect(panel.visible()).toBe(true));
+    expect(FakePane.built).toBe(1);
+    const first = FakePane.last!;
+    await changeLocale('en');
+    panel.refreshLocale();
+    await vi.waitFor(() => expect(FakePane.built).toBe(2));
+    expect(FakePane.last).not.toBe(first);
+    expect(panel.visible()).toBe(true); // 原来是展开的,重建后仍是展开
+    panel.hide();
+    await changeLocale('zh-CN');
+    panel.refreshLocale();
+    await vi.waitFor(() => expect(FakePane.built).toBe(3));
+    expect(panel.visible()).toBe(false); // 原来是收起的,重建后仍是收起
   });
 });

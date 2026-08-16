@@ -6,8 +6,9 @@
  * 无需任何正则排除。
  *
  * 扫描范围:**玩家可见的模块** —— src/ui/ 的全部非测试 .ts、src/main.ts、presentation。
- * 明确排除:src/ui/debugPanel.ts(开发调参面板,按 todo 口径豁免)、各 *.test.ts。
- * 个别确实需要硬编码中文的 token(键位名、语言自名、console 调试日志)走**精确 allowlist**,
+ * 调参面板(ui/debugPanel.ts)玩家形态连按三次 ~ 可呼出,故**不再豁免**、一样扫描;
+ * 其余明确排除:各 *.test.ts。
+ * 个别确实需要硬编码中文的 token(console 调试日志)走**精确 allowlist**,
  * 逐条写理由;禁止整文件/整目录豁免。
  *
  * 源码读取走 `import.meta.glob` + `?raw`(Vite 原生能力,测试侧不用装 @types/node):
@@ -60,26 +61,10 @@ const ALLOWLIST: ReadonlyMap<string, readonly { value: string; reason: string }[
       },
     ],
   ],
-  [
-    'src/ui/pauseMenu.ts',
-    [
-      { value: '空格', reason: '键位 token:与 ui:keys.space 说明对应的键名,不随语言翻' },
-      { value: '按住 Tab', reason: '键位 token:与 ui:keys.firingArc 说明对应的键名,不随语言翻' },
-    ],
-  ],
-  [
-    'src/ui/settingsMenu.ts',
-    [
-      {
-        value: '简体中文',
-        reason: '语言自名(与 English 同为 self 名),语言设置行的自称固定不翻',
-      },
-    ],
-  ],
 ]);
 
-/** 明确豁免的整文件(dev-only 调参面板 + 它的测试)。 */
-const EXCLUDED_FILES = new Set(['src/ui/debugPanel.ts', 'src/ui/debugPanel.test.ts']);
+/** 明确豁免的整文件。当前为空:调参面板已双语化,不再有任何整文件豁免。 */
+const EXCLUDED_FILES = new Set<string>();
 
 /** CJK 显区(统一表意 + 表意扩展 A + CJK 符号标点 + 全角形式)。符号 ★—·×° 不在其列。 */
 const CJK_RE = /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/;
@@ -193,6 +178,10 @@ describe('10 号门禁:玩家可见代码无硬编码中文', () => {
   });
 
   it('allowlist 与豁免清单本身没有中文以外的漂移(逐条写明理由,条目必须是活的)', () => {
+    expect(
+      EXCLUDED_FILES.size,
+      '整文件豁免已清零:调参面板双语化后不再允许任何整文件豁免',
+    ).toBe(0);
     for (const [file, entries] of ALLOWLIST) {
       expect(file, 'allowlist 的 key 必须是相对路径').toMatch(/^src\//);
       const source = sourceOf(file);
@@ -208,7 +197,6 @@ describe('10 号门禁:玩家可见代码无硬编码中文', () => {
         ).toBe(true);
       }
     }
-    expect(EXCLUDED_FILES.has('src/ui/debugPanel.ts')).toBe(true);
   });
 });
 

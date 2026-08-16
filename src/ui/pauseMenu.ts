@@ -138,31 +138,33 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   });
 
   // 静态键位表:暂停菜单就是"我还能干什么"的求助页,键位放这里最顺(非按钮、不可点)。
-  // **键名列是键位 token(WASD/空格/I/按住 Tab/Esc),不随语言翻**;说明列走 ui.keys 翻译
+  // 键名列分两类:WASD / I / Esc 是国际通用 token(字面量,不随语言翻),空格 / 按住 Tab 的
+  // 键名走 ui:keys 翻译(英文玩家读到 Space / Hold Tab);说明列同样走 ui.keys 翻译。
+  // 构造时只摆空 span 占位,两列文案都由 paint() 统一写入(语言切换 refreshLocale 重画)
   const KEY_ROWS = [
-    ['WASD', 'ui:keys.wasd'],
-    ['空格', 'ui:keys.space'],
-    ['I', 'ui:keys.layout'],
-    ['按住 Tab', 'ui:keys.firingArc'],
-    ['Esc', 'ui:keys.pause'],
+    ['WASD', null, 'ui:keys.wasd'],
+    [null, 'ui:keys.spaceKey', 'ui:keys.space'],
+    ['I', null, 'ui:keys.layout'],
+    [null, 'ui:keys.firingArcKey', 'ui:keys.firingArc'],
+    ['Esc', null, 'ui:keys.pause'],
   ] as const;
+  const keyEls: HTMLSpanElement[] = [];
   const keyDescEls: HTMLSpanElement[] = [];
   const keyTable = document.createElement('div');
   keyTable.style.cssText = KEYS_CSS;
   keyTable.className = 'sw-pause-keys';
-  // 说明列文本由 paint() 统一写入(t(KEY_ROWS[i][1])),构造时只摆空 span 占位
-  for (const [key] of KEY_ROWS) {
-    const row = document.createElement('div');
+  for (const _row of KEY_ROWS) {
+    const rowEl = document.createElement('div');
     const keySpan = document.createElement('span');
     keySpan.style.cssText = KEY_CSS;
     keySpan.className = 'sw-pause-key';
-    keySpan.textContent = key;
+    keyEls.push(keySpan);
     const descSpan = document.createElement('span');
     descSpan.style.cssText = KEYDESC_CSS;
     descSpan.className = 'sw-pause-key-desc';
     keyDescEls.push(descSpan);
-    row.append(keySpan, descSpan);
-    keyTable.appendChild(row);
+    rowEl.append(keySpan, descSpan);
+    keyTable.appendChild(rowEl);
   }
 
   const settingsBtn = document.createElement('button');
@@ -210,7 +212,8 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   /**
    * 全量重画文案。语言切换(refreshLocale)与状态变化(保存失败)都走这里:
    * 只改 textContent,不注册监听器、不动 visible/paused/saveFailed 等业务状态。
-   * 键位 token(Esc)与动作文本分开:键名从 common.keys 取,句子整体由翻译决定。
+   * 键位表两列都随语言走:通用 token(WASD/I/Esc)是字面量,空格 / 按住 Tab 的键名与
+   * 说明列走 ui.keys 翻译;动作按钮句子里嵌的键名从 common.keys 取,句子整体由翻译决定。
    */
   function paint(): void {
     title.textContent = t('ui:pause.title');
@@ -223,8 +226,10 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
       : t('ui:pause.saveAndQuit');
     settingsBtn.textContent = t('ui:pause.settings');
     hint.textContent = t('ui:pause.hint', { esc: t('common:keys.esc') });
-    for (let i = 0; i < keyDescEls.length; i++) {
-      keyDescEls[i]!.textContent = t(KEY_ROWS[i]![1]);
+    for (let i = 0; i < KEY_ROWS.length; i++) {
+      const [literal, tokenKey, descKey] = KEY_ROWS[i]!;
+      keyEls[i]!.textContent = literal === null ? t(tokenKey) : literal;
+      keyDescEls[i]!.textContent = t(descKey);
     }
     paintMute();
   }

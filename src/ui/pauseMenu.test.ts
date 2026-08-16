@@ -300,12 +300,12 @@ describe('createPauseMenu', () => {
     expect(settingsBtn.textContent).toBe(t('ui:pause.settings'));
     // 键位表排在设置按钮之前:暂停菜单按"求助页"顺序读下去,键位先于出口
     expect(cardEl.children.indexOf(keyTable)).toBeLessThan(cardEl.children.indexOf(settingsBtn));
-    // 五行五对:键名列是**键位 token**(不翻),说明列走 ui.keys 翻译,顺序与 KEY_ROWS 一致
+    // 五行五对:键名列里 WASD/I/Esc 是通用 token(字面量),空格/按住 Tab 与说明列都走 ui.keys 翻译
     const pairs: Array<[string, string]> = [
       ['WASD', t('ui:keys.wasd')],
-      ['空格', t('ui:keys.space')],
+      [t('ui:keys.spaceKey'), t('ui:keys.space')],
       ['I', t('ui:keys.layout')],
-      ['按住 Tab', t('ui:keys.firingArc')],
+      [t('ui:keys.firingArcKey'), t('ui:keys.firingArc')],
       ['Esc', t('ui:keys.pause')],
     ];
     expect(keyTable.children.length).toBe(5);
@@ -323,18 +323,21 @@ describe('createPauseMenu', () => {
     expect(keyTable.children.length).toBe(5);
   });
 
-  it('键位表说明列随语言翻:refreshLocale 后(en)键名照旧、说明变英文', async () => {
+  it('键位表两列都随语言翻:refreshLocale 后(en)通用 token 照旧、键名与说明变英文', async () => {
     const menu = make();
     const keyTable = card(dom).children[5]!;
     expect(keyTable.children[0]!.children[0]!.textContent).toBe('WASD');
     expect(keyTable.children[0]!.children[1]!.textContent).toBe(t('ui:keys.wasd'));
     await changeLocale('en');
     menu.refreshLocale();
-    // 键位 token 不翻:第一列还是 WASD / 空格 / I / 按住 Tab / Esc
+    // 通用 token 不翻:第一列仍是 WASD / I / Esc;空格与按住 Tab 的键名翻成 Space / Hold Tab
     expect(keyTable.children[0]!.children[0]!.textContent).toBe('WASD');
     expect(keyTable.children[0]!.children[1]!.textContent).toBe(t('ui:keys.wasd'));
-    expect(keyTable.children[1]!.children[0]!.textContent).toBe('空格');
+    expect(keyTable.children[1]!.children[0]!.textContent).toBe(t('ui:keys.spaceKey'));
     expect(keyTable.children[1]!.children[1]!.textContent).toBe(t('ui:keys.space'));
+    expect(keyTable.children[2]!.children[0]!.textContent).toBe('I');
+    expect(keyTable.children[3]!.children[0]!.textContent).toBe(t('ui:keys.firingArcKey'));
+    expect(keyTable.children[4]!.children[0]!.textContent).toBe('Esc');
   });
 
   it('设置页开着时 Esc 归它:暂停菜单主动让路,不会一键摔回战斗', () => {

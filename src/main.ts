@@ -509,6 +509,8 @@ async function boot(): Promise<void> {
     addWeapon: () => world.debugAddWeapon(),
     spawnBoss: () => world.debugSpawnBoss(),
   });
+  // 语言切换成功后调参面板按当前语言重建(文案走 ui:debug.*,见 debugPanel 的 refreshLocale)
+  registerLocaleAware(debugPanel);
   // debugPanel 现在懒建(tweakpane 走动态 import,见 debugPanel.ts):只有 show() 才会真的
   // 建面板 —— 开发模式(?debug)常驻可见,玩家模式从不建,那一百多 KB 只在按下三次 ~ 时才下载
   if (DEBUG) {
