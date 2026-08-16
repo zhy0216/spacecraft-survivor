@@ -148,7 +148,7 @@ export interface WaveSegment {
   bursts: WaveBurst[];
   /**
    * 精英插入节点,按 at 升序(与 bursts 同一条游标口径:运行器只往前扫,不回头找)。
-   * 编排口径(todos/14):教学段(第一段)恒空,其余段 1–2 个、中后段给力。
+   * 编排口径(todos/14):教学段(第一段)恒空,其余段 2–3 个、中后段给力。
    */
   elites: WaveElite[];
   /**
@@ -172,7 +172,7 @@ export interface WaveSegment {
  *      除打底的蜂群蛭外,每一型**先在侧压事件里露一次面,下一段才进流** ——
  *      一次来一小队,比混进流里更看得清它的行为(冲锋型尤其:前摇得看得见才叫"来得及躲")。
  *   3. 侧压事件左右交替,并在中后段插入 180°(背后):船尾是火力死角,那一下就是在收"甲板怎么排"的账。
- *   4. 精英从第二段起每段 1–2 个、中后段给力,教学段不塞;五种词缀整局轮着上场,
+ *   4. 精英从第二段起每段 2–3 个、中后段给力,教学段不塞;五种词缀整局轮着上场,
  *      每只精英的 kind 不早于该型在侧压/流里的首秀(别让精英抢了首秀的戏)。
  */
 export const WAVE_SEGMENTS: WaveSegment[] = [
@@ -239,6 +239,8 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { at: 40, kind: KIND_STRAFER, count: 1, affixes: [0, 3] },
       // 尾随蛆精英 + 磁力干扰:它赖在船尾,拾取半径减半就是逼玩家先处理它再捡钱
       { at: 95, kind: KIND_TRAILER, count: 1, affixes: [2] },
+      // 段尾高潮压轴:裂变蜂群蛭 —— 死在涨潮里还要爆三只,整备前最后一口气
+      { at: 112, kind: KIND_SWARM, count: 1, affixes: [1] },
     ],
     tides: [
       { at: 24, duration: 6, mul: 0.4 }, // 静场预告:30s 侧压接 40s 首只精英的连段
@@ -250,7 +252,7 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { at: 64, duration: 10, mul: 0.4 },
       { at: 80, duration: 14, mul: 1.35 }, // 背袭消化后的涨潮(原 68–82s 挪后,给环阵突围腾出空间)
       { at: 94, duration: 5, mul: 0.45 }, // 静场预告:95s 尾随蛆精英 + 96s 侧压双连
-      { at: 112, duration: 8, mul: 1.35 }, // 段尾高潮:108s 孢子首秀看清之后,最后 8 秒推向整备
+      { at: 112, duration: 8, mul: 1.35 }, // 段尾高潮:108s 孢子首秀看清之后,112s 裂变精英压轴,最后 8 秒推向整备
     ],
   },
   {
@@ -279,13 +281,16 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 相位蜂群蛭:能量系(激光/电弧/磁轨/迫击炮)对它减半,机炮/点防反而才是正解 ——
       // 逼玩家读一读自己甲板上"哪座塔是什么系"
       { at: 30, kind: KIND_SWARM, count: 1, affixes: [4] },
+      // 磁力侧掠者:背袭消化后的涨潮里它赖在舷侧 —— 拾取半径整体减半,
+      // 不先清它,这一波涨潮的残骸就捡不回来
+      { at: 70, kind: KIND_STRAFER, count: 1, affixes: [2] },
       // 冲撞甲虫精英 + 裂变:击杀后爆成三只 —— 冲锋前摇在放大体型下更要看清,别站着不动
       { at: 100, kind: KIND_BEETLE, count: 1, affixes: [1] },
     ],
     tides: [
       { at: 19, duration: 6, mul: 0.4 }, // 静场预告:25s 侧压接 30s 相位精英
       { at: 44, duration: 12, mul: 0.4 }, // 相位精英战后的捡拾退潮,收在 60s 背袭前
-      { at: 66, duration: 14, mul: 1.35 }, // 背袭消化后的涨潮
+      { at: 66, duration: 14, mul: 1.35 }, // 背袭消化后的涨潮,70s 磁力精英混在其中
       // 静场预告:95s 冲撞甲虫首秀 —— 0.9s 前摇是它整型的教学点,必须在安静里看清
       { at: 88, duration: 6, mul: 0.4 },
       { at: 106, duration: 14, mul: 1.35 }, // 段尾高潮:盖住 100s 裂变精英余波与 110s 斜后混编
@@ -329,6 +334,9 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       { at: 40, kind: KIND_STRAFER, count: 1, affixes: [0] },
       // 收尾"小Boss":冲撞甲虫 + 裂变/装甲 —— 血厚、死了还炸三只,活过它就是胜利
       { at: 85, kind: KIND_BEETLE, count: 1, affixes: [1, 3] },
+      // 终局压轴:裂变/狂热孢子炮手 —— 它锚在射程带外不停加速压上来的虫潮,
+      // 死在终局涨潮里还要爆三只炮手,逼玩家在"拆它"和"接三连侧压"之间选
+      { at: 112, kind: KIND_SPORE, count: 1, affixes: [0, 1] },
     ],
     tides: [
       // 收尾段的退潮刻意更浅更短(0.4~0.45 × 5~6s):压力基线已是全局最高,
@@ -341,7 +349,7 @@ export const WAVE_SEGMENTS: WaveSegment[] = [
       // 突围完场上近乎空场,这几秒把残骸捡回来,母巢正好借这口气进场
       { at: 64, duration: 6, mul: 0.4 },
       { at: 79, duration: 6, mul: 0.4 }, // 静场预告:85s 收尾小Boss
-      // 终局涨潮:95/108/116 三连侧压一路推到墙上,不再给低谷 —— 活过这 26 秒就是胜利
+      // 终局涨潮:95/108/116 三连侧压 + 112s 裂变孢子精英一路推到墙上,不再给低谷 —— 活过这 26 秒就是胜利
       { at: 94, duration: 26, mul: 1.4 },
     ],
   },

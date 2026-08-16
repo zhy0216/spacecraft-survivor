@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SIM_DT } from '../core/loop';
-import { AFFIX_ARMORED, AFFIX_FRENZY } from '../data/affixes';
+import { AFFIX_ARMORED, AFFIX_FRENZY, ELITE } from '../data/affixes';
 import {
   DOCK_WEAPON_PRICE,
   MAGNET_PICKUP_SURGE,
   STARTING_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_BOOST, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
-import { KIND_BOSS, KIND_SWARM } from '../data/enemies';
+import { ENEMIES, KIND_BOSS, KIND_SWARM } from '../data/enemies';
 import {
   STAR_MAX,
   TOWER_ARC,
@@ -529,6 +529,28 @@ describe('磁吸涌(26 号)', () => {
     world.damageEnemy(normal, 99);
     world.step();
     expect(world.drops.items.some((d) => d.kind === DROP_KIND_MAGNET)).toBe(false);
+  });
+
+  it('精英接触伤害 ×ELITE.contactDamageMul:放进身的精英比同型普通怪更疼(2026-08-15)', () => {
+    const world = new World(51);
+    // 同型蜂群蛭各一只压在船体受击圆内(敌人与船都停原点,与 killElite 的掉落口径同款):
+    // 普通怪一记 5 伤;精英(affixes ≠ 0)一记 ×ELITE.contactDamageMul ——
+    // "放进身有代价",精英不只是一块更厚的血条(判定与扣血全走 settleHullDamage 的既有路径)
+    const normal = world.enemies.spawn();
+    normal.hp = normal.maxHp = 10;
+    normal.kind = KIND_SWARM;
+    world.step();
+    expect(world.ship.hp).toBeCloseTo(world.ship.maxHp - ENEMIES[KIND_SWARM]!.contactDamage, 9);
+    world.damageEnemy(normal, 99); // 已挨过一口,杀掉它别让无敌帧走完后补第二记
+    const elite = world.enemies.spawn();
+    elite.hp = elite.maxHp = 10;
+    elite.kind = KIND_SWARM;
+    elite.affixes = 1 << AFFIX_FRENZY;
+    world.step();
+    expect(world.ship.hp).toBeCloseTo(
+      world.ship.maxHp - ENEMIES[KIND_SWARM]!.contactDamage * (1 + ELITE.contactDamageMul),
+      9,
+    );
   });
 
   it('涌还醒着时拾起第二颗宝物取 max 不叠加', () => {

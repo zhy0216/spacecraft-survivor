@@ -149,7 +149,7 @@ describe('敌人数值表', () => {
       expect(Number.isInteger(def.starCoins)).toBe(true);
       expect(def.starCoins).toBeGreaterThanOrEqual(0);
     }
-    expect(ELITE.starCoins).toBe(10);
+    expect(ELITE.starCoins).toBe(15); // 原 10:2026-08-15 随精英威胁加压(hpMul 12/接触 ×2)抬面额
     expect(BOSS.starCoins).toBe(30);
   });
 

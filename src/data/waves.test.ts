@@ -248,13 +248,14 @@ describe('波次脚本', () => {
     expect(last.streams.some((s) => s.kind === KIND_BEETLE)).toBe(true);
   });
 
-  it('精英编排:教学段不塞,其余段各 1–2 个;at 升序且落段内;kind 与词缀编号合法', () => {
+  it('精英编排:教学段不塞,其余段各 2–3 个;at 升序且落段内;kind 与词缀编号合法', () => {
     // 教学段(第一段)是"摆塔 + 认主压方向"的白给区,不塞精英(todos/14:教学段不塞)
     expect(WAVE_SEGMENTS[0]!.elites).toEqual([]);
     const all: { at: number; kind: number; count: number; affixes: number[] }[] = [];
     for (const seg of WAVE_SEGMENTS) {
-      // 中后段给力:每段 1–2 个,塞满整段就没有"突发时刻"的节奏可言
-      expect(seg.elites.length, `${seg.devName} 的精英数`).toBeLessThanOrEqual(2);
+      // 中后段给力:每段 2–3 个(2026-08-15 精英加压前是 1–2 个),
+      // 塞满整段就没有"突发时刻"的节奏可言
+      expect(seg.elites.length, `${seg.devName} 的精英数`).toBeLessThanOrEqual(3);
       let prevAt = -1;
       for (const el of seg.elites) {
         expect(el.at, seg.devName).toBeGreaterThanOrEqual(0);

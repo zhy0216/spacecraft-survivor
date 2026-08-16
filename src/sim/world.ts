@@ -1704,7 +1704,13 @@ export class World {
       if (dx * dx + dy * dy > hitR * hitR) continue;
       e.hitCd = tuning.enemyHitInterval;
 
-      const raw = (isBoss ? bossContactDamage() : ENEMIES[e.kind]!.contactDamage) * scale;
+      // 精英接触伤害独立倍率(2026-08-15):affixes ≠ 0 即精英(与击杀计数/掉落同一条判定,
+      // Boss 绝不用 affixes 位故走 1)—— "放进身有代价",精英不只是一块更厚的血条
+      const raw =
+        (isBoss
+          ? bossContactDamage()
+          : ENEMIES[e.kind]!.contactDamage * (e.affixes !== 0 ? ELITE.contactDamageMul : 1)) *
+        scale;
       // 飘字带**实际结算**的伤害 —— 与 damageShip 里同一份乘式(shipDamageTakenMul:
       // 支援减伤 × 加速窗减伤,同一份聚合与同一个 boostTime,确定性不变),
       // 于是红字与血条扣掉的量永远一致,玩家不会读到两本账

@@ -93,25 +93,25 @@ export const AFFIXES: AffixDef[] = [
     id: AFFIX_ARMORED,
     slug: 'armored',
     devName: '装甲',
-    devDescription: '弹药系伤害 ×0.5(与塔的 throttle=THR_AMMO 对齐)',
+    devDescription: '弹药系伤害 ×0.3(与塔的 throttle=THR_AMMO 对齐)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 0,
     pickupMul: 1,
-    ballisticMul: 0.5, // 占位待调
+    ballisticMul: 0.3, // 占位待调(原 0.5:2026-08-15 威胁加压,减半改成砍到三成)
     energyMul: 1,
   },
   {
     id: AFFIX_PHASED,
     slug: 'phased',
     devName: '相位',
-    devDescription: '能量系伤害 ×0.5(过热/充能两系,与塔的 throttle 对齐)',
+    devDescription: '能量系伤害 ×0.3(过热/充能两系,与塔的 throttle 对齐)',
     frenzyRadius: 0,
     frenzySpeedMul: 1,
     splitCount: 0,
     pickupMul: 1,
     ballisticMul: 1,
-    energyMul: 0.5, // 占位待调
+    energyMul: 0.3, // 占位待调(原 0.5:2026-08-15 威胁加压,与装甲词缀同一条口径)
   },
 ];
 
@@ -121,15 +121,26 @@ export const AFFIXES: AffixDef[] = [
  * 两条掉落账各走各的:starCoins 按 STARCOIN_DROP_CHANCE 概率入账(见 data/economy);
  * scrapMul 是精英**经验掉落物**的面额倍率(改版 10 号后 World.spawnDrop 现读:精英 XP =
  * 底座 scrap × 它)。
+ *
+ * 2026-08-15 精英威胁加压(对局日志 seed 3462751984 复盘:7 只精英零接触命中、终局在
+ * 峰值火力前活不过一次集火 —— 「增加精英怪」的同时必须让单只成为"必须停下手处理"的瞬间):
+ *   hpMul 3 → 12:终局精英甲虫 = 40 × 1.72 × 12 ≈ 825 HP,在玩家终局单目标火力
+ *   (~400–700 DPS)下 TTK ≈ 1.5–2.5s,叠装甲/相位减半后 3s+ —— 足够逼出一轮走位,
+ *   又不会刷成血条墙(占位待调,真人体感后再拉);
+ *   contactDamageMul 新增 = 2:精英的威胁不只血厚 —— 放它进身的每一记都该更疼;
+ *   starCoins 10 → 15:威胁涨了,击杀面额跟着涨(≈ 1.5 次重摇)。
  */
 export const ELITE = {
   /** 体型放大比例:渲染纹理、碰撞半径与冲锋几何都乘它(倍数建议真人试玩定稿) */
   scale: 1.5,
   /** HP 放大比例:精英 HP = 基础 HP × 时间缩放 × 它 */
-  hpMul: 3,
+  hpMul: 12,
+  /** 接触伤害倍率(与 hpMul 同一条"独立倍率"口径,sim/world.ts 的 settleHullDamage 现读):
+   *  精英接触 = 底座 contactDamage × 它 —— "放进身有代价",精英不只是一块更厚的血条 */
+  contactDamageMul: 2,
   /** 精英经验掉落物的面额倍率:精英 XP = 底座 scrap × 它(World.spawnDrop 现读) */
   scrapMul: 3,
   /** 精英星币面额(16 号):命中掉率时当场进账 world.starCoins,零 rng 面额、掉的就是"这一只"的。
-   *  1 只精英 = 1 次重摇的价(10),占位待调 */
-  starCoins: 10,
+   *  1 只精英 = 1 次重摇的价(10) → 2026-08-15 随威胁加压抬到 15(≈ 1.5 次重摇) */
+  starCoins: 15,
 };
