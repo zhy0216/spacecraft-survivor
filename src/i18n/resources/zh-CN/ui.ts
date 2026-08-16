@@ -136,6 +136,7 @@ export const ui = {
   armory: {
     title: '舰船背包',
     eyebrow: 'SHIP INVENTORY',
+    close: '回到战斗',
   },
   ship: {
     readoutHp: '船体',

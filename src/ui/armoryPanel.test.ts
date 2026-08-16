@@ -250,6 +250,7 @@ describe('舰船背包面板', () => {
     const ring = diagram.children[2]!;
     const chipLayer = ring.children[ring.children.length - 1]!;
     const chips = chipLayer.children;
+    const closeBtn = root.children[root.children.length - 1]!;
 
     // 选中槽 0 后切语言:选择态必须保留(只重画文案,不动 picked)
     fire(chips[0]!, 'click');
@@ -263,6 +264,8 @@ describe('舰船背包面板', () => {
     expect(((head.children[0] as StubEl).children[1] as StubEl).textContent).toBe(t('ui:armory.title'));
     expect(findText(chips[0]!, 'Forward')).toBe(true);
     expect(findText(chips[2]!, 'Right')).toBe(true);
+    // 「回到战斗」按钮文案同一次刷新
+    expect(closeBtn.textContent).toBe(t('ui:armory.close'));
     // 选择态保留:选中格描边原样,点另一格仍完成交换
     expect(panel.selected()).toBe(0);
     expect(chips[0]!.style.border).toBe(zhBorder);
@@ -308,5 +311,29 @@ describe('舰船背包面板', () => {
     canOpen = false;
     panel.toggle();
     expect(panel.visible()).toBe(false);
+  });
+
+  it('移动端退路:「回到战斗」按钮挂面板末尾,点击关闭并触发 onClose', () => {
+    const world = createWorld();
+    let closed = 0;
+    const panel = createArmoryPanel({
+      canOpen: () => true,
+      onOpen: () => {},
+      onClose: () => { closed++; },
+    });
+    panel.setWorld(world);
+    panel.show();
+
+    // 按钮挂在舰船图之后(root.children[0] 仍是舰船图,既有下标断言不受影响)
+    const root = dom.ui.children[0]!;
+    const closeBtn = root.children[root.children.length - 1]!;
+    expect(closeBtn.tagName).toBe('BUTTON');
+    expect(closeBtn.textContent).toBe(t('ui:armory.close'));
+    // 桌面默认隐藏(有 I/Esc),移动端媒体查询才点亮 —— 桩 DOM 不解析 cssText,直接看字符串
+    expect(closeBtn.style.cssText).toContain('display:none');
+
+    fire(closeBtn, 'click');
+    expect(panel.visible()).toBe(false);
+    expect(closed).toBe(1);
   });
 });

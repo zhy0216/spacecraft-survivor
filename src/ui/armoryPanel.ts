@@ -21,6 +21,18 @@ const ROOT_CSS =
   'padding:20px;box-sizing:border-box;overflow:auto;background:rgba(5,7,13,.86);' +
   'font:13px/1.58 ui-monospace,SFMono-Regular,Menlo,monospace;user-select:none;';
 
+/**
+ * 「回到战斗」按钮:桌面端有 I/Esc 快捷键,按钮只在移动端媒体查询里点亮
+ * (index.html 的 .sw-armory-close 覆写 display)。移动端打开背包时暂停了世界、
+ * 底部驾驶层随之收起,没有这颗按钮玩家就再也回不到战斗 —— 它是触控端唯一的退路。
+ * position:fixed 挂在 overlay 里仍相对视口定位,面板滚动时它钉在屏幕底边不跟着走。
+ */
+const CLOSE_BTN_CSS =
+  'position:fixed;left:50%;transform:translateX(-50%);' +
+  'bottom:max(24px,env(safe-area-inset-bottom));display:none;' +
+  'padding:12px 30px;border-radius:8px;cursor:pointer;font:inherit;letter-spacing:.1em;' +
+  'border:1px solid #2b4a6e;background:rgba(43,74,110,.28);color:#9adcff;';
+
 export interface ArmoryPanelHooks {
   /** 能不能开面板?(main 传 `() => !run.paused` —— 时停/结算时 I 键不响应) */
   canOpen(): boolean;
@@ -63,6 +75,16 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
     onSlotClick: clickSlot,
   });
   root.appendChild(shipDiagram.root);
+
+  // 移动端退路:桌面靠 I/Esc,触控端只有这颗按钮(挂最后 = 不占船图的 children 下标,
+  // 现有测试拿 root.children[0] 当舰船图的断言不受影响)
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'sw-armory-close';
+  closeBtn.style.cssText = CLOSE_BTN_CSS;
+  closeBtn.textContent = t('ui:armory.close');
+  closeBtn.addEventListener('click', close);
+  root.appendChild(closeBtn);
   document.getElementById('ui')!.appendChild(root);
 
   function paint(): void {
@@ -143,7 +165,10 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
     },
     selected: () => picked,
     // 语言切换后重画文案:交给 shipDiagram(它用上次 paint 的入参重画,保留 picked 选择态)
-    refreshLocale: () => shipDiagram.refreshLocale(),
+    refreshLocale: () => {
+      shipDiagram.refreshLocale();
+      closeBtn.textContent = t('ui:armory.close');
+    },
   };
 }
 

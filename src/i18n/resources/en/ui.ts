@@ -140,6 +140,7 @@ export const ui: DeepRecord<typeof zhUi> = {
   armory: {
     title: 'Ship Inventory',
     eyebrow: 'SHIP INVENTORY',
+    close: 'Back to Battle',
   },
   ship: {
     readoutHp: 'Hull',
