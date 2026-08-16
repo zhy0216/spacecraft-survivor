@@ -2164,6 +2164,18 @@ export class World {
   }
 
   /**
+   * 调试入口:立即生成 Boss 一只并进入 Boss 阶段,与脚本走完那一帧走**同一条 enterBossPhase**
+   * (同池、专用 kind、出生方向 = 当前主压方向、零 rng)。只服务调参面板的「出现 Boss」按钮 ——
+   * 不必等脚本走完那 8 分钟;压测路旁路波次脚本、永不走完,没有它那条路上永远没有 Boss 战。
+   * 一次 rng 都不掷:调用它不扰动随机序列,同 seed 同操作序列逐位可复现(与 debugSpawnShop
+   * 的"外部输入消费 rng"不是同一条口径,这里就没有随机)。
+   * Boss 已在场时再按 = 再来一只(召唤计时与游标按 enterBossPhase 归零重计)。
+   */
+  debugSpawnBoss(): void {
+    this.enterBossPhase();
+  }
+
+  /**
    * 掷定本轮整备的船坞法令货架(21 号)。**只在 step 里 refitPending 置位那一帧调用**:
    * 与出怪同一条"帧首、定死顺序"的确定性 —— 同 seed 同操作序列,货架逐位可复现。
    *

@@ -184,14 +184,15 @@ export const CORRIDOR_COVERAGE_WEIGHT = 1.0;
 /**
  * 闸门配装的 Boss TTK 目标(秒):最弱合法配装(星级质量 ≥ 6、≥3 把武器、≥5 层法令,
  * 法令按**零 DPS 贡献**的纯功能档计 —— 保守口径,带弹药/超载叠层的真实玩家只会更快)
- * 应当在这个时间内击杀 Boss。取窗口中点 82.5,单测断言落 [75, 90] 内。
+ * 应当在这个时间内击杀 Boss。取窗口中点 124,单测断言落 [115, 130] 内。
+ * 2026-08-16 难度上调:82.5 → 124(+50%,Boss 血量同步 +50%,配 Z 字冲刺的走廊压力)。
  * 之后调难度时这是第二个旋钮:抬它 = 闸门更松,压它 = 更紧。
  */
-export const GATE_TTK_TARGET = 82.5;
+export const GATE_TTK_TARGET = 124;
 /** TTK 窗口下界(秒):目标值的最小合法档 */
-export const GATE_TTK_MIN = 75;
+export const GATE_TTK_MIN = 115;
 /** TTK 窗口上界(秒):目标值的最大合法档 */
-export const GATE_TTK_MAX = 90;
+export const GATE_TTK_MAX = 130;
 
 /**
  * 闸门配装的星级质量下限:Σstars ≥ 6 —— 用户口径「3★+2★+1★」(= 6)的星级质量制形式,

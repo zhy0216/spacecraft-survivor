@@ -30,7 +30,9 @@ import {
   BOSS_DASH,
   BOSS_RECOVER,
   BOSS_WINDUP,
+  BOSS_Z_LEGS,
   bossContactDamage,
+  bossZLaneDir,
   initBoss,
   initSummon,
   stepBossBehavior,
@@ -155,29 +157,51 @@ describe('Boss 行为状态机(纯函数,可脱离世界)', () => {
     expect(Math.hypot(out.x, out.y)).toBeCloseTo(want, 9);
   });
 
-  it('前摇锁死方向:冲刺沿锁定直线全速、绝不重新瞄准;冲完硬直,再回接近段', () => {
+  it('前摇锁死方向:冲刺折 Z 字(逐段 ±chargeZAngleDeg 交替、三段等长)全速、绝不重新瞄准;冲完硬直,再回接近段', () => {
     const ship = createShip();
     const e = makeBoss(300, 0);
     const out: Vec2 = { x: 0, y: 0 };
-    stepBossBehavior(e, ship, SIM_DT, out); // → WINDUP,锁 (1,0)
+    stepBossBehavior(e, ship, SIM_DT, out); // → WINDUP,锁 (-1,0)
 
-    // 船挪走:冲刺期间读到的若是新位置,前摇预警画出的那条线就成了谎言
+    // 船挪走:冲刺期间读到的若是新位置,前摇预警画出的折线就成了谎言
     ship.x = 5000;
     ship.y = 5000;
     while (e.state !== BOSS_DASH) stepBossBehavior(e, ship, SIM_DT, out);
     expect(e.state).toBe(BOSS_DASH);
     const want = ENEMIES[KIND_BEETLE]!.chargeSpeed * BOSS.chargeSpeedMul;
-    expect(out.x).toBeCloseTo(-want, 9); // 仍沿锁定方向(-X)全速
-    expect(out.y).toBe(0);
+    const c30 = Math.cos(Math.PI / 6);
+    const s30 = Math.sin(Math.PI / 6);
+    // 段 0:锁向 +30°(锁 -X → 偏 -Y 侧)
+    expect(out.x).toBeCloseTo(-want * c30, 9);
+    expect(out.y).toBeCloseTo(-want * s30, 9);
 
-    let dashFrames = 0;
+    // 逐帧数段:三段等长、翻段方向交替;段号由 timer 折出(与 sim 同一条闭式)
+    const legFrames = Math.round((BOSS.chargeDuration / BOSS_Z_LEGS) / SIM_DT);
+    const framesInLeg = [1, 0, 0]; // 上面进段那一步已输出段 0 的第 1 帧
+    let total = 1;
+    let leg = 0;
     while (e.state === BOSS_DASH) {
       stepBossBehavior(e, ship, SIM_DT, out);
-      dashFrames++;
+      if (e.state !== BOSS_DASH) break;
+      const elapsed = BOSS.chargeDuration - e.timer;
+      const cur = Math.min(BOSS_Z_LEGS - 1, Math.floor((elapsed * BOSS_Z_LEGS) / BOSS.chargeDuration));
+      if (cur !== leg) {
+        leg = cur;
+        // 翻段那一帧:方向 = 锁向按 ±chargeZAngleDeg 交替(仍在锁定折线上,不重新瞄准)
+        expect(out.x).toBeCloseTo(-want * c30, 9);
+        expect(out.y).toBeCloseTo(cur % 2 === 0 ? -want * s30 : want * s30, 9);
+      }
+      total++;
+      framesInLeg[leg]!++;
     }
-    expect(dashFrames).toBe(Math.round(BOSS.chargeDuration / SIM_DT));
+    // 三段等长(±1 帧容差:dt = 1/60 是二进制无限小数,逐帧累减的漂移会把翻段点挪一帧,
+    // 与老直线冲刺"全程帧数"同一条浮点口径);全程帧数必须精确 = chargeDuration / SIM_DT
+    for (const n of framesInLeg) expect(Math.abs(n - legFrames)).toBeLessThanOrEqual(1);
+    expect(framesInLeg.reduce((s, n) => s + n, 0)).toBe(Math.round(BOSS.chargeDuration / SIM_DT));
+    expect(total).toBe(Math.round(BOSS.chargeDuration / SIM_DT));
     expect(e.state).toBe(BOSS_RECOVER);
     expect(out.x).toBe(0); // 硬直不出力,靠惯性滑出去
+    expect(out.y).toBe(0);
 
     let recoverFrames = 0;
     while (e.state === BOSS_RECOVER) {
@@ -189,6 +213,30 @@ describe('Boss 行为状态机(纯函数,可脱离世界)', () => {
     stepBossBehavior(e, ship, SIM_DT, out);
     expect(out.x).toBeGreaterThan(0); // 回到接近段:重新 seek 追船
     expect(out.y).toBeGreaterThan(0);
+  });
+
+  it('bossZLaneDir:锁向按 ±chargeZAngleDeg 交替偏转,零次随机、单位长度(预警折线与 DASH 共用)', () => {
+    const out: Vec2 = { x: 0, y: 0 };
+    const c30 = Math.cos(Math.PI / 6);
+    const s30 = Math.sin(Math.PI / 6);
+    // 锁 +X:段 0/2 = +30°,段 1 = -30°;三段合成一条 Z 走廊
+    bossZLaneDir(1, 0, 0, out);
+    expect(out.x).toBeCloseTo(c30, 12);
+    expect(out.y).toBeCloseTo(s30, 12);
+    bossZLaneDir(1, 0, 1, out);
+    expect(out.x).toBeCloseTo(c30, 12);
+    expect(out.y).toBeCloseTo(-s30, 12);
+    bossZLaneDir(1, 0, 2, out);
+    expect(out.x).toBeCloseTo(c30, 12);
+    expect(out.y).toBeCloseTo(s30, 12);
+    // 锁 -X:镜像;单位长度不因方向变
+    bossZLaneDir(-1, 0, 0, out);
+    expect(Math.hypot(out.x, out.y)).toBeCloseTo(1, 12);
+    expect(out.y).toBeCloseTo(-s30, 12);
+    // 偶数段恒同、奇数段恒反:与段号奇偶绑定(0 段与 2 段可互换,不影响走廊形状)
+    bossZLaneDir(0, 1, 1, out); // 锁 +Y:-30° 段
+    expect(out.x).toBeCloseTo(s30, 12);
+    expect(out.y).toBeCloseTo(c30, 12);
   });
 });
 
@@ -216,6 +264,38 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     expect(d).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
     expect(boss.y).toBeCloseTo(w.ship.y, 6);
     expect(boss.x).toBeGreaterThan(w.ship.x);
+  });
+
+  it('调试入口 debugSpawnBoss:波次未走完也能进 Boss 战(同一条 enterBossPhase、零 rng),再按再来一只', () => {
+    const w = new World(5);
+    expect(w.wave.done).toBe(false);
+    expect(w.bossPhase).toBe(0);
+
+    w.debugSpawnBoss();
+    expect(w.bossPhase).toBe(1);
+    expect(w.bossSummonN).toBe(0);
+    expect(w.bossSummonCooldown).toBe(BOSS.summonInterval);
+    const bosses = w.enemies.items.filter((e) => e.kind === KIND_BOSS);
+    expect(bosses.length).toBe(1);
+    expect(bosses[0]!.affixes).toBe(0); // 绝不用 affixes 位(14 号精英判据)
+    // 出生在出怪环上(以船为心),与脚本走完那一帧同一条 enterBossPhase
+    const d = Math.hypot(bosses[0]!.x - w.ship.x, bosses[0]!.y - w.ship.y);
+    expect(d).toBeGreaterThanOrEqual(SPAWN_RADIUS);
+    expect(d).toBeLessThan(SPAWN_RADIUS + SPAWN_RADIUS_BAND);
+
+    // 零 rng:同 seed 两局各按一次,随机流逐位一致(与"脚本走完那一帧"同一条口径)
+    const a = new World(7);
+    const b = new World(7);
+    a.debugSpawnBoss();
+    b.debugSpawnBoss();
+    expect(a.rng.next()).toBe(b.rng.next());
+
+    // 再按 = 再来一只(召唤计时与游标按 enterBossPhase 归零重计)
+    w.bossSummonCooldown = 0;
+    w.debugSpawnBoss();
+    expect(w.enemies.items.filter((e) => e.kind === KIND_BOSS).length).toBe(2);
+    expect(w.bossSummonCooldown).toBe(BOSS.summonInterval);
+    expect(w.bossSummonN).toBe(0);
   });
 
   it('最后一跨与 Boss 同帧投放商店信标:段下标 = 越界哨兵,两张货架照常掷定(每两分钟一次)', () => {

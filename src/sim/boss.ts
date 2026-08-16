@@ -11,7 +11,10 @@
  *
  * 行为 = 周期召唤 + 冲锋,复用现有三原语:
  *   - 接近段走 seek(直线追船),进冲锋距离(chargeRange × chargeRangeMul)就锁方向进长前摇;
- *   - 前摇刹停 + 锁方向(lockCharge)→ 直线全速冲刺 → 硬直,与冲撞甲虫同构,参数放大;
+ *   - 前摇刹停 + 锁方向(lockCharge)→ Z 字折线全速冲刺 → 硬直:冲刺时长三等分,
+ *     逐段朝锁向交替偏转 ±chargeZAngleDeg —— 三段折成一条 Z 形走廊,威胁从一条线
+ *     扩成一条带。方向仍是"锁定方向"的确定性函数,冲刺中绝不重新瞄准的承诺不变,
+ *     预警线按同一条折线画(renderer 的 drawBossTelegraph),「画哪撞哪」依然成立;
  *   - 召唤不走状态机:World 侧一个召唤计时器(BOSS.summonInterval 周期),
  *     每只召唤怪恰好一次角度 rng,型号/数量直给(照 waves 的"每成功出一只恰一次 rng")。
  *   侧掠的 strafe 原语 T1 不用(底座不绕行),留到 T2 的封锁线巨舰。
@@ -34,10 +37,28 @@ import { lockCharge, seek } from './steering';
 export const BOSS_CHASE = 10;
 /** 前摇:刹住不动,方向已锁死(渲染层据此画预警,与 07 的 ST_WINDUP 同一条可读性口径) */
 export const BOSS_WINDUP = 11;
-/** 冲刺:沿锁定方向直线全速,期间绝不重新瞄准 */
+/** 冲刺:沿锁定方向折 Z 字(三等分,逐段 ±chargeZAngleDeg 偏转),期间绝不重新瞄准 */
 export const BOSS_DASH = 12;
 /** 硬直:不出力,靠惯性滑出去(冲完的反打窗口) */
 export const BOSS_RECOVER = 13;
+
+/** Z 字冲刺的折线段数(结构常数,不是平衡旋钮:Z 就是三笔,角度才是旋钮) */
+export const BOSS_Z_LEGS = 3;
+
+/**
+ * Z 字冲刺第 leg 段的期望方向(单位向量):锁向交替偏转 ±chargeZAngleDeg,0° = 退化回直线。
+ * 纯函数、零分配:renderer 的预警折线(drawBossTelegraph)与 DASH 分支共用它 ——
+ * 两条路各自手搓旋转矩阵会漂出两个口径,「画哪撞哪」的承诺就没法保证。
+ */
+export function bossZLaneDir(lockX: number, lockY: number, leg: number, out: Vec2): Vec2 {
+  const sign = leg % 2 === 0 ? 1 : -1;
+  const ang = (BOSS.chargeZAngleDeg * Math.PI) / 180;
+  const s = Math.sin(ang) * sign;
+  const c = Math.cos(ang);
+  out.x = lockX * c - lockY * s;
+  out.y = lockX * s + lockY * c;
+  return out;
+}
 
 /**
  * 计时到期的判据容差(秒)。与 sim/enemy.ts 的 TIMER_EPS 同一套浮点口径:
@@ -172,11 +193,16 @@ export function stepBossBehavior(b: Enemy, ship: Ship, dt: number, out: Vec2): n
       out.y = 0;
       return Math.min(1, base.accel * BOSS.accelMul * dt * 2);
     case BOSS_DASH: {
-      // 沿锁定方向直线全速。这里绝不重新读 ship 的位置 ——
-      // 任何"冲刺中微调"都会让前摇预警变成谎言(与 07 验收标准第二条同一条口径)
+      // Z 字折线冲刺:冲刺时长三等分,逐段朝锁向交替偏转 ±chargeZAngleDeg(0° = 退化回老直线)。
+      // 折线是锁定方向的确定性函数 —— 这里绝不重新读 ship 的位置,任何"冲刺中微调"都会让
+      // 前摇预警画出的折线变成谎言(与 07 验收标准第二条同一条口径)。段号由 timer 剩余量
+      // 闭式折出,不新增字段:同 seed 逐帧可复现,读档/checksum 口径零改动。
       const sp = base.chargeSpeed * BOSS.chargeSpeedMul * tuning.enemySpeedScale;
-      out.x = b.lockX * sp;
-      out.y = b.lockY * sp;
+      const elapsed = BOSS.chargeDuration - b.timer;
+      const leg = Math.min(BOSS_Z_LEGS - 1, Math.floor((elapsed * BOSS_Z_LEGS) / BOSS.chargeDuration));
+      bossZLaneDir(b.lockX, b.lockY, leg, out);
+      out.x *= sp;
+      out.y *= sp;
       return 1; // 瞬时到速:冲刺要"弹出去",而不是慢慢加速
     }
     case BOSS_RECOVER:

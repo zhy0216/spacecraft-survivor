@@ -91,7 +91,7 @@ import { tuning } from '../sim/config';
 import { shipRadius } from '../sim/damage';
 import { DROP_KIND_MAGNET, type Drop } from '../sim/drop';
 import { ENEMY_HIT_FLASH, enemyRadius, ST_SPORE_WINDUP, ST_WINDUP } from '../sim/enemy';
-import { BOSS_CHASE, BOSS_DASH, BOSS_RECOVER, BOSS_WINDUP, bossRadius } from '../sim/boss';
+import { BOSS_CHASE, BOSS_DASH, BOSS_RECOVER, BOSS_WINDUP, BOSS_Z_LEGS, bossRadius, bossZLaneDir } from '../sim/boss';
 import {
   FX_LIFE_HULL_HIT,
   FX_LIFE_KILL,
@@ -3274,32 +3274,44 @@ export class Renderer {
   }
 
   /**
-   * Boss 冲锋前摇(15 号):与普通甲虫同一条可读性通道(telegraphG 里的锁定线 + 收缩环),
+   * Boss 冲锋前摇(15 号):与普通甲虫同一条可读性通道(telegraphG 里的指示线 + 收缩环),
    * 数值走 BOSS 表 —— 冲刺全程 = 底座 chargeSpeed × chargeSpeedMul × enemySpeedScale ×
    * chargeDuration(与 sim/boss.ts 的 DASH 分支同一份乘式),环径走 bossRadius()
    * (与判定体同源):环合拢那一刻正好贴住 Boss 本体,起冲即"贴住了"。
+   * 冲刺是 Z 字折线,指示线按同一条折线画(几何走 bossZLaneDir,与 sim 共用 ——
+   * 两条路各自手搓旋转矩阵会漂出两个口径):线还是那句"待会儿只撞这条线上"的承诺,
+   * 只是承诺对象从一条直线扩成一条 Z 形走廊。
    * Boss 全场只有一只,不占 TELEGRAPH_MAX_PER_KIND 配额。
    */
   private drawBossTelegraph(alpha: number): void {
     const g = this.telegraphG;
     const base = ENEMIES[BOSS.baseKind]!;
-    const reach = base.chargeSpeed * BOSS.chargeSpeedMul * tuning.enemySpeedScale * BOSS.chargeDuration;
+    const reach = (base.chargeSpeed * BOSS.chargeSpeedMul * tuning.enemySpeedScale * BOSS.chargeDuration) / BOSS_Z_LEGS;
     const tint = enemyTint(BOSS.baseKind);
     const bucket = this.bossBucket;
+    const lane: Vec2 = { x: 0, y: 0 };
     let drawn = 0;
     for (let i = 0; i < bucket.length; i++) {
       const e = bucket[i]!;
       if (e.state !== BOSS_WINDUP) continue;
       drawn++;
       // 位置与粒子同口径插值,否则指示线会比 Boss 本体晚一帧(与 drawTelegraph 同一条)
-      const x = e.px + (e.x - e.px) * alpha;
-      const y = e.py + (e.y - e.py) * alpha;
-      g.moveTo(x, y).lineTo(x + e.lockX * reach, y + e.lockY * reach);
+      const bx = e.px + (e.x - e.px) * alpha;
+      const by = e.py + (e.y - e.py) * alpha;
+      let x = bx;
+      let y = by;
+      g.moveTo(x, y);
+      for (let leg = 0; leg < BOSS_Z_LEGS; leg++) {
+        bossZLaneDir(e.lockX, e.lockY, leg, lane);
+        x += lane.x * reach;
+        y += lane.y * reach;
+        g.lineTo(x, y);
+      }
       // 夹住 [0,1]:面板改 chargeWindup 时正在前摇的 Boss 不至于画出巨环
       const t = Math.max(0, Math.min(1, e.timer / BOSS.chargeWindup)); // 1 → 0
       g.circle(
-        x,
-        y,
+        bx,
+        by,
         bossRadius() * BOSS_VISUAL_SCALE * (1 + TELEGRAPH_RING_GROWTH * t) + BOSS_TELEGRAPH_RING_GAP,
       );
     }

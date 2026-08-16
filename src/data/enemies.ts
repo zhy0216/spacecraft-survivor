@@ -77,6 +77,12 @@ export interface BossDef {
   chargeDuration: number;
   /** 冲完的硬直 s(反打窗口) */
   chargeRecover: number;
+  /**
+   * 冲刺 Z 字偏角(度):冲刺时长三等分,逐段朝锁向交替偏转 ±此角,三段折成一条 Z 形走廊。
+   * 0 = 退化回老直线冲刺(与冲撞甲虫同构);预警线按同一条折线画(renderer 的 drawBossTelegraph
+   * 与 sim/boss.ts 的 bossZLaneDir 共用),「画哪撞哪」的承诺不变。
+   */
+  chargeZAngleDeg: number;
   /** 召唤周期 s:每过这么久召唤一批蜂群(Boss 活着才计时) */
   summonInterval: number;
   /** 召唤预告窗口 s:World.bossSummonCooldown < 它时渲染层应提前预警(与精英预警共用提示通道) */
@@ -99,9 +105,8 @@ export const BOSS: BossDef = {
   slug: 'hive_colossus',
   devName: '母巢巨兽',
   scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
-  hpMul: 37, // 闸门反推(自动求解):净 DPS × TTK 82.5s / 68.8 ≈ 37.0 → 取整 37;
-  // Boss HP = 40 × 1.72 × 37 ≈ 2546(原 3234:2026-08-15 召唤加压,清场需求 16.8 → 25.6 DPS,
-  // 净 DPS 同步被吃掉一截 —— 两笔账同池,推导见 sim/balance.ts 的 bossHpMulForGate)
+  hpMul: 56, // 闸门反推(自动求解):净 DPS × TTK 124s / 68.8 ≈ 55.6 → 取整 56;
+  // Boss HP = 40 × 1.72 × 56 ≈ 3853。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
   dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦
   contactDamageMul: 2, // 底座 18 → 36:大质量撞击
   speedMul: 0.8, // 底座 70 → 56:大而慢
@@ -111,6 +116,7 @@ export const BOSS: BossDef = {
   chargeSpeedMul: 1, // 底座 380 → 380
   chargeDuration: 1.2, // 占位待调
   chargeRecover: 1.8, // 占位待调(冲完长硬直 = 反打窗口)
+  chargeZAngleDeg: 30, // 冲刺 Z 字偏角:三等分折线,走廊半宽 ≈ 单段长 × sin30° ≈ 76px(占位待调)
   summonInterval: 7, // 原 9s 占位 → 7s(2026-08-15):与 summonCounts 一起把召唤流 0.89 → 1.43 只/s(约 +60%)
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调

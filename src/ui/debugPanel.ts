@@ -100,6 +100,8 @@ export interface RunHooks {
   spawnShop?(): void;
   /** 调试入口(可选):立即获得一把随机基础武器(1★),见 World.debugAddWeapon */
   addWeapon?(): void;
+  /** 调试入口(可选):立即生成 Boss 一只并进入 Boss 阶段,见 World.debugSpawnBoss */
+  spawnBoss?(): void;
 }
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
@@ -151,6 +153,13 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   if (hooks.addWeapon) {
     const addWeapon = hooks.addWeapon.bind(hooks);
     runF.addButton({ title: '增加武器(随机 1★)' }).on('click', addWeapon);
+  }
+  // 调试入口:跳过整段波次脚本,当场生成 Boss 一只进入 Boss 战(World.debugSpawnBoss)。
+  // 与脚本走完那一帧同一条 enterBossPhase(同池、专用 kind、零 rng)—— 压测路旁路波次脚本
+  // 永不走完,没有它那条路上永远没有 Boss 战;想验 Boss 战 / 召唤 / 掉落不必等 8 分钟。
+  if (hooks.spawnBoss) {
+    const spawnBoss = hooks.spawnBoss.bind(hooks);
+    runF.addButton({ title: '出现 Boss(进入 Boss 战)' }).on('click', spawnBoss);
   }
 
   // 波次脚本读数(08 号 issue)。全是只读:脚本本身在 src/data/waves.ts,改那张表即可调节奏

@@ -276,7 +276,7 @@ export function belowGateMaxDps(): number {
  * 分子 = (闸门锚定 DPS − 召唤清场需求) × TTK 目标 ——
  * 召唤每 summonInterval 秒进一批、单批总 HP = summonBatchHpAt(480) ≈ 179,清场需求 ≈ 25.6 DPS;
  * 不扣掉它,Boss HP 就会锚成「闸门配装 100% 火力磨 Boss 恰好按时击杀」——
- * 那 82.5 秒里 9 批召唤怪在场上无限制堆积,闸门配装自己先被淹死,闸门就成了谎话。
+ * 那 124 秒里 18 批召唤怪在场上无限制堆积,闸门配装自己先被淹死,闸门就成了谎话。
  * 分母 = 底座 HP × 480s 时间缩放 = 40 × 1.72 = 68.8。
  * 结果写回 data/enemies.ts 的 BOSS.hpMul,bossGate.test.ts 钉 1% 自洽 ——
  * 改武器表后重跑那条测试,差值就是「该把 Boss 血量同步抬/压多少」的现成读数。

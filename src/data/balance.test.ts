@@ -80,7 +80,7 @@ describe('平衡常数(数据层)', () => {
     expect(DIFF_COMPRESS_EXP).toBeLessThanOrEqual(1);
   });
 
-  it('闸门常数闭合:TTK 目标落在 [75, 90] 窗口内,质量/武器/法令数与阈值全为正整数', () => {
+  it('闸门常数闭合:TTK 目标落在 [115, 130] 窗口内,质量/武器/法令数与阈值全为正整数', () => {
     expect(GATE_TTK_MIN).toBeLessThanOrEqual(GATE_TTK_TARGET);
     expect(GATE_TTK_TARGET).toBeLessThanOrEqual(GATE_TTK_MAX);
     expect(GATE_TTK_MIN).toBeGreaterThan(0);

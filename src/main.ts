@@ -330,6 +330,7 @@ async function boot(): Promise<void> {
     // 面板不认识 World:投放商店走这个闭包,引用的是外层 let world(每局 startRun 都换成新的)
     spawnShop: () => world.debugSpawnShop(),
     addWeapon: () => world.debugAddWeapon(),
+    spawnBoss: () => world.debugSpawnBoss(),
   });
   if (!DEBUG) {
     debugPanel.hide();

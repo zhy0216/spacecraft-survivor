@@ -79,7 +79,7 @@ describe('Boss 闸门数学(闭式)', () => {
 
   it('淹没账:欠闸门 TTK 期间的未清召唤 HP ≥ 10 × 船体 HP —— 虫潮先于血条把船咬穿', () => {
     // 代表性欠闸门的 TTK 里落几批召唤、每批多少 HP,全是闭式算术:
-    // TTK ≈ 288s ⇒ ≥ 41 批 × 178.9 ≈ 7334 HP,而船体只有 100(无装甲口径)
+    // TTK ≈ 576s(HP +50% 后)⇒ ≥ 82 批 × 178.9 ≈ 14700 HP,而船体只有 100(无装甲口径)
     const levels = createEdictLevels();
     levels[EDICT_ARMOR] = 2;
     const buffs = buffsForLevels(levels);
