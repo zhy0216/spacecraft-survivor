@@ -55,6 +55,7 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-victory-overlay';
   root.tabIndex = 0;
   root.setAttribute('role', 'button');
 
@@ -68,14 +69,17 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
 
   const story = document.createElement('div');
   story.style.cssText = STORY_CSS;
+  story.className = 'sw-victory-story';
   const kicker = document.createElement('div');
   kicker.style.cssText = KICKER_CSS;
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
+  title.className = 'sw-victory-title';
   const reveal = document.createElement('div');
   reveal.style.cssText = REVEAL_CSS;
   const body = document.createElement('div');
   body.style.cssText = BODY_CSS;
+  body.className = 'sw-victory-body';
   const next = document.createElement('div');
   next.style.cssText = NEXT_CSS;
   const hint = document.createElement('div');

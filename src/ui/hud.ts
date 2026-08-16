@@ -602,11 +602,14 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-hud';
   const top = document.createElement('div');
   top.style.cssText = topCss(rightGutter);
+  top.className = 'sw-hud-top';
 
   const vitals = document.createElement('div');
   vitals.style.cssText = `${PANEL_CSS}display:flex;flex-direction:column;gap:7px;`;
+  vitals.className = 'sw-hud-panel';
   const hp = createBar(vitals, t('ui:hud.hull'), HP_COLOR);
   const scrap = createBar(vitals, t('ui:hud.scrap'), SCRAP_COLOR);
   // 加速技能(空格):第三根条 —— 满格 = 就绪,回充中印剩余秒,窗内印"加速中"
@@ -614,9 +617,11 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
 
   const timer = document.createElement('div');
   timer.style.cssText = TIMER_CSS;
+  timer.className = 'sw-hud-timer sw-hud-panel';
 
   const segment = document.createElement('div');
   segment.style.cssText = SEGMENT_CSS;
+  segment.className = 'sw-hud-segment sw-hud-panel';
   const segmentBar = createBar(segment, t('ui:hud.segment'), OK_COLOR);
 
   const threat = document.createElement('div');
@@ -652,6 +657,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // lastMuted 是"上一次画上去的值":sync 每帧对照 hooks —— 设置页改的静音当帧反映到按钮上。
   const muteBtn = document.createElement('div');
   muteBtn.style.cssText = MUTE_CSS;
+  muteBtn.className = 'sw-hud-mute';
   muteBtn.title = t('ui:hud.mute');
   let lastMuted: boolean | null = null;
   function paintMute(): void {
@@ -670,23 +676,27 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 不特判);纯静态文本,节点只建一次、无监听、sync 不写它,时停淡出随整层自动带上
   const keyHints = document.createElement('div');
   keyHints.style.cssText = KEYS_CSS;
+  keyHints.className = 'sw-hud-keys';
   keyHints.textContent = t('ui:hud.keys');
 
   // 精英血条:屏下缘、与静音开关不抢位(一个贴左、一个居中)。填充色取威胁红,
   // 与罗盘箭头同色 —— 这一只就是当下最需要盯着的威胁
   const elite = document.createElement('div');
   elite.style.cssText = ELITE_CSS;
+  elite.className = 'sw-hud-elite';
   const eliteBar = createBar(elite, t('ui:hud.elite'), THREAT_COLOR);
 
   // Boss 血条:常驻版(15 号),叠在精英条正上方;标签走 bossName presenter(查翻译,不读数据表)
   const boss = document.createElement('div');
   boss.style.cssText = BOSS_CSS;
+  boss.className = 'sw-hud-boss';
   const bossBar = createBar(boss, bossName(), BOSS_HP_COLOR);
 
   // 星币读数:残骸读数的同族姊妹 —— ★ 前缀的一行数字,无进度轨道;每帧 sync 直接写余额。
   // 同一行分两列:左列余额、右列场上怪物数(items 就是活跃池,length 即在场数)
   const starCoins = document.createElement('div');
   starCoins.style.cssText = STARCOINS_CSS;
+  starCoins.className = 'sw-hud-panel';
   starCoins.title = t('ui:hud.starCoins');
   const starRow = document.createElement('div');
   starRow.style.cssText = LABEL_ROW_CSS;
@@ -715,6 +725,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 名字 ×层数 / 作用域(系名或全船)/ 一层效果 —— 战斗统计画面的法令,悬停即解释。
   const edicts = document.createElement('div');
   edicts.style.cssText = EDICTS_CSS;
+  edicts.className = 'sw-hud-panel';
   edicts.title = t('ui:hud.edictsActive');
   const edictsRow = document.createElement('div');
   edictsRow.style.cssText = LABEL_ROW_CSS;
@@ -755,6 +766,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 图鉴读数(19 号):星币/法令同族的第三块左列面板,节点只建一次,每帧按掩码现算
   const collection = document.createElement('div');
   collection.style.cssText = COLLECTION_CSS;
+  collection.className = 'sw-hud-panel';
   collection.title = t('ui:hud.collection');
   const collectionRow = document.createElement('div');
   collectionRow.style.cssText = LABEL_ROW_CSS;
@@ -770,6 +782,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 每帧按持有情况点亮)。格 = 一行三段(名字 | 下一次发射 | 理论 DPS)+ 一根就绪小条
   const firepower = document.createElement('div');
   firepower.style.cssText = FIREPOWER_CSS;
+  firepower.className = 'sw-hud-panel';
   firepower.title = t('ui:hud.firepower');
   function statRow(labelText: string, valueColor: string): { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement } {
     const row = document.createElement('div');
@@ -819,6 +832,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // flash 同一条"闪现一下"的口径;连点重置计时,换局(setWorld)清掉上一局的话
   const unlockToast = document.createElement('div');
   unlockToast.style.cssText = TOAST_CSS;
+  unlockToast.className = 'sw-hud-toast';
   let toastTimer = 0;
   function clearToast(): void {
     if (toastTimer) window.clearTimeout(toastTimer);
@@ -842,6 +856,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 渐隐完清 DOM(display:none);换局(setWorld)清掉上一局的话
   const banner = document.createElement('div');
   banner.style.cssText = BANNER_CSS;
+  banner.className = 'sw-hud-banner';
   let bannerFadeTimer = 0;
   let bannerHideTimer = 0;
   function clearBanner(): void {
@@ -883,6 +898,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   radar.width = RADAR_SIZE;
   radar.height = RADAR_SIZE;
   radar.style.cssText = radarCss(rightGutter);
+  radar.className = 'sw-hud-radar';
   radar.title = t('ui:hud.radar');
   const radarCtx: CanvasRenderingContext2D | null =
     typeof radar.getContext === 'function' ? radar.getContext('2d') : null;
@@ -892,6 +908,7 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 不再有任何一块自记 top 偏移(星币压血条那类失配从结构上消灭)
   const leftCol = document.createElement('div');
   leftCol.style.cssText = LEFT_COL_CSS;
+  leftCol.className = 'sw-hud-left';
   leftCol.append(vitals, starCoins, beacon, edicts, collection, firepower);
   top.append(leftCol, timer, segment);
 

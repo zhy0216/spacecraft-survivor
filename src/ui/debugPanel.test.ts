@@ -80,18 +80,20 @@ function makeHooks(): RunHooks {
 }
 
 describe('createDebugPanel', () => {
-  it('包装层写上限高与纵向滚动样式:面板比一屏高时底下几组抽屉滚得到', () => {
-    createDebugPanel(makeStats(), { paused: false, timeScale: 1 }, makeHooks());
-    const lastPane = FakePane.last;
-    expect(lastPane).not.toBeNull();
-    const style = lastPane!.element.parentElement.style;
+  it('包装层写上限高与纵向滚动样式:面板比一屏高时底下几组抽屉滚得到', async () => {
+    const panel = createDebugPanel(makeStats(), { paused: false, timeScale: 1 }, makeHooks());
+    panel.show(); // 懒建:第一次 show 才下载 tweakpane 并建面板(动态 import,mock 后仍是异步)
+    await vi.waitFor(() => expect(FakePane.last).not.toBeNull());
+    const style = FakePane.last!.element.parentElement.style;
     expect(style.maxHeight).toBe('calc(100vh - 16px)');
     expect(style.overflowY).toBe('auto');
   });
 
-  it('显隐句柄收敛在 pane.hidden 上(main.ts 连按三次 ~ 靠它呼出/收起)', () => {
+  it('显隐句柄收敛在 pane.hidden 上(main.ts 连按三次 ~ 靠它呼出/收起)', async () => {
     const panel = createDebugPanel(makeStats(), { paused: false, timeScale: 1 }, makeHooks());
-    expect(panel.visible()).toBe(true);
+    expect(panel.visible()).toBe(false); // 懒建:pane 未就位前一律按不可见答
+    panel.show();
+    await vi.waitFor(() => expect(panel.visible()).toBe(true));
     panel.hide();
     expect(panel.visible()).toBe(false);
     panel.toggle();

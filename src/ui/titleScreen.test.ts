@@ -13,7 +13,7 @@
  * (createElement/getElementById/append + window.addEventListener + HTMLElement),
  * 不装 jsdom。
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { changeLocale, initI18n, t } from '../i18n';
 import type { RunSaveDigest } from '../sim/runSave';
 import { createTitleScreen, continueLineText, newRunLabel } from './titleScreen';
@@ -98,6 +98,7 @@ interface StubEl {
   style: { cssText: string; display: string };
   textContent: string;
   dataset: Record<string, string>;
+  disabled: boolean;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   append(...kids: StubEl[]): void;
@@ -112,6 +113,7 @@ function createStubEl(tag = 'div'): StubEl {
     style: { cssText: '', display: '' },
     textContent: '',
     dataset: {},
+    disabled: false,
     children: [],
     listeners: new Map<string, (e: unknown) => void>(),
     append(...kids: StubEl[]): void {
@@ -178,6 +180,7 @@ describe('标题界面:按钮接线与语言切换', () => {
     try {
       let codexCalls = 0;
       const ui = createTitleScreen({
+        ready: () => true,
         onContinue() {},
         onNewRun() {},
         onSettings() {},
@@ -204,6 +207,7 @@ describe('标题界面:按钮接线与语言切换', () => {
     try {
       let newRuns = 0;
       const ui = createTitleScreen({
+        ready: () => true,
         onContinue() {},
         onNewRun() {
           newRuns++;
@@ -235,7 +239,7 @@ describe('标题界面:按钮接线与语言切换', () => {
   it('有存档时按钮主次不随语言变:主按钮仍是「继续」,新航行保持二段确认', async () => {
     const dom = installDom();
     try {
-      const ui = createTitleScreen({ onContinue() {}, onNewRun() {}, onSettings() {}, onCodex() {} });
+      const ui = createTitleScreen({ ready: () => true, onContinue() {}, onNewRun() {}, onSettings() {}, onCodex() {} });
       ui.show(DIGEST);
       const continueBtn = findAction(dom.created, 'title-continue')!;
       expect(continueBtn.style.cssText).toContain('rgba(43,74,110,.6)'); // PRIMARY_CSS 底色更实
@@ -244,6 +248,54 @@ describe('标题界面:按钮接线与语言切换', () => {
       expect(continueBtn.style.cssText).toContain('rgba(43,74,110,.6)'); // 主按钮地位不变
       expect(continueBtn.textContent).toBe(t('ui:menu.continueRun'));
     } finally {
+      dom.restore();
+    }
+  });
+});
+
+describe('标题界面:启动两段式的 ready 探针(渲染层未就绪时挡住进战斗的路)', () => {
+  it('未就绪时主按钮禁用、点不动;ready 翻真后轮询放行,按钮亮起且可点', () => {
+    vi.useFakeTimers();
+    const dom = installDom();
+    try {
+      let ready = false;
+      let newRuns = 0;
+      let continues = 0;
+      const ui = createTitleScreen({
+        ready: () => ready,
+        onNewRun() {
+          newRuns++;
+        },
+        onContinue() {
+          continues++;
+        },
+        onSettings() {},
+        onCodex() {},
+      });
+      ui.show(null); // 无存档:新航行一击即走,不叠二段确认(本测试专盯 ready 闸)
+      const newBtn = findAction(dom.created, 'title-new-run')!;
+      const continueBtn = findAction(dom.created, 'title-continue')!;
+      expect(newBtn.disabled).toBe(true);
+      expect(continueBtn.disabled).toBe(true);
+      expect(newBtn.style.cssText).toContain('opacity:.45'); // 禁用态有视觉反馈
+      // 禁用态点不动:两条进战斗的路都被挡住
+      newBtn.listeners.get('click')?.({});
+      continueBtn.listeners.get('click')?.({});
+      expect(newRuns).toBe(0);
+      expect(continues).toBe(0);
+
+      ready = true;
+      vi.advanceTimersByTime(200); // 轮询窗 150ms:这一跳就该摘掉轮询、重画放行
+      expect(newBtn.disabled).toBe(false);
+      expect(continueBtn.disabled).toBe(false);
+      expect(newBtn.style.cssText).not.toContain('opacity:.45');
+      newBtn.listeners.get('click')?.({});
+      expect(newRuns).toBe(1);
+      // 放行后轮询已摘:再走时间也不会重复重画(不报错即可)
+      vi.advanceTimersByTime(1000);
+      expect(ui.visible()).toBe(false); // 刚才那一下已经真的开了新局
+    } finally {
+      vi.useRealTimers();
       dom.restore();
     }
   });

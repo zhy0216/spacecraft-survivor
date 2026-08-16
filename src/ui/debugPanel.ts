@@ -7,8 +7,13 @@
  *
  * 畅玩性起它不再是 ?debug 独占:玩家形态下也建,只是初始隐藏,连按三次 ~ 呼出/收起
  * (监听在 main.ts)。故函数返回一个带 show/hide/toggle 的小句柄而不是 void。
+ *
+ * **tweakpane 走动态 import 懒建**(启动两段式,载入提速):面板本体只有第一次 show/toggle
+ * 才真的下载 tweakpane 并构建 —— 玩家形态下从不点 ~ 的那批人永远不下载这一百多 KB;
+ * 开发模式(?debug)在 boot 阶段 B 里 show 一次,与渲染层同一批装。
+ * 构建是异步的,句柄在 pane 就位前一律按"不可见"回答(visible() 对 null pane 报 false)。
  */
-import { Pane } from 'tweakpane';
+import type { Pane } from 'tweakpane';
 import { WAVE_SEGMENTS } from '../data/waves';
 import { tuning } from '../sim/config';
 import { segmentLabel } from './gameOver';
@@ -105,7 +110,38 @@ export interface RunHooks {
 }
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
-  const pane = new Pane({ title: 'STARWRECK · 灰盒调参' });
+  let pane: Pane | null = null;
+  let building = false;
+  // 第一次 show/toggle 才触发:下载 tweakpane → 建面板。building 闩防止连按三次 ~
+  // 的两次快速 toggle 撞出两座面板;构建完成后 show 那句的 pane.hidden = false
+  // 已经来不及落到这座新面板上 —— 新面板默认可见,正好等于"呼出"这一下
+  const ensure = (): void => {
+    if (pane !== null || building) return;
+    building = true;
+    void import('tweakpane').then(({ Pane }) => {
+      pane = buildPane(new Pane({ title: 'STARWRECK · 灰盒调参' }), stats, run, hooks);
+      building = false;
+    });
+  };
+  return {
+    show: () => {
+      ensure();
+      if (pane) pane.hidden = false;
+    },
+    hide: () => {
+      if (pane) pane.hidden = true;
+    },
+    toggle: () => {
+      ensure();
+      if (pane) pane.hidden = !pane.hidden;
+    },
+    // pane 未就位(还在下载 tweakpane)一律按不可见答:main 的连按三次 ~ 靠它判断收起
+    visible: () => pane !== null && !pane.hidden,
+  };
+}
+
+/** 面板本体:输入已经 new 好的 Pane,把所有文件夹/滑杆挂上去,原样返回(供懒建路径持有) */
+function buildPane(pane: Pane, stats: DebugStats, run: RunState, hooks: RunHooks): Pane {
   // 面板内容早已比一屏高:tweakpane 的 .tp-dfwv 包装层没有 max-height/overflow,
   // 超出的部分直接溢出屏外,底下几组抽屉根本够不着。给它限高 + 纵向滚动,
   // 才滚得到「受击」「残骸经济」「塔」「镜头」这几组。maxHeight 留 16px 边距
@@ -320,16 +356,5 @@ export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHoo
   camera.addBinding(tuning, 'cameraShipHeightFraction', { label: '船占屏高', min: 0.03, max: 0.3, step: 0.002 });
   camera.addBinding(tuning, 'cameraLookAhead', { label: '前视偏移', min: 0, max: 0.4, step: 0.01 });
 
-  return {
-    show: () => {
-      pane.hidden = false;
-    },
-    hide: () => {
-      pane.hidden = true;
-    },
-    toggle: () => {
-      pane.hidden = !pane.hidden;
-    },
-    visible: () => !pane.hidden,
-  };
+  return pane;
 }

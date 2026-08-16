@@ -14,6 +14,8 @@ export const ui = {
     continueLine: '航段 {{segment}} · {{duration}} · 击杀 {{kills}} · 船体 {{hp}}',
     hintContinue: '{{enter}} 继续 · {{esc}} 取消确认',
     hintStart: '{{enter}} 开始',
+    // 启动两段式:标题先行、渲染层在背后下载,就绪前按钮禁用,这一行说明为什么还不能点
+    preparing: '载入中…',
   },
   settings: {
     title: '设置',

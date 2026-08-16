@@ -17,6 +17,8 @@ export const ui: DeepRecord<typeof zhUi> = {
     continueLine: 'Segment {{segment}} · {{duration}} · Kills {{kills}} · Hull {{hp}}',
     hintContinue: '{{enter}} to Continue · {{esc}} to cancel',
     hintStart: '{{enter}} to Start',
+    // Two-phase boot: title shows first while the renderer downloads behind it
+    preparing: 'LOADING…',
   },
   settings: {
     title: 'Settings',

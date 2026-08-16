@@ -54,6 +54,7 @@ export function createArmoryPanel(hooks: ArmoryPanelHooks): ArmoryPanelUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-armory-overlay';
   // 标题/副题不再由这里写死:shipDiagram 自己取 ui:armory.title / ui:armory.eyebrow 的翻译,
   // 背包与商店(07)共用同一份默认 —— 各传一遍只会长出两套翻译状态
   const shipDiagram: ShipDiagramUi = createShipDiagram({

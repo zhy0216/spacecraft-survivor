@@ -371,8 +371,10 @@ export function createGameOverUi(opts: {
 }): GameOverUi {
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-game-over-overlay';
   const card = document.createElement('div');
   card.style.cssText = CARD_CSS;
+  card.className = 'sw-modal sw-game-over-card';
   const titleEl = document.createElement('div');
   titleEl.style.cssText = TITLE_CSS;
   const noteEl = document.createElement('div');
@@ -387,6 +389,7 @@ export function createGameOverUi(opts: {
   // 「解锁 XX」只在本次有新解锁时露脸;内容由 show() 按 newUnlocks / progressStats 现刷 ——
   const unlockEl = document.createElement('div');
   unlockEl.style.cssText = UNLOCK_CSS;
+  unlockEl.className = 'sw-game-over-unlock';
   unlockEl.style.display = 'none'; // 默认收着:首局往往没有新解锁,由 renderUnlocks 决定何时露脸
   const collectionEl = document.createElement('div');
   collectionEl.style.cssText = COLLECTION_CSS;
@@ -507,6 +510,7 @@ export function createGameOverUi(opts: {
     for (const row of summaryRows(s)) {
       const line = document.createElement('div');
       line.style.cssText = STAT_ROW_CSS;
+      line.className = 'sw-game-over-stat-row';
       const label = document.createElement('span');
       label.style.cssText = STAT_LABEL_CSS;
       label.textContent = row.label;

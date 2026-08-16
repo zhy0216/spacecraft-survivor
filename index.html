@@ -13,27 +13,369 @@
       body {
         margin: 0;
         height: 100%;
+        width: 100%;
         background: #05070d;
         overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-text-size-adjust: 100%;
+        -webkit-tap-highlight-color: transparent;
       }
       /* 双层结构:canvas 画世界,DOM 画界面(三选一卡片/结算/调参都走 DOM) */
       #game {
         position: fixed;
         inset: 0;
+        touch-action: none;
+      }
+      #game canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
       }
       #ui {
         position: fixed;
         inset: 0;
         pointer-events: none; /* 层本身透传,子元素各自接管 */
+        isolation: isolate;
       }
       #ui > * {
         pointer-events: auto;
       }
+      /* 载入占位条:内联在 html 里,JS 包还在路上时就能看到。真实进度由 main.ts 通过
+         window.__bootLoading 顶上来(见 main.ts 的 bootLoading),这里只负责"慢慢爬 + 平滑顶满" */
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #05070d;
+        transition: opacity 0.5s ease;
+      }
+      #boot.boot-done {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot-title {
+        color: #9adcff;
+        font: 24px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.3em;
+      }
+      #boot-track {
+        width: min(60vw, 280px);
+        height: 2px;
+        background: #1b2a3f;
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      #boot-fill {
+        height: 100%;
+        width: 0%;
+        background: #9adcff;
+        box-shadow: 0 0 8px #9adcff;
+        border-radius: 1px;
+      }
+
+      /* 移动端共用布局基线。各 UI 模块仍保留自己的桌面端行内样式，
+         这里只通过 class 在窄屏覆写尺寸，避免把响应式逻辑散落到每个组件。 */
+      .sw-overlay {
+        box-sizing: border-box;
+        padding: max(10px, env(safe-area-inset-top))
+          max(10px, env(safe-area-inset-right))
+          max(10px, env(safe-area-inset-bottom))
+          max(10px, env(safe-area-inset-left));
+      }
+      .sw-modal {
+        box-sizing: border-box;
+        min-width: 0;
+      }
+      .sw-overlay button,
+      .sw-overlay [role='button'] {
+        touch-action: manipulation;
+      }
+
+      @media (max-width: 720px) {
+        .sw-modal {
+          width: min(100%, 460px) !important;
+          max-width: 100% !important;
+          max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px) !important;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: 18px 16px 14px !important;
+        }
+
+        .sw-title-card {
+          width: min(100%, 420px) !important;
+          padding: 24px 18px 18px !important;
+        }
+        .sw-title-card .sw-title-brand {
+          font-size: clamp(24px, 9vw, 30px) !important;
+          letter-spacing: .2em !important;
+        }
+
+        .sw-overlay button {
+          min-height: 44px;
+        }
+
+        .sw-settings-row {
+          gap: 10px !important;
+          align-items: flex-start !important;
+        }
+        .sw-settings-label {
+          min-width: 0;
+          flex: 1 1 auto;
+          line-height: 1.45;
+          overflow-wrap: anywhere;
+        }
+        .sw-settings-control {
+          flex: 0 0 auto;
+        }
+
+        .sw-pause-card {
+          width: min(100%, 360px) !important;
+          padding: 20px 16px 14px !important;
+        }
+        .sw-pause-keys {
+          text-align: left;
+          line-height: 1.6;
+        }
+        .sw-pause-key {
+          display: inline-block;
+          width: auto !important;
+          min-width: 56px;
+          margin-right: 8px !important;
+          text-align: left !important;
+        }
+        .sw-pause-key-desc {
+          max-width: calc(100% - 74px);
+          vertical-align: top;
+        }
+
+        .sw-game-over-card {
+          width: min(100%, 420px) !important;
+          max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px) !important;
+          overflow-y: auto;
+          padding: 20px 16px 14px !important;
+        }
+        .sw-game-over-stat-row {
+          gap: 10px !important;
+        }
+        .sw-game-over-stat-row > :first-child {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+        .sw-game-over-unlock {
+          white-space: pre-wrap !important;
+          overflow-wrap: anywhere;
+        }
+
+        .sw-codex-card {
+          width: min(100%, 640px) !important;
+          max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 20px) !important;
+          padding: 16px 14px 12px !important;
+        }
+        .sw-codex-filters {
+          flex-wrap: wrap;
+        }
+        .sw-codex-filter {
+          min-height: 38px !important;
+          flex: 1 1 auto;
+        }
+        .sw-codex-grid {
+          grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)) !important;
+          gap: 6px !important;
+        }
+        .sw-codex-weapon-name {
+          width: 78px !important;
+          flex-basis: 78px !important;
+          font-size: 12px !important;
+        }
+        .sw-codex-weapon-art {
+          gap: 6px !important;
+        }
+
+        .sw-armory-overlay {
+          align-items: flex-start !important;
+          justify-content: center !important;
+          overflow-y: auto !important;
+        }
+        .sw-ship-board {
+          width: min(100%, 460px) !important;
+          padding: 14px 12px 12px !important;
+          gap: 8px !important;
+        }
+        .sw-ship-head {
+          gap: 8px !important;
+        }
+        .sw-ship-ring {
+          transform: scale(.72) !important;
+          transform-origin: center center;
+          margin: -64px 0 !important;
+        }
+        .sw-ship-hint {
+          max-width: 34ch;
+          line-height: 1.45;
+        }
+
+        .sw-victory-story {
+          left: max(18px, env(safe-area-inset-left)) !important;
+          right: max(18px, env(safe-area-inset-right)) !important;
+          bottom: max(26px, env(safe-area-inset-bottom)) !important;
+          width: auto !important;
+        }
+        .sw-victory-title {
+          font-size: clamp(30px, 11vw, 52px) !important;
+        }
+        .sw-victory-body {
+          max-width: 42ch;
+          line-height: 1.65 !important;
+        }
+
+        .sw-hud-top {
+          left: max(10px, env(safe-area-inset-left)) !important;
+          right: max(10px, env(safe-area-inset-right)) !important;
+          top: max(10px, env(safe-area-inset-top)) !important;
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) auto !important;
+          grid-template-areas: 'left timer' 'segment segment';
+          gap: 6px !important;
+          align-items: start !important;
+        }
+        .sw-hud-left {
+          grid-area: left;
+          width: min(100%, 250px);
+          max-height: 48dvh;
+          overflow-y: auto;
+          overflow-x: hidden;
+          overscroll-behavior: contain;
+          gap: 6px !important;
+          scrollbar-width: thin;
+        }
+        .sw-hud-panel {
+          padding: 6px 8px !important;
+          min-width: 0;
+        }
+        .sw-hud-timer {
+          grid-area: timer;
+          min-width: 66px !important;
+          padding: 6px 8px !important;
+          font-size: 14px !important;
+        }
+        .sw-hud-segment {
+          grid-area: segment;
+          justify-self: stretch !important;
+          width: auto !important;
+        }
+        .sw-hud-radar {
+          right: max(10px, env(safe-area-inset-right)) !important;
+          bottom: max(64px, calc(env(safe-area-inset-bottom) + 54px)) !important;
+          width: 112px !important;
+          height: 112px !important;
+        }
+        .sw-hud-mute {
+          left: max(10px, env(safe-area-inset-left)) !important;
+          bottom: max(10px, env(safe-area-inset-bottom)) !important;
+          padding: 7px 10px !important;
+        }
+        .sw-hud-keys {
+          left: max(10px, env(safe-area-inset-left)) !important;
+          bottom: max(46px, calc(env(safe-area-inset-bottom) + 36px)) !important;
+          max-width: 42vw;
+          white-space: normal !important;
+          line-height: 1.35;
+        }
+        .sw-hud-elite,
+        .sw-hud-boss {
+          width: min(88vw, 420px) !important;
+        }
+        .sw-hud-banner {
+          top: max(92px, calc(env(safe-area-inset-top) + 82px)) !important;
+          font-size: clamp(18px, 6vw, 28px) !important;
+          max-width: 90vw !important;
+        }
+        .sw-hud-toast {
+          left: max(10px, env(safe-area-inset-left)) !important;
+          bottom: max(92px, calc(env(safe-area-inset-bottom) + 82px)) !important;
+          max-width: min(70vw, 300px);
+          white-space: normal !important;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .sw-modal {
+          padding-left: 12px !important;
+          padding-right: 12px !important;
+        }
+        .sw-hud-left {
+          width: min(100%, 208px);
+        }
+        .sw-ship-ring {
+          transform: scale(.62) !important;
+          margin: -88px 0 !important;
+        }
+      }
+
+      @media (max-height: 560px) and (max-width: 720px) {
+        .sw-hud-left {
+          max-height: 42dvh;
+        }
+        .sw-hud-radar {
+          display: none;
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="boot">
+      <div id="boot-title">STARWRECK</div>
+      <div id="boot-track"><div id="boot-fill"></div></div>
+    </div>
     <div id="game"></div>
     <div id="ui"></div>
+    <script>
+      // 内联、无依赖:主包下载期间 bar 自己慢慢爬(对数式,爬到 92% 就越来越慢,
+      // 永远不顶满 —— 顶满只由 main.ts 的 bootLoadingDone 说了算),main.ts 的
+      // 里程碑(包下完 / i18n 就位 / 渲染层建好)随时可以把它往上顶。
+      (function () {
+        var fill = document.getElementById('boot-fill');
+        var overlay = document.getElementById('boot');
+        var target = 0;
+        var shown = 0;
+        var done = false;
+        var removed = false;
+        var creep = setInterval(function () {
+          if (!done) target = Math.min(92, target + (92 - target) * 0.03 + 0.3);
+        }, 300);
+        function tick() {
+          if (removed) return;
+          shown += (target - shown) * 0.12;
+          if (target - shown < 0.4) shown = target;
+          fill.style.width = shown + '%';
+          if (done && shown >= 99.5) {
+            removed = true;
+            clearInterval(creep);
+            overlay.classList.add('boot-done');
+            setTimeout(function () {
+              overlay.remove();
+            }, 600);
+            return;
+          }
+          requestAnimationFrame(tick);
+        }
+        window.__bootLoading = {
+          set: function (p) {
+            if (p > target) target = Math.min(p, 100);
+          },
+          done: function () {
+            done = true;
+            target = 100;
+          },
+        };
+        requestAnimationFrame(tick);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

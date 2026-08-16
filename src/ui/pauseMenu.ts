@@ -94,9 +94,11 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-pause-overlay';
 
   const card = document.createElement('div');
   card.style.cssText = CARD_CSS;
+  card.className = 'sw-modal sw-pause-card';
 
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
@@ -147,14 +149,17 @@ export function createPauseMenu(hooks: PauseMenuHooks): PauseMenuUi {
   const keyDescEls: HTMLSpanElement[] = [];
   const keyTable = document.createElement('div');
   keyTable.style.cssText = KEYS_CSS;
+  keyTable.className = 'sw-pause-keys';
   // 说明列文本由 paint() 统一写入(t(KEY_ROWS[i][1])),构造时只摆空 span 占位
   for (const [key] of KEY_ROWS) {
     const row = document.createElement('div');
     const keySpan = document.createElement('span');
     keySpan.style.cssText = KEY_CSS;
+    keySpan.className = 'sw-pause-key';
     keySpan.textContent = key;
     const descSpan = document.createElement('span');
     descSpan.style.cssText = KEYDESC_CSS;
+    descSpan.className = 'sw-pause-key-desc';
     keyDescEls.push(descSpan);
     row.append(keySpan, descSpan);
     keyTable.appendChild(row);

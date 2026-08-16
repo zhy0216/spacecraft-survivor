@@ -112,8 +112,10 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-settings-overlay';
   const card = document.createElement('div');
   card.style.cssText = CARD_CSS;
+  card.className = 'sw-modal sw-settings-card';
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
   title.textContent = t('ui:settings.title');
@@ -133,8 +135,10 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   ): { name: HTMLElement; btn: HTMLButtonElement } {
     const row = document.createElement('div');
     row.style.cssText = ROW_CSS;
+    row.className = 'sw-settings-row';
     const name = document.createElement('div');
     name.style.cssText = LABEL_CSS;
+    name.className = 'sw-settings-label';
     name.textContent = t(labelKey);
     const btn = document.createElement('button');
     btn.style.cssText = BTN_CSS;
@@ -148,11 +152,14 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   // —— 主音量:− / 读数 / + ——
   const volRow = document.createElement('div');
   volRow.style.cssText = ROW_CSS;
+  volRow.className = 'sw-settings-row';
   const volName = document.createElement('div');
   volName.style.cssText = LABEL_CSS;
+  volName.className = 'sw-settings-label';
   volName.textContent = t('ui:settings.volume');
   const volCtrl = document.createElement('div');
   volCtrl.style.cssText = CTRL_CSS;
+  volCtrl.className = 'sw-settings-control';
   const volDown = document.createElement('button');
   volDown.style.cssText = STEP_CSS;
   volDown.dataset.action = 'settings-volume-down';
@@ -191,8 +198,10 @@ export function createSettingsMenu(hooks: SettingsMenuHooks): SettingsMenuUi {
   // 走 onLanguage 而不是 onChange:切换是异步的(要加载语言包),由 main 决定成不成
   const langRow = document.createElement('div');
   langRow.style.cssText = ROW_CSS;
+  langRow.className = 'sw-settings-row';
   const langName = document.createElement('div');
   langName.style.cssText = LABEL_CSS;
+  langName.className = 'sw-settings-label';
   const langBtn = document.createElement('button');
   langBtn.style.cssText = BTN_CSS;
   langBtn.dataset.action = 'settings-language';

@@ -273,10 +273,12 @@ export function slotFacingDeg(slot: number): number {
 export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   const root = document.createElement('div');
   root.style.cssText = BOARD_CSS;
+  root.className = 'sw-ship-board';
 
   // —— 头部:标题 + 船体/火力读数 ——
   const head = document.createElement('div');
   head.style.cssText = HEAD_CSS;
+  head.className = 'sw-ship-head';
   const titleBox = document.createElement('div');
   const eyebrow = document.createElement('div');
   eyebrow.style.cssText = EYEBROW_CSS;
@@ -313,6 +315,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   // —— 环形:扇形层 → 船体 → 槽位卡片层(后挂的盖在上面,卡片永远可点) ——
   const ring = document.createElement('div');
   ring.style.cssText = RING_CSS;
+  ring.className = 'sw-ship-ring';
   const wedges: HTMLElement[] = [];
   for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
     const wedge = document.createElement('div');
@@ -390,6 +393,7 @@ export function createShipDiagram(opts: ShipDiagramOpts = {}): ShipDiagramUi {
   tip.style.cssText = TIP_CSS;
 
   root.append(head, hpTrack, ring, foot, hint, tip);
+  hint.className = 'sw-ship-hint';
 
   /** 鼠标停在哪一格(-1 = 没有)。只在 pick 态下改变画面 —— 是纯表现,不交给调用方 */
   let hoverSlot = -1;

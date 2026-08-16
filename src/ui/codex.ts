@@ -512,8 +512,10 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-codex-overlay';
   const card = document.createElement('div');
   card.style.cssText = CARD_CSS;
+  card.className = 'sw-modal sw-codex-card';
   const titleEl = document.createElement('div');
   titleEl.style.cssText = TITLE_CSS;
   const statsEl = document.createElement('div');
@@ -522,9 +524,11 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   // 过滤器按钮:只建一次,选中档由 paintFilters 按 filter 现刷
   const filterRow = document.createElement('div');
   filterRow.style.cssText = FILTER_ROW_CSS;
+  filterRow.className = 'sw-codex-filters';
   const filterBtns = new Map<string, HTMLButtonElement>();
   for (const f of FILTERS) {
     const btn = document.createElement('button');
+    btn.className = 'sw-codex-filter';
     btn.textContent = t(f.labelKey);
     btn.setAttribute('data-filter', f.key);
     btn.addEventListener('click', () => {
@@ -682,15 +686,18 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
   function appendWeaponRow(list: HTMLElement, row: CodexRow): void {
     const el = document.createElement('div');
     el.style.cssText = row.locked ? WEAPON_ROW_LOCKED_CSS : WEAPON_ROW_CSS;
+    el.className = 'sw-codex-weapon-row';
     el.dataset.contentKind = 'weapons';
     el.dataset.contentId = row.id ?? '';
     const name = document.createElement('div');
     name.style.cssText = WEAPON_ROW_NAME_CSS;
+    name.className = 'sw-codex-weapon-name';
     name.textContent = row.name;
     el.appendChild(name);
     if (row.art !== null) {
       const artBox = document.createElement('div');
       artBox.style.cssText = WEAPON_ROW_ART_CSS;
+      artBox.className = 'sw-codex-weapon-art';
       if (row.art.kind === 'stars') {
         appendStarThumbs(artBox, row.art.urls, row.name);
       } else if (row.art.kind === 'img') {
@@ -734,6 +741,7 @@ export function createCodexUi(hooks: CodexHooks): CodexUi {
       } else {
         const grid = document.createElement('div');
         grid.style.cssText = GRID_CSS;
+        grid.className = 'sw-codex-grid';
         for (const row of section.rows) appendCell(grid, row, section.key);
         scrollEl.appendChild(grid);
       }

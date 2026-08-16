@@ -60,16 +60,14 @@ const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spac
 const GITHUB_CSS =
   `display:inline-block;margin-top:16px;line-height:0;color:${IDLE_COLOR};` +
   'opacity:.75;cursor:pointer;transition:color .15s,opacity .15s;';
-const GITHUB_SVG =
-  '<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" ' +
-  'xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-  '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 ' +
+const GITHUB_PATH_D =
+  'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 ' +
   '0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53' +
   '.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89' +
   '-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27' +
   's1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07' +
   '-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8' +
-  'c0-4.42-3.58-8-8-8z"/></svg>';
+  'c0-4.42-3.58-8-8-8z';
 
 /**
  * 存档摘要那一行小字。**四个读数缺一不可**:航段说明打到哪、时长说明投入了多少、
@@ -107,6 +105,13 @@ export interface TitleScreenHooks {
   onSettings(): void;
   /** 「图鉴」:main 收起本页、弹图鉴页,关掉后再把本页弹回来(与设置同一条让路) */
   onCodex(): void;
+  /**
+   * 启动两段式(载入提速)的探针:标题页先于渲染层亮出,主按钮(继续/新航行)
+   * 在 false 期间禁用、Enter 不响应 —— 那两条路都通向 startRun,而 startRun 需要
+   * 渲染层与战斗界面全部就位。设置/图鉴不受影响(纯 DOM)。本页每 150ms 轮询一次,
+   * 翻真即重画放行 —— main 把 bootReady 置真的那一拍,按钮自动亮起。
+   */
+  ready(): boolean;
 }
 
 export interface TitleScreenUi {
@@ -123,14 +128,19 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   let hasSave = false;
   /** 「新航行」的二段确认状态。**每次 show 复位**:上一次没点完的确认不该留到下一次 */
   let confirming = false;
+  /** 渲染层是否已就位(hooks.ready 的快照):false 时主按钮禁用,轮询到翻真为止(见 TitleScreenHooks.ready) */
+  let booted = hooks.ready();
 
   const root = document.createElement('div');
   root.style.cssText = ROOT_CSS;
+  root.className = 'sw-overlay sw-title-overlay';
   const card = document.createElement('div');
   card.style.cssText = CARD_CSS;
+  card.className = 'sw-modal sw-title-card';
 
   const title = document.createElement('div');
   title.style.cssText = TITLE_CSS;
+  title.className = 'sw-title-brand';
   title.textContent = 'STARWRECK';
   const sub = document.createElement('div');
   sub.style.cssText = SUB_CSS;
@@ -140,7 +150,7 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   continueBtn.style.cssText = PRIMARY_CSS;
   continueBtn.dataset.action = 'title-continue';
   continueBtn.addEventListener('click', () => {
-    if (!hasSave) return;
+    if (!booted || !hasSave) return;
     hide();
     hooks.onContinue();
   });
@@ -152,6 +162,7 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   newBtn.style.cssText = BTN_CSS;
   newBtn.dataset.action = 'title-new-run';
   newBtn.addEventListener('click', () => {
+    if (!booted) return;
     // 没有存档 = 没有代价,直接走;有存档则第一下只是把话问出来
     if (hasSave && !confirming) {
       confirming = true;
@@ -188,7 +199,25 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   githubLink.title = 'GitHub';
   githubLink.dataset.action = 'title-github';
   githubLink.setAttribute('aria-label', 'GitHub');
-  githubLink.innerHTML = GITHUB_SVG;
+  // 用 DOM 节点组装图标，避免把 SVG 字符串塞进 innerHTML（也让翻译/动态内容保持 textContent 契约）。
+  const createElementNS = (document as Document & {
+    createElementNS?: (namespace: string, qualifiedName: string) => Element;
+  }).createElementNS;
+  if (createElementNS) {
+    const svg = createElementNS.call(document, 'http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '20');
+    svg.setAttribute('height', '20');
+    svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = createElementNS.call(document, 'http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', GITHUB_PATH_D);
+    svg.appendChild(path);
+    githubLink.appendChild(svg);
+  } else {
+    // 极简 DOM 桩（单测/无 SVG 环境）仍保留一个可见的链接占位。
+    githubLink.textContent = 'GitHub';
+  }
   githubLink.addEventListener('mouseenter', () => {
     githubLink.style.color = OK_COLOR;
     githubLink.style.opacity = '1';
@@ -204,6 +233,9 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
 
   let digest: RunSaveDigest | null = null;
 
+  /** 禁用态样式:与 disabled 属性成对用 —— 属性挡点击/回车,样式给"现在点不了"的反馈 */
+  const DISABLED_CSS = 'opacity:.45;cursor:default;';
+
   function paint(): void {
     // 没有存档时「继续」与那行读数整个不出现,而不是置灰:一个永远点不动的按钮
     // 只会让新玩家怀疑自己是不是漏了什么前置条件
@@ -214,12 +246,20 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
     // 整份重设 cssText(而不是单改 color):cssText 赋值会把之前逐属性设的值一并冲掉,
     // 两种写法混用就会变成"确认色改了一次、下次 paint 又被冲回去"这种时灵时不灵的现象。
     // 没有存档时它就是这一页唯一的主按钮,故用 PRIMARY;有存档时主按钮是「继续」
+    // 渲染层未就绪时两条进战斗的路都禁用(见 TitleScreenHooks.ready)
     newBtn.style.cssText =
-      (hasSave ? BTN_CSS : PRIMARY_CSS) + (confirming ? `color:${WARN_COLOR};` : '');
-    // 键位 token 与句子分开:Enter/Esc 从 common.keys 取,句子整体由翻译决定
-    hint.textContent = hasSave
-      ? t('ui:menu.hintContinue', { enter: t('common:keys.enter'), esc: t('common:keys.esc') })
-      : t('ui:menu.hintStart', { enter: t('common:keys.enter') });
+      (hasSave ? BTN_CSS : PRIMARY_CSS) +
+      (confirming ? `color:${WARN_COLOR};` : '') +
+      (booted ? '' : DISABLED_CSS);
+    continueBtn.style.cssText = PRIMARY_CSS + (booted ? '' : DISABLED_CSS);
+    continueBtn.disabled = !booted;
+    newBtn.disabled = !booted;
+    // 就绪前那一行提示换成"载入中":玩家不该读着 Enter 提示去按一颗按不动的键
+    hint.textContent = booted
+      ? hasSave
+        ? t('ui:menu.hintContinue', { enter: t('common:keys.enter'), esc: t('common:keys.esc') })
+        : t('ui:menu.hintStart', { enter: t('common:keys.enter') })
+      : t('ui:menu.preparing');
     // 品牌副标题 / 各动作按钮文案随语言重刷(品牌名 STARWRECK 保持不译)
     sub.textContent = t('story:title.subtitle');
     continueBtn.textContent = t('ui:menu.continueRun');
@@ -234,6 +274,7 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
 
   window.addEventListener('keydown', (e) => {
     if (!visible || e.repeat || isTyping()) return;
+    if (!booted) return; // 渲染层未就绪:Enter 也进不了战斗,与禁用按钮同一条门
     if (e.code === 'Escape') {
       // Esc 只撤销"放弃存档"那句问话。**不是关闭标题页** —— 标题页背后没有可以回去的地方
       if (!confirming) return;
@@ -250,6 +291,17 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
     if (hasSave) hooks.onContinue();
     else hooks.onNewRun();
   });
+
+  // 启动两段式:创建时渲染层可能还没装好。挂一个轮询,ready 翻真即重画放行并摘掉自己 ——
+  // 正常流程几秒内翻真;创建时就绪(测试/极速网络)则从不挂这个轮询
+  if (!booted) {
+    const poll = setInterval(() => {
+      if (!hooks.ready()) return;
+      booted = true;
+      clearInterval(poll);
+      paint();
+    }, 150);
+  }
 
   return {
     show(next: RunSaveDigest | null): void {

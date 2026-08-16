@@ -28,6 +28,11 @@
  * 帧中不存:那一刻 dead 闩没清、contacts 没结算,而快照不存这些字段的前提正是
  * "跨帧恒为初值"(runSave.ts 文件头第三类)。局终则反过来**删档**:
  * 一局打完还留着半局存档,下次进来那颗「继续」通向的是一场已经结束的战斗。
+ *
+ * **启动是两段式的**(载入提速):阶段 A 只装 sim + DOM 界面,标题/设置/图鉴立刻亮出,
+ * 渲染层(pixi)走动态 import 在阶段 B 背后下载 —— 主包因此砍掉一半以上体积。
+ * 阶段 A 里凡是通向战斗的路都被门挡住(标题页 ready 探针、设置通道 getRenderer 缺席兜底),
+ * 阶段 B 装完置 bootReady 放行。见 boot() 里「阶段 A / 阶段 B」两段注释。
  */
 import { FrameMeter } from './core/frameMeter';
 import { Input } from './core/input';
@@ -46,7 +51,9 @@ import {
 import { registerLocaleAware, refreshAllLocaleAware } from './i18n/registry';
 import type { LanguagePreference } from './i18n';
 import { audioBus } from './render/audio';
-import { bossWarnOnEnter, Renderer, SHIP_DEATH_FX_TIME } from './render/renderer';
+// 渲染层(pixi)走动态 import(见 boot 的阶段 B):它占主包一半以上体积,
+// 静态 import 会让标题界面陪它一起等下载。这里只留类型 —— 类型在编译期擦除,不进产物
+import type { Renderer } from './render/renderer';
 import { applyRandomStart } from './sim/loadout';
 import { tuning } from './sim/config';
 import { evaluateRun, mergeProgress, type Progress } from './sim/progress';
@@ -133,7 +140,25 @@ const CAMERA_FRACTION_MIN = 0.03;
 const CAMERA_FRACTION_MAX = 0.3;
 const CAMERA_FRACTION_DEFAULT = tuning.cameraShipHeightFraction;
 
+/**
+ * 载入进度条(index.html 里内联的那根占位条)。它不认识模块进度(包还没下载时
+ * 谁都量不到真实进度),只能自己慢慢爬;main.ts 这边每过一个**真实**里程碑就把它
+ * 往上顶一次 —— 包下载完(模块开始执行)/ i18n 就位,最后标题页亮出时 done 顶满淡出。
+ * 渲染层不在里程碑之列:它走启动两段式在标题页背后下载(见 boot 的阶段 B),
+ * 那时占位条已经交班给标题页上的「载入中」提示。
+ * 测试等非页面环境里 window.__bootLoading 不存在,全部静默跳过。
+ */
+type BootLoadingApi = { set(p: number): void; done(): void };
+function bootLoading(p: number): void {
+  (window as unknown as { __bootLoading?: BootLoadingApi }).__bootLoading?.set(p);
+}
+function bootLoadingDone(): void {
+  (window as unknown as { __bootLoading?: BootLoadingApi }).__bootLoading?.done();
+}
+
 async function boot(): Promise<void> {
+  // 模块开始执行 = JS 主包已经下载完:把占位条顶过一个台阶。之后每个 await 出来再顶一次
+  bootLoading(45);
   const input = new Input();
   // 玩家设置(音量/震屏/飘字/顿帧/语言):**页载第一件事就读并生效** —— 静音的玩家不该
   // 在标题界面出现之前先被响一声。渲染层此刻还不存在,故先只灌音频那一半(applySettings
@@ -151,6 +176,7 @@ async function boot(): Promise<void> {
     await initI18n(resolveEffectiveLocale(settings.language));
   }
   applyDocumentLocale();
+  bootLoading(60); // 语言资源就位:所有玩家可见文案此刻起可以安全上屏
   // 浏览器自动播放策略:AudioContext 只能由用户手势解锁。在首次键盘/点击的同步栈里 resume
   // 一次就摘掉监听(浏览器要求 resume 必须落在手势处理里;之后发声全靠已解锁的 ctx)。
   // 挂在 main 而不是 Input 里:输入管线不认识声音,音频只从事件出口消费(见 render/audio.ts)。
@@ -182,6 +208,9 @@ async function boot(): Promise<void> {
   // World 构造时注入 unlockMask(卡池过滤与解锁精英门控读它);掩码 0 = 全未解锁,首局就是这么起步的。
   // 局内不写 —— 解锁状态只在"一局结束"这一个点入档(progress.ts 的口径,见 onGameOver)
   let progress: Progress = loadProgress();
+  // 流程状态(暂停/时间倍率)**跨局复用**且阶段 A 就要写它(标题弹出时 run.paused = true):
+  // 故声明提前到这里 —— 阶段 B 的 ticker 与各面板照旧读同一个对象
+  const run: RunState = { paused: false, timeScale: 1 };
   // 首局的 World 得先建出来:Renderer.create 建层时就要读它的槽位。建完原样交给 startRun,
   // 于是**首局与重开走的是同一条装配流程** —— 两条路各写一份的话,重开那条永远会比首局少接一样东西
   let world = new World(runSeed, progress.unlockMask);
@@ -189,8 +218,151 @@ async function boot(): Promise<void> {
   // 它每帧都会读 loop(alpha/tick/advance),缺了这一个值首帧就崩 ——
   // 这个初始 loop 从不会被 advance(run.paused 挡着),startRun 会立刻用本局的替换掉它
   let loop: FixedStepLoop = new FixedStepLoop(() => world.step(cmd));
-  const renderer = await Renderer.create(world);
-  // 渲染层就位,把设置整份重灌一次 —— 这一次震屏强度与飘字开关才真的落到位
+
+  // —— 启动两段式(载入提速)——
+  // 页面最重的两样是 pixi 渲染层与 tweakpane 面板,过去它们被静态 import 卷进主包,
+  // 标题界面要等全部下载完才出得来。现在主包只装 sim + DOM 界面,起手先走
+  // **阶段 A**:标题/设置/图鉴立刻亮出(纯 DOM,百毫秒级);渲染层在背后走动态 import
+  // **阶段 B**(标题页按钮用 ready 探针挡住,装完放行)。玩家读标题、逛设置的那几秒,
+  // 正好是 pixi 下载的那几秒。
+  // 阶段 A 期间凡是碰渲染层的入口都被门挡住:进战斗的两颗按钮走 titleScreen 的 ready,
+  // 设置页的 applySettings 走 getRenderer() 缺席兜底(建好后再整份重灌,见阶段 B)。
+  // 标题页此刻还不是完整的一屏:世界冻着(ticker 尚未挂上,run.paused 已置真),等阶段 B。
+
+  // 标题页「ready」探针的真相源(createTitleScreen 的 ready hook):阶段 B 全部装完
+  // (渲染层 + 战斗界面 + 帧循环)才置真,之前标题页主按钮禁用、Enter 不响应
+  let bootReady = false;
+  // 渲染层缺席期间的设置通道:设置页阶段 A 就能开(标题页入口),applySettings 收
+  // renderer 可缺席;建好之前一律传 undefined,建好之后那句整份重灌把玩家改过的设置补上。
+  // getRenderer 是函数体延迟求值,renderer 未初始化时靠 flag 短路,不会撞 TDZ
+  let rendererReady = false;
+  function getRenderer(): Renderer | undefined {
+    return rendererReady ? renderer : undefined;
+  }
+
+  // —— 阶段 A:标题先行。下面这三页只依赖 sim 世界 + DOM,渲染层缺席不影响 ——
+
+  // 设置页:**整页只建一次、标题与暂停两个入口共用**(见 ui/settingsMenu.ts 文件头)。
+  // 改一项就落盘 + 整份重灌到各落点 —— 没有"改了没保存"的中间态。
+  // 语言走 onLanguage 单独一条路:切换是异步的,且只有切成功了才落盘(见 setLanguage)。
+  // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):战斗中开的就弹回暂停菜单,
+  // 否则回标题 —— 判据取 runActive 而不是"上次谁调的 show",少一个必须两处同步的状态位
+  const settingsMenu = createSettingsMenu({
+    get: () => settings,
+    onChange: (next) => {
+      settings = next;
+      saveSettings(settings);
+      applySettings(settings, getRenderer());
+    },
+    onLanguage: (next) => {
+      void setLanguage(next);
+    },
+    onClose: () => {
+      if (runActive) pauseMenu?.show();
+      else titleScreen.show(titleDigest());
+    },
+  });
+  // 语言切换成功后统一重刷已注册 UI —— 标题 / 暂停 / 设置页各自在这里 registerLocaleAware:
+  // 它们都只建一次,切换靠 refreshLocale 重画文案(04 号);后建的页面在各自创建后注册
+  registerLocaleAware(settingsMenu);
+
+  /**
+   * 换语言(设置页语言行的按钮回调)。**成败分家**:
+   * 成功 —— 更新 settings.language(此时才落盘,存的一定是生效过的值)、
+   *           同步 document lang/dir/title、重刷所有 LocaleAware UI;
+   * 失败(资源加载失败 / 网络错误)—— 保留当前语言、设置页当场给出可读错误,
+   *           **不落盘**:不会把一份没生效的语言偏好写进设置。
+   * 系统语言以后变了,切回 auto 时这里会重新解析(现读 navigator.languages)。
+   */
+  async function setLanguage(next: LanguagePreference): Promise<void> {
+    const target = resolveEffectiveLocale(next);
+    try {
+      await changeLocale(target);
+    } catch (err) {
+      console.warn('[i18n] 切换语言失败,保留当前语言:', err);
+      settingsMenu.showLocaleError(t('ui:language.loadFailed'));
+      return;
+    }
+    settings = { ...settings, language: next };
+    saveSettings(settings);
+    applyDocumentLocale();
+    refreshAllLocaleAware();
+  }
+
+  /**
+   * 图鉴页(ui/codex.ts):**整页只建一次**,只从标题进 —— 每局结算后 progress 已更新,
+   * getProgress 每次 show 现读,标题那颗「图鉴」点开就是最新的一份。onClose 只回标题:
+   * 与设置页不同,它没有"战斗中开"的那条来路,不需要 runActive 分岔(入口只此一处)。
+   */
+  const codex = createCodexUi({
+    getProgress: () => progress,
+    onClose: () => {
+      titleScreen.show(titleDigest());
+    },
+  });
+  // 语言切换成功后图鉴原地重画文案(08 号):保留筛选/滚动/掩码/统计,不重建监听(见 codex 的 refreshLocale)
+  registerLocaleAware(codex);
+
+  /**
+   * 标题界面(进游戏的第一屏)。四条出口:
+   *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不重放起手**);
+   *   新航行 —— 直接开新局(首局送预建 World,之后换种子新建);
+   *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来;
+   *   图鉴 —— 收起自己弹图鉴页(与设置同一条让路)。
+   * 读档失败(存档损坏 / 存储不可用)不弹错误框,直接退回"没有存档"的标题:
+   * loadRunWorld 已经把读不出来的档删掉了,玩家再点一次就是一颗干净的「开始航行」。
+   * ready = 阶段 B 的总闸:进战斗的两条路(继续/新航行)在渲染层与战斗界面就位前禁用。
+   */
+  const titleScreen = createTitleScreen({
+    onContinue: () => {
+      const loaded = loadRunWorld();
+      if (loaded === null) {
+        titleScreen.show(null);
+        return;
+      }
+      // 存档里带着种子:不接回来的话,读档后再点「再试一局」会用标题界面那个默认种子重开
+      // —— 那是另一局(起手由种子派生,读档这局的随机起手已经长在槽位里,不需要额外状态)
+      runSeed = loaded.snapshot.seed;
+      firstRun = false; // 预建的那个空 World 就此作废,重开走"新建"那条
+      startRun(loaded.world, true);
+    },
+    onNewRun: () => {
+      if (firstRun) {
+        firstRun = false;
+        startRun(world); // 首局送 boot 里预建、渲染层已按其槽位建好层的那个 World
+      } else {
+        restart(); // 换种子直接开新局,起手由新种子现抽
+      }
+    },
+    onSettings: () => {
+      titleScreen.hide();
+      settingsMenu.show();
+    },
+    onCodex: () => {
+      titleScreen.hide();
+      codex.show();
+    },
+    ready: () => bootReady,
+  });
+  // 标题界面是整页最早的一屏,语言切换后全量重画文案(含二段确认状态,见 refreshLocale)
+  registerLocaleAware(titleScreen);
+
+  // 进游戏第一屏:标题界面(继续 / 新航行 / 设置),而不是直接开打。
+  // 阶段 A 到这里就结束了 —— 占位条顶满淡出,标题页接棒(渲染层未就绪期间的
+  // "还在载入"由标题页自己的「载入中」提示表达,见 titleScreen 的 ready 探针)。
+  // 这里**不是 toTitle()**:那一刻 gameOver/upgradeFlow 等战斗界面还没建,toTitle 会撞 TDZ;
+  // 世界停在首帧:此刻 ticker 还没挂上,run.paused 先置真,阶段 B 挂上 ticker 后口径不变
+  run.paused = true;
+  titleScreen.show(titleDigest());
+  bootLoadingDone();
+
+  // —— 阶段 B:渲染层与战斗界面,在标题页背后装。动态 import 把 pixi(连同整个渲染管线)
+  // 拆出主包:主包小 = 标题出得快;这个 import 在标题亮出后立刻开始下载,与玩家读屏并行 ——
+  const renderModule = await import('./render/renderer');
+  const renderer = await renderModule.Renderer.create(world);
+  rendererReady = true;
+  // 渲染层就位,把设置整份重灌一次 —— 阶段 A 期间玩家改过的设置(音量/语言外的渲染项)
+  // 在这一拍落到位;之后再改走 settingsMenu.onChange 的 getRenderer()(此刻起恒非空)
   applySettings(settings, renderer);
 
   // 战斗 HUD 同样整页只建一次:固定屏幕空间的血条/残骸/计时/航段与威胁箭头都只改已有 DOM。
@@ -240,7 +412,6 @@ async function boot(): Promise<void> {
     upgrades: 0,
     upgradeCost: world.upgradeCost,
   };
-  const run: RunState = { paused: false, timeScale: 1 };
 
   // 三选一升级流程(10 号 issue T4,取代了 03 号那条灰盒放置入口 ui/placement.ts ——
   // 删而不是留一个 debug 开关的理由见 ui/upgradeFlow.ts 的文件头)。
@@ -332,7 +503,11 @@ async function boot(): Promise<void> {
     addWeapon: () => world.debugAddWeapon(),
     spawnBoss: () => world.debugSpawnBoss(),
   });
-  if (!DEBUG) {
+  // debugPanel 现在懒建(tweakpane 走动态 import,见 debugPanel.ts):只有 show() 才会真的
+  // 建面板 —— 开发模式(?debug)常驻可见,玩家模式从不建,那一百多 KB 只在按下三次 ~ 时才下载
+  if (DEBUG) {
+    debugPanel.show();
+  } else {
     debugPanel.hide();
     pauseMenu = createPauseMenu({
       muted: mutedHooks,
@@ -634,7 +809,7 @@ async function boot(): Promise<void> {
         window.setTimeout(() => {
           if (token !== runToken) return;
           gameOver.show(summary);
-        }, SHIP_DEATH_FX_TIME * 1000);
+        }, renderModule.SHIP_DEATH_FX_TIME * 1000);
       } else {
         gameOver.show(summary);
       }
@@ -844,116 +1019,6 @@ async function boot(): Promise<void> {
     return snap === null ? null : digestRunSnapshot(snap);
   }
 
-  // 设置页:**整页只建一次、标题与暂停两个入口共用**(见 ui/settingsMenu.ts 文件头)。
-  // 改一项就落盘 + 整份重灌到各落点 —— 没有"改了没保存"的中间态。
-  // 语言走 onLanguage 单独一条路:切换是异步的,且只有切成功了才落盘(见 setLanguage)。
-  // onClose 要回哪去由**这里**记(设置页自己不知道是谁弹的它):战斗中开的就弹回暂停菜单,
-  // 否则回标题 —— 判据取 runActive 而不是"上次谁调的 show",少一个必须两处同步的状态位
-  const settingsMenu = createSettingsMenu({
-    get: () => settings,
-    onChange: (next) => {
-      settings = next;
-      saveSettings(settings);
-      applySettings(settings, renderer);
-    },
-    onLanguage: (next) => {
-      void setLanguage(next);
-    },
-    onClose: () => {
-      if (runActive) pauseMenu?.show();
-      else titleScreen.show(titleDigest());
-    },
-  });
-  // 语言切换成功后统一重刷已注册 UI —— 标题 / 暂停 / 设置页各自在这里 registerLocaleAware:
-  // 它们都只建一次,切换靠 refreshLocale 重画文案(04 号);后建的页面在各自创建后注册
-  registerLocaleAware(settingsMenu);
-
-  /**
-   * 换语言(设置页语言行的按钮回调)。**成败分家**:
-   * 成功 —— 更新 settings.language(此时才落盘,存的一定是生效过的值)、
-   *           同步 document lang/dir/title、重刷所有 LocaleAware UI;
-   * 失败(资源加载失败 / 网络错误)—— 保留当前语言、设置页当场给出可读错误,
-   *           **不落盘**:不会把一份没生效的语言偏好写进设置。
-   * 系统语言以后变了,切回 auto 时这里会重新解析(现读 navigator.languages)。
-   */
-  async function setLanguage(next: LanguagePreference): Promise<void> {
-    const target = resolveEffectiveLocale(next);
-    try {
-      await changeLocale(target);
-    } catch (err) {
-      console.warn('[i18n] 切换语言失败,保留当前语言:', err);
-      settingsMenu.showLocaleError(t('ui:language.loadFailed'));
-      return;
-    }
-    settings = { ...settings, language: next };
-    saveSettings(settings);
-    applyDocumentLocale();
-    refreshAllLocaleAware();
-  }
-
-  /**
-   * 图鉴页(ui/codex.ts):**整页只建一次**,只从标题进 —— 每局结算后 progress 已更新,
-   * getProgress 每次 show 现读,标题那颗「图鉴」点开就是最新的一份。onClose 只回标题:
-   * 与设置页不同,它没有"战斗中开"的那条来路,不需要 runActive 分岔(入口只此一处)。
-   */
-  const codex = createCodexUi({
-    getProgress: () => progress,
-    onClose: () => {
-      titleScreen.show(titleDigest());
-    },
-  });
-  // 语言切换成功后图鉴原地重画文案(08 号):保留筛选/滚动/掩码/统计,不重建监听(见 codex 的 refreshLocale)
-  registerLocaleAware(codex);
-
-  /**
-   * 标题界面(进游戏的第一屏)。四条出口:
-   *   继续 —— 读档建世界,走 startRun 的 restored 分支(**不重放起手**);
-   *   新航行 —— 直接开新局(首局送预建 World,之后换种子新建);
-   *   设置 —— 收起自己弹设置页,关掉后由 onClose 弹回来;
-   *   图鉴 —— 收起自己弹图鉴页(与设置同一条让路)。
-   * 读档失败(存档损坏 / 存储不可用)不弹错误框,直接退回"没有存档"的标题:
-   * loadRunWorld 已经把读不出来的档删掉了,玩家再点一次就是一颗干净的「开始航行」
-   */
-  const titleScreen = createTitleScreen({
-    onContinue: () => {
-      const loaded = loadRunWorld();
-      if (loaded === null) {
-        titleScreen.show(null);
-        return;
-      }
-      // 存档里带着种子:不接回来的话,读档后再点「再试一局」会用标题界面那个默认种子重开
-      // —— 那是另一局(起手由种子派生,读档这局的随机起手已经长在槽位里,不需要额外状态)
-      runSeed = loaded.snapshot.seed;
-      firstRun = false; // 预建的那个空 World 就此作废,重开走"新建"那条
-      startRun(loaded.world, true);
-    },
-    onNewRun: () => {
-      if (firstRun) {
-        firstRun = false;
-        startRun(world); // 首局送 boot 里预建、渲染层已按其槽位建好层的那个 World
-      } else {
-        restart(); // 换种子直接开新局,起手由新种子现抽
-      }
-    },
-    onSettings: () => {
-      titleScreen.hide();
-      settingsMenu.show();
-    },
-    onCodex: () => {
-      titleScreen.hide();
-      codex.show();
-    },
-  });
-  // 标题界面是整页最早的一屏,语言切换后全量重画文案(含二段确认状态,见 refreshLocale)
-  registerLocaleAware(titleScreen);
-
-  // 进游戏第一屏:标题界面(继续 / 新航行 / 设置),而不是直接开打。
-  // 「新航行」直接开新局(随机起手在 startRun 落地),不再有独立的起手选择一步。
-  // **先冻结再弹**:此刻 ticker 已挂上(见 boot 末尾),run.paused 挡住 loop.advance,
-  // 标题期间世界停在首帧,开跑由 startRun 收尾时一并恢复
-  run.paused = true;
-  toTitle();
-
   // 页面隐藏时自动存档(切标签页 / 切到后台 / 关页面)。**用 visibilitychange 而不是
   // beforeunload**:移动端与现代浏览器的标签页回收根本不保证触发 beforeunload,
   // 而 visibilitychange→hidden 是官方推荐的"最后一次可靠机会"。
@@ -1083,7 +1148,7 @@ async function boot(): Promise<void> {
     // 商店信标(设计会:每两分钟一次)在最后一跨与 Boss 同帧投放 —— 两条横幅并一条,
     // 免得同帧互相覆盖、把"补给来了"盖掉。
     if (world.bossPhase !== bossPhaseSeen) {
-      if (bossWarnOnEnter(bossPhaseSeen, world.bossPhase)) {
+      if (renderModule.bossWarnOnEnter(bossPhaseSeen, world.bossPhase)) {
         hud.showBanner(
           world.shopBeaconActive ? t('ui:banner.bossSupply') : t('ui:banner.boss'),
           BANNER_SECONDS,
@@ -1103,6 +1168,10 @@ async function boot(): Promise<void> {
       lastChecksumTick = loop.tick;
     }
   });
+
+  // 阶段 B 全部装完:渲染层 + 战斗界面 + 帧循环都就位,标题页的 ready 探针在这一拍放行
+  // (titleScreen 的轮询会摘掉自己并重画按钮)。此后进战斗的两条路畅通
+  bootReady = true;
 }
 
 void boot();
