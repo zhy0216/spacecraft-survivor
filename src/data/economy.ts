@@ -89,43 +89,45 @@ export const OFFER_WEIGHT_NEW_WEAPON = 40;
 export const OFFER_WEIGHT_EDICT = 60;
 
 /**
- * 跳过一次升级的**手续费**(畅玩性调整,取代旧的"固定返还 15"):
- * 旧口径下跳过净亏 = cost − 15,随等比曲线暴涨(第 12 档跳一次净亏 494),
- * 后期抽到三张不想要的卡等于被强制拿卡,"三选一"退化成"三选一必选"。
- * 反转成固定手续费后,跳过的直接残骸损失恒为 15;但跳过**照样 upgrades++ 消费一档曲线**
- * (那是防"下一帧 scrap 还够,同一张卡当场再弹"死循环的既有机制,也让下一档三张全新候选
- * 成为天然的付费重随),曲线前移本身仍是一层温和代价。
- */
-export const UPGRADE_SKIP_FEE = 15;
-
-/**
- * 跳过时实际返还多少残骸 = cost − 手续费,夹到 [0, cost]。
- * **World.skipUpgrade 与 ui 的 skipRefund 共用这一份**:两边分家的话,
- * 玩家看到的返还数与到账数会各走各的,而这种差额要攒好几次才看得出来。
- * 第 0 档特价 15 时返还恰为 0(净亏仍是 15),不存在印残骸的口子。
- */
-export function skipRefundFor(cost: number): number {
-  const refund = cost - UPGRADE_SKIP_FEE;
-  if (!(refund > 0)) return 0;
-  return Math.min(refund, cost);
-}
-
-/**
- * 重摇一次三选一的**星币**价格(GDD §7「每次升级可花 10 星币重摇一次」,16 号 issue)。
+ * 跳过一次升级的**星币补偿**(用户设计会改版):跳过 = 全额消耗本次升级的残骸、
+ * **不返还任何残骸**,当场 +10 星币。星币补偿与重摇价(见 REROLL_BASE_PRICE)是
+ * 同一条资金链的两头:跳过一次(10)恰够一次首摇(5)还余 5;要连摇两次(5+10=15)
+ * 就得攒出两次跳过 —— "跳过攒币、重摇花钱"在升级面板内部自成一个小的取舍循环,
+ * 与船坞商店(25/30 的大项)是两条各管各的出口。
+ * 跳过**照样 upgrades++ 消费一档曲线**(防"下一帧 scrap 还够,同一张卡当场再弹"
+ * 死循环的既有机制,也让下一档三张全新候选成为天然的付费重随),曲线前移本身仍是一层温和代价。
  * 星币是第二货币:面额在 data/enemies.ts 的 ENEMIES[kind].starCoins(普通怪,用户设计会:
- * **所有击杀都进账**,面额 1-4 按敌型)/ ELITE.starCoins / BOSS.starCoins
- * (击杀直接进账 World.starCoins)。MVP 内的消费点是本常量 + 船坞商店(见下)。
- * 与 UPGRADE_SKIP_FEE 同一条"固定支出"口径:**单次固定、不随曲线浮动** ——
- * 否则"这一手值不值 10 星币"的取舍会随档位漂移,玩家没法建立直觉。
- * 两条出口各管各的、不互相抵扣:跳过退经验(15)、重摇花星币(10)。
+ * **按概率掉落**,面额 1-4 按敌型)/ ELITE.starCoins / BOSS.starCoins
+ * (击杀直接进账 World.starCoins)。
  */
-export const REROLL_PRICE = 10;
+export const UPGRADE_SKIP_STAR_COINS = 10;
+
+/**
+ * 重摇一次三选一的**星币**基价(用户设计会改版:GDD §7 的「每次 10 星币重摇一次」
+ * 改为 5n 递增 —— 同一档 offer 里第 1 次 5、第 2 次 10、第 3 次 15……**本档内不限次数**,
+ * 计数随每一档新 offer 重置)。
+ * 基价 5 定在旧价 10 的一半:首摇便宜到"不满意就摇一下"的顺手价,连摇越贵越快,
+ * 用递增本身顶替旧的"每档只许摇一次"上限 —— 刷到天牌的成本随次数平方上涨,
+ * 与跳过补偿(10 星币,恰够一次首摇)咬合成循环。
+ */
+export const REROLL_BASE_PRICE = 5;
+
+/**
+ * 第 n+1 次重摇(本档已摇过 n 次)的价格 = REROLL_BASE_PRICE × (n + 1)。
+ * **World.rerollOffer 扣费与 ui 印价共用这一份**(照 shopDiscountPrice 的"单一真相"纪律):
+ * 两边分家的话,玩家看到的价与到账的扣费会各走各的。
+ * n < 0 / NaN / 小数一律按第 1 次算 —— 扣费绝不许扣出 0 或负数。
+ */
+export function rerollPriceFor(rolls: number): number {
+  const n = rolls >= 1 ? Math.floor(rolls) : 0;
+  return REROLL_BASE_PRICE * (n + 1);
+}
 
 /**
  * —— 船坞商店(21 号,GDD §7 的星币消费点)——
  * 星币的第二条出口:整备期间买法令卡(即时生效、无放置)与付费修复。
- * 两条都是与 REROLL_PRICE 同一条"固定支出"口径:单次固定、不随档位/曲线浮动,
- * 玩家在整备面板上才能建立"这张卡值 25 星币"的直觉(价随档位漂的话,取舍没法学)。
+ * 两条都是固定价、不随档位/曲线浮动(与重摇的 5n 递增相反 —— 那是升级面板内防刷的
+ * 局部递增,商店的取舍则是"这件值多少"的全局直觉,价随档位漂的话取舍没法学)。
  * 数值由下面四条常量 + world 的 rollDockEdicts / buyDockEdict / buyDockRepair 落地,
  * 本文件照旧只管"改数不改逻辑"(todos/05 验收口径)。
  */
@@ -166,7 +168,7 @@ export const DOCK_REPAIR_HP = 30;
 /**
  * —— 船坞商店的武器货架(用户设计会)——
  * 商店出现武器、可刷新:整备期间花星币买武器,不满意就花星币刷新货架。
- * 与 REROLL_PRICE / DOCK_EDICT_PRICE 同一条"固定支出"口径。
+ * 与 DOCK_EDICT_PRICE 同一条"固定支出"口径。
  */
 
 /**
@@ -186,8 +188,8 @@ export const DOCK_WEAPON_COUNT = 3;
 export const DOCK_WEAPON_PRICE = 30;
 
 /**
- * 刷新商店货架的星币价。与 REROLL_PRICE 同档(10):刷新是"不满意这一手"的
- * 止损动作,不该贵到舍不得按 —— 但也不许免费(免费 = 无限抽到满意为止)。
+ * 刷新商店货架的星币价。与重摇首价同档(REROLL_BASE_PRICE = 5 的 2 倍,整备货架更大):
+ * 刷新是"不满意这一手"的止损动作,不该贵到舍不得按 —— 但也不许免费(免费 = 无限抽到满意为止)。
  */
 export const DOCK_SHOP_REFRESH_PRICE = 10;
 
@@ -203,7 +205,7 @@ export const SHOP_DISCOUNT_FRACTION = 0.5;
 
 /**
  * 特价后的实际扣费 = round(base × SHOP_DISCOUNT_FRACTION),夹到 ≥ 1。
- * **World 扣费与 UI 印价共用这一份**(与 skipRefundFor 同一条"单一真相"纪律):
+ * **World 扣费与 UI 印价共用这一份**(与 rerollPriceFor 同一条"单一真相"纪律):
  * 两边分家的话,玩家看到的特价与到账的扣费就会各走各的。
  * 取整用 round 而不是 floor:与 upgradeCost 同一条口径(四舍五入贴住折扣曲线,
  * 累计不往下偏)。坏输入(NaN / 非正)一律夹回 1 —— 扣费绝不许扣出 0 或负数。

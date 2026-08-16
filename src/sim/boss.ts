@@ -9,12 +9,14 @@
  * 它用**专用 kind 标记**(KIND_BOSS = 4,不在 ENEMIES 表里,理由见 data/enemies.ts),
  * **绝不用 affixes 位**:affixes ≠ 0 是 14 号精英的血条扫描与 ELITE 缩放的判据。
  *
- * 行为 = 周期召唤 + 冲锋,复用现有三原语:
+ * 行为 = 周期召唤 + 冲锋 + 冲刺弹射,复用现有三原语:
  *   - 接近段走 seek(直线追船),进冲锋距离(chargeRange × chargeRangeMul)就锁方向进长前摇;
  *   - 前摇刹停 + 锁方向(lockCharge)→ Z 字折线全速冲刺 → 硬直:冲刺时长三等分,
  *     逐段朝锁向交替偏转 ±chargeZAngleDeg —— 三段折成一条 Z 形走廊,威胁从一条线
  *     扩成一条带。方向仍是"锁定方向"的确定性函数,冲刺中绝不重新瞄准的承诺不变,
  *     预警线按同一条折线画(renderer 的 drawBossTelegraph),「画哪撞哪」依然成立;
+ *   - 冲刺中每 dashEjectInterval 秒弹射一批小怪(initEject,带初速往外甩):批次时刻
+ *     由 DASH timer 闭式折出,每只弹射怪恰一次 rng 弹射角(World 侧掷,本文件只填充);
  *   - 召唤不走状态机:World 侧一个召唤计时器(BOSS.summonInterval 周期),
  *     每只召唤怪恰好一次角度 rng,型号/数量直给(照 waves 的"每成功出一只恰一次 rng")。
  *   侧掠的 strafe 原语 T1 不用(底座不绕行),留到 T2 的封锁线巨舰。
@@ -133,6 +135,40 @@ export function initSummon(
   e.animSeed = enemyAnimSeed(x, y);
   e.hitCd = 0;
   e.dead = false;
+}
+
+/**
+ * 冲刺弹射怪出生:与 initSummon 同源,差别是**带初速** —— 沿弹射角以 dashEjectSpeed
+ * 离膛(「弹射」),随后被接近段的追随系数慢慢拉回追船。弹射角由 World 在调用前掷完
+ * (每只恰好一次,与召唤同一条 rng 纪律),型号 = BOSS.dashEjectKind 直给、不掷随机。
+ * 普通血量、无词缀:弹射怪不是小精英。side 定死 0(与 initBoss 同一条零 rng 口径)。
+ */
+export function initEject(e: Enemy, x: number, y: number, angleRad: number, elapsedSec: number): void {
+  const def = ENEMIES[BOSS.dashEjectKind]!;
+  e.x = e.px = x;
+  e.y = e.py = y;
+  e.vx = Math.cos(angleRad) * BOSS.dashEjectSpeed;
+  e.vy = Math.sin(angleRad) * BOSS.dashEjectSpeed;
+  e.kind = BOSS.dashEjectKind;
+  e.affixes = 0;
+  e.hp = e.maxHp = def.hp * hpScaleAt(elapsedSec);
+  e.state = ST_APPROACH;
+  e.timer = 0;
+  e.lockX = 0;
+  e.lockY = 0;
+  e.side = 0;
+  e.animSeed = enemyAnimSeed(x, y);
+  e.hitCd = 0;
+  e.dead = false;
+}
+
+/**
+ * 一次冲刺的弹射批次数上限 = ⌈chargeDuration / dashEjectInterval⌉ + 1。
+ * World 的弹射游标用它做安全顶(游标只随 DASH 计时单调走,顶是纯结构常数):
+ * 最后一格本就在状态机转 RECOVER 那一帧自然落空,顶只防坏表/坏档把循环拖爆。
+ */
+export function bossEjectTickCap(): number {
+  return Math.ceil(BOSS.chargeDuration / BOSS.dashEjectInterval) + 1;
 }
 
 /**

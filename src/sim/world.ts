@@ -38,9 +38,9 @@
  * (精英 ×3 / Boss ×12,见 spawnDrop);磁吸与收取的**全部规则**在 sim/drop.ts(它连世界都不认识,
  * 喂一个池 + 船心坐标就能单测),本文件照旧只做接线 —— 敌人死了往池里放一颗(spawnDrop)、
  * 把 stepDrops 结算出来的那笔账记进 scrap(经验增幅器的 xpMul 在 drop.ts 内部乘好)。
- * 星币(改版 16 号)与残骸不同源但同仓:**所有击杀**都当场进账 world.starCoins
- * (普通怪按型、精英 10、Boss 30,不造掉落物、不走磁吸),消费点 = 时停中的 rerollOffer(10 星币
- * 重掷三候选,每级最多一次)+ 整备商店(买武器 / 买法令 / 付费修复 / 刷新货架)。
+ * 星币(改版 16 号改)与残骸不同源但同仓:**按概率掉落**(普通怪按型、精英 15、Boss 30,
+ * 不造掉落物、不走磁吸),消费点 = 时停中的 rerollOffer(本档内 5n 星币递增、不限次数)
+ * + 整备商店(买武器 / 买法令 / 付费修复 / 刷新货架);跳过升级 +10 星币是它的补充入口。
  * 三选一经济(T2)同样只在这里接线:sim/upgrade.ts 负责生成合法候选(新武器 5% / 武器升级 25% /
  * 支援 35% / 法令 35%),本文件负责扣残骸、记升级次数、帧尾在够钱时弹出一次 offer。
  * 暂停/卡片/商店面板仍一概不在 World,那层在 main.ts。
@@ -69,16 +69,16 @@ import {
   DROP_MAX_ALIVE,
   MAGNET_PICKUP_RADIUS_MUL,
   MAGNET_PICKUP_SURGE,
-  REROLL_PRICE,
+  rerollPriceFor,
   SHOP_BEACON_LIFETIME,
   SHOP_BEACON_MAX_DIST,
   SHOP_BEACON_MIN_DIST,
   SHOP_BEACON_RADIUS,
   shopDiscountPrice,
-  skipRefundFor,
   STARTING_STAR_COINS,
   upgradeCost as economyUpgradeCost,
   UPGRADE_OFFER_COOLDOWN,
+  UPGRADE_SKIP_STAR_COINS,
 } from '../data/economy';
 import { BOSS, ENEMIES, KIND_BOSS, KIND_BEETLE, KIND_STRAFER, KIND_SWARM, KIND_TRAILER } from '../data/enemies';
 import {
@@ -134,9 +134,12 @@ import {
   type RunLog,
 } from './runLog';
 import {
+  BOSS_DASH,
   bossContactDamage,
+  bossEjectTickCap,
   bossRadius,
   initBoss,
+  initEject,
   initSummon,
   stepBossBehavior,
 } from './boss';
@@ -309,13 +312,12 @@ export const RESULT_LOSE = 2;
 export const REFIT_NOT_ACTIVE = -20;
 
 /**
- * 重摇失败(16 号):星币不足(重摇价 = data/economy 的 REROLL_PRICE)。
- * **负数、落在既有成功码之外**是有意的:调用方拿到的与 takeUpgrade 是同一条返回通道,
- * 一个 `>= 0` 判据就能把"新候选数"与"失败理由"分开(重摇成功返回新候选数)。
+ * 重摇失败(16 号改):星币不足(第 n+1 次重摇价 = data/economy 的 rerollPriceFor(n),
+ * 本档内不限次数、价格 5n 递增)。**负数、落在既有成功码之外**是有意的:调用方拿到的
+ * 与 takeUpgrade 是同一条返回通道,一个 `>= 0` 判据就能把"新候选数"与"失败理由"分开
+ * (重摇成功返回新候选数)。
  */
 export const REROLL_NO_STARCOINS = -30;
-/** 重摇失败:当前这档 offer 已经摇过一次(每级最多 1 次,todos/16)。 */
-export const REROLL_ALREADY_DONE = -31;
 
 /**
  * 船坞商店(改版 21 号)失败码。与 REROLL_* 同一条"负数、落在既有成功码之外"的口径:
@@ -564,6 +566,14 @@ export class World {
   bossSummonCooldown = 0;
 
   /**
+   * 冲刺弹射的"到点即消费"游标(16 号弹射):本冲刺内已弹射的批次数。
+   * 批次时刻由 Boss 的 DASH timer 闭式折出,游标只记消费 —— 照 bossSummonN 的
+   * eliteNext 先例进 checksum(弹射消费 rng,每只弹射怪一次角度);
+   * Boss 离开 DASH 那一帧由 stepBossEject 归零。
+   */
+  bossEjectDone = 0;
+
+  /**
    * Boss 被击杀的时刻(elapsed,与 kills 同一条"回收那一帧记账"的口径)—— 一次性记录,
    * 结算界面(胜利时间/本局统计)读它。与 kills 同一条派生量口径:
    * 击杀本身在敌人池与 bossPhase 里可见,故**不进 checksum**。
@@ -571,9 +581,9 @@ export class World {
   bossKilledAt = 0;
 
   /**
-   * 在场 Boss 的对象引用(工程审计的 O(1) 缓存):spawnBoss 挂上、stepBossSummon 只读。
-   * 是**派生缓存**(全表扫描随时找得回),故不进 checksum、不进存档 —— 读档恢复后
-   * 由 stepBossSummon 第一次调用现扫重挂;引用失效(Boss 死亡回池)以 dead 为判据。
+   * 在场 Boss 的对象引用(工程审计的 O(1) 缓存):enterBossPhase 挂上、召唤/弹射两侧
+   * 经 resolveBoss 只读。是**派生缓存**(全表扫描随时找得回),故不进 checksum、不进存档 ——
+   * 读档恢复后由 resolveBoss 第一次调用现扫重挂;引用失效(Boss 死亡回池)以 dead 为判据。
    */
   private bossRef: Enemy | null = null;
 
@@ -634,15 +644,17 @@ export class World {
   offerCooldown = 0;
 
   /**
-   * 当前这档 offer 是否已经重摇过一次(每级最多 1 次,16 号)。true = 星币够也不许再摇,
-   * 防"刷到天牌才停";与跳过/takeUpgrade 各管各的,不互相抵扣。
-   * 它是**真状态**:重摇在 step() 之外由玩家操作触发,而它决定 rerollOffer 是否再次消耗
-   * 2×UPGRADE_CHOICE_COUNT 次 rng —— 漏了它,"这档摇没摇过"的分叉就从确定性口径下漏掉,
+   * 当前这档 offer 已经重摇过几次(16 号改:**本档内不限次数**,价格 5n 递增,
+   * 第 n+1 次花 rerollPriceFor(n) = 5 × (n+1) 星币)。旧版"每档只许摇一次"的
+   * offerRerolled 布尔位升级成计数器:递增价本身顶替次数上限,刷到天牌的成本
+   * 随次数平方上涨。它是**真状态**:重摇在 step() 之外由玩家操作触发,
+   * 而它决定 rerollOffer 消耗多少星币、以及下一档何时重置价格 ——
+   * 漏了它,"这档摇过几次"的分叉就从确定性口径下漏掉,
    * 故进 checksum(照 offerCooldown 的先例:凡是决定 rng 何时被消耗的字段都是真状态)。
-   * **每次新 offer 生成时重置为 false**(重置点 = settleUpgrade 里 rollUpgradeOffer 成功那一处):
-   * 次数限制按"级"计,新一档三张全新候选就是一次新的机会。
+   * **每次新 offer 生成时重置为 0**(重置点 = settleUpgrade 里 rollUpgradeOffer 成功那一处):
+   * 递增价按"级"计,新一档三张全新候选就是一次新的价格起点。
    */
-  offerRerolled = false;
+  offerRerolls = 0;
 
   /**
    * 新 offer 生成那一帧的一次性出口。只要 offer 还没结算,settleUpgrade 的长度守卫就不再生成、
@@ -687,7 +699,7 @@ export class World {
    * (completeRefit)清空,下一轮整备重掷 —— 与 offer 同一条"生成一次、当场消费 rng"的生命周期。
    *
    * 它与 offer 同一条性质:**消耗了 rng、决定玩家这轮能买什么**,故逐项进 checksum
-   * (已售出的格子哈成 -1,售出与否同样在哈希里,照 offerRerolled 的"真状态"先例);
+   * (已售出的格子哈成 -1,售出与否同样在哈希里,照 offerRerolls 的"真状态"先例);
    * 星币余额则仍不进 —— 购买是 step() 之外的外部输入、一次 rng 都不掷,效果落在
    * edicts 与 ship.hp 这两个已在哈希里的字段上,余额只是那条序列的读数(理由全文见
    * starCoins 字段注释;购买零 rng 的口径见 buyDockEdict)。
@@ -1178,7 +1190,10 @@ export class World {
     // 进入的那一帧不扣召唤计时 —— 与 enemy 状态机"刚进入某状态的那一帧不扣计时"同口径,
     // "Boss 登场后整 summonInterval 秒才首召"这条承诺才钉得住
     if (this.wave.done && this.bossPhase === 0 && !this.shipDead) this.enterBossPhase();
-    else if (this.bossPhase === 1) this.stepBossSummon();
+    else if (this.bossPhase === 1) {
+      this.stepBossSummon();
+      this.stepBossEject();
+    }
 
     // 重建空间哈希
     const enemies = this.enemies.items;
@@ -1503,24 +1518,23 @@ export class World {
     if (
       rollUpgradeOffer(this.rng, this.offer, this.edictLevels, this.unlockMask, this.weapons) === 0
     ) {
-      this.completeUpgrade(skipRefundFor(this.upgradeCost));
+      this.completeUpgrade();
+      this.starCoins += UPGRADE_SKIP_STAR_COINS;
       return;
     }
-    // 新一档三张全新候选 = 一次新的重摇机会(16 号):次数限制随档重置。
+    // 新一档三张全新候选 = 一次新的重摇计价(16 号改):递增计数随档重置。
     // 排在 rollUpgradeOffer **之后**:失败的那一档(返回 0)没有生成新 offer,不重置。
-    this.offerRerolled = false;
+    this.offerRerolls = 0;
     this.onUpgradeOffer?.();
   }
 
   /**
-   * 结算一轮经济账。refund 是返还额的上限,实际到账夹在本轮 cost 内:
-   * 第 0 级费用若低于返还额,跳过最多只是免单,绝不能净赚经验并立刻再弹一张。
-   * 顺手把弹卡冷却拉满:下一次三选一至少隔 UPGRADE_OFFER_COOLDOWN 秒(理由见 settleUpgrade)。
+   * 结算一轮经济账:全额消耗本轮费用,upgrades++。顺手把弹卡冷却拉满:
+   * 下一次三选一至少隔 UPGRADE_OFFER_COOLDOWN 秒(理由见 settleUpgrade)。
+   * 无返还(跳过补偿只给星币,见 skipUpgrade / UPGRADE_SKIP_STAR_COINS)。
    */
-  private completeUpgrade(refund: number): void {
-    const cost = this.upgradeCost;
-    this.scrap -= cost;
-    this.scrap += Math.min(Math.max(0, refund), cost);
+  private completeUpgrade(): void {
+    this.scrap -= this.upgradeCost;
     this.upgrades++;
     this.offer.length = 0;
     this.offerCooldown = UPGRADE_OFFER_COOLDOWN;
@@ -1867,7 +1881,7 @@ export class World {
         type: opt.type,
         slot: slotIndex,
       });
-      this.completeUpgrade(0);
+      this.completeUpgrade();
     }
     return code;
   }
@@ -2389,39 +2403,41 @@ export class World {
   }
 
   /**
-   * 跳过当前候选。照样消费这一次升级并 upgrades++(防同帧重弹 + 下一档全新候选 = 付费重随),
-   * 直接残骸损失恒为 UPGRADE_SKIP_FEE(refund = cost − 手续费,见 data/economy.skipRefundFor);
-   * 没有待选时返回 false 且不动账,避免 UI 的过期按钮凭空消费一次曲线。
+   * 跳过当前候选(16 号改:跳过补偿从"退残骸"换成"+10 星币")。照样全额消费这一次升级
+   * 并 upgrades++(防同帧重弹 + 下一档全新候选 = 付费重随),**残骸一分不退**,
+   * 当场 +UPGRADE_SKIP_STAR_COINS 星币;没有待选时返回 false 且不动账,
+   * 避免 UI 的过期按钮凭空消费一次曲线。
    */
   skipUpgrade(): boolean {
     if (this.offer.length === 0) return false;
-    this.completeUpgrade(skipRefundFor(this.upgradeCost));
+    this.completeUpgrade();
+    this.starCoins += UPGRADE_SKIP_STAR_COINS;
     logEvent(this.log, { k: 'upgradeSkip', t: this.elapsed });
     return true;
   }
 
   /**
-   * 重摇当前三选一(16 号):玩家在时停中的一次主动操作,与 skipUpgrade / takeUpgrade 同一条
+   * 重摇当前三选一(16 号改):玩家在时停中的一次主动操作,与 skipUpgrade / takeUpgrade 同一条
    * **"step() 之外的外部输入"路径** —— 消费 rng、改 offer 都是玩家行为的一部分,天然确定性:
    * 序列推进由玩家操作决定,同 seed 同操作序列逐位可复现。
    *
-   * 校验顺序定死:**有待选 → 星币够 → 本档还没摇过** 才动手;任何一条不满足就原样返回,
+   * 校验顺序定死:**有待选 → 星币够** 才动手;任何一条不满足就原样返回,
    * 一个字段都不动 —— 尤其**不消耗 rng**(失败的尝试不许推动随机序列)。
-   * 通过校验后:扣 REROLL_PRICE 星币 → 再次调 rollUpgradeOffer 重掷三个候选位 ——
+   * 通过校验后:扣 rerollPriceFor(offerRerolls) 星币(本档内 5n 递增,不限次数)→
+   * 再次调 rollUpgradeOffer 重掷三个候选位 ——
    * 自动继承它那套定死的 2×UPGRADE_CHOICE_COUNT 次 rng 消耗与卡池过滤,rng 口径与首掷完全相同,
    * 改平衡不会漂。三候选可能与原候选重复(与 GDD 语义一致,不额外去重,rollUpgradeOffer
    * 的去重只在**本次**新掷的三张之间)。
    *
    * @returns 成功 = 新候选数(与 offer.length 相等,照 takeUpgrade 的成功码口径);
-   *   失败 = 负数理由码:UPGRADE_NO_OFFER(没有待选)、REROLL_NO_STARCOINS(星币不足)、
-   *   REROLL_ALREADY_DONE(本档已摇过一次)。
+   *   失败 = 负数理由码:UPGRADE_NO_OFFER(没有待选)、REROLL_NO_STARCOINS(星币不足)。
    */
   rerollOffer(): number {
     if (this.offer.length === 0) return UPGRADE_NO_OFFER;
-    if (this.starCoins < REROLL_PRICE) return REROLL_NO_STARCOINS;
-    if (this.offerRerolled) return REROLL_ALREADY_DONE;
-    this.starCoins -= REROLL_PRICE;
-    this.offerRerolled = true;
+    const price = rerollPriceFor(this.offerRerolls);
+    if (this.starCoins < price) return REROLL_NO_STARCOINS;
+    this.starCoins -= price;
+    this.offerRerolls++;
     // edictLevels 同传:重摇后的法令候选同样剔掉已满层(与首掷同一套过滤);
     // unlockMask 同传:重摇后的卡同样不出现未解锁的塔/法令(与首掷同一套过滤)
     const rolled = rollUpgradeOffer(this.rng, this.offer, this.edictLevels, this.unlockMask, this.weapons);
@@ -2478,6 +2494,7 @@ export class World {
     this.bossPhase = 1;
     this.bossSummonN = 0;
     this.bossSummonCooldown = BOSS.summonInterval;
+    this.bossEjectDone = 0;
     const a = this.wave.dirRad;
     const r = SPAWN_RADIUS + SPAWN_RADIUS_BAND / 2;
     const e = this.enemies.spawn();
@@ -2505,24 +2522,7 @@ export class World {
    * Boss 已击杀时由 bossPhase 挡在门外,这里再兜一道(尸体回池后池里就没有它了)。
    */
   private stepBossSummon(): void {
-    // Boss 引用缓存在 spawnBoss 挂上,这里每帧只读缓存、不再全表扫敌人池(工程审计:
-    // 纯逻辑层唯一的每帧线性扫描)。失效判据 = 引用被回池(dead 为真 —— Boss 死亡那一帧
-    // reap 先翻 bossPhase 再回池,本函数由 bossPhase 挡在门外,这条是双保险)。
-    // 读档恢复时 bossRef 是空(它是派生缓存、不进 checksum 不进存档),第一次调用
-    // 现扫一遍重新挂上 —— 稳态 O(1),恢复路径一次 O(n)。
-    let boss = this.bossRef;
-    if (!boss || boss.dead) {
-      boss = null;
-      const items = this.enemies.items;
-      for (let i = 0; i < items.length; i++) {
-        const e = items[i]!;
-        if (e.kind === KIND_BOSS) {
-          boss = e;
-          break;
-        }
-      }
-      this.bossRef = boss;
-    }
+    const boss = this.resolveBoss();
     if (!boss) return;
     this.bossSummonCooldown -= SIM_DT;
     if (this.bossSummonCooldown > 0) return;
@@ -2540,6 +2540,77 @@ export class World {
         // side 由 initSummon 按下标交替直给:左右舷都有,且一次 rng 都不额外掷
         initSummon(e, k, x, y, this.elapsed, j);
         // 罗盘样本照 spawnFromWave 同口径:每成功落地一只记一次,方向 = 召唤怪落点方位
+        this.threatRate += THREAT_SPAWN_IMPULSE;
+        const dx = e.x - this.ship.x;
+        const dy = e.y - this.ship.y;
+        const d = Math.hypot(dx, dy) || 1;
+        this.threatDirX += (dx / d) * THREAT_SPAWN_IMPULSE;
+        this.threatDirY += (dy / d) * THREAT_SPAWN_IMPULSE;
+        this.onEnemySpawn?.(e);
+      }
+    }
+  }
+
+  /**
+   * 在场 Boss 的引用解析(召唤/弹射共用的 O(1) 缓存):spawnBoss 挂上,此后每帧只读缓存、
+   * 不再全表扫敌人池(工程审计:纯逻辑层唯一的每帧线性扫描)。失效判据 = 引用被回池
+   * (dead 为真 —— Boss 死亡那一帧 reap 先翻 bossPhase 再回池,两个调用方由 bossPhase
+   * 挡在门外,这条是双保险)。读档恢复时 bossRef 是空(它是派生缓存、不进 checksum
+   * 不进存档),第一次调用现扫一遍重新挂上 —— 稳态 O(1),恢复路径一次 O(n)。
+   */
+  private resolveBoss(): Enemy | null {
+    let boss = this.bossRef;
+    if (!boss || boss.dead) {
+      boss = null;
+      const items = this.enemies.items;
+      for (let i = 0; i < items.length; i++) {
+        const e = items[i]!;
+        if (e.kind === KIND_BOSS) {
+          boss = e;
+          break;
+        }
+      }
+      this.bossRef = boss;
+    }
+    return boss;
+  }
+
+  /**
+   * 推进 Boss 战的冲刺弹射侧(16 号):Boss 在 DASH(Z 字冲刺)期间,每过
+   * BOSS.dashEjectInterval 秒弹射一批小怪 —— 批次时刻由 Boss 的 DASH timer 闭式折出
+   * (elapsed = chargeDuration − timer),游标 bossEjectDone 照 bossSummonN 的
+   * "到点即消费"口径:批次到期即 +1,即使一只都没落地(触顶丢弃、不留账)。
+   *
+   * rng 口径定死:**每只弹射怪恰好一次 rng.angle()**(弹射角),型号/数量直给
+   * (dashEjectKind / dashEjectCount,与召唤同一条"型号不掷随机"的纪律 ——
+   * 改弹射构成不会移动整条随机序列)。弹射怪在 Boss 当前位置出生,沿弹射角以
+   * dashEjectSpeed 离膛(initEject),共享 WAVE_MAX_ALIVE 在场上限:触顶丢弃,
+   * 且丢弃发生在掷角度之前 —— 触顶帧一次 rng 都不消耗。
+   * Boss 离开 DASH 那一帧游标归零(帧首读的是上一帧末的状态机,下一帧头就复位)。
+   */
+  private stepBossEject(): void {
+    const boss = this.resolveBoss();
+    if (!boss) return;
+    if (boss.state !== BOSS_DASH) {
+      this.bossEjectDone = 0;
+      return;
+    }
+    // 到点即消费:下一批的时刻 = (游标+1) × interval,已过就弹、游标 +1,循环到追上为止。
+    // 顶 = bossEjectTickCap()(结构常数):只防坏表/坏档,正常冲刺里远够不到
+    const elapsed = BOSS.chargeDuration - boss.timer;
+    const cap = bossEjectTickCap();
+    while (this.bossEjectDone < cap) {
+      const next = (this.bossEjectDone + 1) * BOSS.dashEjectInterval;
+      // eps 加在 elapsed 侧:dt 逐帧累减的浮点残差落在批次点下方(如 0.5999999999999979),
+      // 减在 next 侧会把阈值往低移、第一批晚一帧 —— 加在 elapsed 侧才兜得住
+      if (elapsed + 1e-9 < next) break;
+      this.bossEjectDone++;
+      for (let j = 0; j < BOSS.dashEjectCount; j++) {
+        if (this.enemies.size >= WAVE_MAX_ALIVE) break; // 保险丝:触顶丢弃,不留账
+        const a = this.rng.angle(); // 每只弹射怪恰一次(与召唤的"每只恰一次"同口径)
+        const e = this.enemies.spawn();
+        initEject(e, boss.x, boss.y, a, this.elapsed);
+        // 罗盘样本照召唤同口径:每成功落地一只记一次,方向 = 弹射怪落点方位
         this.threatRate += THREAT_SPAWN_IMPULSE;
         const dx = e.x - this.ship.x;
         const dy = e.y - this.ship.y;
@@ -2730,6 +2801,9 @@ export class World {
     acc(this.bossPhase);
     acc(this.bossSummonN);
     acc(this.bossSummonCooldown * 100);
+    // 弹射游标与召唤游标同一条"到点即消费"定性:弹射也消费 rng(每只一次角度),
+    // 游标差一 = 整批弹射错位,漏了它重放时"这批弹射怪出没出过"无从对账
+    acc(this.bossEjectDone);
     for (const e of this.enemies.items) {
       acc(e.x);
       acc(e.y);
@@ -2822,12 +2896,12 @@ export class World {
     // 特价位(打折机制)紧跟武器货架:与两张货架同一条"消耗了 rng、决定玩家这轮花多少钱"的
     // 理由,漏了它,"同 seed 一边打五折一边原价"的分叉在余额(不进 checksum)上永远看不见
     acc(this.shopDiscountIndex);
-    // 重摇次数限制(16 号)紧跟候选:它决定 rerollOffer **是否**再次消耗 2×count 次 rng,
+    // 重摇计数(16 号改)紧跟候选:它决定 rerollOffer 收多少星币、是否消耗 rng,
     // 差一次就是整条随机序列错位 —— 照 offerCooldown 的先例进 checksum。
     // **starCoins 余额不进**:它只影响 UI 读数与消费、不参与任何 sim 判定;重摇与船坞
     // 购买(改版 21 号)消耗的 rng 本身在序列里,余额只是那条序列的读数 —— 扣过费没有,
     // 序列照样逐位可复现(与 maxHp 同一条"不进"的口径,理由全文见 starCoins 字段注释)。
-    acc(this.offerRerolled ? 1 : 0);
+    acc(this.offerRerolls);
     // FxEvent 一律**不进** checksum:它纯是表现(少画一条闪电不改变世界的下一帧),
     // 混进来只会让"渲染改一下淡出时长"看起来像一次确定性回归。
     return (h >>> 0).toString(16).padStart(8, '0');

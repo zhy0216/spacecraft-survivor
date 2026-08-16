@@ -83,6 +83,17 @@ export interface BossDef {
    * 与 sim/boss.ts 的 bossZLaneDir 共用),「画哪撞哪」的承诺不变。
    */
   chargeZAngleDeg: number;
+  /**
+   * 冲刺弹射周期 s:Z 字冲刺中每过这么久弹一批小怪(见 dashEjectCount)。
+   * 只在 DASH 段计时(状态机离开 DASH 就重置节奏),计时由 Boss 的 DASH timer 折出。
+   */
+  dashEjectInterval: number;
+  /** 一次弹射几只(型号 = dashEjectKind 直给、不掷随机 —— 只有每只的弹射角掷一次) */
+  dashEjectCount: number;
+  /** 弹射的小怪型号(「小怪」 = 蜂群蛭:场上最轻的一型,给冲刺沿途撒压力) */
+  dashEjectKind: EnemyKind;
+  /** 弹射初速 px/s:离膛往外甩,随后被接近段的追随系数慢慢拉回追船 */
+  dashEjectSpeed: number;
   /** 召唤周期 s:每过这么久召唤一批蜂群(Boss 活着才计时) */
   summonInterval: number;
   /** 召唤预告窗口 s:World.bossSummonCooldown < 它时渲染层应提前预警(与精英预警共用提示通道) */
@@ -105,8 +116,8 @@ export const BOSS: BossDef = {
   slug: 'hive_colossus',
   devName: '母巢巨兽',
   scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
-  hpMul: 51, // 闸门反推(自动求解):净 DPS × TTK 114s / 68.8 ≈ 51.1 → 取整 51;
-  // Boss HP = 40 × 1.72 × 51 ≈ 3509。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
+  hpMul: 58, // 闸门反推(自动求解):净 DPS × TTK 129s / 68.8 ≈ 57.8 → 取整 58;
+  // Boss HP = 40 × 1.72 × 58 ≈ 3990。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
   dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦
   contactDamageMul: 2, // 底座 18 → 36:大质量撞击
   speedMul: 0.8, // 底座 70 → 56:大而慢
@@ -117,6 +128,10 @@ export const BOSS: BossDef = {
   chargeDuration: 2.4, // 冲刺 380×2.4 ≈ 912px > 可视屏高 750(镜头口径 48/0.064):一条冲穿整屏
   chargeRecover: 1.8, // 占位待调(冲完长硬直 = 反打窗口)
   chargeZAngleDeg: 30, // 冲刺 Z 字偏角:三等分折线,走廊半宽 ≈ 单段长(304)× sin30° ≈ 152px(占位待调)
+  dashEjectInterval: 0.6, // 冲刺 2.4s 内 3 批(0.6/1.2/1.8s 各一批);占位待调
+  dashEjectCount: 2, // 一批 2 只;占位待调
+  dashEjectKind: KIND_SWARM, // 蜂群蛭:最轻的小怪;占位待调
+  dashEjectSpeed: 260, // 弹出初速:先甩出去,再被接近段追随系数拉回追船;占位待调
   summonInterval: 7, // 原 9s 占位 → 7s(2026-08-15):与 summonCounts 一起把召唤流 0.89 → 1.43 只/s(约 +60%)
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调

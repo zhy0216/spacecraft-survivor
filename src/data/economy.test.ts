@@ -2,7 +2,7 @@
  * 残骸经济数值口径(10 号 issue T2)的表级不变量。
  * 与 data/towers.test.ts / data/enemies.test.ts 同口径:钉的不是流程(那在 sim/upgrade.test.ts
  * 与 sim/world.test.ts 里),而是**这几个数本身的口径** —— 曲线的形状与取整、夹取、
- * 三选一的类别权重方向、跳过返还与第 0 级花费的大小关系,以及"这条曲线与出怪脚本的量级对不对得上"。
+ * 三选一的类别权重方向、跳过补偿与重摇递增价,以及"这条曲线与出怪脚本的量级对不对得上"。
  *
  * 后续调平衡时改这几个数是被鼓励的(那正是本表存在的理由,todos/05 的验收口径),
  * 但改坏下面这几条就是改坏了机制:
@@ -24,16 +24,16 @@ import {
   DROP_MAX_ALIVE,
   OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_NEW_WEAPON,
-  REROLL_PRICE,
+  REROLL_BASE_PRICE,
+  rerollPriceFor,
   SHOP_DISCOUNT_FRACTION,
   shopDiscountPrice,
-  skipRefundFor,
   UPGRADE_CHOICE_COUNT,
   UPGRADE_COST_BASE,
   UPGRADE_COST_GROWTH,
   UPGRADE_EARLY_COSTS,
   upgradeCost,
-  UPGRADE_SKIP_FEE,
+  UPGRADE_SKIP_STAR_COINS,
 } from './economy';
 import { ENEMIES } from './enemies';
 import { WAVE_SEGMENTS } from './waves';
@@ -142,31 +142,29 @@ describe('三选一与跳过', () => {
     expect(weights.reduce((sum, weight) => sum + weight, 0)).toBe(100);
   });
 
-  it('跳过手续费是正整数,返还 = cost − 手续费夹在 [0, cost] —— 跳过永远净亏,不是印残骸的机器', () => {
-    expect(Number.isInteger(UPGRADE_SKIP_FEE)).toBe(true);
-    expect(UPGRADE_SKIP_FEE).toBeGreaterThan(0);
-    for (let n = 0; n < 24; n++) {
-      const cost = upgradeCost(n);
-      const refund = skipRefundFor(cost);
-      expect(Number.isInteger(refund)).toBe(true);
-      // 净亏恒为 min(手续费, cost):后期跳过不再是随曲线暴涨的断崖(旧口径第 12 档净亏 494),
-      // 但也绝不免单 —— 免单的话"三选一"会退化成无限白嫖重随
-      expect(refund).toBeGreaterThanOrEqual(0);
-      expect(refund).toBeLessThan(cost);
-      expect(cost - refund).toBe(Math.min(UPGRADE_SKIP_FEE, cost));
-    }
-    // 坏输入不印钱:0/负数费用最多返 0
-    expect(skipRefundFor(0)).toBe(0);
-    expect(skipRefundFor(-10)).toBe(0);
-    expect(skipRefundFor(Number.NaN)).toBe(0);
+  it('跳过补偿是正整数星币:固定面额、不随曲线浮动 —— 跳过的代价是全额残骸,不是打折', () => {
+    expect(Number.isInteger(UPGRADE_SKIP_STAR_COINS)).toBe(true);
+    expect(UPGRADE_SKIP_STAR_COINS).toBeGreaterThan(0);
+    // 与重摇首价咬合:跳过补偿要至少够一次首摇(5),不然"跳过攒币"这条循环不成立
+    expect(UPGRADE_SKIP_STAR_COINS).toBeGreaterThanOrEqual(REROLL_BASE_PRICE);
   });
 
-  it('重摇价(16 号)是正整数星币:单次固定面额、不随曲线浮动,与跳过各管各的账', () => {
-    expect(Number.isInteger(REROLL_PRICE)).toBe(true);
-    expect(REROLL_PRICE).toBeGreaterThan(0);
-    // 与跳过互不抵扣:跳过退残骸(UPGRADE_SKIP_FEE)、重摇花星币 —— 两条出口不该撞成一个数,
-    // 否则玩家在 UI 上分不清这次点击花的是哪种钱
-    expect(REROLL_PRICE).not.toBe(UPGRADE_SKIP_FEE);
+  it('重摇价(16 号改)是 5n 递增的正整数星币:首摇 = 基价,第 n+1 次 = 基价 × (n+1)', () => {
+    expect(Number.isInteger(REROLL_BASE_PRICE)).toBe(true);
+    expect(REROLL_BASE_PRICE).toBeGreaterThan(0);
+    expect(rerollPriceFor(0)).toBe(REROLL_BASE_PRICE); // 第一次
+    expect(rerollPriceFor(1)).toBe(REROLL_BASE_PRICE * 2); // 第二次
+    expect(rerollPriceFor(2)).toBe(REROLL_BASE_PRICE * 3); // 第三次
+    expect(rerollPriceFor(9)).toBe(REROLL_BASE_PRICE * 10);
+    // 递增本身顶替旧的"每档只许摇一次"上限:连摇越贵越快
+    for (let n = 1; n < 12; n++) {
+      expect(rerollPriceFor(n)).toBeGreaterThan(rerollPriceFor(n - 1));
+    }
+    // 坏输入按第 1 次算:扣费绝不许扣出 0 或负数
+    expect(rerollPriceFor(-1)).toBe(REROLL_BASE_PRICE);
+    expect(rerollPriceFor(Number.NaN)).toBe(REROLL_BASE_PRICE);
+    expect(rerollPriceFor(0.9)).toBe(REROLL_BASE_PRICE);
+    expect(rerollPriceFor(2.7)).toBe(rerollPriceFor(2));
   });
 });
 
@@ -180,9 +178,9 @@ describe('船坞商店(21 号)', () => {
     expect(DOCK_EDICT_COUNT).toBe(3);
   });
 
-  it('法令卡是正整数星币,且贵于一次重摇(10):它是攒出来的大项,不是顺手的小费', () => {
+  it('法令卡是正整数星币,且贵于一次首摇(5):它是攒出来的大项,不是顺手的小费', () => {
     expect(Number.isInteger(DOCK_EDICT_PRICE)).toBe(true);
-    expect(DOCK_EDICT_PRICE).toBeGreaterThan(REROLL_PRICE);
+    expect(DOCK_EDICT_PRICE).toBeGreaterThan(REROLL_BASE_PRICE);
   });
 
   it('付费修复与法令同价(25):两者都是整备期"一个决定"的档位,不该有便宜的次等选项', () => {

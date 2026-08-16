@@ -160,7 +160,6 @@ export const ui = {
       invalidTower: '没有这种塔型(数值表里查不到)',
       invalidEdict: '没有这条法令(数值表里查不到)',
       noStarCoins: '星币不足(重摇需要 {{price}})',
-      alreadyRerolled: '本档已经摇过一次,不能再摇',
       unknown: '升级被拒绝(理由码 {{code}})',
     },
     card: {
@@ -192,9 +191,9 @@ export const ui = {
       weapon: 'DPS {{bd}} → {{ad}} · 射程 {{br}} → {{ar}}',
     },
     reroll: '重摇({{price}} 星币)',
-    skip: '跳过(手续费 {{fee}} · 返还 {{refund}})',
+    skip: '跳过(+{{coins}} 星币)',
     flash: {
-      skip: '跳过这次升级 —— 手续费 {{fee}},返还 {{refund}} 残骸',
+      skip: '跳过这次升级 —— 获得 {{coins}} 星币',
       rerolled: '已重摇 —— 花费 {{price}} 星币',
       pickHint: '选一张卡,或点「跳过」结束这次升级',
     },

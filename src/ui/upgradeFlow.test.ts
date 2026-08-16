@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.hoisted(() => { vi.stubGlobal('location', { search: '' }); });
-import { REROLL_PRICE, UPGRADE_SKIP_FEE } from '../data/economy';
+import { rerollPriceFor, UPGRADE_SKIP_STAR_COINS } from '../data/economy';
 import {
   createEdictLevels,
   EDICT_AMMO,
@@ -22,7 +22,6 @@ import { OFFER_EDICT, OFFER_NEW_WEAPON, UPGRADE_NO_OFFER, type UpgradeOption } f
 import {
   ACQUIRE_INVALID_TYPE,
   ACQUIRE_REPLACE_NEEDED,
-  REROLL_ALREADY_DONE,
   REROLL_NO_STARCOINS,
   REPLACE_BAD_SLOT,
   REPLACE_INVALID_TYPE,
@@ -31,7 +30,7 @@ import {
   type World,
 } from '../sim/world';
 import { changeLocale, currentLocale, initI18n, t } from '../i18n';
-import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, skipRefund, towerDps, upgradeComparison, upgradeComparisonText } from './upgradeFlow';
+import { cardDesc, cardIcon, cardLevelText, cardTitle, createUpgradeFlow, denyMessage, towerDps, upgradeComparison, upgradeComparisonText } from './upgradeFlow';
 import { optionLabel } from './presentation/upgradeText';
 
 beforeEach(async () => {
@@ -55,12 +54,13 @@ const DENY_CODES = [
   EDICT_MAXED,
   EDICT_INVALID_TYPE,
   REROLL_NO_STARCOINS,
-  REROLL_ALREADY_DONE,
 ];
 
 describe('denyMessage', () => {
   it('UI 可收到的每个拒绝码都有明确中文文案', () => {
-    const messages = DENY_CODES.map(denyMessage);
+    const messages = DENY_CODES.map((code) =>
+      code === REROLL_NO_STARCOINS ? denyMessage(code, { price: rerollPriceFor(0) }) : denyMessage(code),
+    );
     for (const message of messages) {
       expect(message.length).toBeGreaterThan(0);
       expect(message).not.toContain('理由码');
@@ -72,8 +72,8 @@ describe('denyMessage', () => {
     expect(denyMessage(UPGRADE_NO_OFFER)).toContain('升级');
     expect(denyMessage(ACQUIRE_REPLACE_NEEDED)).toContain('替换');
     expect(denyMessage(EDICT_MAXED)).toContain(String(EDICT_MAX_LEVEL));
-    expect(denyMessage(REROLL_NO_STARCOINS)).toContain(String(REROLL_PRICE));
-    expect(denyMessage(REROLL_ALREADY_DONE)).toContain('摇过');
+    // 重摇价现算传入:不足第 n+1 摇时,文案报的是那一摇的价
+    expect(denyMessage(REROLL_NO_STARCOINS, { price: rerollPriceFor(2) })).toContain(String(rerollPriceFor(2)));
   });
 
   it('未知码回落为带原码的兜底文案', () => {
@@ -82,15 +82,16 @@ describe('denyMessage', () => {
 
   it('en 下每个理由码都有英文文案,未知码仍保留原始编号', async () => {
     await changeLocale('en');
-    const messages = DENY_CODES.map(denyMessage);
+    const messages = DENY_CODES.map((code) =>
+      code === REROLL_NO_STARCOINS ? denyMessage(code, { price: rerollPriceFor(0) }) : denyMessage(code),
+    );
     for (const message of messages) {
       expect(message.length).toBeGreaterThan(0);
       expect(message).not.toContain('理由码');
     }
     expect(denyMessage(UPGRADE_NO_OFFER)).toContain('upgrade');
     expect(denyMessage(EDICT_MAXED)).toContain(String(EDICT_MAX_LEVEL));
-    expect(denyMessage(REROLL_NO_STARCOINS)).toContain(String(REROLL_PRICE));
-    expect(denyMessage(REROLL_ALREADY_DONE)).toContain('rerolled');
+    expect(denyMessage(REROLL_NO_STARCOINS, { price: rerollPriceFor(1) })).toContain(String(rerollPriceFor(1)));
     expect(denyMessage(-999)).toContain('-999');
   });
 
@@ -214,14 +215,6 @@ describe('升级卡片纯文案', () => {
     );
     // 法令层数进度
     expect(cardLevelText(edictOpt(EDICT_COOLANT, 2))).toBe(`Edict · ×2 → ×3 (cap ×${EDICT_MAX_LEVEL})`);
-  });
-});
-
-describe('skipRefund', () => {
-  it('返还等于费用减手续费，并夹在零以上', () => {
-    expect(skipRefund(509)).toBe(509 - UPGRADE_SKIP_FEE);
-    expect(skipRefund(UPGRADE_SKIP_FEE)).toBe(0);
-    expect(skipRefund(-5)).toBe(0);
   });
 });
 
@@ -366,7 +359,7 @@ interface StubWorld {
   scrap: number;
   upgradeCost: number;
   starCoins: number;
-  offerRerolled: boolean;
+  offerRerolls: number;
   weapons: WeaponSlot[];
   edictLevels: number[];
   takeCalls: Array<[number, number | undefined]>;
@@ -379,7 +372,7 @@ interface StubWorld {
   takeUpgrade(choice: number, slotIndex?: number): number;
   skipUpgrade(): boolean;
   rerollOffer(): number;
-  /** 确定性快照:offer + 武器槽 + 星币/残骸/重摇位,用于钉"refreshLocale 不改 World" */
+  /** 确定性快照:offer + 武器槽 + 星币/残骸/重摇计数,用于钉"refreshLocale 不改 World" */
   checksum(): string;
 }
 
@@ -389,7 +382,7 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     scrap: 60,
     upgradeCost: 35,
     starCoins: 30,
-    offerRerolled: false,
+    offerRerolls: 0,
     weapons: createWeaponSlots(),
     edictLevels: createEdictLevels(),
     takeCalls: [],
@@ -408,15 +401,15 @@ function createStubWorld(offer: UpgradeOption[]): StubWorld {
     rerollOffer(): number {
       world.rerollCalls++;
       if (world.rerollCode > 0) {
-        world.starCoins -= REROLL_PRICE;
-        world.offerRerolled = true;
+        world.starCoins -= rerollPriceFor(world.offerRerolls);
+        world.offerRerolls++;
       }
       return world.rerollCode;
     },
     checksum(): string {
       const offer = world.offer.map((o) => `${o.kind}:${o.type}:${o.level}`).join('|');
       const slots = world.weapons.map((s) => `${s.type}:${s.stars}`).join('|');
-      return [offer, slots, world.scrap, world.starCoins, world.offerRerolled ? 1 : 0].join('#');
+      return [offer, slots, world.scrap, world.starCoins, world.offerRerolls].join('#');
     },
   };
   return world;
@@ -455,7 +448,7 @@ describe('createUpgradeFlow 单阶段流程', () => {
 
   afterEach(() => dom.restore());
 
-  it('show 渲染世界候选、玩家标题与跳过账目', () => {
+  it('show 渲染世界候选、玩家标题与跳过补偿', () => {
     setup();
     expect(headOf(dom).textContent).toBe('世界已暂停 · 三选一');
     expect(cardsOf(dom).children.length).toBe(3);
@@ -467,7 +460,8 @@ describe('createUpgradeFlow 单阶段流程', () => {
       cardLevelText(world.offer[0] as UpgradeOption, worldAsWorld(world)),
       upgradeComparisonText(world.offer[0] as UpgradeOption, worldAsWorld(world)),
     ]);
-    expect(skipOf(dom).textContent).toContain(String(skipRefund(world.upgradeCost)));
+    expect(skipOf(dom).textContent).toContain(String(UPGRADE_SKIP_STAR_COINS));
+    expect(rerollOf(dom).textContent).toContain(String(rerollPriceFor(0)));
   });
 
   it('点卡立即调用 takeUpgrade(choice) 并结算', () => {
@@ -544,23 +538,37 @@ describe('createUpgradeFlow 单阶段流程', () => {
     expect(resolved).toBe(2);
   });
 
-  it('重摇成功后重绘候选但不结算，并立即置灰', () => {
+  it('重摇成功后重绘候选但不结算,按钮价随计数递增', () => {
     setup();
     world.offer = [newWeaponOpt(TOWER_RAILGUN), edictOpt(EDICT_COOLANT)];
     fire(rerollOf(dom), 'click');
     expect(world.rerollCalls).toBe(1);
     expect(resolved).toBe(0);
-    expect(rerollOf(dom).disabled).toBe(true);
+    // 首摇扣 5,星币 30 − 5 = 25 仍够第二摇 10:按钮不置灰,文案已换到下一摇的价
+    expect(world.starCoins).toBe(30 - rerollPriceFor(0));
+    expect(rerollOf(dom).textContent).toContain(String(rerollPriceFor(1)));
+    expect(rerollOf(dom).disabled).toBe(false);
     expect((cardsOf(dom).children[0] as StubEl).children[1]?.textContent).toBe(cardTitle(world.offer[0] as UpgradeOption));
     expect((cardsOf(dom).children[2] as StubEl).style.display).toBe('none');
   });
 
-  it('星币不足或本档已摇过时重摇置灰', () => {
-    world.starCoins = REROLL_PRICE - 1;
+  it('星币不足下一次递增价时重摇置灰,失败不消耗调用', () => {
+    world.starCoins = rerollPriceFor(0) - 1;
     setup();
     expect(rerollOf(dom).disabled).toBe(true);
+    expect(rerollOf(dom).textContent).toContain(String(rerollPriceFor(0)));
     fire(rerollOf(dom), 'click');
     expect(world.rerollCalls).toBe(0);
+  });
+
+  it('首摇后余额不足第二摇:置灰在摇完那一刻跟上', () => {
+    world.starCoins = rerollPriceFor(0);
+    setup();
+    expect(rerollOf(dom).disabled).toBe(false);
+    fire(rerollOf(dom), 'click');
+    expect(world.rerollCalls).toBe(1);
+    expect(world.starCoins).toBe(0);
+    expect(rerollOf(dom).disabled).toBe(true); // 第二摇要 10,0 星币不够
   });
 
   it('setWorld 收起旧流程，下一次点击只落到新世界', () => {

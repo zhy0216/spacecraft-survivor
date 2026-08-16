@@ -163,7 +163,6 @@ export const ui: DeepRecord<typeof zhUi> = {
       invalidTower: 'No such tower (not in the data tables)',
       invalidEdict: 'No such edict (not in the data tables)',
       noStarCoins: 'Not enough ★ (reroll costs {{price}})',
-      alreadyRerolled: 'This offer was already rerolled',
       unknown: 'Upgrade refused (reason code {{code}})',
     },
     card: {
@@ -195,9 +194,9 @@ export const ui: DeepRecord<typeof zhUi> = {
       weapon: 'DPS {{bd}} → {{ad}} · Range {{br}} → {{ar}}',
     },
     reroll: 'Reroll ({{price}} ★)',
-    skip: 'Skip (fee {{fee}} · refund {{refund}})',
+    skip: 'Skip (+{{coins}} ★)',
     flash: {
-      skip: 'Skipped this upgrade — fee {{fee}}, refunded {{refund}} salvage',
+      skip: 'Skipped this upgrade — gained {{coins}} ★',
       rerolled: 'Rerolled — spent {{price}} ★',
       pickHint: 'Pick a card, or click Skip to end this upgrade',
     },

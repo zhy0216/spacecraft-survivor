@@ -142,10 +142,10 @@ describe('局内存档:capture → restore', () => {
     expect(restored.magnetSurgeTime).toBe(0);
   });
 
-  it('v9 旧档判废(增压校准升版:法令层数表 10 → 11):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
+  it('v10 旧档判废(冲刺弹射升版:boss 快照 4 → 5 个字段):版本对不上直接拒收,不产出一个字段错位的半死世界', () => {
     const snap = captureRun(freshRun(60), META);
-    const v9json = serializeRunSnapshot(snap).replace('"v":10', '"v":9');
-    expect(parseRunSnapshot(v9json)).toBeNull();
+    const v10json = serializeRunSnapshot(snap).replace('"v":11', '"v":10');
+    expect(parseRunSnapshot(v10json)).toBeNull();
   });
 
   it('特价位(打折机制)随档保存:读档后特价不丢,checksum 一致', () => {
@@ -185,6 +185,21 @@ describe('局内存档:capture → restore', () => {
     world.starCoins = 3; // 比 STARTING_STAR_COINS 低:补发过就会被顶回 15
     const restored = restoreRun(captureRun(world, META));
     expect(restored.starCoins).toBe(3);
+  });
+
+  it('本档重摇计数随档保存:读档后下一摇还是递增价,checksum 一致', () => {
+    const world = freshRun(600);
+    world.offerRerolls = 3; // 模拟"同一档已连摇三次"的那一刻存档:下一摇要 20 星币
+    const snap = captureRun(world, META);
+    expect(snap.econ[4]).toBe(3);
+    const restored = restoreRun(snap);
+    expect(restored.offerRerolls).toBe(3);
+    expect(restored.checksum()).toBe(world.checksum());
+    // JSON 往返同样带着这个数,读回来一字不差
+    const back = parseRunSnapshot(serializeRunSnapshot(snap));
+    expect(back).not.toBeNull();
+    expect(back!.econ[4]).toBe(3);
+    expect(restoreRun(back!).checksum()).toBe(world.checksum());
   });
 
   it('起手不被重放:读档拿的是存下来的槽位,不是开局那两门随机炮', () => {

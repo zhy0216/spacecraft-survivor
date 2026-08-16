@@ -8,8 +8,9 @@
  * 选择层列出当前 8 槽 → 点某一槽 → **带着槽位再调一次 takeUpgrade(choice, slotIndex)** —— world.ts
  * 的文档口径:替换由 takeUpgrade 内部走 replaceWeapon 并在那一次完成结算,这里绝不直接调
  * replaceWeapon(否则 completeUpgrade 不跑,同一张卡下一帧当场再弹)。替换层 Esc / 右键 / 「返回
- * 重选」只退回选卡(不扣费、不恢复战斗);选卡阶段唯一的出口是「跳过」(world.skipUpgrade);另有
- * 「重摇」(16 号)花 REROLL_PRICE 星币换一手牌,失败由返回码裁决,置灰只是"看就知道不行"。
+ * 重选」只退回选卡(不扣费、不恢复战斗);选卡阶段唯一的出口是「跳过」(world.skipUpgrade,
+ * +10 星币);另有「重摇」(16 号改)花 5n 递增星币换一手牌(本档内不限次数),
+ * 失败由返回码裁决,置灰只是"看就知道不行"。
  * **没有"什么都不选直接关掉"这条路**:费用是"这一次升级"本身,不消费的话 World 下一帧照样满足
  * scrap ≥ upgradeCost,当场再弹同一张卡。支援槽满(SUPPORT_FULL)是唯一"点卡但不结算"的拒绝:卡还在。
  *
@@ -21,13 +22,13 @@
  * 费用读数分两形态:玩家模式标题只写「世界已暂停 · 三选一」(残骸数由 HUD 管),?debug 时(与 main.ts
  * 同一条 URL 判定)才印 残骸/花费。
  */
-import { REROLL_PRICE, skipRefundFor, UPGRADE_SKIP_FEE } from '../data/economy';
+import { rerollPriceFor, UPGRADE_SKIP_STAR_COINS } from '../data/economy';
 import { edictLevel, EDICT_MAX_LEVEL, EDICTS } from '../data/edicts';
 import { mergeResultOf } from '../data/merges';
 import { THR_AMMO, THR_CHARGE, THR_HEAT, type TowerDef, TOWERS, towerAoeDamage, towerArcDeg, towerBurst, towerChargeTime, towerDamage, towerFireInterval, towerRange } from '../data/towers';
 import { slotMaxStars, slotStarCount, WEAPON_SLOT_COUNT } from '../sim/armory';
 import { OFFER_NEW_WEAPON, UPGRADE_NO_OFFER, type UpgradeOption } from '../sim/upgrade';
-import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_ALREADY_DONE, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
+import { ACQUIRE_INVALID_TYPE, ACQUIRE_REPLACE_NEEDED, EDICT_INVALID_TYPE, EDICT_MAXED, REROLL_NO_STARCOINS, REPLACE_BAD_SLOT, REPLACE_INVALID_TYPE, type World } from '../sim/world';
 import { audioBus } from '../render/audio';
 import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
@@ -147,8 +148,8 @@ const DENY_MSGS: Record<number, DenyEntry> = {
   [ACQUIRE_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidTower' },
   [REPLACE_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidTower' },
   [EDICT_INVALID_TYPE]: { key: 'ui:upgrade.deny.invalidEdict' },
-  [REROLL_NO_STARCOINS]: { key: 'ui:upgrade.deny.noStarCoins', vars: { price: REROLL_PRICE } },
-  [REROLL_ALREADY_DONE]: { key: 'ui:upgrade.deny.alreadyRerolled' },
+  // 重摇价随本档次数递增(5n),故 price 由调用方现算后经 vars 传入(denyMessage 第二参)
+  [REROLL_NO_STARCOINS]: { key: 'ui:upgrade.deny.noStarCoins' },
 };
 
 /**
@@ -159,10 +160,10 @@ function tDynamic(key: string, vars?: Record<string, number | string>): string {
   return (t as unknown as (key: string, vars?: Record<string, number | string>) => string)(key, vars);
 }
 
-export function denyMessage(code: number): string {
+export function denyMessage(code: number, vars?: Record<string, number>): string {
   const entry = DENY_MSGS[code];
   if (!entry) return t('ui:upgrade.deny.unknown', { code });
-  return tDynamic(entry.key, entry.vars);
+  return tDynamic(entry.key, { ...entry.vars, ...vars });
 }
 
 /** 卡片标题 = 候选的名字,**一律走 presentation 的 optionLabel**(它委托 towerName/edictName 查翻译),ui 不抄第二份 */
@@ -382,11 +383,6 @@ export function upgradeComparisonText(opt: UpgradeOption, world?: World): string
   });
 }
 
-/** 跳过返还 = cost − 手续费。**与 World.skipUpgrade 调的是同一个 skipRefundFor**:分家的话提示与到账会各走各的 */
-export function skipRefund(cost: number): number {
-  return skipRefundFor(cost);
-}
-
 // 焦点在输入框里 → 数字键/Esc 是在打字,不该被当成选卡/取消抢走。
 // 判据走共享模块(二轮审查:本文件曾是全仓第四份拷贝,口径漂移隐患)
 
@@ -559,9 +555,9 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     }, 460);
   }
 
-  /** 重摇按钮的置灰态,每次弹卡 / 重摇之后现读 World 刷新一次:星币不足或本档已摇过都不可点(置灰只是读数,裁决以返回码为准) */
+  /** 重摇按钮的置灰态,每次弹卡 / 重摇之后现读 World 刷新一次:星币不够下一次递增价就不可点(置灰只是读数,裁决以返回码为准) */
   function syncRerollState(): void {
-    const enabled = world.starCoins >= REROLL_PRICE && !world.offerRerolled;
+    const enabled = world.starCoins >= rerollPriceFor(world.offerRerolls);
     rerollBtn.disabled = !enabled;
     rerollBtn.style.opacity = enabled ? '1' : '0.5';
     rerollBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
@@ -572,7 +568,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     headEl.textContent = DEBUG
       ? tDynamic('ui:upgrade.head.debug', { scrap: Math.round(world.scrap), cost: world.upgradeCost })
       : tDynamic('ui:upgrade.head.paused');
-    rerollBtn.textContent = tDynamic('ui:upgrade.reroll', { price: REROLL_PRICE });
+    rerollBtn.textContent = tDynamic('ui:upgrade.reroll', { price: rerollPriceFor(world.offerRerolls) });
     syncRerollState();
   }
 
@@ -604,8 +600,7 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
       card.preview.textContent = upgradeComparisonText(opt, world);
     }
     skipBtn.textContent = tDynamic('ui:upgrade.skip', {
-      fee: UPGRADE_SKIP_FEE,
-      refund: skipRefund(world.upgradeCost),
+      coins: UPGRADE_SKIP_STAR_COINS,
     });
   }
 
@@ -775,23 +770,23 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
   }
 
   /**
-   * 跳过这一次升级(手续费制,见 data/economy 的 UPGRADE_SKIP_FEE)。**照样是一次结算** ——
-   * World 扣费、按 cost − 手续费返还、upgrades++、清空 offer,于是下一帧不会再弹同一张卡,
-   * 而下一档的三张是全新候选(= 付费重随)。
+   * 跳过这一次升级(16 号改:补偿 +10 星币,见 data/economy 的 UPGRADE_SKIP_STAR_COINS)。
+   * **照样是一次结算** —— World 全额扣费、+10 星币、upgrades++、清空 offer,
+   * 于是下一帧不会再弹同一张卡,而下一档的三张是全新候选(= 付费重随)。
    */
   function skip(): void {
     if (phase !== PHASE_PICK) return;
-    const refund = skipRefund(world.upgradeCost);
-    if (world.skipUpgrade()) flash(tDynamic('ui:upgrade.flash.skip', { fee: UPGRADE_SKIP_FEE, refund }), OK_COLOR);
+    if (world.skipUpgrade()) flash(tDynamic('ui:upgrade.flash.skip', { coins: UPGRADE_SKIP_STAR_COINS }), OK_COLOR);
     // 无待选(理论上这张卡根本不该在屏幕上)也照样放行:留在这儿就是个点什么都没用的面板
     else flash(denyMessage(UPGRADE_NO_OFFER), DENY_COLOR);
     resolve();
   }
 
   /**
-   * 重摇这一手牌(16 号):花 REROLL_PRICE 星币,让 World 重掷三个候选。
-   * **不结算、不恢复战斗** —— 重摇只是换一手牌,时停要继续停到这一次升级真的结算掉为止。
-   * 失败按返回码处理(星币不足 / 本档已摇过 → 重刷置灰态;待选没了 → 说清楚并放行)。
+   * 重摇这一手牌(16 号改):花 rerollPriceFor(offerRerolls) 星币(本档内 5n 递增、不限次数),
+   * 让 World 重掷三个候选。**不结算、不恢复战斗** —— 重摇只是换一手牌,
+   * 时停要继续停到这一次升级真的结算掉为止。失败按返回码处理(星币不足 → 重刷置灰态;
+   * 待选没了 → 说清楚并放行)。
    */
   function reroll(): void {
     if (phase !== PHASE_PICK || rerollBtn.disabled) return;
@@ -799,15 +794,15 @@ export function createUpgradeFlow(opts: UpgradeFlowOpts): UpgradeFlowUi {
     if (code > 0) {
       renderCards();
       syncPanel();
-      flash(tDynamic('ui:upgrade.flash.rerolled', { price: REROLL_PRICE }), OK_COLOR);
+      flash(tDynamic('ui:upgrade.flash.rerolled', { price: rerollPriceFor(world.offerRerolls - 1) }), OK_COLOR);
       return;
     }
-    if (code === REROLL_NO_STARCOINS || code === REROLL_ALREADY_DONE) {
-      // 失败的原因恰好就是置灰的两个条件:重刷一次置灰态,让按钮与账目重新对齐
+    if (code === REROLL_NO_STARCOINS) {
+      // 失败的原因恰好就是置灰的条件:重刷一次置灰态,让按钮与账目重新对齐
       syncRerollState();
       return;
     }
-    flash(denyMessage(code), DENY_COLOR);
+    flash(denyMessage(code, { price: rerollPriceFor(world.offerRerolls) }), DENY_COLOR);
     resolve();
   }
 

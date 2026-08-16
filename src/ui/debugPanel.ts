@@ -106,6 +106,15 @@ export interface RunHooks {
 
 export function createDebugPanel(stats: DebugStats, run: RunState, hooks: RunHooks): DebugPanelUi {
   const pane = new Pane({ title: 'STARWRECK · 灰盒调参' });
+  // 面板内容早已比一屏高:tweakpane 的 .tp-dfwv 包装层没有 max-height/overflow,
+  // 超出的部分直接溢出屏外,底下几组抽屉根本够不着。给它限高 + 纵向滚动,
+  // 才滚得到「受击」「残骸经济」「塔」「镜头」这几组。maxHeight 留 16px 边距
+  // (上 8 下 8,与 .tp-dfwv 自带的 top:8px 对齐),面板不贴屏幕底边。
+  const wrapper = pane.element.parentElement;
+  if (wrapper) {
+    wrapper.style.maxHeight = 'calc(100vh - 16px)';
+    wrapper.style.overflowY = 'auto';
+  }
 
   const perf = pane.addFolder({ title: '性能 / 确定性' });
   // 帧率三读数摆在一起才有意义:平均帧率好看、帧时对预算、最差帧报卡顿(见 DebugStats)。

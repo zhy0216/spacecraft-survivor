@@ -5,7 +5,7 @@ import {
   DOCK_EDICT_PRICE,
   OFFER_WEIGHT_EDICT,
   OFFER_WEIGHT_NEW_WEAPON,
-  skipRefundFor,
+  UPGRADE_SKIP_STAR_COINS,
   upgradeCost,
 } from '../data/economy';
 import { WAVE_TOTAL_TIME } from '../data/waves';
@@ -16,10 +16,11 @@ import { OFFER_EDICT, OFFER_NEW_WEAPON } from './upgrade';
 import { ACQUIRE_REPLACE_NEEDED, RESULT_WIN, World } from './world';
 
 describe('槽位制经济参数', () => {
-  it('升级费用递增且跳过退款扣除固定手续费', () => {
+  it('升级费用递增,跳过补偿是正整数星币(跳过不退残骸)', () => {
     expect(upgradeCost(0)).toBeGreaterThan(0);
     expect(upgradeCost(2)).toBeGreaterThan(upgradeCost(1));
-    expect(skipRefundFor(upgradeCost(2))).toBeLessThan(upgradeCost(2));
+    expect(Number.isInteger(UPGRADE_SKIP_STAR_COINS)).toBe(true);
+    expect(UPGRADE_SKIP_STAR_COINS).toBeGreaterThan(0);
   });
 
   it('候选两类权重总和为 100(星级系统:武器升级整类取消)', () => {

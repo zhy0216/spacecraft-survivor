@@ -349,8 +349,16 @@ export function restoreWaveState(
   s.segment = Math.min(WAVE_SEGMENTS.length, Math.max(0, Math.floor(segment)));
   enterSegment(s); // elites 重拼 + debt 补长 + 两个游标归零(下面按存档覆盖)
   const seg = WAVE_SEGMENTS[s.segment];
-  // 段内计时夹在本段时长内:越界会让下一帧当场连跳两段(段推进带余数进位)
-  s.segTime = seg === undefined ? 0 : Math.min(seg.duration, Math.max(0, segTime));
+  // 段内计时夹在本段时长内:越界会让下一帧当场连跳两段(段推进带余数进位)。
+  // 脚本已走完(segment 越界)时 segTime 是末段跨界的余数,必须**原样保留**而不是夹成 0:
+  // 它进 checksum(×100),夹掉的话 Boss 战中途存档 → 读档 checksum 当场分叉
+  // (Boss 战是"脚本走完但一局还没完"的常态存档时机,见 runSave.test.ts 的 Boss 战存档用例)
+  s.segTime =
+    seg === undefined
+      ? typeof segTime === 'number' && Number.isFinite(segTime)
+        ? Math.max(0, segTime)
+        : 0
+      : Math.min(seg.duration, Math.max(0, segTime));
   s.burstNext = Math.min(seg?.bursts.length ?? 0, Math.max(0, Math.floor(burstNext)));
   // 精英游标按**重拼后**的链长夹(段表 + 已解锁槽位):存档时的掩码与此刻不同也不会越界
   s.eliteNext = Math.min(s.elites.length, Math.max(0, Math.floor(eliteNext)));

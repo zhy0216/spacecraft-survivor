@@ -68,9 +68,12 @@ import { RESULT_RUNNING, World } from './world';
  *   但决定弹尾、命中与迫击炮落点的星级外观;读档后旧弹不能集体变成当前槽位的星级。
  * v10(增压校准):法令层数表长度 10→11(EDICT_KIND_COUNT)。数组长度进存档格式,
  *   旧档缺第 11 个值会把后面的字段整行读串 —— 升版本判废而不是做补齐迁移。
+ * v11(冲刺弹射):boss 快照新增 ejectDone 游标(数组长度 4→5)。弹射消费 rng(每只
+ *   弹射怪一次角度),游标是"到点即消费"的真状态 —— 漏了它,读档后冲刺弹射整批重发,
+ *   随机序列从读档帧起与"没存过档"的局分叉。
  * **只改了字段表才升版本**;旧档照"版本对不上直接判废"的既有口径丢弃(损失半局,可接受)。
  */
-export const RUN_SAVE_VERSION = 10;
+export const RUN_SAVE_VERSION = 11;
 
 // —— 实体的扁平字段表 ——
 // 池里的实体是存档的大头(几百只怪 × 十几个数),故不逐只存成对象,而是**平铺成一条数字数组**:
@@ -131,7 +134,7 @@ export interface RunSnapshot {
   wave: number[];
   /** 逐流出怪账 */
   debt: number[];
-  /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolled(0/1), refitPending(0/1), boostTime, boostCooldown */
+  /** 经济与流程:scrap, starCoins, upgrades, offerCooldown, offerRerolls(本档重摇次数), refitPending(0/1), boostTime, boostCooldown */
   econ: number[];
   /**
    * 磁吸涌剩余秒(26 号改):0 = 无涌。它决定起吸半径(涌 × 25 ≈ 全场)→ 进 checksum,
@@ -154,7 +157,7 @@ export interface RunSnapshot {
    * 与两张货架同一条定性(消耗了 rng、决定玩家这轮花多少钱),进 checksum,必须存。
    */
   shopDiscount: number;
-  /** Boss:phase, summonN, summonCooldown, killedAt */
+  /** Boss:phase, summonN, summonCooldown, killedAt, ejectDone */
   boss: number[];
   /**
    * 局内统计:kills, eliteKills, peakDps。
@@ -289,7 +292,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
       world.starCoins,
       world.upgrades,
       world.offerCooldown,
-      world.offerRerolled ? 1 : 0,
+      world.offerRerolls,
       world.refitPending ? 1 : 0,
       world.boostTime,
       world.boostCooldown,
@@ -306,7 +309,7 @@ export function captureRun(world: World, meta: RunSaveMeta): RunSnapshot {
     dockEdicts: world.dockEdictOffers.slice(),
     shopWeapons: world.shopWeapons.slice(),
     shopDiscount: world.shopDiscountIndex,
-    boss: [world.bossPhase, world.bossSummonN, world.bossSummonCooldown, world.bossKilledAt],
+    boss: [world.bossPhase, world.bossSummonN, world.bossSummonCooldown, world.bossKilledAt, world.bossEjectDone],
     tally: [world.kills, world.eliteKills, world.peakDps],
     damageByType: Array.from(world.runDamageByType),
     enemies,
@@ -361,7 +364,8 @@ export function restoreRun(snap: RunSnapshot): World {
   world.starCoins = snap.econ[1]!;
   world.upgrades = snap.econ[2]!;
   world.offerCooldown = snap.econ[3]!;
-  world.offerRerolled = snap.econ[4]! !== 0;
+  // 旧档的 offerRerolled 布尔位(0/1)与计数器兼容:1 次重摇的旧档读进来就是 offerRerolls = 1
+  world.offerRerolls = snap.econ[4] ?? 0;
   world.refitPending = snap.econ[5]! !== 0;
   world.boostTime = snap.econ[6]!;
   world.boostCooldown = snap.econ[7]!;
@@ -386,6 +390,7 @@ export function restoreRun(snap: RunSnapshot): World {
   world.bossSummonN = snap.boss[1]!;
   world.bossSummonCooldown = snap.boss[2]!;
   world.bossKilledAt = snap.boss[3]!;
+  world.bossEjectDone = snap.boss[4]!;
 
   world.kills = snap.tally[0]!;
   world.eliteKills = snap.tally[1]!;
@@ -553,7 +558,7 @@ export function parseRunSnapshot(json: string): RunSnapshot | null {
   const offer = nums('offer', -1, OF_STRIDE);
   const dockEdicts = nums('dockEdicts', -1);
   const shopWeapons = nums('shopWeapons', -1);
-  const boss = nums('boss', 4);
+  const boss = nums('boss', 5);
   const tally = nums('tally', 3);
   const damageByType = nums('damageByType', TOWER_KIND_COUNT);
   const enemies = nums('enemies', -1, EN_STRIDE);

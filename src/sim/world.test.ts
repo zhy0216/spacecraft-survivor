@@ -4,7 +4,9 @@ import { AFFIX_ARMORED, AFFIX_FRENZY, ELITE } from '../data/affixes';
 import {
   DOCK_WEAPON_PRICE,
   MAGNET_PICKUP_SURGE,
+  rerollPriceFor,
   STARTING_STAR_COINS,
+  UPGRADE_SKIP_STAR_COINS,
 } from '../data/economy';
 import { EDICT_ARMOR, EDICT_BOOST, EDICT_MAX_LEVEL, EDICT_STARCHART, edictLevel } from '../data/edicts';
 import { ENEMIES, KIND_BOSS, KIND_SWARM } from '../data/enemies';
@@ -26,6 +28,7 @@ import { wrapAngle } from './ship';
 import {
   ENEMY_RECYCLE_RADIUS,
   ENEMY_RECYCLE_SPREAD_DEG,
+  REROLL_NO_STARCOINS,
   THREAT_SPAWN_IMPULSE,
   World,
 } from './world';
@@ -759,5 +762,69 @@ describe('视野回收重投·长航(默认波次路径)', () => {
       }
     }
     expect(treadmillSeen).toBe(true);
+  });
+});
+
+describe('升级面板经济(16 号改):跳过给星币、重摇 5n 递增', () => {
+  /** 凑钱后步进,直到弹卡冷却(5s)走完、三候选 roll 出来(照 runLog.test 的自然弹卡口径) */
+  function stepUntilOffer(world: World): void {
+    world.scrap = world.upgradeCost;
+    let guard = 0;
+    while (world.offer.length === 0 && guard < 400) {
+      world.step();
+      guard++;
+    }
+  }
+
+  it('跳过:全额扣残骸、一分不退,当场 +10 星币,upgrades++;无待选时不动账', () => {
+    const world = new World(31);
+    stepUntilOffer(world);
+    const cost = world.upgradeCost;
+    const scrapBefore = world.scrap;
+    const coinsBefore = world.starCoins;
+    const upgradesBefore = world.upgrades;
+    expect(world.skipUpgrade()).toBe(true);
+    expect(world.scrap).toBe(scrapBefore - cost); // 全额消耗、零残骸返还
+    expect(world.starCoins).toBe(coinsBefore + UPGRADE_SKIP_STAR_COINS);
+    expect(world.upgrades).toBe(upgradesBefore + 1);
+    expect(world.offer.length).toBe(0);
+    // 没有待选时返回 false 且不动账:过期按钮不许凭空消费一次曲线
+    expect(world.skipUpgrade()).toBe(false);
+    expect(world.starCoins).toBe(coinsBefore + UPGRADE_SKIP_STAR_COINS);
+  });
+
+  it('重摇:本档内不限次数,价 5/10/15/20… 递增;星币不足拒绝且不推进 rng', () => {
+    const world = new World(32);
+    stepUntilOffer(world);
+    world.starCoins = 200;
+    // 连摇四次:5 + 10 + 15 + 20 = 50
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.offerRerolls).toBe(4);
+    expect(world.starCoins).toBe(150);
+    // 下一摇要 25:差一枚也拒绝 —— 不动账、不推进随机序列、计数不变
+    world.starCoins = 24;
+    const rngBefore = world.rng.state;
+    expect(world.rerollOffer()).toBe(REROLL_NO_STARCOINS);
+    expect(world.offerRerolls).toBe(4);
+    expect(world.starCoins).toBe(24);
+    expect(world.rng.state).toBe(rngBefore);
+  });
+
+  it('递增价随档重置:结算/跳过后下一档从头计首价', () => {
+    const world = new World(33);
+    stepUntilOffer(world);
+    world.starCoins = 100;
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.offerRerolls).toBe(2);
+    world.skipUpgrade(); // 结算本档
+    stepUntilOffer(world); // 下一档:三张全新候选 = 新计价起点
+    expect(world.offerRerolls).toBe(0);
+    const coinsBefore = world.starCoins;
+    expect(world.rerollOffer()).toBeGreaterThan(0);
+    expect(world.starCoins).toBe(coinsBefore - rerollPriceFor(0));
   });
 });
