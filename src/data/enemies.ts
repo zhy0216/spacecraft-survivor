@@ -105,8 +105,8 @@ export const BOSS: BossDef = {
   slug: 'hive_colossus',
   devName: '母巢巨兽',
   scale: 4.5, // 底座半径 14 → 63；配合渲染层 1.5× 视觉倍率,默认镜头约占屏高 1/4
-  hpMul: 56, // 闸门反推(自动求解):净 DPS × TTK 124s / 68.8 ≈ 55.6 → 取整 56;
-  // Boss HP = 40 × 1.72 × 56 ≈ 3853。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
+  hpMul: 51, // 闸门反推(自动求解):净 DPS × TTK 114s / 68.8 ≈ 51.1 → 取整 51;
+  // Boss HP = 40 × 1.72 × 51 ≈ 3509。推导见 sim/balance.ts 的 bossHpMulForGate。再平衡跑 npm run balance
   dropMul: 12, // 掉落面额独立档(旧「×12」原样保留):Boss 击杀掉 4 × 12 = 48 残骸的经济账与血量账解耦
   contactDamageMul: 2, // 底座 18 → 36:大质量撞击
   speedMul: 0.8, // 底座 70 → 56:大而慢
@@ -114,9 +114,9 @@ export const BOSS: BossDef = {
   chargeRangeMul: 1.5, // 底座 420 → 630:大个子起手圈跟着大
   chargeWindup: 1.2, // 底座 0.9 → 1.2:更长前摇,预告更早
   chargeSpeedMul: 1, // 底座 380 → 380
-  chargeDuration: 1.2, // 占位待调
+  chargeDuration: 2.4, // 冲刺 380×2.4 ≈ 912px > 可视屏高 750(镜头口径 48/0.064):一条冲穿整屏
   chargeRecover: 1.8, // 占位待调(冲完长硬直 = 反打窗口)
-  chargeZAngleDeg: 30, // 冲刺 Z 字偏角:三等分折线,走廊半宽 ≈ 单段长 × sin30° ≈ 76px(占位待调)
+  chargeZAngleDeg: 30, // 冲刺 Z 字偏角:三等分折线,走廊半宽 ≈ 单段长(304)× sin30° ≈ 152px(占位待调)
   summonInterval: 7, // 原 9s 占位 → 7s(2026-08-15):与 summonCounts 一起把召唤流 0.89 → 1.43 只/s(约 +60%)
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调
