@@ -171,28 +171,68 @@ const REFIT_STYLE =
   '.starwreck-refit-card:hover{border-color:#6d9bc4!important;background:rgba(31,51,75,.9)!important;transform:translateY(-1px);}' +
   '@media (max-width:760px){' +
   '.starwreck-refit-board{left:0!important;right:0!important;top:0!important;bottom:auto!important;' +
-  'height:44vh!important;padding:max(10px,env(safe-area-inset-top)) 10px 10px!important;' +
+  'height:38vh!important;padding:max(8px,env(safe-area-inset-top)) 8px 6px!important;' +
   'border-bottom:1px solid #2b4a6e;background:rgba(4,8,14,.82);overflow:auto!important;}' +
-  '.starwreck-refit-shop{left:0!important;right:0!important;top:44vh!important;width:100%!important;' +
-  'height:56vh!important;padding:16px max(14px,env(safe-area-inset-right)) ' +
-  'max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))!important;' +
-  'gap:10px!important;border-left:0!important;border-top:1px solid #2b4a6e;box-shadow:0 -16px 38px rgba(0,0,0,.32);}' +
-  '.starwreck-refit-card,.starwreck-refit-row{min-height:118px!important;padding:7px 5px!important;}' +
-  '.starwreck-refit-button{min-height:44px!important;}' +
+  '.starwreck-refit-board .sw-ship-board{padding:9px 10px 8px!important;gap:4px!important;}' +
+  '.starwreck-refit-board .sw-ship-head{gap:6px!important;}' +
+  '.starwreck-refit-board .sw-ship-ring{transform:scale(.5)!important;margin:-115px 0!important;}' +
+  '.starwreck-refit-board .sw-ship-hint{font-size:9px!important;line-height:1.25!important;}' +
+  '.starwreck-refit-shop{left:0!important;right:0!important;top:38vh!important;width:100%!important;' +
+  'height:62vh!important;padding:10px max(10px,env(safe-area-inset-right)) ' +
+  'max(12px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left))!important;' +
+  'gap:7px!important;font-size:11px!important;line-height:1.42!important;border-left:0!important;' +
+  'border-top:1px solid #2b4a6e;box-shadow:0 -16px 38px rgba(0,0,0,.32);}' +
+  '.starwreck-refit-shop-head{padding:9px!important;padding-bottom:9px!important;}' +
+  '.starwreck-refit-eyebrow{font-size:8px!important;}' +
+  '.starwreck-refit-title{font-size:14px!important;}' +
+  '.starwreck-refit-segment{padding:6px!important;font-size:10px!important;}' +
+  '.starwreck-refit-section{gap:5px!important;padding-top:8px!important;}' +
+  '.starwreck-refit-section-title{font-size:11px!important;}' +
+  '.starwreck-refit-cards{gap:5px!important;}' +
+  '.starwreck-refit-card,.starwreck-refit-row{min-height:88px!important;padding:5px 4px!important;gap:2px!important;}' +
+  '.starwreck-refit-art{width:48px!important;height:48px!important;}' +
+  '.starwreck-refit-name{font-size:9px!important;line-height:1.18!important;min-height:2.36em!important;}' +
+  '.starwreck-refit-price{font-size:9px!important;}' +
+  '.starwreck-refit-button{min-height:36px!important;padding:6px 9px!important;font-size:10px!important;}' +
   '.starwreck-refit-toast{left:max(10px,env(safe-area-inset-left))!important;right:max(10px,env(safe-area-inset-right))!important;' +
-  'bottom:max(10px,env(safe-area-inset-bottom))!important;white-space:normal!important;}' +
+  'bottom:max(10px,env(safe-area-inset-bottom))!important;font-size:10px!important;white-space:normal!important;}' +
   '}' +
   '@media (max-width:420px){' +
-  '.starwreck-refit-board{height:40vh!important;}' +
-  '.starwreck-refit-shop{top:40vh!important;height:60vh!important;}' +
+  '.starwreck-refit-board{height:35vh!important;}' +
+  '.starwreck-refit-shop{top:35vh!important;height:65vh!important;}' +
+  '.starwreck-refit-board .sw-ship-ring{transform:scale(.44)!important;margin:-129px 0!important;}' +
   '.starwreck-refit-shop-head{align-items:flex-start!important;}' +
   '.starwreck-refit-section-head{align-items:flex-start!important;}' +
   '}' +
   '@media (max-height:560px) and (max-width:760px){' +
-  '.starwreck-refit-board{height:36vh!important;}' +
-  '.starwreck-refit-shop{top:36vh!important;height:64vh!important;}' +
+  '.starwreck-refit-board{height:32vh!important;}' +
+  '.starwreck-refit-shop{top:32vh!important;height:68vh!important;}' +
+  '.starwreck-refit-board .sw-ship-ring{transform:scale(.4)!important;margin:-138px 0!important;}' +
   '}' +
-  '@media (min-resolution:2dppx){' +
+  // 横屏手机保留左右分栏：左边缩小舰船图、右边缩窄货架。纵向上下切会让 390px 高度
+  // 同时塞不下舰船图和可操作商店，反而需要在两块小窗里各滚一次。
+  '@media (min-width:761px) and (max-width:900px) and (max-height:560px){' +
+  '.starwreck-refit-board{left:200px!important;right:300px!important;padding:6px!important;overflow:hidden!important;}' +
+  '.starwreck-refit-board .sw-ship-board{width:100%!important;padding:8px 10px!important;gap:3px!important;overflow:hidden!important;}' +
+  '.starwreck-refit-board .sw-ship-head{gap:6px!important;}' +
+  '.starwreck-refit-board .sw-ship-ring{transform:scale(.35)!important;margin:-149px 0!important;}' +
+  '.starwreck-refit-board .sw-ship-hint{display:none!important;}' +
+  '.starwreck-refit-shop{width:300px!important;padding:10px 12px 9px!important;gap:7px!important;' +
+  'font-size:11px!important;line-height:1.42!important;}' +
+  '.starwreck-refit-shop-head{padding:9px!important;padding-bottom:9px!important;}' +
+  '.starwreck-refit-eyebrow{font-size:8px!important;}' +
+  '.starwreck-refit-title{font-size:14px!important;}' +
+  '.starwreck-refit-segment{padding:6px!important;font-size:10px!important;}' +
+  '.starwreck-refit-section{gap:5px!important;padding-top:8px!important;}' +
+  '.starwreck-refit-section-title{font-size:11px!important;}' +
+  '.starwreck-refit-cards{gap:4px!important;}' +
+  '.starwreck-refit-card,.starwreck-refit-row{min-height:88px!important;padding:5px 3px!important;gap:2px!important;}' +
+  '.starwreck-refit-art{width:46px!important;height:46px!important;}' +
+  '.starwreck-refit-name{font-size:9px!important;line-height:1.18!important;min-height:2.36em!important;}' +
+  '.starwreck-refit-price{font-size:9px!important;}' +
+  '.starwreck-refit-button{min-height:32px!important;padding:5px 8px!important;font-size:10px!important;}' +
+  '}' +
+  '@media (min-width:901px) and (min-resolution:2dppx){' +
   '.starwreck-refit-root{font-size:13.5px!important;line-height:1.62!important;}' +
   '.starwreck-refit-card,.starwreck-refit-button,.starwreck-refit-row{border-color:#3d6288!important;}' +
   '}';
@@ -294,23 +334,28 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   const shopTitleBox = document.createElement('div');
   const shopEyebrow = document.createElement('div');
   shopEyebrow.style.cssText = EYEBROW_CSS;
+  shopEyebrow.className = 'starwreck-refit-eyebrow';
   const shopTitle = document.createElement('div');
   shopTitle.style.cssText = SHOP_TITLE_CSS;
+  shopTitle.className = 'starwreck-refit-title';
   shopTitleBox.append(shopEyebrow, shopTitle);
   shopHead.appendChild(shopTitleBox);
 
   // —— 航段行(旧版威胁摘要删掉后留下的简版:下一波是第几段) ——
   const segment = document.createElement('div');
   segment.style.cssText = SEGMENT_CSS;
+  segment.className = 'starwreck-refit-segment';
 
   // —— 武器商店(改版主菜):卡片 + 刷新 ——
   const weaponSection = document.createElement('div');
   weaponSection.style.cssText = SECTION_CSS;
+  weaponSection.className = 'starwreck-refit-section';
   const weaponHead = document.createElement('div');
   weaponHead.style.cssText = SECTION_HEAD_CSS;
   weaponHead.className = 'starwreck-refit-section-head';
   const weaponTitle = document.createElement('div');
   weaponTitle.style.cssText = SECTION_TITLE_CSS;
+  weaponTitle.className = 'starwreck-refit-section-title';
   const refreshBtn = document.createElement('button');
   refreshBtn.style.cssText = REFRESH_BTN_CSS;
   refreshBtn.className = 'starwreck-refit-button';
@@ -318,6 +363,7 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   weaponHead.append(weaponTitle, refreshBtn);
   const cards = document.createElement('div');
   cards.style.cssText = CARDS_CSS;
+  cards.className = 'starwreck-refit-cards';
   weaponSection.append(weaponHead, cards);
 
   // —— 替换态:武器槽满时盖住卡片的那一层。**槽位不在这里列** ——
@@ -340,10 +386,13 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
   // —— 星币区:法令卡 + 付费修复(既有,文案与置灰口径原样保留) ——
   const starSection = document.createElement('div');
   starSection.style.cssText = SECTION_CSS;
+  starSection.className = 'starwreck-refit-section';
   const starTitle = document.createElement('div');
   starTitle.style.cssText = SECTION_TITLE_CSS;
+  starTitle.className = 'starwreck-refit-section-title';
   const edictCards = document.createElement('div');
   edictCards.style.cssText = CARDS_CSS;
+  edictCards.className = 'starwreck-refit-cards';
   starSection.append(starTitle, edictCards);
   const repairBtn = document.createElement('button');
   repairBtn.style.cssText = BTN_CSS;
@@ -469,12 +518,15 @@ export function createRefitFlow(opts: RefitFlowOpts): RefitFlowUi {
     root.className = className;
     const art = document.createElement('div');
     art.style.cssText = ITEM_ART_BOX_CSS;
+    art.className = 'starwreck-refit-art';
     const name = document.createElement('span');
     name.style.cssText = ITEM_NAME_CSS;
+    name.className = 'starwreck-refit-name';
     const base = document.createElement('span');
     const sale = document.createElement('span');
     const price = document.createElement('div');
     price.style.cssText = ITEM_PRICE_CSS;
+    price.className = 'starwreck-refit-price';
     price.append(base, sale);
     root.append(art, name, price);
     return { root, art, name, price, base, sale };

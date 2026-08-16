@@ -1328,15 +1328,18 @@ export class Renderer {
 
   static async create(world: World): Promise<Renderer> {
     const app = new Application();
+    const gameRoot = document.getElementById('game')!;
     await app.init({
       background: 0x05070d,
-      resizeTo: window,
+      // 移动端会给底部摇杆/加速键让出一段真实布局高度。监听 #game 而不是整扇 window，
+      // 画布与镜头才能随可玩区域一起缩小，不会只是被一层控制 UI 生硬盖住。
+      resizeTo: gameRoot,
       antialias: false,
       resolution: 1, // 压测口径:1x 分辨率(GDD §13 中端核显预算)
       preference: 'webgl',
     });
     const generatedArt = await loadGeneratedArt();
-    document.getElementById('game')!.appendChild(app.canvas);
+    gameRoot.appendChild(app.canvas);
     return new Renderer(app, world, generatedArt);
   }
 

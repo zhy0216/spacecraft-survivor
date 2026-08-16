@@ -2,13 +2,16 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>STARWRECK 星骸</title>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛸</text></svg>"
     />
     <style>
+      :root {
+        --sw-mobile-control-height: 0px;
+      }
       html,
       body {
         margin: 0;
@@ -23,7 +26,7 @@
       /* 双层结构:canvas 画世界,DOM 画界面(三选一卡片/结算/调参都走 DOM) */
       #game {
         position: fixed;
-        inset: 0;
+        inset: 0 0 var(--sw-mobile-control-height) 0;
         touch-action: none;
       }
       #game canvas {
@@ -96,7 +99,12 @@
         touch-action: manipulation;
       }
 
-      @media (max-width: 720px) {
+      /* 触控驾驶层默认不参与桌面布局；窄屏或粗指针设备进入战斗后才由 JS 点亮。 */
+      .sw-mobile-controls {
+        display: none;
+      }
+
+      @media (max-width: 900px), (hover: none) and (pointer: coarse) {
         .sw-modal {
           width: min(100%, 460px) !important;
           max-width: 100% !important;
@@ -240,28 +248,41 @@
           display: grid !important;
           grid-template-columns: minmax(0, 1fr) auto !important;
           grid-template-areas: 'left timer' 'segment segment';
-          gap: 6px !important;
+          gap: 4px !important;
           align-items: start !important;
+        }
+        .sw-hud {
+          font-size: 10px !important;
         }
         .sw-hud-left {
           grid-area: left;
-          width: min(100%, 250px);
-          max-height: 48dvh;
+          width: min(100%, 190px);
+          max-height: calc(100dvh - var(--sw-mobile-control-height) - 94px);
           overflow-y: auto;
           overflow-x: hidden;
           overscroll-behavior: contain;
-          gap: 6px !important;
+          gap: 4px !important;
           scrollbar-width: thin;
         }
         .sw-hud-panel {
-          padding: 6px 8px !important;
+          padding: 4px 6px !important;
           min-width: 0;
+          border-radius: 5px !important;
+        }
+        .sw-hud-row,
+        .sw-hud-fire-summary,
+        .sw-hud-weapon-row {
+          gap: 5px !important;
+        }
+        .sw-hud-track {
+          height: 3px !important;
+          margin-top: 3px !important;
         }
         .sw-hud-timer {
           grid-area: timer;
-          min-width: 66px !important;
-          padding: 6px 8px !important;
-          font-size: 14px !important;
+          min-width: 58px !important;
+          padding: 4px 6px !important;
+          font-size: 12px !important;
         }
         .sw-hud-segment {
           grid-area: segment;
@@ -270,25 +291,69 @@
         }
         .sw-hud-radar {
           right: max(10px, env(safe-area-inset-right)) !important;
-          bottom: max(64px, calc(env(safe-area-inset-bottom) + 54px)) !important;
-          width: 112px !important;
-          height: 112px !important;
+          bottom: calc(var(--sw-mobile-control-height) + 78px) !important;
+          width: 92px !important;
+          height: 92px !important;
         }
         .sw-hud-mute {
-          left: max(10px, env(safe-area-inset-left)) !important;
-          bottom: max(10px, env(safe-area-inset-bottom)) !important;
-          padding: 7px 10px !important;
+          display: none !important;
         }
         .sw-hud-keys {
-          left: max(10px, env(safe-area-inset-left)) !important;
-          bottom: max(46px, calc(env(safe-area-inset-bottom) + 36px)) !important;
-          max-width: 42vw;
-          white-space: normal !important;
-          line-height: 1.35;
+          display: none !important;
+        }
+        /* 火力统计从左上纵队翻到战场下沿，缩成 3×2 的轻量信息条；
+           底下再留一整块给摇杆和加速键，信息与手指不重叠。 */
+        .sw-hud-firepower {
+          position: fixed !important;
+          z-index: 13;
+          left: max(8px, env(safe-area-inset-left)) !important;
+          right: max(8px, env(safe-area-inset-right)) !important;
+          bottom: calc(var(--sw-mobile-control-height) + 7px) !important;
+          width: auto !important;
+          max-height: 62px;
+          overflow: hidden;
+          box-sizing: border-box;
+          display: grid !important;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          align-items: center;
+          gap: 3px 7px !important;
+          padding: 4px 6px !important;
+          font-size: 9px !important;
+          background: rgba(5, 7, 13, .82) !important;
+        }
+        .sw-hud-fire-summary,
+        .sw-hud-weapon {
+          min-width: 0;
+        }
+        .sw-hud-weapon-row {
+          min-width: 0;
+        }
+        .sw-hud-weapon-label {
+          display: block;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .sw-hud-weapon-cd {
+          display: none;
+        }
+        .sw-hud-weapon-value {
+          font-size: 8px;
+        }
+        .sw-hud-fire-track {
+          height: 2px !important;
+          margin-top: 1px !important;
         }
         .sw-hud-elite,
         .sw-hud-boss {
           width: min(88vw, 420px) !important;
+        }
+        .sw-hud-elite {
+          bottom: calc(var(--sw-mobile-control-height) + 76px) !important;
+        }
+        .sw-hud-boss {
+          bottom: calc(var(--sw-mobile-control-height) + 116px) !important;
         }
         .sw-hud-banner {
           top: max(92px, calc(env(safe-area-inset-top) + 82px)) !important;
@@ -297,7 +362,7 @@
         }
         .sw-hud-toast {
           left: max(10px, env(safe-area-inset-left)) !important;
-          bottom: max(92px, calc(env(safe-area-inset-bottom) + 82px)) !important;
+          bottom: calc(var(--sw-mobile-control-height) + 76px) !important;
           max-width: min(70vw, 300px);
           white-space: normal !important;
         }
@@ -309,7 +374,7 @@
           padding-right: 12px !important;
         }
         .sw-hud-left {
-          width: min(100%, 208px);
+          width: min(100%, 172px);
         }
         .sw-ship-ring {
           transform: scale(.62) !important;
@@ -317,12 +382,178 @@
         }
       }
 
-      @media (max-height: 560px) and (max-width: 720px) {
+      @media (max-height: 560px) and (max-width: 900px),
+        (max-height: 560px) and (hover: none) and (pointer: coarse) {
         .sw-hud-left {
-          max-height: 42dvh;
+          max-height: calc(100dvh - var(--sw-mobile-control-height) - 72px);
         }
         .sw-hud-radar {
           display: none;
+        }
+        .sw-hud-firepower {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          max-height: 42px;
+        }
+        .sw-hud-boss {
+          bottom: calc(var(--sw-mobile-control-height) + 86px) !important;
+        }
+        .sw-hud-elite {
+          bottom: calc(var(--sw-mobile-control-height) + 52px) !important;
+        }
+      }
+
+      @media (max-width: 900px), (hover: none) and (pointer: coarse) {
+        html.sw-mobile-run {
+          --sw-mobile-control-height: calc(clamp(118px, 22dvh, 172px) + env(safe-area-inset-bottom));
+        }
+        .sw-mobile-controls.sw-mobile-controls-visible {
+          position: fixed;
+          z-index: 12;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: var(--sw-mobile-control-height);
+          box-sizing: border-box;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          align-items: center;
+          padding: 8px max(14px, env(safe-area-inset-right))
+            max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+          border-top: 1px solid rgba(74, 118, 157, .62);
+          background:
+            radial-gradient(circle at 18% 52%, rgba(50, 100, 136, .18), transparent 28%),
+            radial-gradient(circle at 82% 52%, rgba(90, 190, 146, .12), transparent 25%),
+            linear-gradient(180deg, rgba(7, 12, 21, .96), rgba(4, 8, 15, .99));
+          box-shadow: 0 -14px 34px rgba(0, 0, 0, .34);
+          pointer-events: none !important;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        .sw-mobile-steer,
+        .sw-mobile-boost-wrap {
+          min-width: 0;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 3px;
+          pointer-events: none;
+        }
+        .sw-mobile-steer {
+          justify-self: start;
+          width: min(44vw, 170px);
+        }
+        .sw-mobile-boost-wrap {
+          justify-self: end;
+          width: min(34vw, 130px);
+        }
+        .sw-mobile-control-label {
+          color: #627f9d;
+          font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+          letter-spacing: .16em;
+          pointer-events: none;
+        }
+        .sw-mobile-stick-pad {
+          position: relative;
+          width: clamp(96px, 28vw, 124px);
+          height: clamp(96px, 28vw, 124px);
+          border: 1px solid rgba(82, 133, 174, .62);
+          border-radius: 50%;
+          box-sizing: border-box;
+          background:
+            radial-gradient(circle, rgba(25, 48, 70, .66) 0 28%, rgba(13, 27, 42, .7) 29% 58%, rgba(7, 14, 24, .78) 59%);
+          box-shadow: inset 0 0 0 8px rgba(45, 80, 108, .08), 0 5px 18px rgba(0, 0, 0, .3);
+          touch-action: none;
+          pointer-events: auto;
+        }
+        .sw-mobile-stick-guides {
+          position: absolute;
+          inset: 15%;
+          border-radius: 50%;
+          opacity: .55;
+          background:
+            linear-gradient(90deg, transparent calc(50% - .5px), #33516d 50%, transparent calc(50% + .5px)),
+            linear-gradient(transparent calc(50% - .5px), #33516d 50%, transparent calc(50% + .5px));
+          pointer-events: none;
+        }
+        .sw-mobile-stick-knob {
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          width: 42%;
+          height: 42%;
+          margin: -21% 0 0 -21%;
+          border: 1px solid #78b8df;
+          border-radius: 50%;
+          box-sizing: border-box;
+          background: radial-gradient(circle at 38% 34%, #9bd7f5, #477ea2 42%, #1b3a55 100%);
+          box-shadow: 0 0 18px rgba(103, 183, 230, .22), inset 0 0 10px rgba(220, 244, 255, .2);
+          transition: transform 55ms linear, filter 100ms ease;
+          pointer-events: none;
+          will-change: transform;
+        }
+        .sw-mobile-stick-pad.is-active .sw-mobile-stick-knob {
+          filter: brightness(1.22);
+          transition: none;
+        }
+        .sw-mobile-boost {
+          position: relative;
+          width: clamp(70px, 20vw, 86px);
+          height: clamp(70px, 20vw, 86px);
+          padding: 0;
+          border: 1px solid rgba(115, 227, 177, .78);
+          border-radius: 50%;
+          box-sizing: border-box;
+          color: #dffff0;
+          background: radial-gradient(circle at 40% 35%, #5dbb91, #25684d 48%, #102c24 100%);
+          box-shadow: 0 0 20px rgba(91, 230, 164, .18), inset 0 0 0 7px rgba(183, 255, 220, .06);
+          touch-action: none;
+          pointer-events: auto;
+          -webkit-appearance: none;
+        }
+        .sw-mobile-boost::after {
+          content: '';
+          position: absolute;
+          inset: 8px;
+          border: 1px solid rgba(207, 255, 232, .22);
+          border-radius: 50%;
+        }
+        .sw-mobile-boost-core {
+          display: block;
+          transform: translateX(1px) rotate(-8deg);
+          font: 700 clamp(26px, 8vw, 34px)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+          letter-spacing: -.22em;
+          text-shadow: 0 0 10px rgba(223, 255, 240, .46);
+          pointer-events: none;
+        }
+        .sw-mobile-boost.is-active {
+          transform: scale(.94);
+          filter: brightness(1.35);
+          box-shadow: 0 0 30px rgba(91, 230, 164, .44), inset 0 0 0 8px rgba(223, 255, 240, .1);
+        }
+      }
+
+      /* 横屏手机的底带只有约 118px：控件按高度再收一档，避免圆盘伸出视口。 */
+      @media (max-height: 560px) and (max-width: 900px),
+        (max-height: 560px) and (hover: none) and (pointer: coarse) {
+        .sw-mobile-controls.sw-mobile-controls-visible {
+          padding-top: 4px;
+          padding-bottom: max(4px, env(safe-area-inset-bottom));
+        }
+        .sw-mobile-stick-pad {
+          width: 90px;
+          height: 90px;
+        }
+        .sw-mobile-boost {
+          width: 74px;
+          height: 74px;
+        }
+        .sw-mobile-control-label {
+          font-size: 8px;
+        }
+        .sw-mobile-boost-core {
+          font-size: 28px;
         }
       }
     </style>

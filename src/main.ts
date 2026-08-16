@@ -64,6 +64,7 @@ import { createDebugPanel, type DebugStats, type RunState } from './ui/debugPane
 import { createGameOverUi, type UploadOutcome } from './ui/gameOver';
 import { createHud } from './ui/hud';
 import { loadIPressed, markIPressed } from './ui/keyHintStorage';
+import { createMobileControls } from './ui/mobileControls';
 import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
 import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
@@ -383,6 +384,11 @@ async function boot(): Promise<void> {
   const hud = createHud({ world, rightGutter: DEBUG ? undefined : 0, debug: DEBUG, muted: mutedHooks });
   // 语言切换成功后 HUD 原地重画静态标签(05 号):切换与战斗并行,不影响 toast/banner 计时
   registerLocaleAware(hud);
+
+  // 移动端驾驶层与 HUD 同样只建一次。它只把摇杆/按钮写成 Input 的虚拟航向与 Space，
+  // 暂停/商店/升级期间由 ticker 收起并释放，避免手指离开控件后留下“还在转/还在加速”。
+  const mobileControls = createMobileControls(input);
+  registerLocaleAware(mobileControls);
 
   // hp / maxHp 初值直接取船的当前值:面板在第一帧渲染之前就该显示满血,而不是先闪一下 0。
   // 波次那几项同理取世界的当前值(createWaveState 已经按第 0 段 t=0 算好了方向与强度)
@@ -1059,6 +1065,9 @@ async function boot(): Promise<void> {
     // 而不是监听一次按键事件)。按渲染帧采样即可 —— 它纯是可视化开关,不进 World.step,
     // 也就不参与确定性回放;放在 sync 之前是为了同一帧内先定开关再画,不留一帧迟滞。
     renderer.setArcOverlay(input.isDown('Tab'));
+    // 先同步底部操控带，再画世界：进入/离开一局时它会改变 #game 的实际高度并触发 resize。
+    // runActive 但 paused 时仍保留底带尺寸，只收起交互，弹层背后的战场不会忽大忽小。
+    mobileControls.sync(runActive, runActive && !run.paused);
     renderer.sync(loop.alpha);
     // HUD 固定在 DOM 屏幕空间,不读敌人容器、也不随相机/船体变换。时停(升级或结算)先淡出,
     // 再同步静止世界的最后一帧读数;重开时 hud.setWorld 已换到新引用,不会重复 append 节点。

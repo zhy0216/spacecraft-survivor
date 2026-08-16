@@ -23,6 +23,12 @@ const PREVENT_DEFAULT = new Set(['Tab', 'Space']);
 
 export class Input {
   private keys = new Set<string>();
+  /** 触控摇杆的期望航向。单独存分量,避免 pointermove 热路径反复分配 Vec2。 */
+  private virtualHeadingX = 0;
+  private virtualHeadingY = 0;
+  private virtualHeadingActive = false;
+  /** 触控按钮映射成与键盘同名的虚拟键；World 仍只看到同一份纯输入命令。 */
+  private virtualKeys = new Set<string>();
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => {
@@ -34,15 +40,57 @@ export class Input {
       this.keys.add(e.code);
     });
     target.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    target.addEventListener('blur', () => this.keys.clear());
+    target.addEventListener('blur', () => {
+      this.keys.clear();
+      this.clearVirtualInput();
+    });
   }
 
   isDown(code: string): boolean {
-    return this.keys.has(code);
+    return this.keys.has(code) || this.virtualKeys.has(code);
+  }
+
+  /**
+   * 触控摇杆写入屏幕/世界同向的航向。输入可不是单位向量：这里统一归一化，
+   * 让 UI 手势的半径只决定摇杆视觉位移，不改变 sim 的转向语义。
+   */
+  setVirtualHeading(x: number, y: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      this.clearVirtualHeading();
+      return;
+    }
+    const len = Math.hypot(x, y);
+    if (len <= 1e-6) {
+      this.clearVirtualHeading();
+      return;
+    }
+    this.virtualHeadingX = x / len;
+    this.virtualHeadingY = y / len;
+    this.virtualHeadingActive = true;
+  }
+
+  clearVirtualHeading(): void {
+    this.virtualHeadingX = 0;
+    this.virtualHeadingY = 0;
+    this.virtualHeadingActive = false;
+  }
+
+  setVirtualKey(code: string, down: boolean): void {
+    if (down) this.virtualKeys.add(code);
+    else this.virtualKeys.delete(code);
+  }
+
+  clearVirtualInput(): void {
+    this.clearVirtualHeading();
+    this.virtualKeys.clear();
   }
 
   /** 归一化期望航向;无输入返回 null(= 维持当前航向滑行减速) */
   desiredHeading(): Vec2 | null {
+    // 摇杆按着时优先于键盘。松手即回到键盘分支，桌面调试与移动触控可以共存。
+    if (this.virtualHeadingActive) {
+      return { x: this.virtualHeadingX, y: this.virtualHeadingY };
+    }
     let x = 0;
     let y = 0;
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) y -= 1;

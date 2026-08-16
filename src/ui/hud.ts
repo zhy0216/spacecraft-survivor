@@ -562,6 +562,7 @@ interface BarEls {
 function createBar(parent: HTMLElement, labelText: string, color: string): BarEls {
   const row = document.createElement('div');
   row.style.cssText = LABEL_ROW_CSS;
+  row.className = 'sw-hud-row';
   const label = document.createElement('span');
   label.style.cssText = LABEL_CSS;
   label.textContent = labelText;
@@ -570,6 +571,7 @@ function createBar(parent: HTMLElement, labelText: string, color: string): BarEl
   row.append(label, value);
   const track = document.createElement('div');
   track.style.cssText = TRACK_CSS;
+  track.className = 'sw-hud-track';
   const fill = document.createElement('div');
   fill.style.cssText = `${FILL_CSS}background:${color};`;
   track.appendChild(fill);
@@ -782,11 +784,12 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   // 每帧按持有情况点亮)。格 = 一行三段(名字 | 下一次发射 | 理论 DPS)+ 一根就绪小条
   const firepower = document.createElement('div');
   firepower.style.cssText = FIREPOWER_CSS;
-  firepower.className = 'sw-hud-panel';
+  firepower.className = 'sw-hud-panel sw-hud-firepower';
   firepower.title = t('ui:hud.firepower');
   function statRow(labelText: string, valueColor: string): { row: HTMLDivElement; value: HTMLSpanElement; label: HTMLSpanElement } {
     const row = document.createElement('div');
     row.style.cssText = LABEL_ROW_CSS;
+    row.className = 'sw-hud-fire-summary';
     const label = document.createElement('span');
     label.style.cssText = LABEL_CSS;
     label.textContent = labelText;
@@ -809,17 +812,23 @@ export function createHud(opts: { world: World; rightGutter?: number; debug?: bo
   for (let i = 0; i < WEAPON_SLOT_COUNT; i++) {
     const box = document.createElement('div');
     box.style.display = 'none';
+    box.className = 'sw-hud-weapon';
     const row = document.createElement('div');
     row.style.cssText = LABEL_ROW_CSS;
+    row.className = 'sw-hud-weapon-row';
     const label = document.createElement('span');
     label.style.cssText = LABEL_CSS;
+    label.className = 'sw-hud-weapon-label';
     const cd = document.createElement('span');
     cd.style.cssText = `color:${IDLE_COLOR};white-space:nowrap;`;
+    cd.className = 'sw-hud-weapon-cd';
     const value = document.createElement('span');
     value.style.cssText = VALUE_CSS;
+    value.className = 'sw-hud-weapon-value';
     row.append(label, cd, value);
     const track = document.createElement('div');
     track.style.cssText = FIRE_TRACK_CSS;
+    track.className = 'sw-hud-fire-track';
     const fill = document.createElement('div');
     fill.style.cssText = FILL_CSS;
     track.appendChild(fill);

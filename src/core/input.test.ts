@@ -84,3 +84,38 @@ describe('Input · 默认行为拦截', () => {
     expect(input.isDown('Tab')).toBe(false);
   });
 });
+
+describe('Input · 触控虚拟输入', () => {
+  it('摇杆航向归一化，并在松手后回到键盘输入', () => {
+    const { target, fire } = fakeWindow();
+    const input = new Input(target);
+
+    fire('keydown', keyEvent('KeyD'));
+    input.setVirtualHeading(3, 4);
+    expect(input.desiredHeading()).toEqual({ x: 0.6, y: 0.8 });
+
+    input.clearVirtualHeading();
+    expect(input.desiredHeading()).toEqual({ x: 1, y: 0 });
+  });
+
+  it('加速按钮与空格共用同一虚拟键，并在窗口失焦时全部释放', () => {
+    const { target, fire } = fakeWindow();
+    const input = new Input(target);
+
+    input.setVirtualKey('Space', true);
+    input.setVirtualHeading(-1, 0);
+    expect(input.isDown('Space')).toBe(true);
+    expect(input.desiredHeading()).toEqual({ x: -1, y: 0 });
+
+    fire('blur');
+    expect(input.isDown('Space')).toBe(false);
+    expect(input.desiredHeading()).toBeNull();
+  });
+
+  it('坏向量不会把 NaN 送进每帧 ShipCommand', () => {
+    const { target } = fakeWindow();
+    const input = new Input(target);
+    input.setVirtualHeading(Number.NaN, 1);
+    expect(input.desiredHeading()).toBeNull();
+  });
+});
