@@ -397,12 +397,6 @@ export const ui: DeepRecord<typeof zhUi> = {
       saved: 'Saved',
       epilogueContinue: 'Confirm Report · View Voyage Ending (Enter)',
     },
-    remind: {
-      message: "This run's log hasn't been saved yet — it can't be saved after leaving",
-      saveNow: 'Save Log',
-      leaveAnyway: 'Leave Anyway',
-      dismiss: "Don't ask again",
-    },
     upload: {
       noEndpoint: 'No upload endpoint configured',
       noLog: 'No run log this game',
@@ -412,6 +406,15 @@ export const ui: DeepRecord<typeof zhUi> = {
       // {{code}} = a stable, diagnosable code; internal error strings are never shown verbatim
       unknown: 'Upload failed (error code {{code}})',
     },
+  },
+  // —— Unsaved-log reminder popover (shared by the results card and the victory epilogue) ——
+  remind: {
+    message: "This run's log hasn't been saved yet",
+    note: "You won't be able to save this run's record after leaving",
+    saveNow: 'Save Log',
+    leaveAnyway: 'Leave Anyway',
+    cancel: 'Cancel',
+    dismiss: "Don't ask again",
   },
   // —— Debug tuning panel (dev tool, reachable in player mode via ~~~): i18n'd after the 10th gate ——
   debug: {

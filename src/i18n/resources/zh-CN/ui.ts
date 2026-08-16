@@ -394,12 +394,6 @@ export const ui = {
       saved: '已保存',
       epilogueContinue: '确认战报 · 查看航行结局(Enter)',
     },
-    remind: {
-      message: '本局日志还没有保存,返回标题后将无法再保存',
-      saveNow: '保存日志',
-      leaveAnyway: '仍要返回',
-      dismiss: '以后不再提醒',
-    },
     upload: {
       noEndpoint: '未配置上传地址',
       noLog: '本局无日志',
@@ -409,6 +403,15 @@ export const ui = {
       // {{code}} = 稳定错误码(可诊断);内部错误字符串永不原样上屏
       unknown: '上传失败(错误码 {{code}})',
     },
+  },
+  // —— 漏存提醒 popover(结算卡/胜利终幕共用):日志未保存就离开时的提示框,可永久关闭 ——
+  remind: {
+    message: '本局日志还没有保存',
+    note: '离开后这一局的记录将无法再保存',
+    saveNow: '保存日志',
+    leaveAnyway: '仍要离开',
+    cancel: '取消',
+    dismiss: '以后不再提醒',
   },
   // —— 调参面板(dev 工具,玩家模式连按三次 ~ 可呼出):10 号门禁后也纳入无硬编码中文 ——
   debug: {

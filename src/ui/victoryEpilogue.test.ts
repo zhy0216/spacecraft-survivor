@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { changeLocale, initI18n } from '../i18n';
+import type { UploadOutcome } from './gameOver';
 import { createVictoryEpilogue } from './victoryEpilogue';
 
 interface StubEl {
@@ -10,6 +11,8 @@ interface StubEl {
   alt: string;
   draggable: boolean;
   tabIndex: number;
+  /** 上传按钮三态会动它(上传中置灰防重入),其余元素恒 false */
+  disabled: boolean;
   children: StubEl[];
   listeners: Map<string, (e: unknown) => void>;
   /** setAttribute 的记录(aria-label 断言用) */
@@ -30,6 +33,7 @@ function createStubEl(tag = 'div'): StubEl {
     alt: '',
     draggable: true,
     tabIndex: -1,
+    disabled: false,
     children: [],
     listeners: new Map(),
     attrs: {},
@@ -184,5 +188,62 @@ describe('胜利终幕', () => {
     expect(created.some((el) => el.textContent.includes('只是守门者'))).toBe(true);
     expect(keyHandlers.length).toBe(1);
     expect(closes).toBe(0);
+  });
+
+  it('带 onUpload:摆出保存/上传按钮,点击走同一条三态流程,且不冒泡成关闭终幕', async () => {
+    let closes = 0;
+    const outcomes: UploadOutcome[] = [];
+    const epilogue = createVictoryEpilogue({
+      onClose: () => closes++,
+      onUpload: async () => outcomes.shift() ?? { status: 'done' },
+    });
+    const root = uiRoot.children[0]!;
+    const logBtn = created.find((el) => el.tagName === 'BUTTON')!;
+    expect(logBtn.textContent).toBe('上传本局日志(U)');
+    epilogue.show();
+    // 点击:上传中(置灰),终幕不收
+    outcomes.push({ status: 'done' });
+    logBtn.listeners.get('click')!({ stopPropagation() {} });
+    expect(logBtn.textContent).toBe('上传中…');
+    expect(logBtn.disabled).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(logBtn.textContent).toBe('已上传');
+    expect(logBtn.disabled).toBe(false);
+    expect(closes).toBe(0);
+    expect(epilogue.visible()).toBe(true);
+    // 已知失败码照常上屏(与结算卡同一条码表)
+    outcomes.push({ status: 'error', code: 'upload-failed' });
+    logBtn.listeners.get('click')!({ stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(logBtn.textContent).toBe('上传失败');
+    expect(root.style.display).toBe('block');
+    // 按钮没拦住的话,点一下就会顺带把终幕关掉 —— 拦住了,onClose 恒 0
+    expect(closes).toBe(0);
+  });
+
+  it('关闭走漏存提醒:点击/Enter 先过 remind.request,放行才 onClose', () => {
+    let closes = 0;
+    const queued: Array<() => void> = [];
+    const epilogue = createVictoryEpilogue({
+      onClose: () => closes++,
+      onUpload: async () => ({ status: 'done' }),
+      remind: { request: (go) => queued.push(go) },
+    });
+    const root = uiRoot.children[0]!;
+    epilogue.show();
+    root.listeners.get('click')?.({});
+    expect(closes).toBe(0);
+    expect(epilogue.visible()).toBe(true); // 提醒还没放行,终幕不收
+    queued.shift()!();
+    expect(closes).toBe(1);
+    expect(epilogue.visible()).toBe(false);
+    // Enter 同一条路
+    epilogue.show();
+    keyHandlers[0]!(keyEvent('Enter'));
+    expect(closes).toBe(1);
+    expect(queued.length).toBe(1);
+    queued.shift()!();
+    expect(closes).toBe(2);
+    // 不传 remind:直接关闭(旧口径,已被上面的旧测试钉住)
   });
 });

@@ -28,7 +28,6 @@ import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
 import { edictName, enemyName, towerName, weaponDisplayName } from './presentation/contentText';
 import { unlockName } from './presentation/unlockText';
-import { dismissRunLogRemind, isRunLogRemindDismissed } from './runLogUpload';
 
 /** 冷色域:我方废铁本色,与 ui/upgradeFlow.ts 的合法高亮同一支蓝(两处提示读起来才是同一件事) */
 const OK_COLOR = '#9adcff';
@@ -94,22 +93,6 @@ const REPORT_FILL_CSS = `height:100%;background:${OK_COLOR};border-radius:inheri
 const BTN_CSS =
   'display:block;width:100%;padding:9px 0;border-radius:6px;cursor:pointer;font:inherit;' +
   `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.1em;`;
-
-/**
- * 漏存提醒块(可永久关闭):「返回标题」与保存按钮之间的那条细栏。默认藏着 ——
- * 只有"日志还没保存就点返回"时才露脸。顶边线与图鉴同款,是提示条不是按钮。
- */
-const REMIND_CSS =
-  'display:none;margin-top:10px;padding-top:10px;border-top:1px solid rgba(43,74,110,.55);text-align:left;';
-const REMIND_MSG_CSS = `color:${VALUE_COLOR};margin-bottom:6px;`;
-const REMIND_ROW_CSS = 'display:flex;gap:8px;';
-/** 提醒里的两颗小按钮:并排各占一半,不铺满整卡(它们不是这一屏的主动作) */
-const REMIND_BTN_CSS =
-  'flex:1;padding:6px 0;border-radius:6px;cursor:pointer;font:inherit;font-size:12px;' +
-  `border:1px solid ${LINE_COLOR};background:rgba(43,74,110,.28);color:${OK_COLOR};letter-spacing:.06em;`;
-/** 「以后不再提醒」:小字下划线,点一下写 localStorage,此后点返回直接放行 */
-const REMIND_DISMISS_CSS =
-  `display:inline-block;margin-top:6px;font-size:12px;color:${IDLE_COLOR};cursor:pointer;text-decoration:underline;`;
 
 /**
  * 上传回调的返回口径:结构化结果 —— `{status:'done'}` = 成功(按钮改口「已上传」);
@@ -323,6 +306,22 @@ export function uploadOutcomeText(outcome: UploadOutcome | null, localSave = fal
   }
 }
 
+/**
+ * 上传/保存按钮的三态文案(待传 → 上传中 → 结果):结算卡、胜利终幕与漏存提醒 popover
+ * 三处共用同一句话 —— 三颗按钮永远同一个口径(结果态走 uploadOutcomeText 的码表)。
+ */
+export function uploadButtonText(state: {
+  uploadLocal: boolean;
+  busy: boolean;
+  outcome: UploadOutcome | null;
+}): string {
+  if (state.busy) return t('ui:gameOver.action.uploading');
+  if (state.outcome === null) {
+    return state.uploadLocal ? t('ui:gameOver.action.save') : t('ui:gameOver.action.upload');
+  }
+  return uploadOutcomeText(state.outcome, state.uploadLocal);
+}
+
 /** 解锁精英的底敌型名(WAVE_LOCKED_ELITES[type] → enemyName);查不到返回 null */
 function eliteBaseName(entry: UnlockEntry): string | null {
   const elite = WAVE_LOCKED_ELITES[entry.type];
@@ -368,13 +367,15 @@ export function collectionItemName(entry: UnlockEntry): string {
  *   补的是流程上的一个死角:玩家模式下 Esc 暂停菜单要求 `!run.paused`,而局终之后
  *   run.paused 恒为真 —— 没有这颗按钮的话,一局打完就只剩"再来一局/再试一局"两条路,
  *   想去改个设置或干脆歇一会儿都得刷新页面。
- *   日志还没保存就点它,先弹一条漏存提醒(见 gameOver.remind):提醒可永久关闭,「仍要返回」照常放行。
  * @param opts.onVictoryContinue 胜利局确认战报后的去处。传入时，胜利卡的主按钮不直接重开，
  *   而是进入全屏终幕；失败局仍保留再来一局 / 同种子重试 / 返回标题三条路。
  * @param opts.onUpload 「上传本局日志」的去处(运行日志系统)。不传就不摆这个按钮。
  *   返回 Promise<UploadOutcome>:done = 已上传,error = 失败(见 UploadOutcome 的码表)。
  *   上传中按钮置灰防重入,新一局 show 时状态复位 —— 这一局的上传结果不赖到下一局。
- *   按钮排在「返回标题」上面;漏存提醒的「保存日志」复用同一条上传流程。
+ *   按钮排在「返回标题」上面。
+ * @param opts.remind 漏存提醒 popover(ui/runLogRemind.ts,main.ts 造好传进来):重开/重试/
+ *   回标题三条路都先过它的 request —— 日志没保存就弹框,由框里的选择决定原动作何时执行
+ *   (保存成功 / 仍要离开)。不传就三条路直接走(旧口径)。
  * @param opts.uploadLocal 本机开发环境(ui/runLogUpload.ts 的 isLocalHost 检出,main.ts 传进来):
  *   按钮改口「保存本局日志」,done 改口「已保存」,失败走 save-failed 码 ——
  *   本地没有同源 Worker 可传,保存到本地文件是同一颗按钮的另一条去路。
@@ -385,6 +386,7 @@ export function createGameOverUi(opts: {
   onTitle?: () => void;
   onVictoryContinue?: () => void;
   onUpload?: () => Promise<UploadOutcome>;
+  remind?: { request: (onLeave: () => void) => void };
   uploadLocal?: boolean;
 }): GameOverUi {
   const root = document.createElement('div');
@@ -436,32 +438,15 @@ export function createGameOverUi(opts: {
   // 状态三态:待传 → 上传中…(置灰)→ 已上传 / 失败原因(见 upload)
   const uploadBtn = document.createElement('button');
   uploadBtn.style.cssText = BTN_CSS + 'margin-top:8px;';
-  uploadBtn.textContent = opts.uploadLocal
-    ? t('ui:gameOver.action.save')
-    : t('ui:gameOver.action.upload');
-  // 漏存提醒:藏在保存按钮与「返回标题」之间。「保存日志」复用上面那颗按钮整条 upload 流程
-  // (成功即收提醒),「仍要返回」放行,「以后不再提醒」写 localStorage 永久关闭。
-  const remindEl = document.createElement('div');
-  remindEl.style.cssText = REMIND_CSS;
-  const remindMsgEl = document.createElement('div');
-  remindMsgEl.style.cssText = REMIND_MSG_CSS;
-  const remindRowEl = document.createElement('div');
-  remindRowEl.style.cssText = REMIND_ROW_CSS;
-  const remindSaveBtn = document.createElement('button');
-  remindSaveBtn.style.cssText = REMIND_BTN_CSS;
-  const remindLeaveBtn = document.createElement('button');
-  remindLeaveBtn.style.cssText = REMIND_BTN_CSS;
-  const remindDismissEl = document.createElement('span');
-  remindDismissEl.style.cssText = REMIND_DISMISS_CSS;
-  remindRowEl.append(remindSaveBtn, remindLeaveBtn);
-  remindEl.append(remindMsgEl, remindRowEl, remindDismissEl);
+  uploadBtn.textContent = uploadButtonText({
+    uploadLocal: opts.uploadLocal ?? false,
+    busy: false,
+    outcome: null,
+  });
   card.append(titleEl, noteEl, statsEl, reportEl, unlockEl, collectionEl, btn);
   if (opts.onRetry) card.appendChild(retryBtn);
   if (opts.onUpload) card.appendChild(uploadBtn);
-  if (opts.onTitle) {
-    card.appendChild(remindEl);
-    card.appendChild(titleBtn);
-  }
+  if (opts.onTitle) card.appendChild(titleBtn);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 
@@ -476,8 +461,6 @@ export function createGameOverUi(opts: {
   let uploadBusy = false;
   /** 本局上传的结果(null = 还没传,待传态);show 时复位,refreshLocale 按它重画 */
   let uploadOutcome: UploadOutcome | null = null;
-  /** 本局日志是否已保存/上传成功:false = 点「返回标题」先弹漏存提醒(见 toTitle) */
-  let logSaved = false;
 
   function continuesToEpilogue(): boolean {
     return shownResult === RESULT_WIN && opts.onVictoryContinue !== undefined;
@@ -488,11 +471,26 @@ export function createGameOverUi(opts: {
     root.style.display = 'none';
   }
 
+  /**
+   * 三条离开路(重开/重试/回标题)的公共前门:漏存提醒 popover 的 request。
+   * 日志没保存就弹框,由框里的选择决定 action 何时执行 —— 未传 remind 时直接走(旧口径)。
+   * action 里"先收面板再回调"的理由见 restart 原注释,三条路同一条口径。
+   */
+  function leaveWith(action: () => void): void {
+    if (opts.remind === undefined) {
+      action();
+      return;
+    }
+    opts.remind.request(action);
+  }
+
   function restart(): void {
     // 先收起面板再回调:main.ts 那边也会 hide 一次(重开流程的一步),但"点了就该消失"
     // 不该依赖调用方记得那一句 —— 何况 onRestart 里要新建 World,那一瞬间面板还挂着就是花屏
-    hide();
-    opts.onRestart();
+    leaveWith(() => {
+      hide();
+      opts.onRestart();
+    });
   }
 
   function primaryAction(): void {
@@ -506,31 +504,18 @@ export function createGameOverUi(opts: {
 
   function retry(): void {
     // 与 restart 同口径:先收面板再回调,理由一字同源
-    hide();
-    opts.onRetry?.();
+    leaveWith(() => {
+      hide();
+      opts.onRetry?.();
+    });
   }
 
   function toTitle(): void {
-    // 日志还没保存就先提醒一句(可永久关闭):返回标题后 pendingLog 作废,
-    // 这局的日志再也传不出去 —— 提醒只是多说一句,不拦死「仍要返回」那条路
-    if (opts.onUpload !== undefined && !logSaved && !isRunLogRemindDismissed()) {
-      remindEl.style.display = 'block';
-      return;
-    }
-    hide();
-    opts.onTitle?.();
-  }
-
-  /** 提醒里的「仍要返回」:不经过保存直接放行,与 toTitle 同一套收起口径 */
-  function leaveAnyway(): void {
-    hide();
-    opts.onTitle?.();
-  }
-
-  /** 提醒里的「以后不再提醒」:写 localStorage 永久关闭,当场收起本次提醒 */
-  function dismissRemind(): void {
-    dismissRunLogRemind();
-    remindEl.style.display = 'none';
+    // 与 restart / retry 同口径:离开前先过漏存提醒(见 leaveWith)
+    leaveWith(() => {
+      hide();
+      opts.onTitle?.();
+    });
   }
 
   /**
@@ -547,11 +532,6 @@ export function createGameOverUi(opts: {
     const outcome = await opts.onUpload();
     uploadBusy = false;
     uploadOutcome = outcome;
-    if (outcome.status === 'done') {
-      // 保存成功了:漏存提醒的理由消失,提醒块(如果露着脸)一并收起
-      logSaved = true;
-      remindEl.style.display = 'none';
-    }
     paintUploadBtn();
   }
 
@@ -594,32 +574,19 @@ export function createGameOverUi(opts: {
     titleBtn.style.display = epilogueNext ? 'none' : 'block';
   }
 
-  /** 漏存提醒文案:show 与 refreshLocale 共用,现读 t()(与 paintUploadBtn 同一口径) */
-  function paintRemind(): void {
-    remindMsgEl.textContent = t('ui:gameOver.remind.message');
-    remindSaveBtn.textContent = t('ui:gameOver.remind.saveNow');
-    remindLeaveBtn.textContent = t('ui:gameOver.remind.leaveAnyway');
-    remindDismissEl.textContent = t('ui:gameOver.remind.dismiss');
-  }
-
   /**
    * 上传按钮状态:待传 / 上传中(置灰)/ 结果(已上传 / 失败原因),全部现读 t()。
    * refreshLocale 调它时保持 uploadBusy 与 uploadOutcome 原样 —— 只换语言,不改状态。
+   * 文案走 uploadButtonText(结算卡/终幕/提醒 popover 三处同一个口径)。
    */
   function paintUploadBtn(): void {
     if (opts.onUpload === undefined) return;
-    if (uploadBusy) {
-      uploadBtn.textContent = t('ui:gameOver.action.uploading');
-      uploadBtn.disabled = true;
-      return;
-    }
-    uploadBtn.disabled = false;
-    uploadBtn.textContent =
-      uploadOutcome === null
-        ? opts.uploadLocal
-          ? t('ui:gameOver.action.save')
-          : t('ui:gameOver.action.upload')
-        : uploadOutcomeText(uploadOutcome, opts.uploadLocal);
+    uploadBtn.disabled = uploadBusy;
+    uploadBtn.textContent = uploadButtonText({
+      uploadLocal: opts.uploadLocal ?? false,
+      busy: uploadBusy,
+      outcome: uploadOutcome,
+    });
   }
 
   /**
@@ -720,11 +687,6 @@ export function createGameOverUi(opts: {
   uploadBtn.addEventListener('click', () => {
     void upload();
   });
-  remindSaveBtn.addEventListener('click', () => {
-    void upload();
-  });
-  remindLeaveBtn.addEventListener('click', leaveAnyway);
-  remindDismissEl.addEventListener('click', dismissRemind);
 
   window.addEventListener('keydown', (e) => {
     // 收着的时候一律不认:战斗中按 Enter/R 不该把正打着的一局重开掉
@@ -760,12 +722,9 @@ export function createGameOverUi(opts: {
       renderUnlocks(s);
       renderCollection(s);
       paintButtons();
-      paintRemind();
       // 上传状态属于"上一局的那一次 show":新一局复位回待传 —— 已上传/失败那句不许赖到下一局
       uploadBusy = false;
       uploadOutcome = null;
-      logSaved = false;
-      remindEl.style.display = 'none';
       paintUploadBtn();
       visible = true;
       root.style.display = 'flex';
@@ -787,7 +746,6 @@ export function createGameOverUi(opts: {
       renderUnlocks(s);
       renderCollection(s);
       paintButtons();
-      paintRemind();
       paintUploadBtn();
     },
   };

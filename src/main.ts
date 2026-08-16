@@ -69,6 +69,7 @@ import { createArmoryPanel, type ArmoryPanelUi } from './ui/armoryPanel';
 import { createPauseMenu, type PauseMenuUi } from './ui/pauseMenu';
 import { loadProgress, saveProgress } from './ui/progressStorage';
 import { createRefitFlow, type RefitFlowUi } from './ui/refitFlow';
+import { createRunLogRemind, type RunLogRemindUi } from './ui/runLogRemind';
 import {
   buildRunLogPayload,
   getLogEndpoint,
@@ -461,7 +462,41 @@ async function boot(): Promise<void> {
 
   // 胜利终幕必须先于结算页构造:两者都监听 Enter；同一次 keydown 里结算页把终幕 show 出来时，
   // 终幕监听器已经走过了“当前不可见”的分支，才不会同一按键又立刻把它关掉。
-  const victoryEpilogue = createVictoryEpilogue({ onClose: toTitle });
+  // 上传/保存到本地二选一:localhost 上没部署 Worker,同一份负载落成 JSON 文件
+  const uploadLocal = isLocalHost();
+  // 本局日志是否已保存/上传成功 —— 结算卡、胜利终幕与漏存提醒共用这一个口径:
+  // 结算卡保存过的局,终幕关闭与提醒 popover 都不会再问第二遍
+  let runLogSaved = false;
+  // 上传/保存本局日志(结算卡按钮 / 终幕按钮 / 提醒 popover 三处共用同一个回调):
+  // 本地开发落文件,线上传 Worker;成功即把 runLogSaved 置真
+  const submitPendingLog = async (): Promise<UploadOutcome> => {
+    if (pendingLog === null) return { status: 'error', code: 'no-log' };
+    const outcome: UploadOutcome = uploadLocal
+      ? saveRunLogLocally(pendingLog)
+        ? { status: 'done' }
+        : { status: 'error', code: 'save-failed' }
+      : (await submitRunLog(getLogEndpoint(), pendingLog))
+        ? { status: 'done' }
+        : { status: 'error', code: 'upload-failed' };
+    if (outcome.status === 'done') runLogSaved = true;
+    return outcome;
+  };
+  // 漏存提醒 popover:**只建一次**,结算卡(重开/重试/回标题)与胜利终幕共用。
+  // 叠在一切覆盖层之上(z-index);日志已保存或已永久关闭时 request 直接放行
+  const runLogRemind: RunLogRemindUi = createRunLogRemind({
+    onUpload: submitPendingLog,
+    uploadLocal,
+    isLogSaved: () => runLogSaved,
+  });
+  // 语言切换成功后提醒 popover 原地重画文案
+  registerLocaleAware(runLogRemind);
+  const victoryEpilogue = createVictoryEpilogue({
+    onClose: toTitle,
+    // 终幕也是结算现场的一部分:日志在这里照样能存(与结算卡同一颗按钮、同一条流程)
+    onUpload: submitPendingLog,
+    uploadLocal,
+    remind: runLogRemind,
+  });
   // 语言切换成功后胜利终幕原地重画叙事文案(09 号):只改文字,不重播/不重置终幕流程
   registerLocaleAware(victoryEpilogue);
 
@@ -470,8 +505,6 @@ async function boot(): Promise<void> {
   // onTitle:局终之后回标题的出口。补的是流程死角 —— 玩家模式下 Esc 暂停菜单要求
   // `!run.paused`,而局终后 run.paused 恒真,没有这颗按钮就只剩重开两条路(见 gameOver.ts)。
   // 存档在 onGameOver 里已经删过,这里不必再管
-  // 上传/保存到本地二选一:localhost 上没部署 Worker,同一份负载落成 JSON 文件
-  const uploadLocal = isLocalHost();
   const gameOver = createGameOverUi({
     onRestart: restart,
     onRetry: retry,
@@ -480,20 +513,9 @@ async function boot(): Promise<void> {
     // 运行日志上传(同源 Cloudflare Worker + R2,接缝见 ui/runLogUpload.ts):本局没有日志 /
     // 网络失败各回一个**稳定错误码**,结算卡按码查本地化文案 ——
     // 后端内部错误字符串不原样上屏,玩家只需知道是否该重试。
-    // 本地开发环境(localhost)没有同源 Worker:同一颗按钮改口「保存到本地」,
-    // 把同一份负载落成 JSON 文件(uploadLocal 选项负责改口,见 gameOver.ts)
-    onUpload: async (): Promise<UploadOutcome> => {
-      if (pendingLog === null) return { status: 'error', code: 'no-log' };
-      if (uploadLocal) {
-        return saveRunLogLocally(pendingLog)
-          ? { status: 'done' }
-          : { status: 'error', code: 'save-failed' };
-      }
-      const endpoint = getLogEndpoint();
-      return (await submitRunLog(endpoint, pendingLog))
-        ? { status: 'done' }
-        : { status: 'error', code: 'upload-failed' };
-    },
+    onUpload: submitPendingLog,
+    // 重开/重试/回标题三条路都先过漏存提醒(见 ui/runLogRemind.ts)
+    remind: runLogRemind,
     uploadLocal,
   });
   // 语言切换成功后结算界面原地重画文案(09 号):用最近一次 RunSummary 重画,
@@ -720,6 +742,7 @@ async function boot(): Promise<void> {
     world = next;
     // 上一局的上传负载作废:新一局开跑后,结算卡(还没出现的那张)只能上传它自己的日志
     pendingLog = null;
+    runLogSaved = false;
     // 正式开局才套随机起手。**不放进 World 构造函数**:规则单测与纯 sim 调用方需要空槽位,
     // 而「这一局怎么开场」是 sim/loadout.ts 的随机装配 —— 从 world.rng 派生,同 seed 必同起手。
     //
@@ -1023,8 +1046,10 @@ async function boot(): Promise<void> {
   function toTitle(): void {
     runActive = false;
     run.paused = true;
-    // 离开结算现场(回标题):那一局的上传负载一并作废 —— 结算卡已收起,不再有上传出口
+    // 离开结算现场(回标题):那一局的上传负载与"已保存"口径一并作废 ——
+    // 结算卡已收起,不再有上传出口
     pendingLog = null;
+    runLogSaved = false;
     gameOver.hide();
     victoryEpilogue.hide();
     upgradeFlow.hide();

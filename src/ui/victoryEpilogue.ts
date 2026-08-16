@@ -5,9 +5,15 @@
  * 玩家点击整张画面（或按 Enter）后，它只把“返回主菜单”这件事交还给 onClose。
  * 生成图不烤字：叙事文本由 DOM 叠上去，既清晰，也能在不重生成美术的情况下继续调文案；
  * 文案走 story:epilogue.*(09 号),语言切换后原地重画,不重播终幕流程。
+ *
+ * 终幕也是结算现场的一部分:带上 onUpload 时,「下一次航行」提示下面摆一颗
+ * 保存/上传日志按钮(与结算卡同一条 upload 流程与同一句三态文案);
+ * 关闭终幕走 opts.remind(漏存提醒 popover)的 request —— 日志没保存就先弹框,
+ * 由框里的选择决定「返回主菜单」何时执行。
  */
 import { isTyping } from '../core/isTyping';
 import { t } from '../i18n';
+import { uploadButtonText, type UploadOutcome } from './gameOver';
 
 const ART_URL = new URL(
   '../../assets/game/ui/victory-epilogue-nanobanana.webp',
@@ -41,6 +47,15 @@ const NEXT_CSS =
   'background:rgba(8,21,35,.62);color:#bde9ff;font-size:clamp(11px,.95vw,14px);' +
   'letter-spacing:.12em;margin-bottom:16px;';
 const HINT_CSS = 'color:#627f99;font-size:11px;letter-spacing:.12em;';
+/**
+ * 保存/上传日志按钮:故事层整体 pointer-events:none(点击整屏 = 关闭),按钮自己
+ * pointer-events:auto 接回点击,并在 click 里 stopPropagation —— 点按钮不许顺带关终幕。
+ */
+const LOG_BTN_CSS =
+  'pointer-events:auto;display:inline-block;padding:9px 14px;margin-bottom:16px;cursor:pointer;' +
+  'border:1px solid rgba(127,207,242,.58);background:rgba(8,21,35,.62);color:#bde9ff;' +
+  'font-size:clamp(11px,.95vw,14px);letter-spacing:.12em;' +
+  'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;';
 
 export interface VictoryEpilogueUi {
   show(): void;
@@ -50,7 +65,15 @@ export interface VictoryEpilogueUi {
   refreshLocale(): void;
 }
 
-export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpilogueUi {
+export function createVictoryEpilogue(opts: {
+  onClose: () => void;
+  /** 「保存/上传本局日志」的按钮出口(与结算卡同一条流程)。不传就不摆这颗按钮。 */
+  onUpload?: () => Promise<UploadOutcome>;
+  /** 本机开发环境:按钮改口「保存本局日志」(与结算卡同口径,见 ui/gameOver.ts) */
+  uploadLocal?: boolean;
+  /** 漏存提醒 popover:关闭终幕先过它的 request,日志没保存就弹框(见 ui/runLogRemind.ts) */
+  remind?: { request: (onLeave: () => void) => void };
+}): VictoryEpilogueUi {
   let visible = false;
 
   const root = document.createElement('div');
@@ -84,10 +107,17 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
   next.style.cssText = NEXT_CSS;
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
+  const logBtn = document.createElement('button');
+  logBtn.style.cssText = LOG_BTN_CSS;
   story.append(kicker, title, reveal, body, next, hint);
+  if (opts.onUpload !== undefined) story.appendChild(logBtn);
 
   root.append(art, shade, story);
   document.getElementById('ui')!.appendChild(root);
+
+  /** 上传按钮状态:与结算卡同一句三态文案(uploadButtonText),busy 置灰防重入 */
+  let uploadBusy = false;
+  let uploadOutcome: UploadOutcome | null = null;
 
   /**
    * 叙事文案从 story:epilogue.* 现读(生成图不烤字:中英文都由 DOM 叠上去)。
@@ -104,6 +134,28 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
     hint.textContent = t('story:epilogue.hint');
   }
   paintText();
+  paintLogBtn();
+
+  /** 保存/上传按钮的三态文案(与结算卡/提醒 popover 同一个 uploadButtonText 口径) */
+  function paintLogBtn(): void {
+    if (opts.onUpload === undefined) return;
+    logBtn.disabled = uploadBusy;
+    logBtn.textContent = uploadButtonText({
+      uploadLocal: opts.uploadLocal ?? false,
+      busy: uploadBusy,
+      outcome: uploadOutcome,
+    });
+  }
+
+  async function upload(): Promise<void> {
+    if (uploadBusy || opts.onUpload === undefined) return;
+    uploadBusy = true;
+    paintLogBtn();
+    const outcome = await opts.onUpload();
+    uploadBusy = false;
+    uploadOutcome = outcome;
+    paintLogBtn();
+  }
 
   function hide(): void {
     visible = false;
@@ -112,11 +164,24 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
 
   function close(): void {
     if (!visible) return;
-    hide();
-    opts.onClose();
+    // 先收终幕再回调,与结算卡同一条口径;漏存提醒(若传入)在动作之前拦一道
+    const go = () => {
+      hide();
+      opts.onClose();
+    };
+    if (opts.remind === undefined) {
+      go();
+      return;
+    }
+    opts.remind.request(go);
   }
 
   root.addEventListener('click', close);
+  logBtn.addEventListener('click', (e) => {
+    // 按钮在整屏点击关闭的 root 之内:不拦下冒泡,点一下上传 = 上传 + 顺带关终幕
+    e.stopPropagation();
+    void upload();
+  });
   window.addEventListener('keydown', (e) => {
     if (!visible || e.repeat || isTyping()) return;
     if (e.code !== 'Enter' && e.code !== 'NumpadEnter' && e.code !== 'Space') return;
@@ -127,6 +192,10 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
   return {
     show(): void {
       paintText();
+      // 上传状态属于"上一局的那一次 show":新一局复位回待传
+      uploadBusy = false;
+      uploadOutcome = null;
+      paintLogBtn();
       visible = true;
       root.style.display = 'block';
       root.focus();
@@ -140,6 +209,7 @@ export function createVictoryEpilogue(opts: { onClose: () => void }): VictoryEpi
      */
     refreshLocale(): void {
       paintText();
+      paintLogBtn();
     },
   };
 }
