@@ -568,7 +568,8 @@ export class World {
   /**
    * 冲刺弹射的"到点即消费"游标(16 号弹射):本冲刺内已弹射的批次数。
    * 批次时刻由 Boss 的 DASH timer 闭式折出,游标只记消费 —— 照 bossSummonN 的
-   * eliteNext 先例进 checksum(弹射消费 rng,每只弹射怪一次角度);
+   * eliteNext 先例进 checksum:它决定"这批弹射怪进不进池",池内容已进 checksum,
+   * 游标差一 = 整批弹射错位,漏了它重放时"这批弹射怪出没出过"无从对账;
    * Boss 离开 DASH 那一帧由 stepBossEject 归零。
    */
   bossEjectDone = 0;
@@ -2581,12 +2582,12 @@ export class World {
    * (elapsed = chargeDuration − timer),游标 bossEjectDone 照 bossSummonN 的
    * "到点即消费"口径:批次到期即 +1,即使一只都没落地(触顶丢弃、不留账)。
    *
-   * rng 口径定死:**每只弹射怪恰好一次 rng.angle()**(弹射角),型号/数量直给
-   * (dashEjectKind / dashEjectCount,与召唤同一条"型号不掷随机"的纪律 ——
-   * 改弹射构成不会移动整条随机序列)。弹射怪在 Boss 当前位置出生,沿弹射角以
-   * dashEjectSpeed 离膛(initEject),共享 WAVE_MAX_ALIVE 在场上限:触顶丢弃,
-   * 且丢弃发生在掷角度之前 —— 触顶帧一次 rng 都不消耗。
-   * Boss 离开 DASH 那一帧游标归零(帧首读的是上一帧末的状态机,下一帧头就复位)。
+   * **零 rng**:弹射方向 = 船当前方位(atan2 现算,小怪笔直朝船飞),型号/数量直给 ——
+   * 与召唤不同,弹射一次随机都不掷,完全不扰动出怪/召唤的随机序列。
+   * 弹射怪在 Boss 当前位置出生,沿船方位以 dashEjectSpeed 高速离膛(initEject,
+   * 一开始很快,随后被接近段的追随系数快速拉回追船),共享 WAVE_MAX_ALIVE 在场上限:
+   * 触顶丢弃、不留账。Boss 离开 DASH 那一帧游标归零(帧首读的是上一帧末的状态机,
+   * 下一帧头就复位)。
    */
   private stepBossEject(): void {
     const boss = this.resolveBoss();
@@ -2605,9 +2606,10 @@ export class World {
       // 减在 next 侧会把阈值往低移、第一批晚一帧 —— 加在 elapsed 侧才兜得住
       if (elapsed + 1e-9 < next) break;
       this.bossEjectDone++;
+      // 弹射方向 = 船当前方位(零 rng,一批内的几只同向齐射)
+      const a = Math.atan2(this.ship.y - boss.y, this.ship.x - boss.x);
       for (let j = 0; j < BOSS.dashEjectCount; j++) {
         if (this.enemies.size >= WAVE_MAX_ALIVE) break; // 保险丝:触顶丢弃,不留账
-        const a = this.rng.angle(); // 每只弹射怪恰一次(与召唤的"每只恰一次"同口径)
         const e = this.enemies.spawn();
         initEject(e, boss.x, boss.y, a, this.elapsed);
         // 罗盘样本照召唤同口径:每成功落地一只记一次,方向 = 弹射怪落点方位
@@ -2801,8 +2803,8 @@ export class World {
     acc(this.bossPhase);
     acc(this.bossSummonN);
     acc(this.bossSummonCooldown * 100);
-    // 弹射游标与召唤游标同一条"到点即消费"定性:弹射也消费 rng(每只一次角度),
-    // 游标差一 = 整批弹射错位,漏了它重放时"这批弹射怪出没出过"无从对账
+    // 弹射游标与召唤游标同一条"到点即消费"定性:它决定弹射怪何时进池(池内容已进
+    // checksum),游标差一 = 整批弹射错位,漏了它重放时"这批弹射怪出没出过"无从对账
     acc(this.bossEjectDone);
     for (const e of this.enemies.items) {
       acc(e.x);

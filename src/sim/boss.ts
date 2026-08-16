@@ -15,8 +15,8 @@
  *     逐段朝锁向交替偏转 ±chargeZAngleDeg —— 三段折成一条 Z 形走廊,威胁从一条线
  *     扩成一条带。方向仍是"锁定方向"的确定性函数,冲刺中绝不重新瞄准的承诺不变,
  *     预警线按同一条折线画(renderer 的 drawBossTelegraph),「画哪撞哪」依然成立;
- *   - 冲刺中每 dashEjectInterval 秒弹射一批小怪(initEject,带初速往外甩):批次时刻
- *     由 DASH timer 闭式折出,每只弹射怪恰一次 rng 弹射角(World 侧掷,本文件只填充);
+ *   - 冲刺中每 dashEjectInterval 秒弹射一批小怪(initEject,高速离膛、方向 = 船方位):
+ *     批次时刻由 DASH timer 闭式折出,方向由 World 侧现算(零 rng),本文件只填充;
  *   - 召唤不走状态机:World 侧一个召唤计时器(BOSS.summonInterval 周期),
  *     每只召唤怪恰好一次角度 rng,型号/数量直给(照 waves 的"每成功出一只恰一次 rng")。
  *   侧掠的 strafe 原语 T1 不用(底座不绕行),留到 T2 的封锁线巨舰。
@@ -138,9 +138,9 @@ export function initSummon(
 }
 
 /**
- * 冲刺弹射怪出生:与 initSummon 同源,差别是**带初速** —— 沿弹射角以 dashEjectSpeed
- * 离膛(「弹射」),随后被接近段的追随系数慢慢拉回追船。弹射角由 World 在调用前掷完
- * (每只恰好一次,与召唤同一条 rng 纪律),型号 = BOSS.dashEjectKind 直给、不掷随机。
+ * 冲刺弹射怪出生:与 initSummon 同源,差别是**带高速初速** —— 沿弹射角以 dashEjectSpeed
+ * 高速离膛(「弹射」,一开始很快,随后被接近段的追随系数快速拉回追船)。弹射角 = 船方位,
+ * 由 World 现算传入(零 rng —— 弹射不扰动随机序列),型号 = BOSS.dashEjectKind 直给、不掷随机。
  * 普通血量、无词缀:弹射怪不是小精英。side 定死 0(与 initBoss 同一条零 rng 口径)。
  */
 export function initEject(e: Enemy, x: number, y: number, angleRad: number, elapsedSec: number): void {

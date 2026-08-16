@@ -88,11 +88,11 @@ export interface BossDef {
    * 只在 DASH 段计时(状态机离开 DASH 就重置节奏),计时由 Boss 的 DASH timer 折出。
    */
   dashEjectInterval: number;
-  /** 一次弹射几只(型号 = dashEjectKind 直给、不掷随机 —— 只有每只的弹射角掷一次) */
+  /** 一次弹射几只(型号 = dashEjectKind 直给、方向 = 船方位,零 rng) */
   dashEjectCount: number;
   /** 弹射的小怪型号(「小怪」 = 蜂群蛭:场上最轻的一型,给冲刺沿途撒压力) */
   dashEjectKind: EnemyKind;
-  /** 弹射初速 px/s:离膛往外甩,随后被接近段的追随系数慢慢拉回追船 */
+  /** 弹射初速 px/s:朝船方向高速离膛(「一开始很快」),随后被接近段的追随系数快速拉回追船 */
   dashEjectSpeed: number;
   /** 召唤周期 s:每过这么久召唤一批蜂群(Boss 活着才计时) */
   summonInterval: number;
@@ -131,7 +131,7 @@ export const BOSS: BossDef = {
   dashEjectInterval: 0.6, // 冲刺 2.4s 内 3 批(0.6/1.2/1.8s 各一批);占位待调
   dashEjectCount: 2, // 一批 2 只;占位待调
   dashEjectKind: KIND_SWARM, // 蜂群蛭:最轻的小怪;占位待调
-  dashEjectSpeed: 260, // 弹出初速:先甩出去,再被接近段追随系数拉回追船;占位待调
+  dashEjectSpeed: 550, // 弹出初速(占位待调):朝船方向高速离膛,一开始很快,再被追随系数拉回追船
   summonInterval: 7, // 原 9s 占位 → 7s(2026-08-15):与 summonCounts 一起把召唤流 0.89 → 1.43 只/s(约 +60%)
   summonWarnTime: 1.5, // 占位待调:最后 1.5s 给预告
   summonRingRadius: 120, // 占位待调

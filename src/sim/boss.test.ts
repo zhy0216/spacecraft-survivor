@@ -452,15 +452,36 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     park(boss, w.ship.x + 300, w.ship.y); // 起手圈(630)内:下一帧进前摇
 
     // 弹射怪是这批步骤里唯一的 spawn 来源(Boss 早已登场;召唤首触发在 7s,这里 4s 内走完)
-    const spawns: { at: number; kind: number; x: number; y: number; bx: number; by: number; speed: number; hpWant: number }[] = [];
+    const spawns: {
+      at: number;
+      kind: number;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      bx: number;
+      by: number;
+      ux: number;
+      uy: number;
+      speed: number;
+      hpWant: number;
+    }[] = [];
     w.onEnemySpawn = (e) => {
+      // 挂钩在帧首弹射里触发:此刻 Boss 与船当帧都没动,弹射点 = Boss 位置、方向 = 船方位
+      const dx = w.ship.x - boss.x;
+      const dy = w.ship.y - boss.y;
+      const dl = Math.hypot(dx, dy) || 1;
       spawns.push({
         at: w.bossEjectDone,
         kind: e.kind,
         x: e.x,
         y: e.y,
-        bx: boss.x, // 挂钩在帧首弹射里触发:此刻 Boss 当帧还没动,弹射点就是 Boss 当时的位置
+        vx: e.vx,
+        vy: e.vy,
+        bx: boss.x,
         by: boss.y,
+        ux: dx / dl,
+        uy: dy / dl,
         speed: Math.hypot(e.vx, e.vy),
         hpWant: ENEMIES[BOSS.dashEjectKind]!.hp * hpScaleAt(w.elapsed), // 出生时刻口径
       });
@@ -479,13 +500,15 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     // 一帧的头部之外(那时 elapsed = duration − dt),故不算 —— 与 sim 同一条浮点口径
     const ticksPerDash = Math.floor((BOSS.chargeDuration - SIM_DT) / BOSS.dashEjectInterval);
     expect(maxDone).toBe(ticksPerDash); // 2.4/0.6 → 3 批(0.6/1.2/1.8s)
-    // 弹射点 = Boss 当时的位置、初速 = dashEjectSpeed、型号直给
+    // 弹射点 = Boss 当时的位置、初速 = dashEjectSpeed、方向 = 船方位(零 rng)、型号直给
     expect(spawns.length).toBe(maxDone * BOSS.dashEjectCount);
     for (const s of spawns) {
       expect(s.kind).toBe(BOSS.dashEjectKind);
       expect(s.x).toBeCloseTo(s.bx, 9);
       expect(s.y).toBeCloseTo(s.by, 9);
       expect(s.speed).toBeCloseTo(BOSS.dashEjectSpeed, 9);
+      expect(s.vx / s.speed).toBeCloseTo(s.ux, 9); // 笔直朝船:与「Boss → 船」同向
+      expect(s.vy / s.speed).toBeCloseTo(s.uy, 9);
     }
     // 到点即消费:每批内的两只都记在同一个游标值下(1/2/3 各两只)
     const byTick = new Map<number, number>();
@@ -507,12 +530,12 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     }
   });
 
-  it('弹射 rng 口径:每只弹射怪恰好一次角度(型号/数量直给不掷随机)', () => {
+  it('弹射零 rng:方向 = 船方位现算,弹射完全不扰动随机序列(与召唤相反)', () => {
     const a = bossWorld(33);
     const b = bossWorld(33);
     const ba = a.enemies.items.find((e) => e.kind === KIND_BOSS)!;
     const bb = b.enemies.items.find((e) => e.kind === KIND_BOSS)!;
-    park(ba, a.ship.x + 300, a.ship.y); // 冲锋圈内:走完整条冲刺
+    park(ba, a.ship.x + 300, a.ship.y); // 冲锋圈内:走完整条冲刺,弹三批
     park(bb, 50000, 50000); // 对照组:冲锋圈外永不弹射(seek 也拉不回来)
     const frames = Math.ceil((BOSS.chargeWindup + BOSS.chargeDuration) * SIM_HZ) + 4;
     for (let f = 0; f < frames; f++) {
@@ -522,8 +545,8 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     const ticksPerDash = Math.floor((BOSS.chargeDuration - SIM_DT) / BOSS.dashEjectInterval);
     const ejectedA = a.enemies.items.filter((e) => e.kind === BOSS.dashEjectKind);
     expect(ejectedA.length).toBe(ticksPerDash * BOSS.dashEjectCount);
-    // a 比 b 多掷的恰好是"每只弹射怪一次"(b 全程零弹射,其余 rng 消耗两边同格)
-    for (let i = 0; i < ejectedA.length; i++) b.rng.next();
+    // 零 rng:a 弹了三批、b 一场没弹,两边的随机流仍逐位同格 —— 一次补偿都不需要
+    // (方向是 atan2 现算,型号/数量直给;弹射怪此后 seek/追击/接触也都不掷随机)
     expect(a.rng.next()).toBe(b.rng.next());
   });
 
@@ -552,7 +575,7 @@ describe('Boss 战接线(15 号:登场、召唤、胜利、掉落、确定性)',
     }
     expect(maxDone).toBeGreaterThanOrEqual(1); // 批次"到点即消费"(游标照 eliteNext 先例)
     expect(a.enemies.size).toBe(sizeBefore); // 一只都没落地:触顶丢弃、不留账
-    expect(a.rng.next()).toBe(b.rng.next()); // 触顶帧一次 rng 都不掷(丢弃发生在掷角度之前)
+    expect(a.rng.next()).toBe(b.rng.next()); // 弹射零 rng:触顶丢弃也不掷,两条流逐位同格
   });
 
   it('冲刺中途存档:读档后弹射游标接得上(checksum 一致、继续推进逐帧一致)', () => {
