@@ -56,6 +56,21 @@ const QUIET_CSS = BTN_CSS.replace(`color:${OK_COLOR}`, `color:${VALUE_COLOR}`);
 const SAVE_LINE_CSS = `color:${IDLE_COLOR};font-size:11px;margin:-4px 0 12px;letter-spacing:.04em;`;
 const HINT_CSS = `color:${IDLE_COLOR};font-size:11px;margin-top:12px;letter-spacing:.06em;`;
 
+/** 页脚 GitHub 图标:直链仓库主页,新标签打开(不抢走游戏页) */
+const GITHUB_CSS =
+  `display:inline-block;margin-top:16px;line-height:0;color:${IDLE_COLOR};` +
+  'opacity:.75;cursor:pointer;transition:color .15s,opacity .15s;';
+const GITHUB_SVG =
+  '<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" ' +
+  'xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+  '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 ' +
+  '0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53' +
+  '.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89' +
+  '-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27' +
+  's1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07' +
+  '-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8' +
+  'c0-4.42-3.58-8-8-8z"/></svg>';
+
 /**
  * 存档摘要那一行小字。**四个读数缺一不可**:航段说明打到哪、时长说明投入了多少、
  * 击杀说明战果、血量说明接手的是什么处境 —— 少了最后一样,玩家会在毫不知情的
@@ -165,7 +180,25 @@ export function createTitleScreen(hooks: TitleScreenHooks): TitleScreenUi {
   const hint = document.createElement('div');
   hint.style.cssText = HINT_CSS;
 
-  card.append(title, sub, continueBtn, saveLine, newBtn, settingsBtn, codexBtn, hint);
+  const githubLink = document.createElement('a');
+  githubLink.style.cssText = GITHUB_CSS;
+  githubLink.href = 'https://github.com/zhy0216/spacecraft-survivor';
+  githubLink.target = '_blank';
+  githubLink.rel = 'noopener noreferrer';
+  githubLink.title = 'GitHub';
+  githubLink.dataset.action = 'title-github';
+  githubLink.setAttribute('aria-label', 'GitHub');
+  githubLink.innerHTML = GITHUB_SVG;
+  githubLink.addEventListener('mouseenter', () => {
+    githubLink.style.color = OK_COLOR;
+    githubLink.style.opacity = '1';
+  });
+  githubLink.addEventListener('mouseleave', () => {
+    githubLink.style.color = IDLE_COLOR;
+    githubLink.style.opacity = '.75';
+  });
+
+  card.append(title, sub, continueBtn, saveLine, newBtn, settingsBtn, codexBtn, hint, githubLink);
   root.appendChild(card);
   document.getElementById('ui')!.appendChild(root);
 

@@ -103,6 +103,7 @@ interface StubEl {
   append(...kids: StubEl[]): void;
   appendChild(kid: StubEl): StubEl;
   addEventListener(type: string, fn: (e: unknown) => void): void;
+  setAttribute(name: string, value: string): void;
 }
 
 function createStubEl(tag = 'div'): StubEl {
@@ -123,6 +124,7 @@ function createStubEl(tag = 'div'): StubEl {
     addEventListener(type: string, fn: (e: unknown) => void): void {
       el.listeners.set(type, fn);
     },
+    setAttribute(): void {},
   };
   return el;
 }
